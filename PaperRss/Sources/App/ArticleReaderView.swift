@@ -1329,10 +1329,10 @@ private enum PaperReaderBridge {
               btn.setAttribute("role", "button");
               btn.setAttribute("tabindex", "0");
               btn.setAttribute("aria-label", "AI 解释");
-              // Match the bilingual translation badge so completed
-              // explanations are marked with the same compact "A文" chips at
-              // the end of the explained sentence instead of a larger pill.
-              ["A", "文"].forEach(value => {
+              // Match the bilingual translation badge's compact two-chip
+              // look, but use an "AI" badge so explanations are visually
+              // distinct from the translation "A文" marker.
+              ["A", "I"].forEach(value => {
                 const chip = document.createElement("span");
                 chip.className = "paper-rss-language-chip";
                 chip.setAttribute("aria-hidden", "true");
