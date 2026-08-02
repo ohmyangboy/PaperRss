@@ -1007,31 +1007,30 @@ th, td {
   cursor: pointer;
 }
 .paper-rss-annotation-icon {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  gap: 3px;
   box-sizing: border-box;
-  margin: 0 .22em;
-  padding: .12em .45em;
+  width: 24px;
+  height: 20px;
+  margin: 0 .3em;
+  vertical-align: -.22em;
   color: var(--paper-accent);
-  font-size: .82em;
-  font-weight: 600;
-  vertical-align: .08em;
-  border: .5px solid color-mix(in srgb, var(--paper-accent) 30%, transparent);
-  border-radius: 12px;
-  background: var(--paper-wash);
   opacity: .92;
   pointer-events: auto;
   cursor: pointer;
-  transition: all .15s ease;
+  transition: opacity .15s ease, transform .15s ease;
 }
 .paper-rss-annotation-icon:hover {
-  background: color-mix(in srgb, var(--paper-accent) 22%, transparent);
+  opacity: 1;
   transform: translateY(-1px);
 }
 .paper-rss-annotation-icon.is-pending {
   opacity: .60;
   animation: paper-rss-pulse 1.2s ease-in-out infinite;
+}
+.paper-rss-annotation-icon .paper-rss-language-chip {
+  /* Reuse the bilingual "A文" badge look: two overlapping rounded chips in
+     the accent color, positioned inside this relative container. */
 }
 .paper-rss-explanation {
   position: absolute;
@@ -1330,11 +1329,16 @@ private enum PaperReaderBridge {
               btn.setAttribute("role", "button");
               btn.setAttribute("tabindex", "0");
               btn.setAttribute("aria-label", "AI 解释");
-              btn.append(svgIcon("note"));
-              const label = document.createElement("span");
-              label.className = "paper-rss-annotation-label";
-              label.textContent = "AI 解释";
-              btn.append(label);
+              // Match the bilingual translation badge so completed
+              // explanations are marked with the same compact "A文" chips at
+              // the end of the explained sentence instead of a larger pill.
+              ["A", "文"].forEach(value => {
+                const chip = document.createElement("span");
+                chip.className = "paper-rss-language-chip";
+                chip.setAttribute("aria-hidden", "true");
+                chip.textContent = value;
+                btn.append(chip);
+              });
               return btn;
             };
 
@@ -1453,8 +1457,13 @@ private enum PaperReaderBridge {
           const postRequest = (kind, range, selectedText) => {
             const requestID = "selection-" + Date.now() + "-" + Math.random().toString(36).slice(2);
             const rect = focusRectForSelection(window.getSelection(), range);
-            const anchor = kind === "explanation" ? selectionAnchorForRange(range) : null;
-            const markers = kind === "explanation" ? markRange(range, requestID, selectedText) : [];
+            // The floating action bar passes the visual kind "note"; treat it
+            // as an explanation so the inline annotation icon and the saved
+            // anchor are actually created. Without this, the popover works
+            // but the reader has no icon to reopen the explanation later.
+            const isExplanation = kind === "explanation" || kind === "note";
+            const anchor = isExplanation ? selectionAnchorForRange(range) : null;
+            const markers = isExplanation ? markRange(range, requestID, selectedText) : [];
             let marker = markers[0]?.querySelector?.(".paper-rss-annotation-icon") || markers[0] || null;
             if (!marker && kind === "translation") {
               // Selection translations have no persistent icon, so give the
@@ -1527,13 +1536,12 @@ private enum PaperReaderBridge {
           }, true);
           document.addEventListener("click", event => {
             const icon = event.target.closest?.(".paper-rss-annotation-icon");
-            const mark = event.target.closest?.(".paper-rss-explained");
-            if (icon || mark) {
+            if (icon) {
               event.preventDefault();
-              const target = mark || icon;
+              const target = icon;
               const loading = target.classList.contains("is-pending");
-              const rect = (icon || mark)?.getBoundingClientRect();
-              showPopover(target.dataset.explanationId, rect, loading ? "" : (target.dataset.explanation || "解释暂不可用。"), loading ? "is-loading" : "", "explanation", icon || mark);
+              const rect = icon.getBoundingClientRect();
+              showPopover(target.dataset.explanationId, rect, loading ? "" : (target.dataset.explanation || "解释暂不可用。"), loading ? "is-loading" : "", "explanation", icon);
               return;
             }
             if (!event.target.closest?.(".paper-rss-explanation") && !event.target.closest?.(".paper-rss-selection-actions")) dismissPopover();

@@ -247,6 +247,74 @@ final class PaperRssCoreTests: XCTestCase {
         )
     }
 
+    /// Proves the SSE path delivers the summary one delta at a time (the same
+    /// path the summary card uses to render text while it is still being
+    /// generated), without touching the network.
+    func testSummarySSEStreamsIncrementalDeltas() async throws {
+        final class DeltaCollector: @unchecked Sendable {
+            private let lock = NSLock()
+            private var items: [String] = []
+            func add(_ delta: String) { lock.lock(); items.append(delta); lock.unlock() }
+            var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
+        }
+
+        final class MockSSEURLProtocol: URLProtocol {
+            override class func canInit(with request: URLRequest) -> Bool { true }
+            override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+            override func startLoading() {
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                // Deliver each SSE event as its own data chunk so the bytes
+                // reader yields separate lines and the delta closure fires per
+                // chunk rather than once at the end.
+                let sse = """
+                data: {"choices":[{"delta":{"content":"第一"}}]}
+
+                data: {"choices":[{"delta":{"content":"第二"}}]}
+
+                data: {"choices":[{"delta":{"content":"第三"}}]}
+
+                data: [DONE]
+
+                """
+                for chunk in sse.split(separator: "\n\n") {
+                    client?.urlProtocol(self, didLoad: Data((String(chunk) + "\n\n").utf8))
+                }
+                client?.urlProtocolDidFinishLoading(self)
+            }
+
+            override func stopLoading() {}
+        }
+
+        URLProtocol.registerClass(MockSSEURLProtocol.self)
+        defer { URLProtocol.unregisterClass(MockSSEURLProtocol.self) }
+
+        let configuration = LLMConfiguration(
+            baseURL: "https://example.com/v1",
+            model: "test-model",
+            temperature: 0.2,
+            targetLanguage: "简体中文",
+            allowInsecureLocalEndpoint: false
+        )
+        let collector = DeltaCollector()
+        let result = try await LLMService().summary(
+            text: "An article body.",
+            configuration: configuration,
+            apiKey: "test-key"
+        ) { delta in
+            collector.add(delta)
+        }
+
+        XCTAssertEqual(collector.all, ["第一", "第二", "第三"])
+        XCTAssertEqual(result, "第一第二第三")
+    }
+
     func testBatchTranslationDecoderOnlyAcceptsOrderedJSON() throws {
         XCTAssertEqual(
             try LLMService.decodeBatchTranslations("[\"第一段\", \"第二段\"]"),

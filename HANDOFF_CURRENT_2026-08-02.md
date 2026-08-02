@@ -161,3 +161,26 @@ swift build --product PaperRssDesktop
 - 不要使用 `git reset --hard`、`git checkout --` 或删除用户数据/缓存。
 - 不要在日志、数据库、导出文件中输出 API Key、Authorization Header 或完整请求。
 - 报告完成时区分“代码测试通过”“实际 App 已启动验证”“Xcode Beta 构建器异常”，不要把其中一项冒充另一项。
+
+## 9. 2026-08-02 下午：划词解释体验修复（本轮）
+
+### 修复内容
+
+- **推文双语对照翻译**：`ArticleExtractor.sanitizedHTML` 会把顶层裸文本包进 `<p>`，RSSHub 推文正文（裸文本 + `<br>`）因此成为可观察、可翻译的段落。旧缓存打开时自动重新清洗。
+- **AI 摘要流式**：新增 `AppStore.summaryArtifact(for:)`（含未完成产物），摘要卡片流式渲染增量；中断后显示“上次生成未完成 + 重新生成”。LLMService SSE 增量有回归测试 `testSummarySSEStreamsIncrementalDeltas`。
+- **视频全屏**：两个平台开启 `configuration.preferences.isElementFullscreenEnabled = true`。
+- **推特头像**：`Feed` 新增 `storedIconURL`（自定义解码兼容旧数据），刷新时从 RSSHub feed `<image>` 保存作者头像，Twitter/X 订阅优先显示头像而非站点图标。
+- **Popover 跟随滚动**：`.paper-rss-explanation` 改为文档坐标 `position: absolute`，随正文滚动；选区翻译带不可见行内锚点。
+- **划词解释图标（关键修复）**：操作栏按钮传入的 kind 是 `"note"`，而 `postRequest` 只对 `"explanation"` 创建标记/锚点——导致 ✦ 图标和锚点从未创建，“关闭后无法再次查看”。已把 `"note"` 视为解释；图标改为与双语翻译一致的“A文”双角标，放在解释句末尾；**只有点击图标才重新弹出**，点句子不弹。
+
+### 验证证据（真实运行）
+
+- `swift test`：29/29 通过（新增 SSE 流式、推文段落、头像路由、Feed 兼容解码等回归）。
+- 真实 WebKit harness：A文 图标创建（icons=1）、点句子不弹（closed）、点图标重开（open + 原文）、popover 文档坐标滚动前后不变。
+- 真实 App（Computer Use）：推文首段出现中文译文；视频全屏进入/退出成功；刷新后 `storedIconURL` 写入作者头像；AX 树可见内联“已完成解释，点击重新查看”按钮，点击后 popover 重新打开并显示完整解释。
+- 验证期间产生少量 DeepSeek 请求（逐段翻译、摘要、划词解释各 1-2 次小请求），均为个人账号正常用途。
+
+### 注意事项
+
+- 用户正常流程是从 Xcode 运行；本轮把修复二进制安装到了 `PaperRss 2026-07-31 20-03-41/PaperRss.app` 与 DerivedData Debug 构建（均 ad-hoc 重新签名）。下次在 Xcode 里重新 Build/Run 会覆盖。
+- git 已初始化（基线 `cf49f92`），本轮提交为 `9210428`（第一批）+ 后续划词解释修复提交。
