@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array><string>com.yangbukun.PaperRss.refresh</string></array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>PaperRss uses the local network only when you explicitly configure a local AI endpoint.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <!-- RSS readers accept user-entered feeds, including legacy HTTP feeds.
+             This broad exception is intentional for the personal, user-driven
+             reader. LLMService still rejects HTTP API endpoints by policy. -->
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>47.251.82.23</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>
