@@ -119,16 +119,80 @@ public enum ArticleExtractor {
         }
         result += withoutExecutableBlocks[cursor...]
         let trimmedResult = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasBlockTag = (try? NSRegularExpression(pattern: "(?is)<(p|div|blockquote|li|h[1-6]|pre)\\b"))?.firstMatch(in: trimmedResult, range: NSRange(trimmedResult.startIndex..., in: trimmedResult)) != nil
-        if !hasBlockTag && !trimmedResult.isEmpty {
-            let parts = trimmedResult.components(separatedBy: "\n\n")
-            if parts.count > 1 {
-                result = parts.map { "<p>\($0)</p>" }.joined()
+        return wrappingTopLevelTextRuns(trimmedResult)
+    }
+
+    /// Wraps bare text at the top level of a sanitized fragment in `<p>`
+    /// elements. RSSHub feeds (notably Twitter/X tweets) frequently place the
+    /// status text directly in the feed body without any block element, so the
+    /// reader's block observer would never see it and bilingual translation
+    /// would silently skip the tweet. Inline-only runs (a lone `<img>`, `<br>`
+    /// or whitespace) stay untouched, and text already inside a block element
+    /// is never duplicated.
+    private static func wrappingTopLevelTextRuns(_ html: String) -> String {
+        let blockTags: Set<String> = [
+            "p", "div", "li", "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
+            "figcaption", "dt", "dd", "table", "thead", "tbody", "tfoot", "tr", "ul", "ol", "hr"
+        ]
+        let voidTags: Set<String> = ["br", "hr", "img", "source"]
+        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b[^>]*>"
+        guard let expression = try? NSRegularExpression(pattern: tagPattern) else { return html }
+        let range = NSRange(html.startIndex..., in: html)
+        var output = ""
+        var stack: [String] = []
+        var loose = ""
+        var cursor = html.startIndex
+
+        func flush() {
+            let trimmed = loose.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.plainText.isEmpty {
+                output += loose
             } else {
-                result = "<p>\(trimmedResult)</p>"
+                output += "<p>\(trimmed)</p>"
+            }
+            loose = ""
+        }
+
+        expression.enumerateMatches(in: html, range: range) { match, _, _ in
+            guard let match,
+                  let tagRange = Range(match.range, in: html),
+                  let nameRange = Range(match.range(at: 1), in: html) else { return }
+            let segment = html[cursor..<tagRange.lowerBound]
+            if stack.isEmpty { loose += segment } else { output += segment }
+            cursor = tagRange.upperBound
+
+            let tag = html[tagRange]
+            let name = html[nameRange].lowercased()
+            let isClosing = tag.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/")
+            if isClosing {
+                if stack.isEmpty && !voidTags.contains(name) {
+                    // An inline closing tag at top level belongs to the loose
+                    // run, so wrapping later keeps the tags balanced.
+                    loose += tag
+                } else {
+                    output += tag
+                }
+                if !stack.isEmpty, stack.last == name {
+                    stack.removeLast()
+                    flush()
+                }
+            } else if blockTags.contains(name) {
+                flush()
+                output += tag
+                if !voidTags.contains(name) { stack.append(name) }
+            } else if stack.isEmpty {
+                loose += tag
+            } else {
+                output += tag
             }
         }
-        return result
+        if stack.isEmpty {
+            loose += html[cursor...]
+        } else {
+            output += html[cursor...]
+        }
+        flush()
+        return output
     }
 
     /// Returns the source blocks WebKit can observe while the reader scrolls.

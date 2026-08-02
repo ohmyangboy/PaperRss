@@ -196,6 +196,17 @@ public final class AppStore: ObservableObject {
         database.artifacts.filter { $0.entryID == entry.id && $0.kind == kind && $0.isComplete && !$0.isDeleted }.sorted { $0.updatedAt > $1.updatedAt }.first
     }
 
+    /// Returns the latest summary artifact even while it is still streaming.
+    /// `artifact(for:kind:)` intentionally stays completion-only so callers
+    /// never mistake a partial result for a final one; the summary card uses
+    /// this accessor to render each delta as it arrives.
+    public func summaryArtifact(for entry: Entry) -> AIArtifact? {
+        database.artifacts
+            .filter { $0.entryID == entry.id && $0.kind == .summary && !$0.isDeleted }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first
+    }
+
     /// Returns the saved progressive translation that matches the article's
     /// current text and model. Unlike `artifact(for:kind:)`, this intentionally
     /// includes an incomplete artifact so the reader can render finished
@@ -258,6 +269,7 @@ public final class AppStore: ObservableObject {
                 case let .updated(parsed, etag, lastModified):
                     database.feeds[index].title = parsed.title
                     database.feeds[index].siteURL = parsed.siteURL
+                    database.feeds[index].storedIconURL = parsed.iconURL ?? database.feeds[index].storedIconURL
                     database.feeds[index].etag = etag
                     database.feeds[index].lastModified = lastModified
                     database.feeds[index].lastRefreshedAt = .now

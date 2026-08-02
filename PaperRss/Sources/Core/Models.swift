@@ -11,8 +11,12 @@ public struct Feed: Identifiable, Codable, Hashable, Sendable {
     public var lastRefreshedAt: Date?
     public var isDeleted: Bool
     public var updatedAt: Date
+    /// The icon advertised by the feed itself. For RSSHub Twitter/X routes
+    /// this is the account owner's profile image, which the reader prefers
+    /// over the generic twitter.com favicon.
+    public var storedIconURL: URL?
 
-    public init(id: UUID = UUID(), title: String, siteURL: URL? = nil, feedURL: URL, folder: String? = nil, etag: String? = nil, lastModified: String? = nil, lastRefreshedAt: Date? = nil, isDeleted: Bool = false, updatedAt: Date = .now) {
+    public init(id: UUID = UUID(), title: String, siteURL: URL? = nil, feedURL: URL, folder: String? = nil, etag: String? = nil, lastModified: String? = nil, lastRefreshedAt: Date? = nil, isDeleted: Bool = false, updatedAt: Date = .now, storedIconURL: URL? = nil) {
         self.id = id
         self.title = title
         self.siteURL = siteURL
@@ -23,16 +27,40 @@ public struct Feed: Identifiable, Codable, Hashable, Sendable {
         self.lastRefreshedAt = lastRefreshedAt
         self.isDeleted = isDeleted
         self.updatedAt = updatedAt
+        self.storedIconURL = storedIconURL
     }
 
     public var iconURL: URL? {
         let candidateHost = siteURL?.host ?? feedURL.host
         guard let host = candidateHost?.lowercased() else { return nil }
         // Special case for Twitter / X via RSSHub
-        if host.contains("twitter.com") || host.contains("x.com") || feedURL.path.lowercased().contains("/twitter/") {
-            return URL(string: "https://abs.twimg.com/favicons/twitter.3.ico")
+        let path = feedURL.path.lowercased()
+        if host.contains("twitter.com") || host.contains("x.com") || path.contains("/twitter/") || path.hasPrefix("/twitter") || path.contains("/x/") {
+            // RSSHub publishes the account owner's avatar as the feed image.
+            // Prefer it; the bird favicon remains the fallback until refresh.
+            return storedIconURL ?? URL(string: "https://abs.twimg.com/favicons/twitter.3.ico")
         }
         return URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, siteURL, feedURL, folder, etag, lastModified
+        case lastRefreshedAt, isDeleted, updatedAt, storedIconURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "未命名订阅"
+        siteURL = try container.decodeIfPresent(URL.self, forKey: .siteURL)
+        feedURL = try container.decode(URL.self, forKey: .feedURL)
+        folder = try container.decodeIfPresent(String.self, forKey: .folder)
+        etag = try container.decodeIfPresent(String.self, forKey: .etag)
+        lastModified = try container.decodeIfPresent(String.self, forKey: .lastModified)
+        lastRefreshedAt = try container.decodeIfPresent(Date.self, forKey: .lastRefreshedAt)
+        isDeleted = try container.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+        storedIconURL = try container.decodeIfPresent(URL.self, forKey: .storedIconURL)
     }
 }
 

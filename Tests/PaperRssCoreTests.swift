@@ -146,12 +146,77 @@ final class PaperRssCoreTests: XCTestCase {
             baseURL: URL(string: "https://x.com/antigravity/status/2082908715200675889")
         )
 
-        XCTAssertEqual(content.text, "Going live today 👀 Nohe: @rodydavis @antigravity Heres the link!\nhttps://www.youtube.com/watch?v=LcnBRo11mnk")
+        // The leading status text is now a real paragraph boundary, so the
+        // tweet body and the quoted tweet become independent translation units
+        // instead of one undetectable blob.
+        XCTAssertEqual(content.text, "Going live today 👀\n\nNohe: @rodydavis @antigravity Heres the link!\nhttps://www.youtube.com/watch?v=LcnBRo11mnk")
         XCTAssertTrue(content.html.contains("Going live today 👀"))
         XCTAssertTrue(content.html.contains("youtube.com/watch?v=LcnBRo11mnk"))
         XCTAssertFalse(content.html.contains("style="))
         XCTAssertFalse(content.html.contains("rsshub-quote"))
     }
+
+    func testSanitizerWrapsTopLevelTweetTextIntoTranslatableParagraphs() {
+        let html = """
+        We are making our discount permanent! 🎉<br><br>Enjoy building with DeepSeek-V4-Pro!<br><img width="1632" height="900" src="https://pbs.twimg.com/media/HI7xPnWbgAAW4UO?format=jpg&amp;name=orig"><hr><div>DeepSeek: The V4-Pro discount has been extended!<br><img width="1912" height="1012" src="https://pbs.twimg.com/media/HGwt-7VasAAPM7i?format=jpg&amp;name=orig"></div>
+        """
+        let sanitized = ArticleExtractor.sanitizedHTML(
+            html,
+            baseURL: URL(string: "https://x.com/deepseek_ai/status/2049312932014813344")!
+        )
+
+        // Both the tweet text and the quoted-tweet div are now observable
+        // blocks, so the viewport observer can request each one for
+        // translation and the first paragraph is no longer skipped.
+        XCTAssertEqual(
+            // RSSHub inserts an en-space after some labels; normalize it so the
+            // assertion is readable while the paragraph boundaries stay exact.
+            ArticleExtractor.readerParagraphs(in: sanitized).map(\.original).map { $0.replacingOccurrences(of: "\u{2002}", with: " ") },
+            [
+                "We are making our discount permanent! 🎉\n\nEnjoy building with DeepSeek-V4-Pro!",
+                "DeepSeek: The V4-Pro discount has been extended!"
+            ]
+        )
+        XCTAssertEqual(
+            ArticleExtractor.readerParagraphs(in: sanitized).map(\.id),
+            ["p0", "p1"]
+        )
+    }
+
+    func testSanitizerKeepsStandaloneImagesOutsideParagraphs() {
+        let html = "<h2>封面图</h2><img src=\"https://example.com/cover.jpg\"><p>图片说明。</p>"
+        let sanitized = ArticleExtractor.sanitizedHTML(html)
+        XCTAssertTrue(sanitized.contains("<h2>封面图</h2><img src=\"https://example.com/cover.jpg\" loading=\"eager\" decoding=\"async\"><p>图片说明。</p>"))
+        XCTAssertFalse(sanitized.contains("<p><img"))
+    }
+
+    func testFeedUsesStoredAvatarForTwitterRouteAndFaviconOtherwise() {
+        let avatar = URL(string: "https://pbs.twimg.com/profile_images/1717417613775757312/Uk1zNOj4.jpg")
+        let twitter = Feed(
+            title: "Twitter @DeepSeek",
+            feedURL: URL(string: "http://127.0.0.1:1200/twitter/user/deepseek_ai")!,
+            storedIconURL: avatar
+        )
+        XCTAssertEqual(twitter.iconURL, avatar)
+
+        let plain = Feed(
+            title: "Site",
+            feedURL: URL(string: "https://example.com/rss.xml")!,
+            storedIconURL: URL(string: "https://example.com/logo.png")
+        )
+        XCTAssertEqual(plain.iconURL?.absoluteString, "https://www.google.com/s2/favicons?domain=example.com&sz=64")
+    }
+
+    func testFeedDecodesLegacyJSONWithoutIconField() throws {
+        let data = Data("""
+        {"id":"5C0B1B6A-8E6E-4F13-9D1B-3B7F4D2E1A00","title":"Legacy","feedURL":"https://example.com/rss.xml","isDeleted":false}
+        """.utf8)
+        let feed = try JSONDecoder().decode(Feed.self, from: data)
+        XCTAssertEqual(feed.title, "Legacy")
+        XCTAssertNil(feed.storedIconURL)
+        XCTAssertEqual(feed.iconURL?.absoluteString, "https://www.google.com/s2/favicons?domain=example.com&sz=64")
+    }
+
 
     func testLegacyArticleCacheRequiresOneTimeSanitization() throws {
         let data = Data("""

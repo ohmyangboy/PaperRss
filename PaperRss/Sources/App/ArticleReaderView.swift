@@ -524,7 +524,7 @@ struct ArticleReaderView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(PaperTheme.accent)
                 Spacer()
-                if store.artifact(for: entry, kind: .summary) != nil {
+                if store.summaryArtifact(for: entry) != nil {
                     Button {
                         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
                             isSummaryExpanded.toggle()
@@ -543,7 +543,7 @@ struct ArticleReaderView: View {
                 }
             }
 
-            if let summary = store.artifact(for: entry, kind: .summary), !summary.content.isEmpty {
+            if let summary = store.summaryArtifact(for: entry), !summary.content.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(summary.content)
                         .font(.body)
@@ -552,14 +552,29 @@ struct ArticleReaderView: View {
                         .textSelection(.enabled)
                         .contentTransition(.opacity)
                     if !summary.isComplete {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("AI 正在生成摘要…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if activeAIStatus(for: .summary) != nil {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("AI 正在生成摘要…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 2)
+                        } else {
+                            // A partially generated summary survived an app
+                            // relaunch or cancellation. Offer a visible retry
+                            // instead of leaving an eternal spinner.
+                            HStack(spacing: 8) {
+                                Text("上次生成未完成")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button("重新生成") { generateSummary() }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .padding(.top, 2)
                         }
-                        .padding(.top, 2)
                     }
                 }
             } else if let status = activeAIStatus(for: .summary) {
@@ -1019,7 +1034,7 @@ th, td {
   animation: paper-rss-pulse 1.2s ease-in-out infinite;
 }
 .paper-rss-explanation {
-  position: fixed;
+  position: absolute;
   z-index: 2147483647;
   box-sizing: border-box;
   width: min(350px, calc(100vw - 40px));
@@ -1036,6 +1051,15 @@ th, td {
   font: 14px/1.58 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   animation: paper-rss-materialize .20s ease-out both;
   transform-origin: top center;
+}
+.paper-rss-selection-anchor {
+  display: inline;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
 }
 .paper-rss-explanation-header {
   display: flex;
@@ -1193,12 +1217,15 @@ private enum PaperReaderBridge {
 
           const dismissPopover = () => {
             activePopover?.remove();
+            if (activeAnchorElement?.classList.contains("paper-rss-selection-anchor")) {
+              activeAnchorElement.remove();
+            }
             activePopover = null;
             activeAnchorRect = null;
             activeAnchorElement = null;
           };
 
-          const positionNear = (element, rect) => {
+          const positionNear = (element, rect, documentSpace = false) => {
             if (!element || !rect) return;
             const gap = 9;
             const margin = 12;
@@ -1219,8 +1246,13 @@ private enum PaperReaderBridge {
               left: Math.min(window.innerWidth - bounds.width - margin, Math.max(margin, candidates[0].left)),
               top: Math.min(window.innerHeight - bounds.height - margin, Math.max(minTop, candidates[0].top))
             };
-            element.style.left = chosen.left + "px";
-            element.style.top = Math.max(minTop, chosen.top) + "px";
+            // Popovers live in document coordinates so they stay glued to the
+            // explained sentence while the page scrolls. The action bar keeps
+            // viewport coordinates because it is a fixed transient menu.
+            const scrollX = documentSpace ? window.scrollX : 0;
+            const scrollY = documentSpace ? window.scrollY : 0;
+            element.style.left = (chosen.left + scrollX) + "px";
+            element.style.top = (Math.max(margin, chosen.top) + scrollY) + "px";
           };
 
           const focusRectForSelection = (selection, range) => {
@@ -1406,7 +1438,7 @@ private enum PaperReaderBridge {
             popover.append(header, body);
             document.body.append(popover);
             activePopover = popover;
-            positionNear(popover, rect);
+            positionNear(popover, rect, true);
           };
 
           const updatePopover = (id, text, state, kind) => {
@@ -1415,7 +1447,7 @@ private enum PaperReaderBridge {
             const body = activePopover.querySelector(".paper-rss-explanation-body");
             if (body) body.textContent = text || (state === "is-error" ? "暂时无法完成，请稍后重试。" : "正在生成…");
             const rect = activeAnchorElement?.isConnected ? activeAnchorElement.getBoundingClientRect() : activeAnchorRect;
-            positionNear(activePopover, rect);
+            positionNear(activePopover, rect, true);
           };
 
           const postRequest = (kind, range, selectedText) => {
@@ -1423,7 +1455,19 @@ private enum PaperReaderBridge {
             const rect = focusRectForSelection(window.getSelection(), range);
             const anchor = kind === "explanation" ? selectionAnchorForRange(range) : null;
             const markers = kind === "explanation" ? markRange(range, requestID, selectedText) : [];
-            const marker = markers[0]?.querySelector?.(".paper-rss-annotation-icon") || markers[0] || null;
+            let marker = markers[0]?.querySelector?.(".paper-rss-annotation-icon") || markers[0] || null;
+            if (!marker && kind === "translation") {
+              // Selection translations have no persistent icon, so give the
+              // popover an invisible inline anchor at the selection end. It
+              // scrolls with the text and is removed when the popover closes.
+              const anchorSpan = document.createElement("span");
+              anchorSpan.className = "paper-rss-selection-anchor";
+              anchorSpan.setAttribute("aria-hidden", "true");
+              const endRange = range.cloneRange();
+              endRange.collapse(false);
+              endRange.insertNode(anchorSpan);
+              marker = anchorSpan;
+            }
             showPopover(requestID, marker?.getBoundingClientRect?.() || rect, "", "is-loading", kind, marker);
             removeAction();
             window.getSelection()?.removeAllRanges();
@@ -1494,19 +1538,16 @@ private enum PaperReaderBridge {
             }
             if (!event.target.closest?.(".paper-rss-explanation") && !event.target.closest?.(".paper-rss-selection-actions")) dismissPopover();
           });
-          document.addEventListener("scroll", () => {
-            removeAction();
-            if (activePopover) {
-              const rect = activeAnchorElement?.isConnected ? activeAnchorElement.getBoundingClientRect() : activeAnchorRect;
-              if (rect) {
-                if (rect.bottom < -40 || rect.top > window.innerHeight + 40) {
-                  dismissPopover();
-                } else {
-                  positionNear(activePopover, rect);
-                }
-              }
-            }
-          }, { passive: true, capture: true });
+          // The popover is positioned in document coordinates, so it follows
+          // the page on its own while scrolling. Reposition only when layout
+          // changes under it (images loading, translations inserted, window
+          // resize), keeping the anchor element as the source of truth.
+          document.addEventListener("scroll", removeAction, { passive: true, capture: true });
+          window.addEventListener("resize", () => {
+            if (!activePopover) return;
+            const rect = activeAnchorElement?.isConnected ? activeAnchorElement.getBoundingClientRect() : activeAnchorRect;
+            positionNear(activePopover, rect, true);
+          }, { passive: true });
 
           window.paperRssSelectionAssistant = {
             updateInlineTranslation(id, text) {
@@ -1634,6 +1675,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        // HTML5 <video> fullscreen (and the Fullscreen API in general) is
+        // disabled by default in WKWebView. Without this, the video element's
+        // fullscreen control does nothing on macOS.
+        configuration.preferences.isElementFullscreenEnabled = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(
             context.coordinator,
@@ -2055,6 +2100,9 @@ private struct ArticleHTMLView: UIViewRepresentable {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        // iOS 15.4+ exposes the same Fullscreen API preference; enable it so
+        // article videos can use the native fullscreen controller.
+        configuration.preferences.isElementFullscreenEnabled = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(
             context.coordinator,
