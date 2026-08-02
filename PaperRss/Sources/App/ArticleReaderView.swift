@@ -1007,13 +1007,14 @@ th, td {
   cursor: pointer;
 }
 .paper-rss-annotation-icon {
-  position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   box-sizing: border-box;
-  width: 24px;
-  height: 20px;
-  margin: 0 .3em;
-  vertical-align: -.22em;
+  width: 18px;
+  height: 18px;
+  margin: 0 .18em;
+  vertical-align: -.18em;
   color: var(--paper-accent);
   opacity: .92;
   pointer-events: auto;
@@ -1028,9 +1029,10 @@ th, td {
   opacity: .60;
   animation: paper-rss-pulse 1.2s ease-in-out infinite;
 }
-.paper-rss-annotation-icon .paper-rss-language-chip {
-  /* Reuse the bilingual "A文" badge look: two overlapping rounded chips in
-     the accent color, positioned inside this relative container. */
+.paper-rss-annotation-icon .paper-rss-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 .paper-rss-explanation {
   position: absolute;
@@ -1292,6 +1294,22 @@ private enum PaperReaderBridge {
             return svg;
           };
 
+          // The selection bar's translation action uses the same compact
+          // "A文" badge as the side-by-side translation labels, so both
+          // translation entry points share one visual language.
+          const translationBadge = () => {
+            const badge = document.createElement("span");
+            badge.className = "paper-rss-translation-label";
+            badge.setAttribute("aria-hidden", "true");
+            ["A", "文"].forEach(value => {
+              const chip = document.createElement("span");
+              chip.className = "paper-rss-language-chip";
+              chip.textContent = value;
+              badge.append(chip);
+            });
+            return badge;
+          };
+
           const textNodesForRange = range => {
             const nodes = [];
             const root = range.commonAncestorContainer;
@@ -1329,16 +1347,9 @@ private enum PaperReaderBridge {
               btn.setAttribute("role", "button");
               btn.setAttribute("tabindex", "0");
               btn.setAttribute("aria-label", "AI 解释");
-              // Match the bilingual translation badge's compact two-chip
-              // look, but use an "AI" badge so explanations are visually
-              // distinct from the translation "A文" marker.
-              ["A", "I"].forEach(value => {
-                const chip = document.createElement("span");
-                chip.className = "paper-rss-language-chip";
-                chip.setAttribute("aria-hidden", "true");
-                chip.textContent = value;
-                btn.append(chip);
-              });
+              // A compact sparkle marks the explained sentence; it is
+              // visually distinct from the bilingual "A文" translation badge.
+              btn.append(svgIcon("note"));
               return btn;
             };
 
@@ -1507,7 +1518,7 @@ private enum PaperReaderBridge {
               const button = document.createElement("button");
               button.type = "button";
               button.className = "paper-rss-selection-action";
-              button.append(svgIcon(kind));
+              button.append(kind === "translation" ? translationBadge() : svgIcon(kind));
               button.setAttribute("aria-label", label);
               button.setAttribute("title", label);
               button.addEventListener("pointerdown", event => event.preventDefault());
