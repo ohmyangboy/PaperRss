@@ -2,6 +2,19 @@ import XCTest
 @testable import PaperRssCore
 
 final class PaperRssCoreTests: XCTestCase {
+        func testFeedRefreshIntervalOffersExpectedChoices() {
+        XCTAssertEqual(FeedRefreshInterval.allCases.map(\.title), [
+            "仅手动",
+            "每 30 分钟",
+            "每小时",
+            "每 2 小时",
+            "每 4 小时",
+            "每 8 小时"
+        ])
+        XCTAssertNil(FeedRefreshInterval.manual.seconds)
+        XCTAssertEqual(FeedRefreshInterval.twoHours.seconds, 7_200)
+    }
+
     func testParsesRSSAndUsesGuid() throws {
         let data = Data("""
         <rss version="2.0"><channel><title>Example</title><link>https://example.com</link>
@@ -47,6 +60,34 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(index.byID["newer"]?.title, "Newer")
         XCTAssertEqual(index.listItemsByFeed[technology.id]?.first?.summaryPreview, "One")
         XCTAssertEqual(index.allListItems.first?.sourceTitle, "News")
+    }
+
+    func testLibraryIndexExcludesDeletedAndMissingFeedArticles() {
+        let activeFeed = Feed(
+            id: UUID(),
+            title: "Active",
+            feedURL: URL(string: "https://example.com/active.xml")!
+        )
+        let deletedFeed = Feed(
+            id: UUID(),
+            title: "Deleted",
+            feedURL: URL(string: "https://example.com/deleted.xml")!,
+            isDeleted: true
+        )
+        let entries = [
+            Entry(id: "active-entry", feedID: activeFeed.id, title: "保留"),
+            Entry(id: "deleted-entry", feedID: deletedFeed.id, title: "删除"),
+            Entry(id: "missing-entry", feedID: UUID(), title: "孤儿")
+        ]
+
+        XCTAssertTrue(deletedFeed.isDeleted)
+
+        let index = EntryLibraryIndex(entries: entries, feeds: [activeFeed, deletedFeed])
+
+        XCTAssertEqual(index.all.map(\.id), ["active-entry"])
+        XCTAssertNil(index.byID["deleted-entry"])
+        XCTAssertNil(index.byID["missing-entry"])
+        XCTAssertNil(index.listItemsByFeed[deletedFeed.id])
     }
 
     func testEntryListItemDoesNotCarryFullArticleContent() {
@@ -190,7 +231,7 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(sanitized.contains("<p><img"))
     }
 
-    func testFeedUsesStoredAvatarForTwitterRouteAndFaviconOtherwise() {
+    func testFeedUsesStoredIconForEveryFeedAndFaviconOtherwise() {
         let avatar = URL(string: "https://pbs.twimg.com/profile_images/1717417613775757312/Uk1zNOj4.jpg")
         let twitter = Feed(
             title: "Twitter @DeepSeek",
@@ -204,7 +245,19 @@ final class PaperRssCoreTests: XCTestCase {
             feedURL: URL(string: "https://example.com/rss.xml")!,
             storedIconURL: URL(string: "https://example.com/logo.png")
         )
-        XCTAssertEqual(plain.iconURL?.absoluteString, "https://www.google.com/s2/favicons?domain=example.com&sz=64")
+        XCTAssertEqual(plain.iconURL?.absoluteString, "https://example.com/logo.png")
+    }
+
+    func testRSSInfersSiteOriginFromFirstEntryWhenChannelHasNoHomepage() throws {
+        let data = Data("""
+        <rss version="2.0"><channel><title>Example</title>
+        <item><guid>item-1</guid><title>Hello</title><link>https://example.com/blog/hello</link></item>
+        </channel></rss>
+        """.utf8)
+
+        let feed = try FeedParser.parse(data: data, baseURL: URL(string: "https://feeds.example.net/example.xml")!)
+
+        XCTAssertEqual(feed.siteURL?.absoluteString, "https://example.com")
     }
 
     func testFeedDecodesLegacyJSONWithoutIconField() throws {
@@ -374,7 +427,18 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(configuration.providerDescription, "用于翻译、总结和解读文章")
         XCTAssertEqual(configuration.reasoningMode, "自动")
         XCTAssertEqual(configuration.model, "local-model")
+        XCTAssertTrue(configuration.showsAISummary)
         XCTAssertFalse(configuration.automaticallyGenerateSummary)
+    }
+
+    func testLLMConfigurationCanHideAISummaryModule() throws {
+        var configuration = LLMConfiguration.default
+        configuration.showsAISummary = false
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(LLMConfiguration.self, from: data)
+
+        XCTAssertFalse(decoded.showsAISummary)
     }
 
     func testDeepSeekPresetUsesOfficialAPIHost() {
@@ -501,5 +565,27 @@ final class PaperRssCoreTests: XCTestCase {
         let artifact = try XCTUnwrap(merged.artifacts.first)
         XCTAssertTrue(artifact.isDeleted)
         XCTAssertTrue(artifact.content.isEmpty)
+    }
+
+    func testUnreadListItemsRetainsReadEntriesInSession() {
+        let feedID = UUID()
+        let feed = Feed(id: feedID, title: "Test", feedURL: URL(string: "https://example.com")!)
+        var entry1 = Entry(id: "item-1", feedID: feedID, title: "Unread 1", isRead: false)
+        let entry2 = Entry(id: "item-2", feedID: feedID, title: "Unread 2", isRead: false)
+
+        var index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
+        XCTAssertEqual(index.unreadListItems.count, 2)
+
+        // Simulate marking item1 as read
+        entry1.isRead = true
+        index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
+
+        // Without retainingIDs, marked read item vanishes
+        XCTAssertEqual(index.unreadListItems.map(\.id), ["item-2"])
+
+        // With retainingIDs set from current session, item1 is retained
+        let retained = index.unreadListItems(retainingIDs: ["item-1", "item-2"])
+        XCTAssertEqual(retained.map(\.id), ["item-1", "item-2"])
+        XCTAssertTrue(retained.first(where: { $0.id == "item-1" })?.isRead == true)
     }
 }

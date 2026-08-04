@@ -162,7 +162,53 @@ swift build --product PaperRssDesktop
 - 不要在日志、数据库、导出文件中输出 API Key、Authorization Header 或完整请求。
 - 报告完成时区分“代码测试通过”“实际 App 已启动验证”“Xcode Beta 构建器异常”，不要把其中一项冒充另一项。
 
-## 9. 2026-08-02 下午：划词解释体验修复（本轮）
+## 9. 2026-08-02 视频全屏修复
+
+用户反馈：视频点全屏后，画面只占原阅读列宽，右侧出现大面积黑边（截图中视频约占左半屏）。
+
+原因是 WKWebView 全屏元素仍继承文章正文的 `max-width: 100%` 和原始布局宽度；原有 `video:fullscreen` 只取消了 max-width/max-height，没有把元素扩展到 fullscreen viewport。
+
+已修改 `PaperRss/Sources/App/ArticleReaderView.swift` 的 `paperArticleStyle`：
+
+- `video:-webkit-full-screen` / `video:fullscreen` 使用 `position: fixed; inset: 0; width: 100vw; height: 100vh`；
+- `object-fit: contain`、`object-position: center` 保持视频比例，避免拉伸；
+- 全屏元素移除圆角、边框和文章 margin，背景为黑色；
+- `html/body` 的 fullscreen 状态锁定为 `100%` 宽高并隐藏溢出。
+
+这会把黑边限制在视频源与屏幕纵横比差异所必需的方向，不再保留“原正文列宽 + 右侧整块黑区”。
+
+验证：
+
+- `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test`：**29/29 通过**；
+- `swift build --product PaperRssDesktop`：成功；
+- 已将更新后的 App 安装到实际启动路径：
+  `/Users/yangbukun/Desktop/code/myapp/PaperRss 2026-07-31 20-03-41/PaperRss.app`
+- 本轮替换前版本备份：
+  `/Users/yangbukun/Desktop/code/myapp/PaperRss 2026-07-31 20-03-41/PaperRss.app.pre-fullscreen-20260802`
+
+尚未用真实视频控件在 Computer Use 中自动点击全屏（WKWebView 原生视频控件不稳定暴露为 AX 控件）；用户应在当前版本中重新打开同一视频并点击全屏确认。若仍有黑边，下一步只考虑 `object-fit: cover`（会裁切画面），不要直接采用，因为默认阅读体验应优先保留完整视频内容。
+
+## 10. 2026-08-02 视频全屏第二轮：修复 WKWebView 宿主问题
+
+用户用真实视频再次验证后，确认第一轮 CSS 修复仍然出现“左侧原尺寸 + 右侧大面积黑区”。这不是视频比例造成的黑边，而是 macOS WebKit 的宿主布局问题：SwiftUI `NSViewRepresentable` 直接返回 `WKWebView` 时，WebKit 将 WebView 重挂到原生全屏窗口后，viewport/bounds 可能被压成 0×0，视频因此保留进入全屏前的文章栏尺寸。
+
+已修改 `PaperRss/Sources/App/ArticleReaderView.swift`：
+
+- 新增 `ArticleWebViewContainer: NSView`，由 SwiftUI 管理容器，而不是直接管理 `WKWebView`；
+- 容器内部使用 frame/autoresizing 托管 WKWebView，使 WebKit 重挂全屏窗口时不受 SwiftUI 祖先 Auto Layout 约束影响；
+- `video:-webkit-full-screen` / `video:fullscreen` 改为按全屏元素的 `width: 100%; height: 100%` 计算，不再使用可能仍指向文章栏 viewport 的 `100vw/100vh`；
+- 继续使用 `object-fit: contain`，保证视频完整显示，不拉伸、不裁切。
+
+这对应 WebKit 已知问题 313802 的官方复现和 workaround：将 WKWebView 放入 frame-based 容器后，视频才能正确填满全屏窗口。
+
+验证：
+
+- Xcode Beta 环境 `swift test`：**30/30 通过**；
+- `swift build --product PaperRssDesktop`：成功；
+- 已安装到实际路径：`/Users/yangbukun/Desktop/code/myapp/PaperRss 2026-07-31 20-03-41/PaperRss.app`；
+- 旧版本备份：`PaperRss.app.pre-fullscreen-wrapper-20260802`。
+
+## 11. 2026-08-02 下午：划词解释体验修复（本轮）
 
 ### 修复内容
 

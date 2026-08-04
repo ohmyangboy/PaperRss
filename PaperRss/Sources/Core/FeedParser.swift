@@ -126,7 +126,13 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
         if local == "link" {
             let href = attributeDict["href"] ?? attributeDict["url"]
             if let href, let url = URL(string: href, relativeTo: baseURL)?.absoluteURL {
-                if currentItem != nil { currentItemLink = url } else { feedLink = url }
+                if currentItem != nil {
+                    currentItemLink = url
+                } else if attributeDict["rel"]?.lowercased() != "self" {
+                    // Atom's rel="self" points back to the feed endpoint,
+                    // not to the site that owns the feed.
+                    feedLink = url
+                }
             }
         }
     }
@@ -180,7 +186,19 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
 
     func result() throws -> ParsedFeed {
         guard root == "rss" || root == "feed" || root == "rdf" || !entries.isEmpty else { throw FeedParserError.unsupported }
-        return ParsedFeed(title: feedTitle.nonEmpty ?? "未命名订阅", siteURL: feedLink, iconURL: feedIconURL, entries: entries)
+        // A number of RSS proxies omit the channel homepage. The first item
+        // still normally carries the publisher URL, which is a useful and
+        // stable source for favicon fallback.
+        let siteURL = feedLink ?? entries.compactMap(\.url).first.flatMap(Self.originURL)
+        return ParsedFeed(title: feedTitle.nonEmpty ?? "未命名订阅", siteURL: siteURL, iconURL: feedIconURL, entries: entries)
+    }
+
+    private static func originURL(_ url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 }
 

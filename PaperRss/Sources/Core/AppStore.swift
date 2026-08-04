@@ -57,12 +57,11 @@ struct EntryLibraryIndex: Sendable {
             let right = $1.publishedAt ?? .distantPast
             return left == right ? $0.id < $1.id : left > right
         }
-        let feedsByID = Dictionary(uniqueKeysWithValues: feeds.map { ($0.id, $0) })
-        let folderByFeed = Dictionary(uniqueKeysWithValues: feeds.compactMap { feed in
+        let activeFeeds = feeds.filter { !$0.isDeleted }
+        let feedsByID = Dictionary(uniqueKeysWithValues: activeFeeds.map { ($0.id, $0) })
+        let folderByFeed = Dictionary(uniqueKeysWithValues: activeFeeds.compactMap { feed in
             feed.folder.map { (feed.id, $0) }
         })
-        let titleByFeed = Dictionary(uniqueKeysWithValues: feeds.map { ($0.id, $0.title) })
-
         var todayEntries: [Entry] = []
         var unreadEntries: [Entry] = []
         var starredEntries: [Entry] = []
@@ -78,6 +77,7 @@ struct EntryLibraryIndex: Sendable {
         var rowItemsByFeed: [UUID: [EntryListItem]] = [:]
         var rowItemsByFolder: [String: [EntryListItem]] = [:]
 
+        var activeEntries: [Entry] = []
         todayEntries.reserveCapacity(min(ordered.count, 128))
         unreadEntries.reserveCapacity(ordered.count)
         starredEntries.reserveCapacity(min(ordered.count, 128))
@@ -85,11 +85,12 @@ struct EntryLibraryIndex: Sendable {
         listItems.reserveCapacity(ordered.count)
 
         for entry in ordered {
-            let feed = feedsByID[entry.feedID]
+            guard let feed = feedsByID[entry.feedID] else { continue }
+            activeEntries.append(entry)
             let listItem = EntryListItem(
                 entry: entry,
-                sourceTitle: feed?.title ?? titleByFeed[entry.feedID] ?? "订阅",
-                feedIconURL: feed?.iconURL
+                sourceTitle: feed.title,
+                feedIconURL: feed.iconURL
             )
             entriesByID[entry.id] = entry
             entriesByFeed[entry.feedID, default: []].append(entry)
@@ -117,7 +118,7 @@ struct EntryLibraryIndex: Sendable {
             }
         }
 
-        all = ordered
+        all = activeEntries
         today = todayEntries
         unread = unreadEntries
         starred = starredEntries
@@ -133,12 +134,26 @@ struct EntryLibraryIndex: Sendable {
         listItemsByFeed = rowItemsByFeed
         listItemsByFolder = rowItemsByFolder
     }
+
+    func unreadListItems(retainingIDs: Set<String>) -> [EntryListItem] {
+        guard !retainingIDs.isEmpty else { return unreadListItems }
+        return allListItems.filter { !$0.isRead || retainingIDs.contains($0.id) }
+    }
 }
 
 @MainActor
 public final class AppStore: ObservableObject {
+    @Published public var appLanguage: AppLanguage = I18N.shared.language {
+        didSet {
+            I18N.shared.language = appLanguage
+        }
+    }
     @Published public private(set) var database: AppDatabase
+    @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
+    @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
+    @Published public private(set) var refreshInterval: FeedRefreshInterval
+    @Published public private(set) var refreshOnLaunch: Bool
     @Published public private(set) var lastError: String?
     @Published public private(set) var isICloudSyncEnabled = false
     @Published public private(set) var iCloudSyncStatus = "未启用"
@@ -148,8 +163,17 @@ public final class AppStore: ObservableObject {
     private let llm = LLMService()
     private let persistenceWriter = DatabasePersistenceWriter()
     private var iCloudSyncTask: Task<Void, Never>?
+    private var automaticRefreshTask: Task<Void, Never>?
+    private var summaryStreamNotificationTask: Task<Void, Never>?
     private var persistenceRevision = 0
     private var entryIndex: EntryLibraryIndex
+
+    private static let summaryStreamNotificationInterval: UInt64 = 80_000_000
+
+    private enum PreferenceKey {
+        static let refreshInterval = "PaperRss.refreshInterval"
+        static let refreshOnLaunch = "PaperRss.refreshOnLaunch"
+    }
 
     public init(fileManager: FileManager = .default) {
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
@@ -157,20 +181,37 @@ public final class AppStore: ObservableObject {
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         persistenceURL = directory.appendingPathComponent("library.json")
         var loadedDatabase = Self.load(from: persistenceURL) ?? .empty
+        var needsRepairPersistence = false
+        // Older libraries may have a feed endpoint but no channel homepage.
+        // Recover the publisher origin from an existing article so the icon
+        // fallback does not stay on a proxy/feed host forever.
+        for feedIndex in loadedDatabase.feeds.indices where loadedDatabase.feeds[feedIndex].siteURL == nil {
+            guard let articleURL = loadedDatabase.entries.first(where: { $0.feedID == loadedDatabase.feeds[feedIndex].id })?.url,
+                  let origin = Self.originURL(from: articleURL) else { continue }
+            loadedDatabase.feeds[feedIndex].siteURL = origin
+            needsRepairPersistence = true
+        }
         // Older builds kept some HTML descriptions in `summary`. Normalize
         // those once at load time instead of running a regular-expression HTML
         // pass from every visible row whenever the user changes feeds.
         for index in loadedDatabase.entries.indices where loadedDatabase.entries[index].summary.needsPlainTextNormalization {
             loadedDatabase.entries[index].summary = loadedDatabase.entries[index].summary.plainText
         }
+        if Self.purgeEntriesFromInactiveFeeds(in: &loadedDatabase) {
+            needsRepairPersistence = true
+        }
         database = loadedDatabase
         entryIndex = EntryLibraryIndex(entries: loadedDatabase.entries, feeds: loadedDatabase.feeds)
+        let preferences = UserDefaults.standard
+        refreshInterval = FeedRefreshInterval(rawValue: preferences.string(forKey: PreferenceKey.refreshInterval) ?? "") ?? .twoHours
+        refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
         isICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
         iCloudSyncStatus = isICloudSyncEnabled ? "等待同步" : "未启用"
+        if needsRepairPersistence { persist(scheduleICloud: false) }
     }
 
     public var feeds: [Feed] { database.feeds.filter { !$0.isDeleted }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
-    public var folders: [String] { Array(Set(feeds.compactMap(\.folder))).sorted() }
+    public var folders: [String] { Array(Set(feeds.compactMap(\.folder)).union(database.customFolders)).sorted() }
     public var entries: [Entry] { entryIndex.all }
     public var todayEntries: [Entry] { entryIndex.today }
     public var unreadEntries: [Entry] { entryIndex.unread }
@@ -178,9 +219,47 @@ public final class AppStore: ObservableObject {
     public var entryListItems: [EntryListItem] { entryIndex.allListItems }
     public var todayEntryListItems: [EntryListItem] { entryIndex.todayListItems }
     public var unreadEntryListItems: [EntryListItem] { entryIndex.unreadListItems }
+    public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] { entryIndex.unreadListItems(retainingIDs: retainingIDs) }
     public var starredEntryListItems: [EntryListItem] { entryIndex.starredListItems }
     public func unreadCount(feedID: UUID) -> Int { entryIndex.unreadByFeed[feedID, default: 0] }
     public func unreadCount(folder: String) -> Int { entryIndex.unreadByFolder[folder, default: 0] }
+
+    public func setFeedFolder(_ feed: Feed, folder: String?) {
+        guard let index = database.feeds.firstIndex(where: { $0.id == feed.id }) else { return }
+        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        database.feeds[index].folder = cleanFolder
+        database.feeds[index].updatedAt = .now
+        rebuildEntryIndex()
+        persist()
+    }
+
+    public func setFeedFolder(feedID: UUID, folder: String?) {
+        guard let index = database.feeds.firstIndex(where: { $0.id == feedID }) else { return }
+        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        database.feeds[index].folder = cleanFolder
+        database.feeds[index].updatedAt = .now
+        rebuildEntryIndex()
+        persist()
+    }
+
+    public func addFolder(_ name: String) {
+        guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
+        if !database.customFolders.contains(clean) {
+            database.customFolders.append(clean)
+            database.customFolders.sort()
+            persist()
+        }
+    }
+
+    public func deleteFolder(_ name: String) {
+        database.customFolders.removeAll { $0 == name }
+        for index in database.feeds.indices where database.feeds[index].folder == name {
+            database.feeds[index].folder = nil
+            database.feeds[index].updatedAt = .now
+        }
+        rebuildEntryIndex()
+        persist()
+    }
 
     public func entries(feedID: UUID?) -> [Entry] {
         guard let feedID else { return entries }
@@ -230,6 +309,60 @@ public final class AppStore: ObservableObject {
         activeAIRequest?.entryID == entry.id && activeAIRequest?.kind == kind
     }
 
+    public func setRefreshInterval(_ interval: FeedRefreshInterval) {
+        guard refreshInterval != interval else { return }
+        refreshInterval = interval
+        UserDefaults.standard.set(interval.rawValue, forKey: PreferenceKey.refreshInterval)
+        restartAutomaticRefreshIfNeeded()
+    }
+
+    public func setRefreshOnLaunch(_ enabled: Bool) {
+        guard refreshOnLaunch != enabled else { return }
+        refreshOnLaunch = enabled
+        UserDefaults.standard.set(enabled, forKey: PreferenceKey.refreshOnLaunch)
+    }
+
+    /// Starts the app-level refresh loop. The first refresh is intentionally
+    /// immediate so reopening the app always checks for new articles.
+    public func startAutomaticRefresh() {
+        guard automaticRefreshTask == nil else { return }
+        automaticRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.refreshOnLaunch {
+                await self.refresh(reportErrors: false)
+            }
+
+            while !Task.isCancelled {
+                guard let seconds = self.refreshInterval.seconds else {
+                    do {
+                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                    } catch {
+                        return
+                    }
+                    continue
+                }
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await self.refresh(reportErrors: false)
+            }
+        }
+    }
+
+    public func stopAutomaticRefresh() {
+        automaticRefreshTask?.cancel()
+        automaticRefreshTask = nil
+    }
+
+    private func restartAutomaticRefreshIfNeeded() {
+        guard automaticRefreshTask != nil else { return }
+        stopAutomaticRefresh()
+        startAutomaticRefresh()
+    }
+
     public func addFeed(urlText: String, folder: String? = nil) async {
         guard let url = normalizedURL(urlText) else { lastError = "请输入有效的 Feed URL。"; return }
         guard !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) else { lastError = "这个订阅已经存在。"; return }
@@ -250,12 +383,21 @@ public final class AppStore: ObservableObject {
 
     public func exportOPML() -> Data { OPMLService.export(feeds: database.feeds) }
 
-    public func refresh(feedIDs: [UUID]? = nil) async {
+    public func refresh(feedIDs: [UUID]? = nil, reportErrors: Bool = true) async {
         guard !isRefreshing else { return }
+        let startedAt = Date.now
         isRefreshing = true
-        defer { isRefreshing = false }
+        refreshStatus = .refreshing
         let ids = feedIDs ?? feeds.map(\.id)
+        let total = ids.count
+        refreshProgress = (0, total)
+        defer {
+            refreshProgress = nil
+            isRefreshing = false
+        }
         var failures: [String] = []
+        var updatedFeeds = 0
+        var completedCount = 0
         for id in ids {
             guard let index = database.feeds.firstIndex(where: { $0.id == id }), !database.feeds[index].isDeleted else { continue }
             let oldFeed = database.feeds[index]
@@ -267,6 +409,7 @@ public final class AppStore: ObservableObject {
                     database.feeds[index].lastRefreshedAt = .now
                     database.feeds[index].updatedAt = .now
                 case let .updated(parsed, etag, lastModified):
+                    updatedFeeds += 1
                     database.feeds[index].title = parsed.title
                     database.feeds[index].siteURL = parsed.siteURL
                     database.feeds[index].storedIconURL = parsed.iconURL ?? database.feeds[index].storedIconURL
@@ -279,10 +422,25 @@ public final class AppStore: ObservableObject {
             } catch {
                 failures.append("\(oldFeed.title)：\(error.localizedDescription)")
             }
+            completedCount += 1
+            refreshProgress = (completedCount, total)
         }
         rebuildEntryIndex()
         persist()
-        if !failures.isEmpty { lastError = failures.joined(separator: "\n") }
+        let finishedAt = Date.now
+        if failures.isEmpty {
+            refreshStatus = .completed(updatedFeeds: updatedFeeds, finishedAt: finishedAt)
+        } else {
+            let message = failures.joined(separator: "\n")
+            refreshStatus = .failed(message: message, finishedAt: finishedAt)
+            if reportErrors { lastError = message }
+        }
+        let minimumIndicatorDuration: TimeInterval = 1.2
+        let remainingDuration = minimumIndicatorDuration - Date.now.timeIntervalSince(startedAt)
+        if remainingDuration > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
+        }
+        isRefreshing = false
     }
 
     public func markRead(_ entry: Entry, read: Bool = true) {
@@ -566,7 +724,10 @@ public final class AppStore: ObservableObject {
         }
 
         activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
-        defer { activeAIRequest = nil }
+        defer {
+            cancelSummaryStreamNotification()
+            activeAIRequest = nil
+        }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
             lastError = "尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。"
@@ -594,7 +755,7 @@ public final class AppStore: ObservableObject {
                     await MainActor.run {
                         if let index = self.database.artifacts.firstIndex(where: { $0.id == artifactID }) {
                             self.database.artifacts[index].content += delta
-                            self.objectWillChange.send()
+                            self.scheduleSummaryStreamNotification()
                         }
                     }
                 }
@@ -1105,10 +1266,34 @@ public final class AppStore: ObservableObject {
 
     private func completeArtifact(id: UUID, content: String) {
         guard let index = database.artifacts.firstIndex(where: { $0.id == id }) else { return }
+        if database.artifacts[index].kind == .summary {
+            cancelSummaryStreamNotification()
+        }
         database.artifacts[index].content = content
         database.artifacts[index].isComplete = true
         database.artifacts[index].updatedAt = .now
         persist()
+    }
+
+    /// Coalesce token-sized summary updates so the reader's large WebView
+    /// hierarchy is not invalidated once per network delta while scrolling.
+    private func scheduleSummaryStreamNotification() {
+        guard summaryStreamNotificationTask == nil else { return }
+        summaryStreamNotificationTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.summaryStreamNotificationInterval)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.summaryStreamNotificationTask = nil
+            self.objectWillChange.send()
+        }
+    }
+
+    private func cancelSummaryStreamNotification() {
+        summaryStreamNotificationTask?.cancel()
+        summaryStreamNotificationTask = nil
     }
 
     private func apply(cloud remote: CloudLibrary) {
@@ -1120,17 +1305,7 @@ public final class AppStore: ObservableObject {
         // Feed tombstones are synchronized, while article bodies are local to
         // each device. Apply the same cascade on every device so an iPhone does
         // not retain articles after their feed was deleted on the Mac.
-        let deletedFeedIDs = Set(database.feeds.lazy.filter(\.isDeleted).map(\.id))
-        if !deletedFeedIDs.isEmpty {
-            let deletedEntryIDs = Set(
-                database.entries.lazy
-                    .filter { deletedFeedIDs.contains($0.feedID) }
-                    .map(\.id)
-            )
-            database.entries.removeAll { deletedEntryIDs.contains($0.id) }
-            database.articleCaches = database.articleCaches.filter { !deletedEntryIDs.contains($0.key) }
-            database.readingStates = database.readingStates.filter { !deletedEntryIDs.contains($0.key) }
-        }
+        _ = Self.purgeEntriesFromInactiveFeeds(in: &database)
 
         for index in database.entries.indices {
             if let state = merged.readingStates[database.entries[index].id] {
@@ -1161,6 +1336,36 @@ public final class AppStore: ObservableObject {
         entryIndex = EntryLibraryIndex(entries: database.entries, feeds: database.feeds)
     }
 
+    /// Removes articles whose feed was deleted or no longer exists. Older
+    /// builds could leave these rows behind, and a cloud merge can reintroduce
+    /// them on a device that still has the local article cache.
+    @discardableResult
+    private static func purgeEntriesFromInactiveFeeds(in database: inout AppDatabase) -> Bool {
+        let activeFeedIDs = Set(database.feeds.lazy.filter { !$0.isDeleted }.map(\.id))
+        let orphanedEntryIDs = Set(
+            database.entries.lazy
+                .filter { !activeFeedIDs.contains($0.feedID) }
+                .map(\.id)
+        )
+        guard !orphanedEntryIDs.isEmpty else { return false }
+
+        let deletedAt = Date.now
+        database.entries.removeAll { orphanedEntryIDs.contains($0.id) }
+        database.articleCaches = database.articleCaches.filter { !orphanedEntryIDs.contains($0.key) }
+        database.readingStates = database.readingStates.filter { !orphanedEntryIDs.contains($0.key) }
+        for index in database.artifacts.indices where orphanedEntryIDs.contains(database.artifacts[index].entryID) {
+            database.artifacts[index].content = ""
+            database.artifacts[index].segments = []
+            database.artifacts[index].selectionText = nil
+            database.artifacts[index].selectionArticleHash = nil
+            database.artifacts[index].selectionAnchor = nil
+            database.artifacts[index].isComplete = false
+            database.artifacts[index].isDeleted = true
+            database.artifacts[index].updatedAt = deletedAt
+        }
+        return true
+    }
+
     private func scheduleICloudSync() {
         guard isICloudSyncEnabled else { return }
         iCloudSyncTask?.cancel()
@@ -1169,6 +1374,14 @@ public final class AppStore: ObservableObject {
             guard !Task.isCancelled else { return }
             await self?.syncICloud()
         }
+    }
+
+    private static func originURL(from url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 
     private static func load(from url: URL) -> AppDatabase? {

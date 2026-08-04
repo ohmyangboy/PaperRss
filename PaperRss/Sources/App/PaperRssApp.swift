@@ -13,8 +13,10 @@ struct PaperRssApp: App {
         }
         #if os(iOS)
         .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
-            await store.refresh()
-            BackgroundRefresh.schedule()
+            if await store.refreshInterval != .manual {
+                await store.refresh(reportErrors: false)
+            }
+            BackgroundRefresh.schedule(interval: await store.refreshInterval)
         }
         #endif
         .commands {

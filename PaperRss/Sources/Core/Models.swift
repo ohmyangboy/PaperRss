@@ -1,5 +1,52 @@
 import Foundation
 
+public enum FeedRefreshInterval: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case manual
+    case thirtyMinutes
+    case oneHour
+    case twoHours
+    case fourHours
+    case eightHours
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .manual: "仅手动"
+        case .thirtyMinutes: "每 30 分钟"
+        case .oneHour: "每小时"
+        case .twoHours: "每 2 小时"
+        case .fourHours: "每 4 小时"
+        case .eightHours: "每 8 小时"
+        }
+    }
+
+    public var seconds: TimeInterval? {
+        switch self {
+        case .manual: nil
+        case .thirtyMinutes: 30 * 60
+        case .oneHour: 60 * 60
+        case .twoHours: 2 * 60 * 60
+        case .fourHours: 4 * 60 * 60
+        case .eightHours: 8 * 60 * 60
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .manual: "应用保持打开时不自动刷新；打开应用时仍会按上方开关刷新。"
+        default: "应用保持打开时按此频率检查订阅；系统后台刷新时间可能会有所延迟。"
+        }
+    }
+}
+
+public enum FeedRefreshStatus: Equatable, Sendable {
+    case idle
+    case refreshing
+    case completed(updatedFeeds: Int, finishedAt: Date)
+    case failed(message: String, finishedAt: Date)
+}
+
 public struct Feed: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var title: String
@@ -31,14 +78,21 @@ public struct Feed: Identifiable, Codable, Hashable, Sendable {
     }
 
     public var iconURL: URL? {
+        // Keep the icon advertised by the feed for every source, not only
+        // Twitter/X. Some feeds provide a real logo while the generic
+        // favicon service returns a globe or another placeholder.
+        if let storedIconURL {
+            return storedIconURL
+        }
+
         let candidateHost = siteURL?.host ?? feedURL.host
         guard let host = candidateHost?.lowercased() else { return nil }
         // Special case for Twitter / X via RSSHub
         let path = feedURL.path.lowercased()
         if host.contains("twitter.com") || host.contains("x.com") || path.contains("/twitter/") || path.hasPrefix("/twitter") || path.contains("/x/") {
             // RSSHub publishes the account owner's avatar as the feed image.
-            // Prefer it; the bird favicon remains the fallback until refresh.
-            return storedIconURL ?? URL(string: "https://abs.twimg.com/favicons/twitter.3.ico")
+            // The bird favicon remains the fallback until refresh.
+            return URL(string: "https://abs.twimg.com/favicons/twitter.3.ico")
         }
         return URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
     }
@@ -102,6 +156,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let id: String
     public let feedID: UUID
     public let title: String
+    public let url: URL?
     public let summaryPreview: String
     public let sourceTitle: String
     public let feedIconURL: URL?
@@ -113,6 +168,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         id = entry.id
         feedID = entry.feedID
         title = entry.title
+        url = entry.url
         summaryPreview = String(entry.summary.prefix(previewCharacterLimit))
         self.sourceTitle = sourceTitle
         self.feedIconURL = feedIconURL
@@ -306,9 +362,10 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var temperature: Double
     public var targetLanguage: String
     public var allowInsecureLocalEndpoint: Bool
+    public var showsAISummary: Bool
     public var automaticallyGenerateSummary: Bool
 
-    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, automaticallyGenerateSummary: false)
+    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false)
 
     /// DeepSeek's OpenAI-compatible endpoint expects the API root here.  The
     /// service appends `/chat/completions` itself, so users never need to guess
@@ -322,6 +379,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         temperature: 0.2,
         targetLanguage: "简体中文",
         allowInsecureLocalEndpoint: false,
+        showsAISummary: true,
         automaticallyGenerateSummary: false
     )
 
@@ -330,7 +388,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         return host == "api.deepseek.com"
     }
 
-    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, automaticallyGenerateSummary: Bool = false) {
+    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false) {
         self.providerName = providerName
         self.providerDescription = providerDescription
         self.baseURL = baseURL
@@ -339,10 +397,11 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         self.temperature = temperature
         self.targetLanguage = targetLanguage
         self.allowInsecureLocalEndpoint = allowInsecureLocalEndpoint
+        self.showsAISummary = showsAISummary
         self.automaticallyGenerateSummary = automaticallyGenerateSummary
     }
 
-    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, automaticallyGenerateSummary }
+    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -354,6 +413,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.2
         targetLanguage = try container.decodeIfPresent(String.self, forKey: .targetLanguage) ?? "简体中文"
         allowInsecureLocalEndpoint = try container.decodeIfPresent(Bool.self, forKey: .allowInsecureLocalEndpoint) ?? false
+        showsAISummary = try container.decodeIfPresent(Bool.self, forKey: .showsAISummary) ?? true
         automaticallyGenerateSummary = try container.decodeIfPresent(Bool.self, forKey: .automaticallyGenerateSummary) ?? false
     }
 }
@@ -365,19 +425,21 @@ public struct AppDatabase: Codable, Sendable {
     public var readingStates: [String: ReadingState]
     public var artifacts: [AIArtifact]
     public var llmConfiguration: LLMConfiguration
+    public var customFolders: [String]
 
-    public static let empty = AppDatabase(feeds: [], entries: [], articleCaches: [:], readingStates: [:], artifacts: [], llmConfiguration: .default)
+    public static let empty = AppDatabase(feeds: [], entries: [], articleCaches: [:], readingStates: [:], artifacts: [], llmConfiguration: .default, customFolders: [])
 
-    public init(feeds: [Feed], entries: [Entry], articleCaches: [String: ArticleCache], readingStates: [String: ReadingState], artifacts: [AIArtifact], llmConfiguration: LLMConfiguration) {
+    public init(feeds: [Feed], entries: [Entry], articleCaches: [String: ArticleCache], readingStates: [String: ReadingState], artifacts: [AIArtifact], llmConfiguration: LLMConfiguration, customFolders: [String] = []) {
         self.feeds = feeds
         self.entries = entries
         self.articleCaches = articleCaches
         self.readingStates = readingStates
         self.artifacts = artifacts
         self.llmConfiguration = llmConfiguration
+        self.customFolders = customFolders
     }
 
-    private enum CodingKeys: String, CodingKey { case feeds, entries, articleCaches, readingStates, artifacts, llmConfiguration }
+    private enum CodingKeys: String, CodingKey { case feeds, entries, articleCaches, readingStates, artifacts, llmConfiguration, customFolders }
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         feeds = try container.decodeIfPresent([Feed].self, forKey: .feeds) ?? []
@@ -386,6 +448,7 @@ public struct AppDatabase: Codable, Sendable {
         readingStates = try container.decodeIfPresent([String: ReadingState].self, forKey: .readingStates) ?? [:]
         artifacts = try container.decodeIfPresent([AIArtifact].self, forKey: .artifacts) ?? []
         llmConfiguration = try container.decodeIfPresent(LLMConfiguration.self, forKey: .llmConfiguration) ?? .default
+        customFolders = try container.decodeIfPresent([String].self, forKey: .customFolders) ?? []
     }
 }
 
