@@ -48,6 +48,29 @@ private struct ReaderHeaderHeightPreferenceKey: PreferenceKey {
     }
 }
 
+#if os(macOS)
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hitView = super.hitTest(point)
+        return hitView === self ? nil : hitView
+    }
+}
+
+private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    func makeNSView(context: Context) -> NSHostingView<Content> {
+        let host = PassthroughHostingView(rootView: content)
+        host.layer?.backgroundColor = .clear
+        return host
+    }
+
+    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+}
+#endif
+
 struct ArticleReaderView: View {
     @ObservedObject var store: AppStore
     let entry: Entry
@@ -60,17 +83,27 @@ struct ArticleReaderView: View {
     @State private var articleBaseURL: URL?
     @State private var isLoading = true
     @State private var activeLoadEntryID: String?
-    @State private var readerMode: ReaderMode = .original
     @State private var isSummaryExpanded = false
-    @State private var isReaderAtTop = true
-    @State private var isHeaderManuallyExpanded = false
     @State private var visibleBilingualParagraphIDs: [String] = []
     @State private var pendingBilingualParagraphIDs: Set<String> = []
     @State private var failedBilingualParagraphIDs: Set<String> = []
     @State private var streamingBilingualTranslations: [String: String] = [:]
-    @State private var expandedReaderHeaderContentHeight: CGFloat = 176
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+
+    private var paperTopMargin: CGFloat {
+        0
+    }
+
+    private var paperLeftMargin: CGFloat {
+        0
+    }
+
+    private func toggleSummary() {
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
+            isSummaryExpanded.toggle()
+        }
+    }
 
     private var artifact: AIArtifact? {
         readerMode == .bilingual ? store.bilingualArtifact(for: entry, text: text) : nil
@@ -89,7 +122,13 @@ struct ArticleReaderView: View {
         return persisted + streamed
     }
 
-    private var readerParagraphs: [ReaderParagraph] { parsedReaderParagraphs }
+    private var readerParagraphs: [ReaderParagraph] {
+        if !parsedReaderParagraphs.isEmpty {
+            return parsedReaderParagraphs
+        }
+        guard let html, !html.isEmpty else { return [] }
+        return ArticleExtractor.readerParagraphs(in: html)
+    }
 
     private var savedSelectionAnnotations: [ReaderSelectionAnnotation] {
         guard !text.isEmpty else { return [] }
@@ -104,7 +143,7 @@ struct ArticleReaderView: View {
                   let anchor = artifact.selectionAnchor,
                   !artifact.content.isEmpty else { return nil }
             return ReaderSelectionAnnotation(
-                id: "saved-(artifact.id.uuidString)",
+                id: "saved-\(artifact.id.uuidString)",
                 selection: selection,
                 explanation: artifact.content,
                 paragraphID: anchor.paragraphID,
@@ -115,13 +154,21 @@ struct ArticleReaderView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             if hasReaderContent {
                 readerBody
+                    .zIndex(0)
             }
             if isLoading {
                 loadingOverlay
+                    .zIndex(2)
             }
+
+            #if os(iOS)
+            floatingCapsuleToolbar
+                .padding(.top, 14)
+                .zIndex(10)
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
@@ -132,19 +179,11 @@ struct ArticleReaderView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbar { articleToolbar }
-        .onPreferenceChange(ReaderHeaderHeightPreferenceKey.self) { height in
-            guard height > 0, abs(height - expandedReaderHeaderContentHeight) > 0.5 else { return }
-            expandedReaderHeaderContentHeight = height
-        }
         .task(id: entry.id) {
             let requestedEntry = entry
             activeLoadEntryID = requestedEntry.id
             isLoading = true
-            readerMode = .original
             isSummaryExpanded = false
-            isReaderAtTop = true
-            isHeaderManuallyExpanded = false
             visibleBilingualParagraphIDs = []
             pendingBilingualParagraphIDs = []
             failedBilingualParagraphIDs = []
@@ -206,247 +245,88 @@ struct ArticleReaderView: View {
     @ViewBuilder private var readerBody: some View {
         #if os(macOS)
         if usesNativeHTMLScroller, let html {
-            // A WKWebView already owns a well-tuned AppKit scroll view. Placing it
-            // inside another SwiftUI ScrollView drops wheel events while the cursor
-            // is over the page, so keep exactly one vertical scrolling surface.
-            ZStack(alignment: .top) {
-                ArticleHTMLView(
-                    articleID: entry.id,
-                    html: html,
-                    baseURL: articleBaseURL,
-                    contentTopInset: readerContentTopInset,
-                    readerParagraphs: readerParagraphs,
-                    inlineTranslations: bilingualSegments,
-                    pendingTranslationIDs: pendingBilingualParagraphIDs,
-                    selectionAnnotations: savedSelectionAnnotations,
-                    isBilingualMode: readerMode == .bilingual,
-                    onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
-                    onScrollOffsetChange: updateReaderScrollOffset,
-                    onSelectionRequest: performSelectionRequest
-                )
-                    .frame(maxWidth: 960, maxHeight: .infinity, alignment: .top)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 32)
-
-                adaptiveReaderChrome
-            }
+            ArticleHTMLView(
+                entry: entry,
+                feedTitle: store.feed(for: entry)?.title,
+                html: html,
+                baseURL: articleBaseURL,
+                contentTopInset: 84,
+                readerParagraphs: readerParagraphs,
+                inlineTranslations: bilingualSegments,
+                pendingTranslationIDs: pendingBilingualParagraphIDs,
+                selectionAnnotations: savedSelectionAnnotations,
+                isBilingualMode: readerMode == .bilingual,
+                fontSize: store.articleFontSize,
+                summaryArtifact: store.summaryArtifact(for: entry),
+                isSummaryExpanded: isSummaryExpanded,
+                isGeneratingSummary: activeAIStatus(for: .summary) != nil,
+                aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
+                errorMessage: store.lastError,
+                onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
+                onScrollOffsetChange: { _ in },
+                onSelectionRequest: performSelectionRequest,
+                onGenerateSummary: { force in generateSummary(force: force) },
+                onToggleSummary: toggleSummary
+            )
+            .ignoresSafeArea()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, paperLeftMargin)
         } else {
             ScrollView {
                 readerContents
+                    .padding(.top, 84)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, paperLeftMargin)
         }
         #else
         if usesNativeHTMLScroller, let html {
-            ZStack(alignment: .top) {
-                ArticleHTMLView(
-                    articleID: entry.id,
-                    html: html,
-                    baseURL: articleBaseURL,
-                    contentTopInset: readerContentTopInset,
-                    readerParagraphs: readerParagraphs,
-                    inlineTranslations: bilingualSegments,
-                    pendingTranslationIDs: pendingBilingualParagraphIDs,
-                    selectionAnnotations: savedSelectionAnnotations,
-                    isBilingualMode: readerMode == .bilingual,
-                    onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
-                    onScrollOffsetChange: updateReaderScrollOffset,
-                    onSelectionRequest: performSelectionRequest
-                )
-                .padding(.horizontal, 20)
-
-                adaptiveReaderChrome
-            }
+            ArticleHTMLView(
+                entry: entry,
+                feedTitle: store.feed(for: entry)?.title,
+                html: html,
+                baseURL: articleBaseURL,
+                contentTopInset: 64,
+                readerParagraphs: readerParagraphs,
+                inlineTranslations: bilingualSegments,
+                pendingTranslationIDs: pendingBilingualParagraphIDs,
+                selectionAnnotations: savedSelectionAnnotations,
+                isBilingualMode: readerMode == .bilingual,
+                fontSize: store.articleFontSize,
+                summaryArtifact: store.summaryArtifact(for: entry),
+                isSummaryExpanded: isSummaryExpanded,
+                isGeneratingSummary: activeAIStatus(for: .summary) != nil,
+                aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
+                errorMessage: store.lastError,
+                onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
+                onScrollOffsetChange: { _ in },
+                onSelectionRequest: performSelectionRequest,
+                onGenerateSummary: { force in generateSummary(force: force) },
+                onToggleSummary: toggleSummary
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, paperLeftMargin)
         } else {
             ScrollView {
                 readerContents
+                    .padding(.top, 64)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, paperLeftMargin)
         }
         #endif
     }
 
     private var readerContents: some View {
         VStack(alignment: .leading, spacing: 18) {
-            readerChrome
-            content
-        }
-        .frame(maxWidth: 960, alignment: .leading)
-        .padding(.horizontal, 32)
-        .padding(.vertical, 32)
-    }
-
-    private var readerChrome: some View {
-        VStack(alignment: .leading, spacing: 18) {
             header
             summaryCard
-
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            PaperTheme.noteBorder(scheme: colorScheme).opacity(0.1),
-                            PaperTheme.noteBorder(scheme: colorScheme).opacity(0.75),
-                            PaperTheme.noteBorder(scheme: colorScheme).opacity(0.1)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 1)
-                .padding(.top, 2)
+            content
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: ReaderHeaderHeightPreferenceKey.self,
-                    value: proxy.size.height
-                )
-            }
-        }
-    }
-
-    private var adaptiveReaderChrome: some View {
-        Group {
-            if isReaderHeaderExpanded {
-                ZStack(alignment: .topTrailing) {
-                    readerChrome
-
-                    if !isReaderAtTop {
-                        readerDisclosureButton(isExpanded: true, action: collapseReaderHeader)
-                    }
-                }
-                .transition(.opacity)
-            } else {
-                compactReaderChrome
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, readerHeaderHorizontalPadding)
-        .padding(.vertical, isReaderHeaderExpanded ? readerHeaderExpandedPadding : 8)
-        .background(PaperHeaderSurface())
-        .shadow(
-            color: .black.opacity(isReaderHeaderExpanded ? 0 : (colorScheme == .dark ? 0.24 : 0.08)),
-            radius: isReaderHeaderExpanded ? 0 : 8,
-            y: isReaderHeaderExpanded ? 0 : 3
-        )
-        .animation(readerHeaderAnimation, value: isReaderHeaderExpanded)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var compactReaderChrome: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                if let url = entry.url {
-                    Link(destination: url) {
-                        Text(entry.title)
-                            .font(.system(.headline, design: .serif).weight(.semibold))
-                            .tracking(0.15)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.plain)
-                    .help("打开原网页")
-                } else {
-                    Text(entry.title)
-                        .font(.system(.headline, design: .serif).weight(.semibold))
-                        .tracking(0.15)
-                        .lineLimit(1)
-                }
-
-                HStack(spacing: 6) {
-                    if let feed = store.feed(for: entry) {
-                        Text(feed.title)
-                    }
-                    if let date = entry.publishedAt {
-                        Text(date, format: .dateTime.month().day())
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-
-            Spacer(minLength: 12)
-
-            readerDisclosureButton(isExpanded: false, action: expandReaderHeader)
-        }
-        .frame(maxWidth: 960)
-    }
-
-    private func readerDisclosureButton(isExpanded: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(PaperTheme.accent)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .background(PaperTheme.accent.opacity(0.10), in: Circle())
-        .overlay {
-            Circle().stroke(PaperTheme.accent.opacity(0.14), lineWidth: 0.5)
-        }
-        .help(isExpanded ? "收起标题与 AI 摘要" : "展开标题与 AI 摘要")
-        .accessibilityLabel(isExpanded ? "收起页头" : "展开页头")
-    }
-
-    private var isReaderHeaderExpanded: Bool {
-        isReaderAtTop || isHeaderManuallyExpanded
-    }
-
-    private var readerHeaderHorizontalPadding: CGFloat {
-        #if os(macOS)
-        32
-        #else
-        20
-        #endif
-    }
-
-    private var readerHeaderExpandedPadding: CGFloat {
-        #if os(macOS)
-        24
-        #else
-        16
-        #endif
-    }
-
-    private var readerHeaderAnimation: Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.18)
-    }
-
-    private var readerContentTopInset: CGFloat {
-        expandedReaderHeaderContentHeight + readerHeaderExpandedPadding * 2 + 16
-    }
-
-    private func updateReaderScrollOffset(_ rawOffset: CGFloat) {
-        let offset = max(0, rawOffset)
-        if offset <= 10 {
-            guard !isReaderAtTop || isHeaderManuallyExpanded else { return }
-            withAnimation(readerHeaderAnimation) {
-                isReaderAtTop = true
-                isHeaderManuallyExpanded = false
-            }
-        } else if offset >= max(128, readerContentTopInset - 72),
-                  isReaderAtTop || isHeaderManuallyExpanded {
-            withAnimation(readerHeaderAnimation) {
-                isReaderAtTop = false
-                isHeaderManuallyExpanded = false
-            }
-        }
-    }
-
-    private func expandReaderHeader() {
-        withAnimation(readerHeaderAnimation) {
-            isHeaderManuallyExpanded = true
-        }
-    }
-
-    private func collapseReaderHeader() {
-        withAnimation(readerHeaderAnimation) {
-            isHeaderManuallyExpanded = false
-            isReaderAtTop = false
-        }
+        .frame(maxWidth: 820, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.top, 84)
+        .padding(.bottom, 32)
     }
 
     private var usesNativeHTMLScroller: Bool {
@@ -569,7 +449,7 @@ struct ArticleReaderView: View {
                                 Text("上次生成未完成")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Button("重新生成") { generateSummary() }
+                                Button("重新生成") { generateSummary(force: true) }
                                     .buttonStyle(.borderless)
                                     .font(.caption.weight(.semibold))
                             }
@@ -586,14 +466,21 @@ struct ArticleReaderView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                HStack(spacing: 8) {
-                    Text("尚未生成；仅在你点按后发送正文。")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button("生成摘要") { generateSummary() }
-                        .buttonStyle(.borderless)
-                        .font(.subheadline.weight(.semibold))
-                        .disabled(text.isEmpty)
+                VStack(alignment: .leading, spacing: 6) {
+                    if let error = store.lastError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    HStack(spacing: 8) {
+                        Text("尚未生成；仅在你点按后发送正文。")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Button("生成摘要") { generateSummary(force: false) }
+                            .buttonStyle(.borderless)
+                            .font(.subheadline.weight(.semibold))
+                            .disabled(effectiveArticleText.isEmpty)
+                    }
                 }
             }
         }
@@ -607,40 +494,74 @@ struct ArticleReaderView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(PaperTheme.noteBorder(scheme: colorScheme), lineWidth: 1)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if store.summaryArtifact(for: entry) != nil {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
+                    isSummaryExpanded.toggle()
+                }
+            }
+        }
         .accessibilityElement(children: .contain)
     }
 
-    @ToolbarContentBuilder private var articleToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .principal) {
-            ControlGroup {
-                Button(action: toggleBilingualTranslation) {
-                    toolbarSymbol(
-                        readerMode == .bilingual ? "character.bubble.fill" : "character.bubble",
-                        isActive: readerMode == .bilingual
-                    )
-                }
-                .disabled(text.isEmpty || store.activeAIRequest != nil)
-                .accessibilityLabel(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
-                .help(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
+    private var currentEntry: Entry {
+        store.entry(id: entry.id) ?? entry
+    }
 
-                Button {
-                    store.markRead(entry, read: !entry.isRead)
-                } label: {
-                    toolbarSymbol(entry.isRead ? "envelope.open.fill" : "envelope.open", isActive: entry.isRead)
-                }
-                .accessibilityLabel(entry.isRead ? "标为未读" : "标为已读")
-                .help(entry.isRead ? "标为未读" : "标为已读")
-
-                Button {
-                    store.toggleStar(entry)
-                } label: {
-                    toolbarSymbol(entry.isStarred ? "star.fill" : "star", isActive: entry.isStarred)
-                }
-                .accessibilityLabel(entry.isStarred ? "取消收藏" : "收藏")
-                .help(entry.isStarred ? "取消收藏" : "收藏")
+    private var floatingCapsuleToolbar: some View {
+        HStack(spacing: 4) {
+            Button(action: toggleBilingualTranslation) {
+                toolbarSymbol(
+                    readerMode == .bilingual ? "character.bubble.fill" : "character.bubble",
+                    isActive: readerMode == .bilingual
+                )
             }
-            .controlGroupStyle(.navigation)
+            .buttonStyle(.borderless)
+            .disabled(text.isEmpty || store.activeAIRequest != nil)
+            .accessibilityLabel(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
+            .help(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
+
+            Button {
+                store.markRead(currentEntry, read: !currentEntry.isRead)
+            } label: {
+                toolbarSymbol(currentEntry.isRead ? "envelope.open" : "envelope", isActive: false)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(currentEntry.isRead ? "标为未读" : "标为已读")
+            .help(currentEntry.isRead ? "标为未读" : "标为已读")
+
+            Button {
+                store.toggleStar(currentEntry)
+            } label: {
+                toolbarSymbol(currentEntry.isStarred ? "star.fill" : "star", isActive: currentEntry.isStarred)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(currentEntry.isStarred ? "取消收藏" : "收藏")
+            .help(currentEntry.isStarred ? "取消收藏" : "收藏")
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .frame(width: 108, height: 32)
+        .background(
+            Capsule()
+                .fill(
+                    colorScheme == .dark
+                        ? AnyShapeStyle(Color.white.opacity(0.08))
+                        : AnyShapeStyle(Color.black.opacity(0.04))
+                )
+                .shadow(
+                    color: .black.opacity(colorScheme == .dark ? 0.35 : 0.08),
+                    radius: 6,
+                    x: 0,
+                    y: 2
+                )
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+        )
+        .contentShape(Rectangle())
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
@@ -652,24 +573,57 @@ struct ArticleReaderView: View {
             .contentShape(Circle())
     }
 
+    private var readerMode: ReaderMode {
+        store.isBilingualActive(for: entry.id) ? .bilingual : .original
+    }
+
     private func toggleBilingualTranslation() {
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
-            readerMode = readerMode == .bilingual ? .original : .bilingual
+            store.toggleBilingualMode(for: entry.id)
         }
         requestVisibleTranslationsIfPossible()
     }
 
-    private func generateSummary() {
-        guard !text.isEmpty, store.activeAIRequest == nil else { return }
-        withAnimation(readerHeaderAnimation) {
+    private var effectiveArticleText: String {
+        if !text.isEmpty {
+            return text
+        }
+        if let html, !html.isEmpty {
+            let stripped = ArticleExtractor.content(from: html, baseURL: nil).text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stripped.isEmpty {
+                return stripped
+            }
+        }
+        if !entry.summary.isEmpty {
+            let stripped = ArticleExtractor.content(from: entry.summary, baseURL: nil).text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stripped.isEmpty {
+                return stripped
+            }
+        }
+        return entry.sourceText
+    }
+
+    private func generateSummary(force: Bool = false) {
+        let targetText = effectiveArticleText
+        guard !targetText.isEmpty else {
+            store.reportError("文章暂无正文内容，无法生成摘要。")
+            return
+        }
+        if store.activeAIRequest != nil {
+            store.reportError("已有 AI 任务正在进行，请等待它完成后再试。")
+            return
+        }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
             isSummaryExpanded = true
         }
-        Task { await store.generateSummary(entry: entry, text: text) }
+        Task { await store.generateSummary(entry: entry, text: targetText, force: force) }
     }
 
     private func generateBilingualTranslation() {
         guard !text.isEmpty else { return }
-        readerMode = .bilingual
+        if !store.isBilingualActive(for: entry.id) {
+            store.toggleBilingualMode(for: entry.id)
+        }
         requestVisibleTranslationsIfPossible()
     }
 
@@ -799,6 +753,158 @@ struct ArticleReaderView: View {
     }
 }
 
+private enum PaperReaderHeaderBuilder {
+    static func headerHTML(
+        entry: Entry,
+        feedTitle: String?,
+        summaryArtifact: AIArtifact?,
+        isSummaryExpanded: Bool,
+        isGeneratingSummary: Bool,
+        aiStatusMessage: String?
+    ) -> String {
+        let titleText = entry.title.htmlEscaped
+        let titleHTML: String
+        if let url = entry.url {
+            titleHTML = "<a href=\"\(url.absoluteString.htmlEscaped)\">\(titleText)</a>"
+        } else {
+            titleHTML = titleText
+        }
+
+        var metaParts: [String] = []
+        if let feedTitle, !feedTitle.isEmpty {
+            metaParts.append("<span>\(feedTitle.htmlEscaped)</span>")
+        }
+        if let author = entry.author, !author.isEmpty {
+            metaParts.append("<span>\(author.htmlEscaped)</span>")
+        }
+        if let date = entry.publishedAt {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            metaParts.append("<span>\(formatter.string(from: date))</span>")
+        }
+        let metaHTML = metaParts.joined(separator: " &bull; ")
+
+        let summaryHTML = summaryCardHTML(
+            summaryArtifact: summaryArtifact,
+            isSummaryExpanded: isSummaryExpanded,
+            isGeneratingSummary: isGeneratingSummary,
+            aiStatusMessage: aiStatusMessage
+        )
+
+        return """
+        <header class="paper-header-container">
+          <h1 class="paper-header-title">\(titleHTML)</h1>
+          <div class="paper-header-meta">\(metaHTML)</div>
+          <div class="paper-summary-card" id="paper-summary-card">\(summaryHTML)</div>
+          <hr class="paper-header-divider">
+        </header>
+        """
+    }
+
+    static func summaryCardHTML(
+        summaryArtifact: AIArtifact?,
+        isSummaryExpanded: Bool,
+        isGeneratingSummary: Bool,
+        aiStatusMessage: String?,
+        errorMessage: String? = nil
+    ) -> String {
+        let sparklesSVG = """
+        <svg class="paper-summary-icon" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z"/>
+        </svg>
+        """
+
+        let chevronUpSVG = """
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+        """
+
+        let chevronDownSVG = """
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+        """
+
+        if let summary = summaryArtifact, !summary.content.isEmpty {
+            let formattedContent = summary.content.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>")
+            let toggleIcon = isSummaryExpanded ? chevronUpSVG : chevronDownSVG
+            let bodyClass = isSummaryExpanded ? "expanded" : "collapsed"
+            
+            var statusFooter = ""
+            if !summary.isComplete {
+                if isGeneratingSummary {
+                    statusFooter = """
+                    <div class="paper-summary-status">
+                      <span class="paper-spinner"></span>
+                      <span>AI 正在生成摘要…</span>
+                    </div>
+                    """
+                } else {
+                    let errStr = errorMessage.map { "<span class=\"paper-summary-error\">\($0.htmlEscaped)</span> " } ?? "<span>上次生成未完成</span> "
+                    statusFooter = """
+                    <div class="paper-summary-status">
+                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true">重新生成</button>
+                    </div>
+                    """
+                }
+            }
+
+            return """
+            <div class="paper-summary-header">
+              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+              <button class="paper-summary-toggle-btn" data-paper-action="toggleSummary">
+                \(toggleIcon)
+              </button>
+            </div>
+            <div class="paper-summary-body \(bodyClass)">
+              <p>\(formattedContent)</p>
+              \(statusFooter)
+            </div>
+            """
+        } else if isGeneratingSummary {
+            let msg = aiStatusMessage ?? "AI 正在准备摘要…"
+            return """
+            <div class="paper-summary-header">
+              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+            </div>
+            <div class="paper-summary-status">
+              <span class="paper-spinner"></span>
+              <span>\(msg.htmlEscaped)</span>
+            </div>
+            """
+        } else {
+            let errNotice = errorMessage.map {
+                """
+                <div class="paper-summary-error" style="color: #c93b3b; font-size: 0.85em; margin-bottom: 6px;">
+                  ⚠️ \($0.htmlEscaped)
+                </div>
+                """
+            } ?? ""
+            return """
+            <div class="paper-summary-header">
+              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+            </div>
+            \(errNotice)
+            <div class="paper-summary-placeholder">
+              <span>尚未生成；仅在你点按后发送正文。</span>
+              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false">生成摘要</button>
+            </div>
+            """
+        }
+    }
+}
+
+private extension String {
+    var htmlEscaped: String {
+        self.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+}
+
 private let paperArticleStyle = """
 :root {
   color-scheme: light dark;
@@ -825,8 +931,11 @@ private let paperArticleStyle = """
 }
 html { background: transparent; }
 body {
-  margin: 0 2px 42px;
-  padding-top: var(--paper-reader-top-inset, 220px);
+  max-width: 820px;
+  margin: 0 auto 42px auto;
+  padding-left: 32px;
+  padding-right: 32px;
+  padding-top: var(--paper-reader-top-inset, 84px);
   box-sizing: border-box;
   color: var(--paper-ink);
   background: transparent;
@@ -839,6 +948,124 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 ::selection { background: rgba(116, 137, 100, .24); }
+
+.paper-header-container {
+  margin: 0 0 24px 0;
+  padding: 0;
+}
+.paper-header-title {
+  font-family: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+  font-size: 1.85em;
+  font-weight: 700;
+  line-height: 1.28;
+  letter-spacing: .012em;
+  color: var(--paper-ink);
+  margin: 0 0 10px 0;
+}
+.paper-header-title a {
+  color: var(--paper-ink);
+  text-decoration: none;
+}
+.paper-header-title a:hover {
+  color: var(--paper-accent);
+}
+.paper-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 0.88em;
+  color: var(--paper-muted);
+  margin: 0 0 16px 0;
+}
+.paper-summary-card {
+  background: var(--paper-card);
+  border: 1px solid var(--paper-rule);
+  border-radius: 10px;
+  padding: 14px;
+  margin: 0 0 20px 0;
+  font-size: 0.95em;
+  cursor: pointer;
+}
+.paper-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--paper-accent);
+}
+.paper-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.paper-summary-icon {
+  width: 16px;
+  height: 16px;
+}
+.paper-summary-toggle-btn {
+  background: rgba(95, 115, 85, 0.1);
+  border: none;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--paper-accent);
+  padding: 0;
+}
+.paper-summary-body {
+  line-height: 1.6;
+  color: var(--paper-ink);
+}
+.paper-summary-body.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.paper-summary-placeholder, .paper-summary-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--paper-muted);
+  font-size: 0.9em;
+  margin-top: 4px;
+}
+.paper-summary-action-btn {
+  background: transparent;
+  border: none;
+  color: var(--paper-accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.paper-summary-action-btn:hover {
+  background: var(--paper-wash);
+}
+.paper-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--paper-wash);
+  border-top-color: var(--paper-accent);
+  border-radius: 50%;
+  animation: paper-spin 0.8s linear infinite;
+}
+@keyframes paper-spin {
+  to { transform: rotate(360deg); }
+}
+.paper-header-divider {
+  border: none;
+  height: 1px;
+  background: linear-gradient(to right, rgba(72, 65, 52, 0.05), var(--paper-rule), rgba(72, 65, 52, 0.05));
+  margin: 18px 0 24px 0;
+}
 p, ul, ol, dl, blockquote, pre, table, figure { margin: 0 0 1.2em; }
 h1, h2, h3, h4, h5, h6 {
   margin: 1.6em 0 .58em;
@@ -961,21 +1188,23 @@ th, td {
   position: fixed;
   z-index: 2147483645;
   display: flex;
-  gap: 3px;
-  padding: 3px;
-  border: .5px solid var(--paper-rule);
-  border-radius: 19px;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--paper-rule);
+  border-radius: 20px;
   color: var(--paper-ink);
   background: var(--paper-card);
-  box-shadow: 0 7px 22px rgba(35, 31, 25, .18);
-  backdrop-filter: blur(18px) saturate(1.15);
+  box-shadow: 0 8px 24px rgba(35, 31, 25, .16), 0 2px 6px rgba(35, 31, 25, .08);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
   animation: paper-rss-materialize .18s ease-out both;
 }
 .paper-rss-selection-action {
   display: grid;
   place-items: center;
-  width: 31px;
-  height: 31px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -983,11 +1212,12 @@ th, td {
   background: transparent;
   cursor: pointer;
   -webkit-appearance: none;
+  transition: background-color .15s ease, color .15s ease, transform .12s ease;
 }
 .paper-rss-selection-action .paper-rss-icon,
 .paper-rss-explanation-header .paper-rss-icon {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
 }
 .paper-rss-selection-action:hover {
@@ -1187,6 +1417,39 @@ private enum PaperReaderBridge {
             scheduleScroll();
             scheduleParagraphs();
           }, { passive: true });
+          document.addEventListener("click", event => {
+            const btn = event.target ? event.target.closest("[data-paper-action]") : null;
+            if (btn) {
+              const action = btn.dataset.paperAction;
+              if (action === "generateSummary") {
+                event.preventDefault();
+                event.stopPropagation();
+                const force = btn.dataset.paperForce === "true";
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssGenerateSummary) {
+                  window.webkit.messageHandlers.paperRssGenerateSummary.postMessage({ force: force });
+                }
+                return;
+              } else if (action === "toggleSummary") {
+                event.preventDefault();
+                event.stopPropagation();
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssToggleSummary) {
+                  window.webkit.messageHandlers.paperRssToggleSummary.postMessage({});
+                }
+                return;
+              }
+            }
+
+            const summaryCard = event.target ? event.target.closest(".paper-summary-card") : null;
+            if (summaryCard) {
+              const sel = window.getSelection();
+              if (sel && sel.toString() && sel.toString().trim().length > 0) {
+                return;
+              }
+              if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssToggleSummary) {
+                window.webkit.messageHandlers.paperRssToggleSummary.postMessage({});
+              }
+            }
+          }, true);
           scheduleScroll();
           scheduleParagraphs();
         })();
@@ -1672,7 +1935,8 @@ private enum PaperReaderBridge {
 
 #if os(macOS)
 private struct ArticleHTMLView: NSViewRepresentable {
-    let articleID: String
+    let entry: Entry
+    let feedTitle: String?
     let html: String
     let baseURL: URL?
     let contentTopInset: CGFloat
@@ -1681,12 +1945,20 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let pendingTranslationIDs: Set<String>
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
+    let fontSize: Int
+    let summaryArtifact: AIArtifact?
+    let isSummaryExpanded: Bool
+    let isGeneratingSummary: Bool
+    let aiStatusMessage: String?
+    let errorMessage: String?
     let onVisibleParagraphIDsChange: ([String]) -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
     let onSelectionRequest: (
         ReaderSelectionRequest,
         @escaping @Sendable (String) async -> Void
     ) async -> ReaderSelectionResponse
+    let onGenerateSummary: (Bool) -> Void
+    let onToggleSummary: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -1714,20 +1986,38 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.explainSelectionMessageName
         )
+        // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
+        // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssGenerateSummary"
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssToggleSummary"
+        )
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.wantsLayer = true
+        webView.layer?.masksToBounds = true
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsMagnification = false
         webView.setValue(false, forKey: "drawsBackground")
+        if #available(macOS 12.0, *) {
+            webView.underPageBackgroundColor = .clear
+        }
         webView.setAccessibilityLabel(isBilingualMode ? "原文与中文逐段翻译" : "原文内容")
         webView.enclosingScrollView?.hasVerticalScroller = true
         webView.enclosingScrollView?.autohidesScrollers = true
         webView.enclosingScrollView?.verticalScrollElasticity = .automatic
         webView.enclosingScrollView?.horizontalScrollElasticity = .none
+        webView.enclosingScrollView?.drawsBackground = false
         context.coordinator.webView = webView
         context.coordinator.loadIfNeeded(into: webView)
         return webView
@@ -1736,12 +2026,16 @@ private struct ArticleHTMLView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
+        context.coordinator.synchronizeSummaryCard(in: webView)
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
         for segment in inlineTranslations {
             context.coordinator.updateInlineTranslationInWebView(id: segment.id, translation: segment.translation)
         }
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.isHidden = true
+        webView.removeFromSuperview()
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.scrollMessageName,
             contentWorld: .defaultClient
@@ -1752,6 +2046,14 @@ private struct ArticleHTMLView: NSViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.explainSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssGenerateSummary",
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssToggleSummary",
             contentWorld: .defaultClient
         )
         webView.stopLoading()
@@ -1778,6 +2080,27 @@ private struct ArticleHTMLView: NSViewRepresentable {
             renderedTranslations[id] = translation
             let escaped = (try? String(data: JSONEncoder().encode(translation), encoding: .utf8)) ?? "\"\""
             webView?.evaluateJavaScript("window.paperRssSelectionAssistant?.updateInlineTranslation('\(id)', \(escaped))")
+        }
+
+        func synchronizeSummaryCard(in webView: WKWebView) {
+            let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
+                summaryArtifact: parent.summaryArtifact,
+                isSummaryExpanded: parent.isSummaryExpanded,
+                isGeneratingSummary: parent.isGeneratingSummary,
+                aiStatusMessage: parent.aiStatusMessage,
+                errorMessage: parent.errorMessage
+            )
+            guard let data = try? JSONEncoder().encode(summaryHTML),
+                  let jsonEncoded = String(data: data, encoding: .utf8) else { return }
+            let script = """
+            (() => {
+              const card = document.getElementById('paper-summary-card');
+              if (card) {
+                card.innerHTML = \(jsonEncoded);
+              }
+            })();
+            """
+            webView.evaluateJavaScript(script)
         }
 
         private func readerScrollView(in webView: WKWebView) -> NSScrollView? {
@@ -1839,6 +2162,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 )
                 pendingSelectionExplanationRequests.append(request)
                 startNextSelectionExplanationIfNeeded()
+            case "paperRssGenerateSummary":
+                let force = (message.body as? [String: Any])?["force"] as? Bool ?? false
+                parent.onGenerateSummary(force)
+            case "paperRssToggleSummary":
+                parent.onToggleSummary()
             default:
                 break
             }
@@ -1892,10 +2220,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) else { return nil }
                 return url
             }
-            let articleKey = "\(parent.articleID)|\(secureBaseURL?.absoluteString ?? "")"
+            let articleKey = "\(parent.entry.id)|\(secureBaseURL?.absoluteString ?? "")"
             guard loadedArticleKey != articleKey else {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
+                synchronizeSummaryCard(in: webView)
                 return
             }
             let initialTranslationState = translationState()
@@ -1904,7 +2233,20 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 segments: parent.inlineTranslations,
                 pendingIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : []
             )
-            let document = Self.documentHTML(body: readerHTML, topInset: parent.contentTopInset)
+            let headerHTML = PaperReaderHeaderBuilder.headerHTML(
+                entry: parent.entry,
+                feedTitle: parent.feedTitle,
+                summaryArtifact: parent.summaryArtifact,
+                isSummaryExpanded: parent.isSummaryExpanded,
+                isGeneratingSummary: parent.isGeneratingSummary,
+                aiStatusMessage: parent.aiStatusMessage
+            )
+            let document = Self.documentHTML(
+                body: readerHTML,
+                topInset: parent.contentTopInset,
+                fontSize: parent.fontSize,
+                headerHTML: headerHTML
+            )
             loadedArticleKey = articleKey
             renderedTranslations = initialTranslationState.translations
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
@@ -1923,6 +2265,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 }
                 self.synchronizeContentTopInset(in: webView)
                 self.synchronizeTranslations(in: webView)
+                self.synchronizeSummaryCard(in: webView)
                 self.restoreSelectionAnnotations(in: webView)
             }
         }
@@ -2078,15 +2421,15 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
         """
 
-        private static func documentHTML(body: String, topInset: CGFloat) -> String {
+        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
             return """
             <!doctype html>
             <html><head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; }\(paperArticleStyle)</style>
-            </head><body>\(body)</body></html>
+            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
+            </head><body>\(headerHTML)\(body)</body></html>
             """
         }
     }
@@ -2095,7 +2438,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
 #if os(iOS)
 private struct ArticleHTMLView: UIViewRepresentable {
-    let articleID: String
+    let entry: Entry
+    let feedTitle: String?
     let html: String
     let baseURL: URL?
     let contentTopInset: CGFloat
@@ -2104,12 +2448,20 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let pendingTranslationIDs: Set<String>
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
+    let fontSize: Int
+    let summaryArtifact: AIArtifact?
+    let isSummaryExpanded: Bool
+    let isGeneratingSummary: Bool
+    let aiStatusMessage: String?
+    let errorMessage: String?
     let onVisibleParagraphIDsChange: ([String]) -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
     let onSelectionRequest: (
         ReaderSelectionRequest,
         @escaping @Sendable (String) async -> Void
     ) async -> ReaderSelectionResponse
+    let onGenerateSummary: (Bool) -> Void
+    let onToggleSummary: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -2138,6 +2490,18 @@ private struct ArticleHTMLView: UIViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.explainSelectionMessageName
         )
+        // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
+        // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssGenerateSummary"
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssToggleSummary"
+        )
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
@@ -2158,6 +2522,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
+        context.coordinator.synchronizeSummaryCard(in: webView)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -2171,6 +2536,14 @@ private struct ArticleHTMLView: UIViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.explainSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssGenerateSummary",
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssToggleSummary",
             contentWorld: .defaultClient
         )
         webView.stopLoading()
@@ -2191,6 +2564,27 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
+        }
+
+        func synchronizeSummaryCard(in webView: WKWebView) {
+            let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
+                summaryArtifact: parent.summaryArtifact,
+                isSummaryExpanded: parent.isSummaryExpanded,
+                isGeneratingSummary: parent.isGeneratingSummary,
+                aiStatusMessage: parent.aiStatusMessage,
+                errorMessage: parent.errorMessage
+            )
+            guard let data = try? JSONEncoder().encode(summaryHTML),
+                  let jsonEncoded = String(data: data, encoding: .utf8) else { return }
+            let script = """
+            (() => {
+              const card = document.getElementById('paper-summary-card');
+              if (card) {
+                card.innerHTML = \(jsonEncoded);
+              }
+            })();
+            """
+            webView.evaluateJavaScript(script)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -2223,6 +2617,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 )
                 pendingSelectionExplanationRequests.append(request)
                 startNextSelectionExplanationIfNeeded()
+            case "paperRssGenerateSummary":
+                let force = (message.body as? [String: Any])?["force"] as? Bool ?? false
+                parent.onGenerateSummary(force)
+            case "paperRssToggleSummary":
+                parent.onToggleSummary()
             default:
                 break
             }
@@ -2273,10 +2672,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) else { return nil }
                 return url
             }
-            let articleKey = "\(parent.articleID)|\(secureBaseURL?.absoluteString ?? "")"
+            let articleKey = "\(parent.entry.id)|\(secureBaseURL?.absoluteString ?? "")"
             guard loadedArticleKey != articleKey else {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
+                synchronizeSummaryCard(in: webView)
                 return
             }
             let initialTranslationState = translationState()
@@ -2285,7 +2685,20 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 segments: parent.inlineTranslations,
                 pendingIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : []
             )
-            let document = Self.documentHTML(body: readerHTML, topInset: parent.contentTopInset)
+            let headerHTML = PaperReaderHeaderBuilder.headerHTML(
+                entry: parent.entry,
+                feedTitle: parent.feedTitle,
+                summaryArtifact: parent.summaryArtifact,
+                isSummaryExpanded: parent.isSummaryExpanded,
+                isGeneratingSummary: parent.isGeneratingSummary,
+                aiStatusMessage: parent.aiStatusMessage
+            )
+            let document = Self.documentHTML(
+                body: readerHTML,
+                topInset: parent.contentTopInset,
+                fontSize: parent.fontSize,
+                headerHTML: headerHTML
+            )
             loadedArticleKey = articleKey
             renderedTranslations = initialTranslationState.translations
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
@@ -2305,6 +2718,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 }
                 self.synchronizeContentTopInset(in: webView)
                 self.synchronizeTranslations(in: webView)
+                self.synchronizeSummaryCard(in: webView)
                 self.restoreSelectionAnnotations(in: webView)
             }
         }
@@ -2456,15 +2870,15 @@ private struct ArticleHTMLView: UIViewRepresentable {
         }
         """
 
-        private static func documentHTML(body: String, topInset: CGFloat) -> String {
+        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
             return """
             <!doctype html>
             <html><head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; }\(paperArticleStyle)</style>
-            </head><body>\(body)</body></html>
+            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
+            </head><body>\(headerHTML)\(body)</body></html>
             """
         }
     }
@@ -2516,5 +2930,60 @@ private struct BilingualContent: View {
                     .padding(.vertical, 12)
             }
         }
+    }
+}
+
+// MARK: - 阅读胶囊工具栏控件
+
+struct ReaderCapsuleToolbar: View {
+    let isBilingualActive: Bool
+    let isRead: Bool
+    let isStarred: Bool
+    let disabled: Bool
+    let onToggleBilingual: () -> Void
+    let onToggleRead: () -> Void
+    let onToggleStar: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: onToggleBilingual) {
+                toolbarSymbol(
+                    isBilingualActive ? "character.bubble.fill" : "character.bubble",
+                    isActive: isBilingualActive
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityLabel(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")
+            .help(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")
+
+            Button(action: onToggleRead) {
+                toolbarSymbol(isRead ? "envelope.open" : "envelope", isActive: false)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isRead ? "标为未读" : "标为已读")
+            .help(isRead ? "标为未读" : "标为已读")
+
+            Button(action: onToggleStar) {
+                toolbarSymbol(isStarred ? "star.fill" : "star", isActive: isStarred)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isStarred ? "取消收藏" : "收藏")
+            .help(isStarred ? "取消收藏" : "收藏")
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 108, height: 28)
+    }
+
+    private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
+        Image(systemName: name)
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+            .font(.system(size: 13, weight: .medium))
+            .frame(width: 28, height: 26)
+            .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+            .contentShape(Circle())
     }
 }

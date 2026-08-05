@@ -10,7 +10,12 @@ let package = Package(
     ],
     targets: [
         .target(name: "PaperRssCore", path: "PaperRss/Sources/Core"),
-        .executableTarget(name: "PaperRssDesktop", dependencies: ["PaperRssCore"], path: "PaperRss/Sources/App"),
+        .executableTarget(
+            name: "PaperRssDesktop",
+            dependencies: ["PaperRssCore"],
+            path: "PaperRss/Sources/App",
+            resources: [.process("../../Resources")]
+        ),
         .testTarget(name: "PaperRssCoreTests", dependencies: ["PaperRssCore"], path: "Tests")
     ]
 )

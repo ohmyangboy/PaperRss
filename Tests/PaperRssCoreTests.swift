@@ -56,6 +56,7 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(index.byFolder["Reading"]?.map(\.id), ["older"])
         XCTAssertEqual(index.unreadByFeed[technology.id], 1)
         XCTAssertEqual(index.unreadByFolder["Reading"], 1)
+        XCTAssertEqual(index.todayUnreadCount, 1)
         XCTAssertEqual(index.starred.map(\.id), ["newer"])
         XCTAssertEqual(index.byID["newer"]?.title, "Newer")
         XCTAssertEqual(index.listItemsByFeed[technology.id]?.first?.summaryPreview, "One")
@@ -587,5 +588,20 @@ final class PaperRssCoreTests: XCTestCase {
         let retained = index.unreadListItems(retainingIDs: ["item-1", "item-2"])
         XCTAssertEqual(retained.map(\.id), ["item-1", "item-2"])
         XCTAssertTrue(retained.first(where: { $0.id == "item-1" })?.isRead == true)
+    }
+
+    @MainActor
+    func testSummaryForceRegenerationAndMissingKeyError() async throws {
+        let store = AppStore()
+        var config = store.database.llmConfiguration
+        config.baseURL = "https://api.deepseek.com"
+        _ = store.saveLLMConfiguration(config, apiKey: "")
+
+        let entry = Entry(id: "test-entry-1", feedID: UUID(), title: "Test Title", summary: "Test Content")
+        
+        // When DeepSeek API Key is empty, generateSummary reports lastError
+        await store.generateSummary(entry: entry, text: "Test Content", force: true)
+        XCTAssertNotNil(store.lastError)
+        XCTAssertTrue(store.lastError?.contains("DeepSeek API Key") == true)
     }
 }

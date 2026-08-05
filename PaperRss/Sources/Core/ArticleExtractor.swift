@@ -55,18 +55,29 @@ public enum ArticleExtractor {
     }
 
     public static func content(from html: String, baseURL: URL?) -> Content {
-        let cleaned = html
+        let cleaned = stripNoiseBlocks(html)
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|nav|footer|aside)[^>]*>.*?</\\1>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "(?is)<!--.*?-->", with: " ", options: .regularExpression)
-        let candidates = ["article", "main", "body"]
-        for tag in candidates {
-            let pattern = "(?is)<\(tag)[^>]*>(.*?)</\(tag)>"
-            if let range = cleaned.range(of: pattern, options: .regularExpression) {
-                let fragment = String(cleaned[range])
-                let safeHTML = sanitizedHTML(fragment, baseURL: baseURL)
-                let text = safeHTML.plainText
-                if text.count >= 120 {
-                    return Content(text: text, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+
+        let containerPatterns = [
+            "(?is)<(div|article|section)\\b[^>]*?\\bclass\\s*=\\s*[\"'][^\"']*?\\b(?:article-body|post-content|entry-content|article-content|ss-article-content|markdown-body|content)\\b[^\"']*?[\"'][^>]*?>(.*?)</\\1>",
+            "(?is)<article[^>]*>(.*?)</article>",
+            "(?is)<main[^>]*>(.*?)</main>",
+            "(?is)<body[^>]*>(.*?)</body>"
+        ]
+
+        for pattern in containerPatterns {
+            if let expression = try? NSRegularExpression(pattern: pattern) {
+                let range = NSRange(cleaned.startIndex..., in: cleaned)
+                let matches = expression.matches(in: cleaned, range: range)
+                for match in matches {
+                    guard let matchRange = Range(match.range, in: cleaned) else { continue }
+                    let fragment = String(cleaned[matchRange])
+                    let safeHTML = sanitizedHTML(fragment, baseURL: baseURL)
+                    let text = safeHTML.plainText
+                    if text.count >= 120 {
+                        return Content(text: text, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+                    }
                 }
             }
         }
@@ -74,11 +85,32 @@ public enum ArticleExtractor {
         return Content(text: safeHTML.plainText, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
     }
 
+    private static func stripNoiseBlocks(_ html: String) -> String {
+        var current = html
+        let noiseKeywords = [
+            "author-popover", "author-item", "author__info", "author__bio",
+            "article__header__author", "article-header-author", "author-card", "author-box", "user-card",
+            "article__charge", "post__comments", "comment-box", "comment-list",
+            "share-bar", "social-share", "action-bar", "phoneBindDialog", "dialog-title",
+            "comp__Directory", "directory__overlay"
+        ]
+        let keywordPattern = noiseKeywords.joined(separator: "|")
+        let pattern = "(?is)<(div|section|aside|form|ul|ol|blockquote|button)\\b[^>]*?\\b(?:class|id|data-[a-z-]+)\\s*=\\s*[\"'][^\"']*?\\b(\(keywordPattern))\\b[^\"']*?[\"'][^>]*?>.*?</\\1>"
+
+        for _ in 0..<3 {
+            let updated = current.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+            if updated.count == current.count { break }
+            current = updated
+        }
+        return current
+    }
+
     /// Retains only the small, document-oriented HTML subset used by the reader.
     /// Attributes are rebuilt rather than edited in place so malformed markup cannot
     /// smuggle event handlers, styles, or executable URL schemes into WebKit.
     public static func sanitizedHTML(_ html: String, baseURL: URL? = nil) -> String {
-        let withoutExecutableBlocks = html
+        let stripped = stripNoiseBlocks(html)
+        let withoutExecutableBlocks = stripped
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|object|embed|meta|link|base|template|nav|footer|aside)[^>]*>.*?</\\1>", with: "", options: .regularExpression)
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|object|embed|meta|link|base|template|nav|footer|aside)\\b[^>]*>", with: "", options: .regularExpression)
             .replacingOccurrences(of: "(?is)<!--.*?-->", with: "", options: .regularExpression)

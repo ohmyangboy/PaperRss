@@ -1,5 +1,31 @@
 import Combine
 import Foundation
+import SwiftUI
+
+public enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    public var id: String { rawValue }
+
+    @MainActor
+    public var title: String {
+        switch self {
+        case .system: I18N.shared.tr("跟随系统", "System")
+        case .light: I18N.shared.tr("浅色模式", "Light")
+        case .dark: I18N.shared.tr("深色模式", "Dark")
+        }
+    }
+
+    public var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
 
 public enum AIRequestPhase: Sendable, Equatable {
     case loadingLocalConfiguration
@@ -37,6 +63,7 @@ struct EntryLibraryIndex: Sendable {
 
     let all: [Entry]
     let today: [Entry]
+    let todayUnreadCount: Int
     let unread: [Entry]
     let starred: [Entry]
     let byID: [String: Entry]
@@ -63,6 +90,7 @@ struct EntryLibraryIndex: Sendable {
             feed.folder.map { (feed.id, $0) }
         })
         var todayEntries: [Entry] = []
+        var todayUnreadCount: Int = 0
         var unreadEntries: [Entry] = []
         var starredEntries: [Entry] = []
         var entriesByID: [String: Entry] = [:]
@@ -99,6 +127,9 @@ struct EntryLibraryIndex: Sendable {
             if let publishedAt = entry.publishedAt, calendar.isDate(publishedAt, inSameDayAs: now) {
                 todayEntries.append(entry)
                 todayRowItems.append(listItem)
+                if !entry.isRead {
+                    todayUnreadCount += 1
+                }
             }
             if entry.isStarred {
                 starredEntries.append(entry)
@@ -120,6 +151,7 @@ struct EntryLibraryIndex: Sendable {
 
         all = activeEntries
         today = todayEntries
+        self.todayUnreadCount = todayUnreadCount
         unread = unreadEntries
         starred = starredEntries
         byID = entriesByID
@@ -148,6 +180,8 @@ public final class AppStore: ObservableObject {
             I18N.shared.language = appLanguage
         }
     }
+    @Published public private(set) var appTheme: AppTheme
+    @Published public private(set) var articleFontSize: Int
     @Published public private(set) var database: AppDatabase
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
@@ -158,6 +192,20 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var isICloudSyncEnabled = false
     @Published public private(set) var iCloudSyncStatus = "未启用"
     @Published public private(set) var activeAIRequest: AIRequestStatus?
+    @Published public private(set) var updateStatus: UpdateCheckStatus = .idle
+    @Published public private(set) var activeBilingualEntryIDs: Set<String> = []
+
+    public func isBilingualActive(for entryID: String) -> Bool {
+        activeBilingualEntryIDs.contains(entryID)
+    }
+
+    public func toggleBilingualMode(for entryID: String) {
+        if activeBilingualEntryIDs.contains(entryID) {
+            activeBilingualEntryIDs.remove(entryID)
+        } else {
+            activeBilingualEntryIDs.insert(entryID)
+        }
+    }
 
     private let persistenceURL: URL
     private let llm = LLMService()
@@ -168,11 +216,13 @@ public final class AppStore: ObservableObject {
     private var persistenceRevision = 0
     private var entryIndex: EntryLibraryIndex
 
-    private static let summaryStreamNotificationInterval: UInt64 = 80_000_000
+    private static let summaryStreamNotificationInterval: UInt64 = 30_000_000
 
     private enum PreferenceKey {
         static let refreshInterval = "PaperRss.refreshInterval"
         static let refreshOnLaunch = "PaperRss.refreshOnLaunch"
+        static let appTheme = "PaperRss.appTheme"
+        static let articleFontSize = "PaperRss.articleFontSize"
     }
 
     public init(fileManager: FileManager = .default) {
@@ -205,15 +255,93 @@ public final class AppStore: ObservableObject {
         let preferences = UserDefaults.standard
         refreshInterval = FeedRefreshInterval(rawValue: preferences.string(forKey: PreferenceKey.refreshInterval) ?? "") ?? .twoHours
         refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
+        let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
+        appTheme = AppTheme(rawValue: rawTheme) ?? .system
+        let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
+        articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
         isICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
         iCloudSyncStatus = isICloudSyncEnabled ? "等待同步" : "未启用"
         if needsRepairPersistence { persist(scheduleICloud: false) }
+
+        Task { [weak self] in
+            await self?.checkForUpdates(isUserInitiated: false)
+        }
     }
 
-    public var feeds: [Feed] { database.feeds.filter { !$0.isDeleted }.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
-    public var folders: [String] { Array(Set(feeds.compactMap(\.folder)).union(database.customFolders)).sorted() }
+    public func checkForUpdates(isUserInitiated: Bool = false) async {
+        if isUserInitiated || updateStatus == .idle {
+            updateStatus = .checking
+        }
+        do {
+            let (hasUpdate, release) = try await UpdateCheckService.checkForUpdates()
+            let now = Date()
+            if hasUpdate, let release {
+                updateStatus = .hasUpdate(release: release, checkedAt: now)
+            } else {
+                updateStatus = .upToDate(checkedAt: now)
+            }
+        } catch {
+            updateStatus = .failed(message: error.localizedDescription)
+        }
+    }
+
+    public var feeds: [Feed] { database.feeds.filter { !$0.isDeleted } }
+    public var rootFeeds: [Feed] { feeds.filter { $0.folder == nil } }
+    public func feeds(in folder: String) -> [Feed] { feeds.filter { $0.folder == folder } }
+    public var folders: [String] {
+        var result: [String] = []
+        let allFolders = Set(feeds.compactMap(\.folder)).union(database.customFolders)
+        for folder in database.customFolders {
+            if allFolders.contains(folder) && !result.contains(folder) {
+                result.append(folder)
+            }
+        }
+        let remaining = allFolders.subtracting(result).sorted()
+        result.append(contentsOf: remaining)
+        return result
+    }
+
+    public func reorderFolders(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var currentFolders = folders
+        currentFolders.move(fromOffsets: offsets, toOffset: destination)
+        database.customFolders = currentFolders
+        persist()
+    }
+
+    public func reorderRootFeeds(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var currentRootFeeds = rootFeeds
+        currentRootFeeds.move(fromOffsets: offsets, toOffset: destination)
+        reorderFeedsInDatabase(matching: currentRootFeeds)
+    }
+
+    public func reorderFeeds(in folder: String, fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        var currentFolderFeeds = feeds(in: folder)
+        currentFolderFeeds.move(fromOffsets: offsets, toOffset: destination)
+        reorderFeedsInDatabase(matching: currentFolderFeeds)
+    }
+
+    private func reorderFeedsInDatabase(matching orderedSublist: [Feed]) {
+        guard !orderedSublist.isEmpty else { return }
+        let idSet = Set(orderedSublist.map(\.id))
+        var newFeeds: [Feed] = []
+        var sublistIndex = 0
+        for feed in database.feeds {
+            if idSet.contains(feed.id) {
+                if sublistIndex < orderedSublist.count {
+                    newFeeds.append(orderedSublist[sublistIndex])
+                    sublistIndex += 1
+                }
+            } else {
+                newFeeds.append(feed)
+            }
+        }
+        database.feeds = newFeeds
+        rebuildEntryIndex()
+        persist()
+    }
     public var entries: [Entry] { entryIndex.all }
     public var todayEntries: [Entry] { entryIndex.today }
+    public var todayUnreadCount: Int { entryIndex.todayUnreadCount }
     public var unreadEntries: [Entry] { entryIndex.unread }
     public var starredEntries: [Entry] { entryIndex.starred }
     public var entryListItems: [EntryListItem] { entryIndex.allListItems }
@@ -246,7 +374,6 @@ public final class AppStore: ObservableObject {
         guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
         if !database.customFolders.contains(clean) {
             database.customFolders.append(clean)
-            database.customFolders.sort()
             persist()
         }
     }
@@ -255,6 +382,20 @@ public final class AppStore: ObservableObject {
         database.customFolders.removeAll { $0 == name }
         for index in database.feeds.indices where database.feeds[index].folder == name {
             database.feeds[index].folder = nil
+            database.feeds[index].updatedAt = .now
+        }
+        rebuildEntryIndex()
+        persist()
+    }
+
+    public func renameFolder(from oldName: String, to newName: String) {
+        let cleanNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanNew.isEmpty, cleanNew != oldName else { return }
+        if let idx = database.customFolders.firstIndex(of: oldName) {
+            database.customFolders[idx] = cleanNew
+        }
+        for index in database.feeds.indices where database.feeds[index].folder == oldName {
+            database.feeds[index].folder = cleanNew
             database.feeds[index].updatedAt = .now
         }
         rebuildEntryIndex()
@@ -320,6 +461,19 @@ public final class AppStore: ObservableObject {
         guard refreshOnLaunch != enabled else { return }
         refreshOnLaunch = enabled
         UserDefaults.standard.set(enabled, forKey: PreferenceKey.refreshOnLaunch)
+    }
+
+    public func setAppTheme(_ theme: AppTheme) {
+        guard appTheme != theme else { return }
+        appTheme = theme
+        UserDefaults.standard.set(theme.rawValue, forKey: PreferenceKey.appTheme)
+    }
+
+    public func setArticleFontSize(_ size: Int) {
+        let clamped = max(13, min(25, size))
+        guard articleFontSize != clamped else { return }
+        articleFontSize = clamped
+        UserDefaults.standard.set(clamped, forKey: PreferenceKey.articleFontSize)
     }
 
     /// Starts the app-level refresh loop. The first refresh is intentionally
@@ -723,6 +877,7 @@ public final class AppStore: ObservableObject {
             return
         }
 
+        lastError = nil
         activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
         defer {
             cancelSummaryStreamNotification()
@@ -743,7 +898,7 @@ public final class AppStore: ObservableObject {
             targetLanguage: configuration.targetLanguage
         )
         let artifactID = artifact.id
-        database.artifacts.removeAll { $0.entryID == entry.id && $0.kind == .summary && !$0.isComplete }
+        database.artifacts.removeAll { $0.entryID == entry.id && $0.kind == .summary && (force || !$0.isComplete) }
         database.artifacts.append(artifact)
         persist()
         do {
@@ -754,6 +909,7 @@ public final class AppStore: ObservableObject {
                 onDelta: { delta in
                     await MainActor.run {
                         if let index = self.database.artifacts.firstIndex(where: { $0.id == artifactID }) {
+                            self.objectWillChange.send()
                             self.database.artifacts[index].content += delta
                             self.scheduleSummaryStreamNotification()
                         }
@@ -1089,6 +1245,7 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    public func reportError(_ message: String) { lastError = message }
     public func dismissError() { lastError = nil }
 
     private func merge(entries parsed: [ParsedFeedEntry], into feedID: UUID) {
@@ -1269,6 +1426,7 @@ public final class AppStore: ObservableObject {
         if database.artifacts[index].kind == .summary {
             cancelSummaryStreamNotification()
         }
+        objectWillChange.send()
         database.artifacts[index].content = content
         database.artifacts[index].isComplete = true
         database.artifacts[index].updatedAt = .now

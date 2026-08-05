@@ -128,12 +128,13 @@ private struct PaperGrain: View {
 }
 
 struct PaperHeaderSurface: View {
+    var kind: PaperSurfaceKind = .page
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
             Rectangle().fill(.ultraThinMaterial)
-            PaperTheme.surface(.page, scheme: colorScheme).opacity(colorScheme == .dark ? 0.82 : 0.88)
+            PaperTheme.surface(kind, scheme: colorScheme).opacity(colorScheme == .dark ? 0.82 : 0.88)
             PaperGrain(opacity: 0.55)
         }
         .accessibilityHidden(true)

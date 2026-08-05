@@ -10,6 +10,11 @@ struct PaperRssApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(store: store)
+                #if os(macOS)
+                .onAppear {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
+                #endif
         }
         #if os(iOS)
         .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
