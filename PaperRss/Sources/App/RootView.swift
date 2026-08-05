@@ -29,7 +29,7 @@ enum SidebarSelection: Hashable {
 
 struct RootView: View {
     @ObservedObject var store: AppStore
-    @State private var selection: SidebarSelection? = .unread
+    @State private var selection: SidebarSelection? = .today
     // Keep selection independent from the value-semantic Entry model. Reading an
     // item updates its `isRead` / `updatedAt` fields, which used to invalidate the
     // List's synthesized Hashable selection after the first click. A stable ID
@@ -50,9 +50,12 @@ struct RootView: View {
             .preferredColorScheme(store.appTheme.colorScheme)
             .task {
                 #if os(iOS)
-                BackgroundRefresh.schedule()
+                BackgroundRefresh.schedule(interval: store.refreshInterval)
                 #endif
-                await store.refresh()
+                // 启动定时刷新循环。首刷与 interval 循环都在 AppStore 内
+                // 处理，并尊重"启动时刷新"开关——此前 startAutomaticRefresh
+                // 从未被调用，设置里的刷新间隔选项完全不生效。
+                store.startAutomaticRefresh()
             }
             .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
             .sheet(isPresented: $showsAddFolder) { AddFolderSheet(store: store) }
@@ -60,7 +63,13 @@ struct RootView: View {
                 get: { renamingFolder.map { FolderIdentifiable(name: $0) } },
                 set: { renamingFolder = $0?.name }
             )) { folder in
-                RenameFolderSheet(store: store, oldName: folder.name)
+                RenameFolderSheet(store: store, oldName: folder.name) { newName in
+                    // 重命名当前选中的文件夹后，侧栏选择与中间栏内容应跟随，
+                    // 否则高亮消失、文章列表显示"没有文章"。
+                    if case let .folder(current) = selection, current == folder.name {
+                        selection = .folder(newName)
+                    }
+                }
             }
             #if os(iOS)
             .sheet(isPresented: $showsSettings) { NavigationStack { SettingsView(store: store).navigationTitle("设置") } }
@@ -93,14 +102,15 @@ struct RootView: View {
                 renamingFolder: $renamingFolder,
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
-                showsExporter: $showsExporter
+                showsExporter: $showsExporter,
+                onDeleteSelection: { selectedEntryID = nil }
             )
             .ignoresSafeArea(),
             // 注意:内容列不能 .ignoresSafeArea()——否则 safeAreaInset 的 header
             // 会顶到窗口最上方,落在 unified NSToolbar 的不可交互条带内,
             // 「全部已读」按钮点击会被工具栏吞掉。纸张背景已在 EntryListView
             // 内用 .ignoresSafeArea() 单独延伸到工具栏之下,观感保持一致。
-            content: EntryListView(store: store, selection: selection ?? .unread, selectedEntryID: $selectedEntryID)
+            content: EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID)
                 .ignoresSafeArea(),
             detail: detailContent
                 .ignoresSafeArea(),
@@ -111,7 +121,7 @@ struct RootView: View {
                 onImport: { showsImporter = true },
                 onExport: { showsExporter = true },
                 isRefreshing: store.isRefreshing,
-                selectionTitle: currentSelection.title,
+                selectionTitle: headerTitle,
                 hasUnread: currentHasUnread,
                 onMarkAllRead: { markCurrentAllRead() },
                 showsReaderCapsule: selectedEntryID != nil,
@@ -130,10 +140,11 @@ struct RootView: View {
                 renamingFolder: $renamingFolder,
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
-                showsExporter: $showsExporter
+                showsExporter: $showsExporter,
+                onDeleteSelection: { selectedEntryID = nil }
             )
         } content: {
-            EntryListView(store: store, selection: selection ?? .unread, selectedEntryID: $selectedEntryID)
+            EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID)
         } detail: {
             detailContent
         }
@@ -142,7 +153,16 @@ struct RootView: View {
     }
 
     private var currentSelection: SidebarSelection {
-        selection ?? .unread
+        selection ?? .today
+    }
+
+    private var headerTitle: String {
+        if let selectedEntryID,
+           let entry = store.entry(id: selectedEntryID),
+           let feed = store.feed(for: entry) {
+            return feed.title
+        }
+        return currentSelection.title
     }
 
     private var currentDisplayEntries: [EntryListItem] {
@@ -237,6 +257,11 @@ private struct SidebarView: View {
     @Binding var showsSettings: Bool
     @Binding var showsImporter: Bool
     @Binding var showsExporter: Bool
+    /// Invoked after any destructive sidebar action (delete feed/folder).
+    /// The parent clears the open reader so a deleted feed's article never
+    /// leaves a stale selection behind — the toolbar would otherwise render
+    /// an empty capsule placeholder.
+    var onDeleteSelection: () -> Void
     @State private var expandedFolders: Set<String> = []
     @Environment(\.colorScheme) private var colorScheme
 
@@ -423,7 +448,7 @@ private struct SidebarView: View {
                 }
             } else {
                 selection = .folder(folder)
-                withAnimation(.easeInOut(duration: 0.2)) {
+                _ = withAnimation(.easeInOut(duration: 0.2)) {
                     expandedFolders.insert(folder)
                 }
             }
@@ -447,8 +472,9 @@ private struct SidebarView: View {
                 Button(role: .destructive) {
                     store.deleteFolder(folder)
                     if case let .folder(f) = selection, f == folder {
-                        selection = .unread
+                        selection = .today
                     }
+                    onDeleteSelection()
                 } label: {
                     Label("删除文件夹", systemImage: "trash")
                 }
@@ -533,8 +559,9 @@ private struct SidebarView: View {
                 Button(role: .destructive) {
                     store.deleteFeed(feed)
                     if selection == .feed(feed.id) {
-                        selection = .unread
+                        selection = .today
                     }
+                    onDeleteSelection()
                 } label: {
                     Label("删除订阅", systemImage: "trash")
                 }
@@ -733,7 +760,11 @@ private struct EntryListView: View {
                     }
                 }
         }
+        #if os(macOS)
         .listStyle(.inset(alternatesRowBackgrounds: false))
+        #else
+        .listStyle(.inset)
+        #endif
         .scrollContentBackground(.hidden)
         .background {
             // 让纸张背景延伸到窗口顶部（unified NSToolbar 之下、safeAreaInset 占位区），
@@ -1038,18 +1069,24 @@ private struct AddFolderSheet: View {
 private struct RenameFolderSheet: View {
     @ObservedObject var store: AppStore
     let oldName: String
+    /// Called with the final folder name after a successful rename so the
+    /// parent can keep the sidebar selection in sync.
+    var onRename: ((String) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var newName: String = ""
 
-    init(store: AppStore, oldName: String) {
+    init(store: AppStore, oldName: String, onRename: ((String) -> Void)? = nil) {
         self.store = store
         self.oldName = oldName
+        self.onRename = onRename
         _newName = State(initialValue: oldName)
     }
 
     private var canSubmit: Bool {
         let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !clean.isEmpty && clean != oldName
+        guard !clean.isEmpty && clean != oldName else { return false }
+        // 禁止重名：renameFolder 会把两个文件夹静默合并。
+        return !store.folders.contains { $0 == clean }
     }
 
     var body: some View {
@@ -1083,7 +1120,9 @@ private struct RenameFolderSheet: View {
 
     private func submit() {
         guard canSubmit else { return }
-        store.renameFolder(from: oldName, to: newName)
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.renameFolder(from: oldName, to: clean)
+        onRename?(clean)
         dismiss()
     }
 }

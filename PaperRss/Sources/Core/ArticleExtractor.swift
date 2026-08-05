@@ -230,15 +230,20 @@ public enum ArticleExtractor {
     /// Returns the source blocks WebKit can observe while the reader scrolls.
     /// The same expression is used by the renderer below, keeping paragraph IDs
     /// stable between translation requests and document reloads.
-    public static func readerParagraphs(in html: String) -> [ReaderParagraph] {
-        guard let expression = readerBlockExpression else { return [] }
-        let range = NSRange(html.startIndex..., in: html)
+    public static func readerParagraphs(in html: String, title: String? = nil) -> [ReaderParagraph] {
         var paragraphs: [ReaderParagraph] = []
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            paragraphs.append(ReaderParagraph(id: "title", original: title))
+        }
+        guard let expression = readerBlockExpression else { return paragraphs }
+        let range = NSRange(html.startIndex..., in: html)
+        var paragraphIndex = 0
         expression.enumerateMatches(in: html, range: range) { match, _, _ in
             guard let match, let blockRange = Range(match.range, in: html) else { return }
             let original = String(html[blockRange]).plainText
             guard !original.isEmpty else { return }
-            paragraphs.append(ReaderParagraph(id: "p\(paragraphs.count)", original: original))
+            paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
+            paragraphIndex += 1
         }
         return paragraphs
     }
@@ -298,7 +303,7 @@ public enum ArticleExtractor {
         return output
     }
 
-    private static func translationMarkup(for translation: String, id: String) -> String {
+    public static func translationMarkup(for translation: String, id: String) -> String {
         """
         <aside id="paper-rss-translation-\(id)" class="paper-rss-translation" data-paper-rss-translation-for="\(id)" aria-label="中文翻译">
         <p><span class="paper-rss-translation-label" aria-label="译文">
@@ -309,7 +314,7 @@ public enum ArticleExtractor {
         """
     }
 
-    private static func pendingTranslationMarkup(for id: String) -> String {
+    public static func pendingTranslationMarkup(for id: String) -> String {
         """
         <aside id="paper-rss-translation-\(id)" class="paper-rss-translation is-loading" data-paper-rss-translation-for="\(id)" aria-label="正在生成中文翻译" aria-live="polite">
         <p><span class="paper-rss-translation-label" aria-label="译文">

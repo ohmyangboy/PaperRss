@@ -634,6 +634,10 @@ struct SettingsView: View {
                         set: { store.setICloudSyncEnabled($0) }
                     ))
                     .labelsHidden()
+                    // 无 CloudKit entitlement 的构建（ad-hoc 签名、纯 SPM
+                    // 产物）调用 CloudKit 会抛无法捕获的 Objective-C 异常
+                    // 并终止应用，因此在没有权限时直接禁用入口。
+                    .disabled(!CloudSyncService.isICloudEntitled)
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)

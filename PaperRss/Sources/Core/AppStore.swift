@@ -259,8 +259,19 @@ public final class AppStore: ObservableObject {
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
         articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
-        isICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
-        iCloudSyncStatus = isICloudSyncEnabled ? "等待同步" : "未启用"
+        let storedICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
+        if storedICloudSyncEnabled && !CloudSyncService.isICloudEntitled {
+            // 先前构建可能保存了启用标记，但当前二进制没有 CloudKit
+            // entitlement。保留该标记会在任意一次持久化后调度 CloudKit
+            // 调用，而 `CKContainer.default()` 在此场景抛出的 Objective-C
+            // 异常无法被 Swift 捕获，会直接终止应用（SIGABRT）。
+            UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
+            isICloudSyncEnabled = false
+            iCloudSyncStatus = CloudSyncError.notEntitled.localizedDescription
+        } else {
+            isICloudSyncEnabled = storedICloudSyncEnabled
+            iCloudSyncStatus = isICloudSyncEnabled ? "等待同步" : "未启用"
+        }
         if needsRepairPersistence { persist(scheduleICloud: false) }
 
         Task { [weak self] in
@@ -813,17 +824,18 @@ public final class AppStore: ObservableObject {
     /// caches be replaced without another network request.
     private func preferredFeedContent(for entry: Entry) -> ArticleExtractor.Content? {
         guard let rawHTML = entry.contentHTML,
-              !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let feed = feed(for: entry) else { return nil }
+              !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
-        let feedURL = feed.feedURL
-        let feedHost = feedURL.host?.lowercased() ?? ""
-        let feedPath = feedURL.path.lowercased()
         let entryHost = entry.url?.host?.lowercased() ?? ""
-        let isTwitterRoute = feedPath.contains("/twitter/") || feedPath.hasPrefix("/twitter") || feedPath.contains("/x/")
         let isTwitterStatus = entryHost == "x.com" || entryHost == "www.x.com" || entryHost == "twitter.com" || entryHost == "www.twitter.com"
+
+        let feedURL = feed(for: entry)?.feedURL
+        let feedHost = feedURL?.host?.lowercased() ?? ""
+        let feedPath = feedURL?.path.lowercased() ?? ""
+        let isTwitterRoute = feedPath.contains("/twitter/") || feedPath.hasPrefix("/twitter") || feedPath.contains("/x/")
         let isRSSHub = feedHost.contains("rsshub") || feedHost == "47.251.82.23"
-        guard isTwitterRoute || (isRSSHub && isTwitterStatus) else { return nil }
+
+        guard isTwitterRoute || isTwitterStatus || isRSSHub else { return nil }
 
         return ArticleExtractor.content(from: rawHTML, baseURL: entry.url)
     }
@@ -843,14 +855,26 @@ public final class AppStore: ObservableObject {
     }
 
     public func setICloudSyncEnabled(_ enabled: Bool) {
-        isICloudSyncEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "PaperRss.iCloudSyncEnabled")
-        iCloudSyncStatus = enabled ? "等待同步" : "未启用"
-        if enabled { scheduleICloudSync() }
+        guard enabled else {
+            isICloudSyncEnabled = false
+            UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
+            iCloudSyncStatus = "未启用"
+            iCloudSyncTask?.cancel()
+            iCloudSyncTask = nil
+            return
+        }
+        guard CloudSyncService.isICloudEntitled else {
+            iCloudSyncStatus = CloudSyncError.notEntitled.localizedDescription
+            return
+        }
+        isICloudSyncEnabled = true
+        UserDefaults.standard.set(true, forKey: "PaperRss.iCloudSyncEnabled")
+        iCloudSyncStatus = "等待同步"
+        scheduleICloudSync()
     }
 
     public func syncICloud() async {
-        guard isICloudSyncEnabled else { return }
+        guard isICloudSyncEnabled, CloudSyncService.isICloudEntitled else { return }
         do {
             let remote = try await CloudSyncService.shared.synchronize(CloudLibrary.from(database))
             apply(cloud: remote)

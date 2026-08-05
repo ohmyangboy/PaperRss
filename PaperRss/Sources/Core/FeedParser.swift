@@ -113,8 +113,19 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
 
     init(baseURL: URL) { self.baseURL = baseURL }
 
+    /// XMLParser hands the qualified name to `elementName` when
+    /// `shouldProcessNamespaces` is off (the default). Feed module elements
+    /// arrive as "content:encoded" / "dc:creator"; only the unqualified
+    /// local part is matched against the extraction cases.
+    private static func localName(of elementName: String) -> String {
+        elementName.lowercased().split(separator: ":").last.map(String.init) ?? elementName.lowercased()
+    }
+
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
-        let local = elementName.lowercased()
+        // XMLParser reports qualified names ("content:encoded", "dc:creator")
+        // when namespaces are not processed, so strip the prefix before
+        // matching against the unqualified cases below.
+        let local = Self.localName(of: elementName)
         currentElement = local
         currentText = ""
         if root.isEmpty { root = local }
@@ -141,15 +152,21 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { currentText += String(data: CDATABlock, encoding: .utf8) ?? "" }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        let local = elementName.lowercased()
+        let local = Self.localName(of: elementName)
         let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
         if var item = currentItem {
             switch local {
-            case "title", "id", "guid", "author", "name", "summary", "description", "content", "encoded", "pubdate", "published", "updated", "link":
+            case "title", "id", "guid", "author", "name", "creator", "summary", "description", "content", "encoded", "pubdate", "published", "updated", "link":
                 if !text.isEmpty {
                     let key: String
-                    if local == "encoded" { key = "content" } else if local == "name" && item["author"] == nil { key = "author" } else { key = local }
-                    if item[key] == nil || key == "content" { item[key] = text }
+                    if local == "encoded" { key = "content" }
+                    else if local == "creator" { key = "author" } // RSS 2.0 <dc:creator>
+                    else if local == "name" && item["author"] == nil { key = "author" }
+                    else { key = local }
+                    // First writer wins. Without the prefix strip a module
+                    // element like <media:content> could otherwise overwrite
+                    // the real body extracted from <content:encoded>.
+                    if item[key] == nil { item[key] = text }
                 }
             default: break
             }

@@ -1,5 +1,14 @@
 @preconcurrency import CloudKit
 import Foundation
+import Security
+
+public enum CloudSyncError: LocalizedError, Equatable, Sendable {
+    case notEntitled
+
+    public var errorDescription: String? {
+        "此构建未启用 iCloud 权限：请使用开发者证书签名并在 Xcode 中开启 CloudKit capability。"
+    }
+}
 
 public struct CloudLibrary: Codable, Sendable {
     public var feeds: [Feed]
@@ -33,7 +42,29 @@ public actor CloudSyncService {
     public static let shared = CloudSyncService()
     private let recordID = CKRecord.ID(recordName: "paper-rss-library-v1")
 
+    /// Whether the running binary actually carries the CloudKit iCloud
+    /// entitlement. Calling `CKContainer.default()` without it raises an
+    /// Objective-C exception that Swift cannot catch and aborts the app
+    /// (SIGABRT). Ad-hoc signed builds and plain SPM executables never carry
+    /// the entitlement, so every CloudKit entry point must check this first
+    /// instead of letting the framework throw.
+    public static var isICloudEntitled: Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil),
+              let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-services" as CFString, nil),
+              let services = value as? [String] else { return false }
+        return services.contains("CloudKit")
+        #else
+        // SecTask is macOS-only, and iOS cannot query its runtime
+        // entitlements. iOS is not a release target for now, so keep sync
+        // disabled there until a real entitlement path (developer signing +
+        // iCloud capability) exists for it.
+        return false
+        #endif
+    }
+
     public func synchronize(_ local: CloudLibrary) async throws -> CloudLibrary {
+        guard Self.isICloudEntitled else { throw CloudSyncError.notEntitled }
         let remote = try await download() ?? CloudLibrary(feeds: [], readingStates: [:], artifacts: [])
         let merged = CloudLibrary.merged(local: local, remote: remote)
         try await upload(merged)

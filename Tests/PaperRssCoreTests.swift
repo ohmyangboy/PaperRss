@@ -28,6 +28,31 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(feed.entries[0].summary, "Short summary")
     }
 
+    func testParsesContentEncodedFullBodyAndDcCreator() throws {
+        // RSS 2.0 publishers put the full article body in the namespaced
+        // <content:encoded> element. XMLParser reports the qualified name
+        // ("content:encoded"), which used to fail every unqualified case in
+        // the parser and silently fell back to the <description> summary.
+        let data = Data("""
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <channel><title>Example</title><link>https://example.com</link>
+        <item>
+        <guid>item-1</guid><title>Hello</title><link>https://example.com/hello</link>
+        <description><![CDATA[<p>Short summary</p>]]></description>
+        <content:encoded><![CDATA[<p>Full article body with real content.</p>]]></content:encoded>
+        <dc:creator>张三</dc:creator>
+        <media:content url="https://example.com/video.mp4">https://example.com/video.mp4</media:content>
+        </item>
+        </channel></rss>
+        """.utf8)
+        let feed = try FeedParser.parse(data: data, baseURL: URL(string: "https://example.com/feed.xml")!)
+        XCTAssertEqual(feed.entries.count, 1)
+        let entry = feed.entries[0]
+        XCTAssertEqual(entry.contentHTML, "<p>Full article body with real content.</p>")
+        XCTAssertEqual(entry.author, "张三")
+        XCTAssertEqual(entry.summary, "Short summary")
+    }
+
     func testLibraryIndexSortsAndGroupsWithoutRepeatedQueries() throws {
         let technology = Feed(
             id: UUID(),
@@ -603,5 +628,55 @@ final class PaperRssCoreTests: XCTestCase {
         await store.generateSummary(entry: entry, text: "Test Content", force: true)
         XCTAssertNotNil(store.lastError)
         XCTAssertTrue(store.lastError?.contains("DeepSeek API Key") == true)
+    }
+
+    func testUnentitledBuildsAreRejectedBeforeAnyCloudKitCall() async {
+        // The SPM test runner has no CloudKit iCloud entitlement. The
+        // entitlement guard must reject synchronize() before it touches
+        // CKContainer.default(), which raises an uncatchable Objective-C
+        // exception and aborts the process (SIGABRT) when the entitlement is
+        // missing.
+        guard !CloudSyncService.isICloudEntitled else { return } // developer-signed environment: skip
+        do {
+            _ = try await CloudSyncService.shared.synchronize(
+                CloudLibrary(feeds: [], readingStates: [:], artifacts: [])
+            )
+            XCTFail("synchronize() must refuse to run without the CloudKit entitlement")
+        } catch let error as CloudSyncError {
+            XCTAssertEqual(error, .notEntitled)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testReaderParagraphsIncludesTitleWhenProvided() {
+        let html = "<p>正文段落一</p><p>正文段落二</p>"
+        let paragraphs = ArticleExtractor.readerParagraphs(in: html, title: "推文标题")
+        XCTAssertEqual(paragraphs.count, 3)
+        XCTAssertEqual(paragraphs[0].id, "title")
+        XCTAssertEqual(paragraphs[0].original, "推文标题")
+        XCTAssertEqual(paragraphs[1].id, "p0")
+        XCTAssertEqual(paragraphs[1].original, "正文段落一")
+        XCTAssertEqual(paragraphs[2].id, "p1")
+        XCTAssertEqual(paragraphs[2].original, "正文段落二")
+    }
+
+    @MainActor
+    func testTwitterStatusEntryUsesFeedContentDirectly() async throws {
+        let store = AppStore()
+        let entry = Entry(
+            id: "twitter-item-1",
+            feedID: UUID(),
+            title: "Test Tweet Title",
+            url: URL(string: "https://x.com/testuser/status/1234567890"),
+            contentHTML: "Test tweet body from RSS feed"
+        )
+
+        let html = store.articleHTML(for: entry)
+        XCTAssertNotNil(html)
+        XCTAssertTrue(html?.contains("Test tweet body from RSS feed") == true)
+        
+        let text = try await store.articleText(for: entry)
+        XCTAssertEqual(text, "Test tweet body from RSS feed")
     }
 }

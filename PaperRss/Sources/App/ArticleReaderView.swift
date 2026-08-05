@@ -86,7 +86,14 @@ struct ArticleReaderView: View {
     @State private var isSummaryExpanded = false
     @State private var visibleBilingualParagraphIDs: [String] = []
     @State private var pendingBilingualParagraphIDs: Set<String> = []
-    @State private var failedBilingualParagraphIDs: Set<String> = []
+    /// Paragraph IDs that failed translation, with the number of failed
+    /// attempts. Bounded so a permanently failing paragraph (model refusal,
+    /// overlong text, provider outage) stops being re-requested after a few
+    /// tries instead of burning paid API calls on every scroll.
+    @State private var failedBilingualParagraphIDs: [String: Int] = [:]
+    /// Streamed partial translations that have not yet been persisted.
+    /// Cleared for failed paragraphs so a truncated result never renders as
+    /// a final translation (and never blocks an automatic retry).
     @State private var streamingBilingualTranslations: [String: String] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -127,7 +134,7 @@ struct ArticleReaderView: View {
             return parsedReaderParagraphs
         }
         guard let html, !html.isEmpty else { return [] }
-        return ArticleExtractor.readerParagraphs(in: html)
+        return ArticleExtractor.readerParagraphs(in: html, title: entry.title)
     }
 
     private var savedSelectionAnnotations: [ReaderSelectionAnnotation] {
@@ -175,10 +182,31 @@ struct ArticleReaderView: View {
             PaperSurface(kind: .page)
                 .ignoresSafeArea()
         }
-        .navigationTitle(entry.title)
         #if os(iOS)
+        .navigationTitle(entry.title)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .onChange(of: store.activeAIRequest == nil) { _, isIdle in
+            // Translation requests are silently skipped while another AI
+            // operation (auto summary, selection explanation, selection
+            // translation) holds the single request lock. Without this
+            // recovery the viewport chain would stay stalled until the user
+            // scrolls again — toggling bilingual mode during a summary
+            // appeared to do nothing.
+            if isIdle {
+                requestVisibleTranslationsIfPossible()
+            }
+        }
+        .onChange(of: text) { _, newText in
+            if !newText.isEmpty {
+                requestVisibleTranslationsIfPossible()
+            }
+        }
+        .onChange(of: readerMode) { _, newMode in
+            if newMode == .bilingual {
+                requestVisibleTranslationsIfPossible()
+            }
+        }
         .task(id: entry.id) {
             let requestedEntry = entry
             activeLoadEntryID = requestedEntry.id
@@ -186,7 +214,7 @@ struct ArticleReaderView: View {
             isSummaryExpanded = false
             visibleBilingualParagraphIDs = []
             pendingBilingualParagraphIDs = []
-            failedBilingualParagraphIDs = []
+            failedBilingualParagraphIDs = [:]
             streamingBilingualTranslations = [:]
             parsedReaderParagraphs = []
             store.markRead(requestedEntry)
@@ -205,7 +233,7 @@ struct ArticleReaderView: View {
             let loadedHTML = store.articleHTML(for: requestedEntry)
             let parsedParagraphs: [ReaderParagraph] = await Task.detached(priority: .userInitiated) { () -> [ReaderParagraph] in
                 guard let loadedHTML, !loadedHTML.isEmpty else { return [] }
-                return ArticleExtractor.readerParagraphs(in: loadedHTML)
+                return ArticleExtractor.readerParagraphs(in: loadedHTML, title: requestedEntry.title)
             }.value
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
@@ -214,6 +242,7 @@ struct ArticleReaderView: View {
             parsedReaderParagraphs = parsedParagraphs
             articleBaseURL = store.articleSourceURL(for: requestedEntry)
             isLoading = false
+            requestVisibleTranslationsIfPossible()
             if store.database.llmConfiguration.automaticallyGenerateSummary,
                store.artifact(for: requestedEntry, kind: .summary) == nil,
                !text.isEmpty {
@@ -578,6 +607,7 @@ struct ArticleReaderView: View {
     }
 
     private func toggleBilingualTranslation() {
+        failedBilingualParagraphIDs.removeAll()
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
             store.toggleBilingualMode(for: entry.id)
         }
@@ -621,6 +651,7 @@ struct ArticleReaderView: View {
 
     private func generateBilingualTranslation() {
         guard !text.isEmpty else { return }
+        failedBilingualParagraphIDs.removeAll()
         if !store.isBilingualActive(for: entry.id) {
             store.toggleBilingualMode(for: entry.id)
         }
@@ -664,16 +695,24 @@ struct ArticleReaderView: View {
         var seen = Set<String>()
         let normalized = ids.filter { validIDs.contains($0) && seen.insert($0).inserted }
         if normalized != visibleBilingualParagraphIDs {
-            failedBilingualParagraphIDs.removeAll()
+            // Failure counters intentionally survive scrolling: clearing them
+            // here made a permanently failing paragraph re-enter a paid batch
+            // on every scroll. They reset per article in .task(id:).
             visibleBilingualParagraphIDs = normalized
         }
         requestVisibleTranslationsIfPossible()
     }
 
+    /// Whether another AI operation (summary, selection explanation, etc.)
+    /// is currently holding the store's single request lock.
+    private var isAIRequestInFlight: Bool {
+        store.activeAIRequest != nil
+    }
+
     private func requestVisibleTranslationsIfPossible() {
         guard readerMode == .bilingual,
               !text.isEmpty,
-              store.activeAIRequest == nil else { return }
+              !isAIRequestInFlight else { return }
 
         let translatedIDs = Set(bilingualSegments.map(\.id))
         let batch = Array(
@@ -681,7 +720,7 @@ struct ArticleReaderView: View {
                 .filter {
                     !translatedIDs.contains($0)
                         && !pendingBilingualParagraphIDs.contains($0)
-                        && !failedBilingualParagraphIDs.contains($0)
+                        && (failedBilingualParagraphIDs[$0] ?? 0) < Self.maximumTranslationFailures
                 }
                 .prefix(4)
         )
@@ -709,11 +748,19 @@ struct ArticleReaderView: View {
             pendingBilingualParagraphIDs.subtract(batch)
             for id in batch where completedIDs.contains(id) {
                 streamingBilingualTranslations.removeValue(forKey: id)
+                failedBilingualParagraphIDs.removeValue(forKey: id)
             }
-            failedBilingualParagraphIDs.formUnion(unsuccessfulIDs)
+            for id in unsuccessfulIDs {
+                // Never leave a truncated streamed text behind: it would
+                // render as a final translation and block automatic retries.
+                streamingBilingualTranslations.removeValue(forKey: id)
+                failedBilingualParagraphIDs[id, default: 0] += 1
+            }
             requestVisibleTranslationsIfPossible()
         }
     }
+
+    private static let maximumTranslationFailures = 2
 
     private func activeAIStatus(for kind: AIArtifactKind) -> AIRequestStatus? {
         guard store.isGeneratingAI(for: entry, kind: kind) else { return nil }
@@ -760,7 +807,10 @@ private enum PaperReaderHeaderBuilder {
         summaryArtifact: AIArtifact?,
         isSummaryExpanded: Bool,
         isGeneratingSummary: Bool,
-        aiStatusMessage: String?
+        aiStatusMessage: String?,
+        isBilingualMode: Bool = false,
+        titleSegment: BilingualSegment? = nil,
+        isTitlePending: Bool = false
     ) -> String {
         let titleText = entry.title.htmlEscaped
         let titleHTML: String
@@ -768,6 +818,19 @@ private enum PaperReaderHeaderBuilder {
             titleHTML = "<a href=\"\(url.absoluteString.htmlEscaped)\">\(titleText)</a>"
         } else {
             titleHTML = titleText
+        }
+
+        let titleTranslationHTML: String
+        if isBilingualMode {
+            if let titleSegment {
+                titleTranslationHTML = ArticleExtractor.translationMarkup(for: titleSegment.translation, id: "title")
+            } else if isTitlePending {
+                titleTranslationHTML = ArticleExtractor.pendingTranslationMarkup(for: "title")
+            } else {
+                titleTranslationHTML = ""
+            }
+        } else {
+            titleTranslationHTML = ""
         }
 
         var metaParts: [String] = []
@@ -791,9 +854,12 @@ private enum PaperReaderHeaderBuilder {
             aiStatusMessage: aiStatusMessage
         )
 
+        let titleAttr = " data-paper-rss-id=\"title\""
+
         return """
         <header class="paper-header-container">
-          <h1 class="paper-header-title">\(titleHTML)</h1>
+          <h1 class="paper-header-title"\(titleAttr)>\(titleHTML)</h1>
+          \(titleTranslationHTML)
           <div class="paper-header-meta">\(metaHTML)</div>
           <div class="paper-summary-card" id="paper-summary-card">\(summaryHTML)</div>
           <hr class="paper-header-divider">
@@ -2239,7 +2305,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
-                aiStatusMessage: parent.aiStatusMessage
+                aiStatusMessage: parent.aiStatusMessage,
+                isBilingualMode: parent.isBilingualMode,
+                titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
+                isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
             let document = Self.documentHTML(
                 body: readerHTML,
@@ -2691,7 +2760,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
-                aiStatusMessage: parent.aiStatusMessage
+                aiStatusMessage: parent.aiStatusMessage,
+                isBilingualMode: parent.isBilingualMode,
+                titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
+                isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
             let document = Self.documentHTML(
                 body: readerHTML,

@@ -106,8 +106,16 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         // 这会在窗口准备显示的第 0 帧同步触发，早于任何 SwiftUI 的 update 周期，
         // 从而能在原生窗口呈现的第一秒前就将 Toolbar 与全屏标志位设定好，实现零闪烁 (Zero-flicker) 启动。
         context.coordinator.windowObservation = splitVC.view.observe(\.window, options: [.new]) { [weak coordinator = context.coordinator] view, _ in
-            if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
-                coord.configureToolbar(on: window, splitView: splitVC.splitView)
+            MainActor.assumeIsolated {
+                if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
+                    coord.configureToolbar(on: window, splitView: splitVC.splitView)
+                }
+            }
+        }
+
+        context.coordinator.sidebarObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { [weak coordinator = context.coordinator] _, _ in
+            MainActor.assumeIsolated {
+                coordinator?.syncHeaderState()
             }
         }
 
@@ -161,12 +169,16 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
     // MARK: - Coordinator
 
-    @MainActor
-    final class Coordinator: NSObject, NSToolbarDelegate {
+    typealias Coordinator = ThreeColumnSplitViewCoordinator
+}
+
+@MainActor
+final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         var actions: ToolbarActions
         weak var splitViewController: NSSplitViewController?
         var toolbarConfigured = false
         var windowObservation: NSKeyValueObservation?
+        var sidebarObservation: NSKeyValueObservation?
         private weak var refreshItem: NSToolbarItem?
         private weak var refreshButton: NSButton?
         private weak var refreshSpinner: NSProgressIndicator?
@@ -174,6 +186,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         fileprivate weak var readerCapsuleHost: NSHostingView<AnyView>?
         fileprivate weak var readerCapsuleWidthConstraint: NSLayoutConstraint?
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
+        fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var markAllReadButton: NSButton?
 
@@ -259,9 +272,22 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
         /// 同步中间栏标题及全部已读按钮状态
         func syncHeaderState() {
-            if let label = titleLabel, label.stringValue != actions.selectionTitle {
-                label.stringValue = actions.selectionTitle
-                label.sizeToFit()
+            let isSidebarCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
+            
+            if let label = titleLabel {
+                label.isHidden = isSidebarCollapsed
+                if isSidebarCollapsed {
+                    label.stringValue = ""
+                    label.frame = .zero
+                } else {
+                    if label.stringValue != actions.selectionTitle {
+                        label.stringValue = actions.selectionTitle
+                        label.sizeToFit()
+                    }
+                }
+            }
+            if #available(macOS 15.0, *) {
+                entryListTitleItem?.isHidden = isSidebarCollapsed
             }
             if let button = markAllReadButton {
                 button.isEnabled = actions.hasUnread
@@ -350,15 +376,24 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
             case .paperEntryListTitle:
                 let item = NSToolbarItem(itemIdentifier: .paperEntryListTitle)
-                let label = NSTextField(labelWithString: actions.selectionTitle)
+                let isCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
+                if #available(macOS 15.0, *) {
+                    item.isHidden = isCollapsed
+                }
+                let label = NSTextField(labelWithString: isCollapsed ? "" : actions.selectionTitle)
                 label.font = .systemFont(ofSize: 13, weight: .semibold)
                 label.textColor = .labelColor
                 label.isEditable = false
                 label.isSelectable = false
                 label.drawsBackground = false
                 label.isBezeled = false
+                label.isHidden = isCollapsed
+                if isCollapsed {
+                    label.frame = .zero
+                }
                 item.view = label
                 self.titleLabel = label
+                self.entryListTitleItem = item
                 return item
 
             case .paperMarkAllRead:
@@ -464,7 +499,6 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         @objc private func doExport() { actions.onExport() }
         @objc private func doMarkAllRead() { actions.onMarkAllRead() }
     }
-}
 
 // MARK: - 自定义工具栏项标识
 
