@@ -1,6 +1,7 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import WebKit
 
 // MARK: - 工具栏动作回调
 
@@ -15,8 +16,15 @@ struct ToolbarActions {
     let selectionTitle: String
     let hasUnread: Bool
     let onMarkAllRead: () -> Void
+    let onFocusAndScrollArticle: () -> Void
+    let isZenMode: Bool
+    let onToggleZenMode: () -> Void
     let showsReaderCapsule: Bool
     let readerCapsule: AnyView
+
+    let onIncreaseFontSize: () -> Void
+    let onDecreaseFontSize: () -> Void
+    let onResetFontSize: () -> Void
 
     init(
         onRefresh: @escaping () -> Void,
@@ -28,8 +36,14 @@ struct ToolbarActions {
         selectionTitle: String,
         hasUnread: Bool,
         onMarkAllRead: @escaping () -> Void,
+        onFocusAndScrollArticle: @escaping () -> Void = {},
+        isZenMode: Bool = false,
+        onToggleZenMode: @escaping () -> Void = {},
         showsReaderCapsule: Bool = false,
-        readerCapsule: AnyView = AnyView(EmptyView())
+        readerCapsule: AnyView = AnyView(EmptyView()),
+        onIncreaseFontSize: @escaping () -> Void = {},
+        onDecreaseFontSize: @escaping () -> Void = {},
+        onResetFontSize: @escaping () -> Void = {}
     ) {
         self.onRefresh = onRefresh
         self.onAddFeed = onAddFeed
@@ -40,8 +54,14 @@ struct ToolbarActions {
         self.selectionTitle = selectionTitle
         self.hasUnread = hasUnread
         self.onMarkAllRead = onMarkAllRead
+        self.onFocusAndScrollArticle = onFocusAndScrollArticle
+        self.isZenMode = isZenMode
+        self.onToggleZenMode = onToggleZenMode
         self.showsReaderCapsule = showsReaderCapsule
         self.readerCapsule = readerCapsule
+        self.onIncreaseFontSize = onIncreaseFontSize
+        self.onDecreaseFontSize = onDecreaseFontSize
+        self.onResetFontSize = onResetFontSize
     }
 }
 
@@ -67,7 +87,14 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     }
 
     func makeNSViewController(context: Context) -> NSSplitViewController {
-        let splitVC = NSSplitViewController()
+        let splitVC = PaperSplitViewController()
+        splitVC.onLayout = { [weak coordinator = context.coordinator] in
+            MainActor.assumeIsolated {
+                if let window = splitVC.view.window {
+                    coordinator?.removeTitlebarBlur(from: window)
+                }
+            }
+        }
 
         // 侧边栏 — 使用 sidebarWithViewController 声明 sidebar 身份
         let sidebarHost = NSHostingController(rootView: sidebar)
@@ -141,6 +168,22 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         context.coordinator.syncRefreshState()
         context.coordinator.syncHeaderState()
 
+        // 禅模式：平滑动画收起 Sidebar (Column 0) 和 EntryListView (Column 1)
+        if splitVC.splitViewItems.count >= 2 {
+            let sidebarItem = splitVC.splitViewItems[0]
+            let contentListItem = splitVC.splitViewItems[1]
+            let targetState = toolbarActions.isZenMode
+            if sidebarItem.isCollapsed != targetState {
+                sidebarItem.animator().isCollapsed = targetState
+            }
+            if contentListItem.isCollapsed != targetState {
+                contentListItem.animator().isCollapsed = targetState
+            }
+        }
+
+        // 禅模式下隐藏除 Article View 阅读胶囊外的所有工具栏按钮
+        context.coordinator.syncZenModeState()
+
         // 更新工具栏中的阅读工具胶囊(SwiftUI 状态变化后刷新图标/可用态与显示隐藏)
         if let host = context.coordinator.readerCapsuleHost {
             if toolbarActions.showsReaderCapsule {
@@ -150,7 +193,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
                 }
                 host.rootView = toolbarActions.readerCapsule
                 let size = host.fittingSize
-                let width = size.width > 0 ? size.width : 108
+                let width = size.width > 0 ? size.width : 140
                 let height = size.height > 0 ? size.height : 28
                 host.frame = NSRect(x: 0, y: 0, width: width, height: height)
                 context.coordinator.readerCapsuleWidthConstraint?.constant = width
@@ -189,9 +232,166 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var markAllReadButton: NSButton?
+        nonisolated(unsafe) private var eventMonitor: Any?
+        private var blurCleanupTimer: DispatchSourceTimer?
 
         init(actions: ToolbarActions) {
             self.actions = actions
+            super.init()
+            setupLocalKeyMonitor()
+        }
+
+        deinit {
+            if let monitor = eventMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            blurCleanupTimer?.cancel()
+        }
+
+        private func setupLocalKeyMonitor() {
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self else { return event }
+
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if flags.contains(.command) && !flags.contains(.control) && !flags.contains(.option) {
+                    let chars = event.charactersIgnoringModifiers ?? ""
+                    if chars == "=" || chars == "+" || event.keyCode == 24 || event.keyCode == 69 {
+                        MainActor.assumeIsolated {
+                            self.actions.onIncreaseFontSize()
+                        }
+                        return nil
+                    }
+                    if chars == "-" || chars == "_" || event.keyCode == 27 || event.keyCode == 78 {
+                        MainActor.assumeIsolated {
+                            self.actions.onDecreaseFontSize()
+                        }
+                        return nil
+                    }
+                    if chars == "0" || event.keyCode == 29 || event.keyCode == 82 {
+                        MainActor.assumeIsolated {
+                            self.actions.onResetFontSize()
+                        }
+                        return nil
+                    }
+                }
+                
+                // 左/右方向键 (keyCode 123 左, 124 右)
+                if flags.isEmpty && (event.keyCode == 123 || event.keyCode == 124) {
+                    guard let window = event.window ?? NSApp.keyWindow,
+                          let splitVC = self.splitViewController,
+                          splitVC.splitViewItems.count >= 3 else { return event }
+                          
+                    let firstResponder = window.firstResponder as? NSView
+                    if firstResponder is NSTextView || firstResponder is NSTextField {
+                        return event
+                    }
+
+                    let sidebarView = splitVC.splitViewItems[0].viewController.view
+                    let listView = splitVC.splitViewItems[1].viewController.view
+                    let detailView = splitVC.splitViewItems[2].viewController.view
+
+                    func findFocusTarget(in view: NSView) -> NSView {
+                        func findPrimary(in v: NSView) -> NSView? {
+                            if v is NSTableView || v is NSOutlineView || v is WKWebView {
+                                return v
+                            }
+                            for subview in v.subviews {
+                                if let found = findPrimary(in: subview) { return found }
+                            }
+                            return nil
+                        }
+                        if let primary = findPrimary(in: view) { return primary }
+
+                        func findAnyAccepting(in v: NSView) -> NSView? {
+                            if v.acceptsFirstResponder { return v }
+                            for subview in v.subviews {
+                                if let found = findAnyAccepting(in: subview) { return found }
+                            }
+                            return nil
+                        }
+                        return findAnyAccepting(in: view) ?? view
+                    }
+
+                    func currentColumnIndex() -> Int? {
+                        guard let firstResponder = firstResponder else { return nil }
+                        var current: NSView? = firstResponder
+                        while let p = current {
+                            if p === sidebarView { return 0 }
+                            if p === listView { return 1 }
+                            if p === detailView { return 2 }
+                            current = p.superview
+                        }
+                        return nil
+                    }
+
+                    guard let colIndex = currentColumnIndex() else { return event }
+
+                    if event.keyCode == 123 { // Left
+                        if colIndex == 2 { // 从文章详情 -> 切到文章列表
+                            let target = findFocusTarget(in: listView)
+                            window.makeFirstResponder(target)
+                            return nil
+                        } else if colIndex == 1 { // 从文章列表 -> 切到侧边栏
+                            let target = findFocusTarget(in: sidebarView)
+                            window.makeFirstResponder(target)
+                            return nil
+                        }
+                    } else if event.keyCode == 124 { // Right
+                        if colIndex == 0 { // 从侧边栏 -> 切到文章列表
+                            let target = findFocusTarget(in: listView)
+                            window.makeFirstResponder(target)
+                            return nil
+                        } else if colIndex == 1 { // 从文章列表 -> 切到文章详情
+                            let target = findFocusTarget(in: detailView)
+                            window.makeFirstResponder(target)
+                            return nil
+                        }
+                    }
+                }
+
+                // Space 键 (keyCode 49), 且没有任何 modifier 键 (Cmd / Option / Ctrl / Shift)
+                guard event.keyCode == 49, flags.isEmpty else {
+                    return event
+                }
+                guard let window = event.window ?? NSApp.keyWindow,
+                      let firstResponder = window.firstResponder as? NSView else {
+                    return event
+                }
+                guard let splitVC = self.splitViewController, splitVC.splitViewItems.count >= 2 else {
+                    return event
+                }
+                if firstResponder is NSTextView || firstResponder is NSTextField {
+                    return event
+                }
+                let contentVCView = splitVC.splitViewItems[1].viewController.view
+                let detailVCView = splitVC.splitViewItems.count >= 3 ? splitVC.splitViewItems[2].viewController.view : nil
+
+                if firstResponder.isDescendant(of: contentVCView) {
+                    MainActor.assumeIsolated {
+                        self.actions.onFocusAndScrollArticle()
+                    }
+                    return nil
+                }
+
+                if let detailVCView, firstResponder.isDescendant(of: detailVCView) {
+                    func findWKWebView(in view: NSView) -> WKWebView? {
+                        if let webView = view as? WKWebView { return webView }
+                        for subview in view.subviews {
+                            if let found = findWKWebView(in: subview) { return found }
+                        }
+                        return nil
+                    }
+                    if findWKWebView(in: detailVCView) == nil {
+                        MainActor.assumeIsolated {
+                            self.actions.onFocusAndScrollArticle()
+                        }
+                        return nil
+                    }
+                }
+
+                return event
+            }
         }
 
         /// 在窗口上配置 NSToolbar，复刻 NetNewsWire 的布局方式
@@ -212,10 +412,71 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     self?.removeTitlebarBlur(from: window)
                 }
             }
+
+            let center = NotificationCenter.default
+            let fullScreenNotifications: [Notification.Name] = [
+                NSWindow.willEnterFullScreenNotification,
+                NSWindow.didEnterFullScreenNotification,
+                NSWindow.willExitFullScreenNotification,
+                NSWindow.didExitFullScreenNotification,
+                NSWindow.didResizeNotification,
+                NSWindow.didEndLiveResizeNotification
+            ]
+            for name in fullScreenNotifications {
+                center.addObserver(
+                    forName: name,
+                    object: window,
+                    queue: .main
+                ) { [weak self, weak window] _ in
+                    guard let window = window else { return }
+                    self?.removeTitlebarBlur(from: window)
+                    self?.startBlurCleanupTimer(for: window)
+                }
+            }
+
+            // 全局监听所有窗口出现/更新，捕捉全屏时系统动态创建的浮动工具栏窗口
+            for noteName in [NSWindow.didBecomeKeyNotification, NSWindow.didUpdateNotification] {
+                center.addObserver(
+                    forName: noteName,
+                    object: nil,
+                    queue: .main
+                ) { [weak self, weak window] note in
+                    guard let mainWindow = window else { return }
+                    guard let appearedWindow = note.object as? NSWindow, appearedWindow !== mainWindow else { return }
+                    let className = String(describing: type(of: appearedWindow))
+                    if className.contains("Toolbar") || className.contains("Titlebar") || className.contains("FullScreen") {
+                        self?.removeTitlebarBlur(from: mainWindow)
+                    }
+                }
+            }
+
             toolbarConfigured = true
         }
 
-        private func removeTitlebarBlur(from window: NSWindow) {
+        /// 启动一个高频定时器，每 100ms 调用一次 removeTitlebarBlur，持续 3 秒后自动停止。
+        /// 解决退出全屏时系统异步多次重建 Titlebar 导致 NSVisualEffectView 反复出现的问题。
+        private func startBlurCleanupTimer(for window: NSWindow) {
+            blurCleanupTimer?.cancel()
+            var remaining = 30 // 30 次 × 100ms = 3 秒
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+            timer.setEventHandler { [weak self, weak window] in
+                guard let self = self, let window = window else {
+                    timer.cancel()
+                    return
+                }
+                self.removeTitlebarBlur(from: window)
+                remaining -= 1
+                if remaining <= 0 {
+                    timer.cancel()
+                    self.blurCleanupTimer = nil
+                }
+            }
+            timer.resume()
+            blurCleanupTimer = timer
+        }
+
+        fileprivate func removeTitlebarBlur(from window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
             // 窗口背景不能保持透明:透明会让我 NSSplitView 的分割线矩形
@@ -231,19 +492,36 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard let themeFrame = window.contentView?.superview else { return }
 
             func hideVisualEffects(in view: NSView) {
+                if let effectView = view as? NSVisualEffectView {
+                    effectView.isHidden = true
+                    effectView.state = .inactive
+                    effectView.alphaValue = 0
+                }
                 for subview in view.subviews {
-                    if let effectView = subview as? NSVisualEffectView {
-                        effectView.isHidden = true
-                        effectView.state = .inactive
-                        effectView.alphaValue = 0
-                    }
                     hideVisualEffects(in: subview)
                 }
             }
 
+            // 主窗口：仅隐去标题栏/工具栏容器中的 NSVisualEffectView，保留 contentView (应用内容)
             for subview in themeFrame.subviews {
                 if subview !== window.contentView {
                     hideVisualEffects(in: subview)
+                }
+            }
+            
+            // 全屏窗口：处理 macOS 进入全屏时创建的浮动工具栏与标题栏辅助窗口
+            for appWindow in NSApp.windows where appWindow !== window {
+                let className = String(describing: type(of: appWindow))
+                if className.contains("Toolbar") || className.contains("Titlebar") || className.contains("FullScreen") {
+                    appWindow.titlebarAppearsTransparent = true
+                    appWindow.titlebarSeparatorStyle = .none
+                    appWindow.backgroundColor = .clear
+                    appWindow.isOpaque = false
+                    if let toolbarThemeFrame = appWindow.contentView?.superview {
+                        hideVisualEffects(in: toolbarThemeFrame)
+                    } else if let contentView = appWindow.contentView {
+                        hideVisualEffects(in: contentView)
+                    }
                 }
             }
         }
@@ -291,6 +569,34 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             }
             if let button = markAllReadButton {
                 button.isEnabled = actions.hasUnread
+            }
+        }
+
+        /// 同步禅模式下工具栏其他按钮的显隐与原生居中对齐（借助 centeredItemIdentifier 强制让阅读胶囊位于窗口及内容正上方）
+        func syncZenModeState() {
+            guard let toolbar = splitViewController?.view.window?.toolbar else { return }
+            let isZenMode = actions.isZenMode
+
+            if #available(macOS 11.0, *) {
+                toolbar.centeredItemIdentifier = isZenMode ? .paperReaderCapsule : nil
+            }
+
+            for item in toolbar.items {
+                if item.itemIdentifier == .paperReaderCapsule {
+                    if #available(macOS 15.0, *) {
+                        item.isHidden = !actions.showsReaderCapsule
+                    }
+                    readerCapsuleHost?.isHidden = !actions.showsReaderCapsule
+                } else {
+                    if #available(macOS 15.0, *) {
+                        item.isHidden = isZenMode
+                    }
+                    item.view?.isHidden = isZenMode
+                }
+            }
+
+            if !isZenMode {
+                syncHeaderState()
             }
         }
 
@@ -510,6 +816,15 @@ extension NSToolbarItem.Identifier {
     static let paperEntryListTitle = NSToolbarItem.Identifier("com.paperrss.toolbar.entryListTitle")
     static let paperMarkAllRead = NSToolbarItem.Identifier("com.paperrss.toolbar.markAllRead")
     static let paperReaderCapsule = NSToolbarItem.Identifier("com.paperrss.toolbar.readerCapsule")
+}
+
+@MainActor
+final class PaperSplitViewController: NSSplitViewController {
+    var onLayout: (() -> Void)?
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        onLayout?()
+    }
 }
 #endif
 

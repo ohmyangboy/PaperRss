@@ -365,7 +365,9 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var showsAISummary: Bool
     public var automaticallyGenerateSummary: Bool
 
-    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false)
+    public var customPrompt: String
+
+    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false, customPrompt: "")
 
     /// DeepSeek's OpenAI-compatible endpoint expects the API root here.  The
     /// service appends `/chat/completions` itself, so users never need to guess
@@ -380,7 +382,8 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         targetLanguage: "简体中文",
         allowInsecureLocalEndpoint: false,
         showsAISummary: true,
-        automaticallyGenerateSummary: false
+        automaticallyGenerateSummary: false,
+        customPrompt: ""
     )
 
     public var usesDeepSeekAPI: Bool {
@@ -388,7 +391,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         return host == "api.deepseek.com"
     }
 
-    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false) {
+    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, customPrompt: String = "") {
         self.providerName = providerName
         self.providerDescription = providerDescription
         self.baseURL = baseURL
@@ -399,9 +402,10 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         self.allowInsecureLocalEndpoint = allowInsecureLocalEndpoint
         self.showsAISummary = showsAISummary
         self.automaticallyGenerateSummary = automaticallyGenerateSummary
+        self.customPrompt = customPrompt
     }
 
-    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary }
+    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, customPrompt }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -415,6 +419,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         allowInsecureLocalEndpoint = try container.decodeIfPresent(Bool.self, forKey: .allowInsecureLocalEndpoint) ?? false
         showsAISummary = try container.decodeIfPresent(Bool.self, forKey: .showsAISummary) ?? true
         automaticallyGenerateSummary = try container.decodeIfPresent(Bool.self, forKey: .automaticallyGenerateSummary) ?? false
+        customPrompt = try container.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
     }
 }
 

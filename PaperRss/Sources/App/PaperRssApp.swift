@@ -29,6 +29,27 @@ struct PaperRssApp: App {
                 Button("刷新全部订阅") { Task { await store.refresh() } }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .textFormatting) {
+                Button("放大正文字号") {
+                    store.increaseArticleFontSize()
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("放大正文字号") {
+                    store.increaseArticleFontSize()
+                }
+                .keyboardShortcut("+", modifiers: .command)
+
+                Button("缩小正文字号") {
+                    store.decreaseArticleFontSize()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("默认正文字号") {
+                    store.resetArticleFontSize()
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
         }
 
         #if os(macOS)

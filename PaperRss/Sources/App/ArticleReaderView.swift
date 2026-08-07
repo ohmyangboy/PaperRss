@@ -22,6 +22,7 @@ private enum ReaderSelectionKind: String, Sendable {
 private struct ReaderSelectionRequest: Sendable {
     let id: String
     let selection: String
+    let question: String?
     let localContext: String
     let kind: ReaderSelectionKind
     let anchor: AISelectionAnchor?
@@ -74,6 +75,10 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
 struct ArticleReaderView: View {
     @ObservedObject var store: AppStore
     let entry: Entry
+    var onSelectNextEntry: () -> Void = {}
+    var onFocusListView: () -> Void = {}
+    var isZenMode: Bool = false
+    var onToggleZenMode: () -> Void = {}
     @State private var text = ""
     @State private var html: String?
     /// Parsing a long document's paragraph structure is deliberately done once
@@ -295,7 +300,17 @@ struct ArticleReaderView: View {
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
-                onToggleSummary: toggleSummary
+                onToggleSummary: toggleSummary,
+                onSelectNextEntry: onSelectNextEntry,
+                onFocusListView: onFocusListView,
+                onAdjustFontSize: { action in
+                    switch action {
+                    case "increase": store.increaseArticleFontSize()
+                    case "decrease": store.decreaseArticleFontSize()
+                    case "reset": store.resetArticleFontSize()
+                    default: break
+                    }
+                }
             )
             .ignoresSafeArea()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -331,7 +346,17 @@ struct ArticleReaderView: View {
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
-                onToggleSummary: toggleSummary
+                onToggleSummary: toggleSummary,
+                onSelectNextEntry: onSelectNextEntry,
+                onFocusListView: onFocusListView,
+                onAdjustFontSize: { action in
+                    switch action {
+                    case "increase": store.increaseArticleFontSize()
+                    case "decrease": store.decreaseArticleFontSize()
+                    case "reset": store.resetArticleFontSize()
+                    default: break
+                    }
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.leading, paperLeftMargin)
@@ -371,10 +396,10 @@ struct ArticleReaderView: View {
                 // remains for SwiftUI's type-safe view construction only.
                 EmptyView()
                 #else
-                Text(text).font(.system(size: 17)).lineSpacing(7).textSelection(.enabled)
+                Text(text).font(.system(size: CGFloat(store.articleFontSize))).lineSpacing(7).textSelection(.enabled)
                 #endif
             } else {
-                Text(text).font(.system(size: 17)).lineSpacing(7).textSelection(.enabled)
+                Text(text).font(.system(size: CGFloat(store.articleFontSize))).lineSpacing(7).textSelection(.enabled)
             }
         case .bilingual:
             if let artifact, !artifact.segments.isEmpty {
@@ -568,10 +593,22 @@ struct ArticleReaderView: View {
             .buttonStyle(.borderless)
             .accessibilityLabel(currentEntry.isStarred ? "取消收藏" : "收藏")
             .help(currentEntry.isStarred ? "取消收藏" : "收藏")
+
+            Button {
+                onToggleZenMode()
+            } label: {
+                toolbarSymbol(
+                    isZenMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                    isActive: isZenMode
+                )
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
+            .help(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .frame(width: 108, height: 32)
+        .frame(width: 140, height: 32)
         .background(
             Capsule()
                 .fill(
@@ -666,14 +703,26 @@ struct ArticleReaderView: View {
             let result: String
             switch request.kind {
             case .explanation:
-                result = try await store.explainSelection(
-                    entry: entry,
-                    selection: request.selection,
-                    localContext: request.localContext,
-                    articleText: text,
-                    selectionAnchor: request.anchor,
-                    onDelta: onDelta
-                )
+                if let question = request.question, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result = try await store.askSelection(
+                        entry: entry,
+                        selection: request.selection,
+                        question: question,
+                        localContext: request.localContext,
+                        articleText: text,
+                        selectionAnchor: request.anchor,
+                        onDelta: onDelta
+                    )
+                } else {
+                    result = try await store.explainSelection(
+                        entry: entry,
+                        selection: request.selection,
+                        localContext: request.localContext,
+                        articleText: text,
+                        selectionAnchor: request.anchor,
+                        onDelta: onDelta
+                    )
+                }
             case .translation:
                 result = try await store.translateSelection(
                     entry: entry,
@@ -1005,7 +1054,8 @@ body {
   box-sizing: border-box;
   color: var(--paper-ink);
   background: transparent;
-  font: 17px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: var(--paper-font-size, 17px);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   font-weight: 400;
   line-height: 1.72;
   letter-spacing: .006em;
@@ -1150,9 +1200,33 @@ img, video {
   box-sizing: border-box;
   max-width: 100%;
   height: auto;
-  margin: 1.2em 0;
+  margin: 1.2em auto;
   border: .5px solid var(--paper-rule);
   border-radius: 6px;
+  cursor: pointer;
+}
+figure {
+  margin: 1.2em auto;
+  text-align: center;
+}
+figure img, figure video {
+  margin-left: auto;
+  margin-right: auto;
+}
+:fullscreen, :-webkit-full-screen {
+  background-color: #000000 !important;
+}
+video:fullscreen, video:-webkit-full-screen,
+*:fullscreen video, *:-webkit-full-screen video {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  object-fit: contain !important;
+  background-color: #000000 !important;
 }
 figure img { margin-bottom: .48em; }
 figcaption {
@@ -1160,6 +1234,73 @@ figcaption {
   font-size: .88em;
   line-height: 1.55;
   letter-spacing: .015em;
+  text-align: center;
+}
+.paper-rss-lightbox {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease-out;
+}
+.paper-rss-lightbox.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.paper-rss-lightbox-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.paper-rss-lightbox-content {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+.paper-rss-lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  cursor: zoom-out;
+}
+.paper-rss-lightbox-close {
+  position: absolute;
+  top: -44px;
+  right: -8px;
+  background: rgba(255, 255, 255, 0.22);
+  border: none;
+  color: #ffffff;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 0.15s ease;
+}
+.paper-rss-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.38);
 }
 a {
   color: var(--paper-accent);
@@ -1255,8 +1396,8 @@ th, td {
   z-index: 2147483645;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 8px;
+  gap: 4px;
+  padding: 4px 6px;
   border: 1px solid var(--paper-rule);
   border-radius: 20px;
   color: var(--paper-ink);
@@ -1267,8 +1408,9 @@ th, td {
   animation: paper-rss-materialize .18s ease-out both;
 }
 .paper-rss-selection-action {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -1396,10 +1538,11 @@ th, td {
 """
 
 @MainActor
-private enum PaperReaderBridge {
+enum PaperReaderBridge {
     static let scrollMessageName = "paperRssReaderScroll"
     static let visibleParagraphsMessageName = "paperRssVisibleParagraphs"
     static let explainSelectionMessageName = "paperRssExplainSelection"
+    static let askSelectionMessageName = "paperRssAskSelection"
     static let observerScript = WKUserScript(
         source: """
         (() => {
@@ -1538,7 +1681,10 @@ private enum PaperReaderBridge {
           let activeAnchorElement = null;
           let selectionTimer = null;
 
+          let isAsking = false;
+
           const removeAction = () => {
+            isAsking = false;
             actionBar?.remove();
             actionBar = null;
             activeRange = null;
@@ -1606,10 +1752,12 @@ private enum PaperReaderBridge {
             svg.setAttribute("focusable", "false");
             svg.classList.add("paper-rss-icon");
             const paths = kind === "translation"
-              ? ["M5 8h7M8.5 5v3c0 3.3-1.3 5.4-4 7M5 11c1.7 1.6 3.7 2.7 6 3.2M14 14h7M17.5 11v3c0 3.3-1.3 5.4-4 7M14 17c1.6 1.2 3.4 2.1 5.5 2.6"]
-              : kind === "note"
-                ? ["M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z", "M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7L19 14z"]
-                : ["M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z", "M5 14l.6 1.6 1.4.6-1.4.6L5 18.4l-.6-1.6-1.4-.6 1.4-.6L5 14z"];
+              ? ["m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2v3", "M22 22l-5-10-5 10", "M14 18h6"]
+              : kind === "ask"
+                ? ["M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"]
+                : kind === "note"
+                  ? ["M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z", "M19 14l.7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7L19 14z"]
+                  : ["M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z", "M5 14l.6 1.6 1.4.6-1.4.6L5 18.4l-.6-1.6-1.4-.6 1.4-.6L5 14z"];
             paths.forEach(d => {
               const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
               path.setAttribute("d", d);
@@ -1683,6 +1831,17 @@ private enum PaperReaderBridge {
             };
 
             const last = marks[0];
+            let container = last ? (last.closest('[data-paper-rss-id]') || last.parentElement) : null;
+            if (!container && range) {
+              let node = range.commonAncestorContainer;
+              container = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+              if (container) container = container.closest('[data-paper-rss-id]') || container;
+            }
+            if (container) {
+              const existingIcons = container.querySelectorAll('.paper-rss-annotation-icon');
+              existingIcons.forEach(icon => icon.remove());
+            }
+
             if (last) {
               const icon = createAnnotationButton(id);
               last.append(icon);
@@ -1761,7 +1920,7 @@ private enum PaperReaderBridge {
             }
           };
 
-          const showPopover = (id, rect, text, state, kind, anchorElement = null) => {
+          const showPopover = (id, rect, text, state, kind, anchorElement = null, question = null) => {
             dismissPopover();
             activeAnchorRect = rect;
             activeAnchorElement = anchorElement;
@@ -1774,12 +1933,20 @@ private enum PaperReaderBridge {
             header.className = "paper-rss-explanation-header";
             header.append(svgIcon(kind === "translation" ? "translation" : "note"));
             const title = document.createElement("span");
-            title.textContent = kind === "translation" ? "翻译" : "AI 解释";
+            title.textContent = kind === "translation" ? "翻译" : (question ? "问 AI 答疑" : "AI 解释");
             header.append(title);
+            popover.append(header);
+            if (question) {
+              const qBox = document.createElement("div");
+              qBox.className = "paper-rss-question-tag";
+              qBox.style.cssText = "font-size:12px;opacity:0.8;margin:4px 0 8px;font-weight:600;";
+              qBox.textContent = "问：" + question;
+              popover.append(qBox);
+            }
             const body = document.createElement("div");
             body.className = "paper-rss-explanation-body";
-            body.textContent = text || (kind === "translation" ? "正在翻译…" : "正在结合全文理解这段文字…");
-            popover.append(header, body);
+            body.textContent = text || (kind === "translation" ? "正在翻译…" : "正在生成解答…");
+            popover.append(body);
             document.body.append(popover);
             activePopover = popover;
             positionNear(popover, rect, true);
@@ -1794,21 +1961,14 @@ private enum PaperReaderBridge {
             positionNear(activePopover, rect, true);
           };
 
-          const postRequest = (kind, range, selectedText) => {
+          const postRequest = (kind, range, selectedText, question = null) => {
             const requestID = "selection-" + Date.now() + "-" + Math.random().toString(36).slice(2);
             const rect = focusRectForSelection(window.getSelection(), range);
-            // The floating action bar passes the visual kind "note"; treat it
-            // as an explanation so the inline annotation icon and the saved
-            // anchor are actually created. Without this, the popover works
-            // but the reader has no icon to reopen the explanation later.
             const isExplanation = kind === "explanation" || kind === "note";
             const anchor = isExplanation ? selectionAnchorForRange(range) : null;
             const markers = isExplanation ? markRange(range, requestID, selectedText) : [];
             let marker = markers[0]?.querySelector?.(".paper-rss-annotation-icon") || markers[0] || null;
             if (!marker && kind === "translation") {
-              // Selection translations have no persistent icon, so give the
-              // popover an invisible inline anchor at the selection end. It
-              // scrolls with the text and is removed when the popover closes.
               const anchorSpan = document.createElement("span");
               anchorSpan.className = "paper-rss-selection-anchor";
               anchorSpan.setAttribute("aria-hidden", "true");
@@ -1817,19 +1977,56 @@ private enum PaperReaderBridge {
               endRange.insertNode(anchorSpan);
               marker = anchorSpan;
             }
-            showPopover(requestID, marker?.getBoundingClientRect?.() || rect, "", "is-loading", kind, marker);
+            showPopover(requestID, marker?.getBoundingClientRect?.() || rect, "", "is-loading", kind, marker, question);
             removeAction();
             window.getSelection()?.removeAllRanges();
-            window.webkit.messageHandlers.paperRssExplainSelection.postMessage({
+            const handler = question ? window.webkit.messageHandlers.paperRssAskSelection : window.webkit.messageHandlers.paperRssExplainSelection;
+            handler?.postMessage({
               id: requestID,
               kind,
               selection: selectedText.slice(0, 4000),
-              localContext: kind === "explanation" ? localContextForRange(range).slice(0, 8000) : "",
+              question: question ? question.slice(0, 1000) : null,
+              localContext: kind === "explanation" || kind === "note" ? localContextForRange(range).slice(0, 8000) : "",
               anchor
             });
           };
 
+          const presentQuestionInput = (bar, focusRect, range, selectedText) => {
+            isAsking = true;
+            bar.innerHTML = "";
+            bar.className = "paper-rss-selection-actions is-asking";
+            const form = document.createElement("form");
+            form.className = "paper-rss-ask-form";
+            form.style.cssText = "display:flex;align-items:center;gap:4px;padding:2px 6px;";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "paper-rss-ask-input";
+            input.placeholder = "针对划选文字提问...";
+            input.style.cssText = "border:none;background:transparent;outline:none;font-size:13px;color:var(--paper-ink);width:150px;";
+
+            const sendBtn = document.createElement("button");
+            sendBtn.type = "submit";
+            sendBtn.className = "paper-rss-selection-action";
+            sendBtn.append(svgIcon("ask"));
+            sendBtn.setAttribute("title", "发送提问");
+
+            form.append(input, sendBtn);
+            bar.append(form);
+
+            form.addEventListener("submit", event => {
+              event.preventDefault();
+              const question = input.value.trim();
+              if (!question) return;
+              postRequest("note", range, selectedText, question);
+            });
+
+            setTimeout(() => input.focus(), 50);
+            positionNear(bar, { left: focusRect.left - 40, top: focusRect.top, width: 80, height: Math.max(1, focusRect.height), bottom: focusRect.bottom });
+          };
+
           const presentActionForSelection = () => {
+            if (isAsking) return;
             removeAction();
             const selection = window.getSelection();
             const selectedText = selection?.toString().trim() || "";
@@ -1847,23 +2044,28 @@ private enum PaperReaderBridge {
               const button = document.createElement("button");
               button.type = "button";
               button.className = "paper-rss-selection-action";
-              button.append(kind === "translation" ? translationBadge() : svgIcon(kind));
+              button.append(svgIcon(kind));
               button.setAttribute("aria-label", label);
               button.setAttribute("title", label);
               button.addEventListener("pointerdown", event => event.preventDefault());
               button.addEventListener("click", () => {
                 if (!activeRange || !activeSelection) return;
-                postRequest(kind, activeRange.cloneRange(), activeSelection);
+                if (kind === "ask") {
+                  presentQuestionInput(bar, focusRect, activeRange.cloneRange(), activeSelection);
+                } else {
+                  postRequest(kind, activeRange.cloneRange(), activeSelection);
+                }
               });
               return button;
             };
-            bar.append(makeButton("note", "解释所选文字"), makeButton("translation", "翻译所选文字"));
+            bar.append(makeButton("note", "解释所选文字"), makeButton("ask", "问 AI 所选文字"), makeButton("translation", "翻译所选文字"));
             actionBar = bar;
             document.body.append(bar);
-            positionNear(bar, { left: focusRect.left - 24, top: focusRect.top, width: 48, height: Math.max(1, focusRect.height), bottom: focusRect.bottom });
+            positionNear(bar, { left: focusRect.left - 36, top: focusRect.top, width: 72, height: Math.max(1, focusRect.height), bottom: focusRect.bottom });
           };
 
           const scheduleSelectionAction = () => {
+            if (isAsking) return;
             clearTimeout(selectionTimer);
             selectionTimer = setTimeout(presentActionForSelection, 90);
           };
@@ -1872,9 +2074,11 @@ private enum PaperReaderBridge {
           document.addEventListener("pointerup", scheduleSelectionAction);
           document.addEventListener("keyup", scheduleSelectionAction);
           document.addEventListener("pointerdown", event => {
+            if (isAsking && event.target.closest?.(".paper-rss-selection-actions")) return;
             if (!event.target.closest?.(".paper-rss-selection-actions") && !event.target.closest?.(".paper-rss-explanation")) removeAction();
           }, true);
           document.addEventListener("click", event => {
+            if (isAsking && event.target.closest?.(".paper-rss-selection-actions")) return;
             const icon = event.target.closest?.(".paper-rss-annotation-icon");
             if (icon) {
               event.preventDefault();
@@ -1886,11 +2090,9 @@ private enum PaperReaderBridge {
             }
             if (!event.target.closest?.(".paper-rss-explanation") && !event.target.closest?.(".paper-rss-selection-actions")) dismissPopover();
           });
-          // The popover is positioned in document coordinates, so it follows
-          // the page on its own while scrolling. Reposition only when layout
-          // changes under it (images loading, translations inserted, window
-          // resize), keeping the anchor element as the source of truth.
-          document.addEventListener("scroll", removeAction, { passive: true, capture: true });
+          document.addEventListener("scroll", () => {
+            if (!isAsking) removeAction();
+          }, { passive: true, capture: true });
           window.addEventListener("resize", () => {
             if (!activePopover) return;
             const rect = activeAnchorElement?.isConnected ? activeAnchorElement.getBoundingClientRect() : activeAnchorRect;
@@ -1997,9 +2199,358 @@ private enum PaperReaderBridge {
         forMainFrameOnly: true,
         in: .defaultClient
     )
+
+    static let nextArticleMessageName = "paperRssNextArticle"
+    static let focusListMessageName = "paperRssFocusList"
+
+    static let spacebarScript = WKUserScript(
+        source: """
+        (() => {
+          window.addEventListener("keydown", event => {
+            if (event.key === " " || event.keyCode === 32) {
+              const active = document.activeElement;
+              if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
+                return;
+              }
+              if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+                return;
+              }
+              event.preventDefault();
+
+              const scrollHeight = Math.max(
+                document.documentElement.scrollHeight,
+                document.body.scrollHeight
+              );
+              const clientHeight = window.innerHeight;
+              const scrollTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+              const isAtBottom = (scrollTop + clientHeight) >= (scrollHeight - 6);
+
+              if (isAtBottom) {
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(nextArticleMessageName)) {
+                  window.webkit.messageHandlers.\(nextArticleMessageName).postMessage({});
+                }
+              } else {
+                const pageDistance = Math.max(120, clientHeight * 0.382);
+                window.scrollBy({
+                  top: pageDistance,
+                  behavior: "smooth"
+                });
+              }
+            } else if (event.key === "ArrowLeft" || event.keyCode === 37) {
+              const active = document.activeElement;
+              if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
+                return;
+              }
+              if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+                return;
+              }
+              if (window.getSelection() && window.getSelection().toString().length > 0) {
+                return;
+              }
+              event.preventDefault();
+              if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(focusListMessageName)) {
+                window.webkit.messageHandlers.\(focusListMessageName).postMessage({});
+              }
+            }
+          }, true);
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
+    static let mediaFullscreenScript = WKUserScript(
+        source: """
+        (() => {
+          let scale = 1;
+          let translateX = 0;
+          let translateY = 0;
+          let initialDistance = 0;
+          let initialScale = 1;
+          let isDragging = false;
+          let startX = 0;
+          let startY = 0;
+          let initialTx = 0;
+          let initialTy = 0;
+          let lastTapTime = 0;
+
+          const resetZoom = img => {
+            scale = 1;
+            translateX = 0;
+            translateY = 0;
+            if (img) {
+              img.style.transition = "transform 0.2s cubic-bezier(0.2, 0, 0.2, 1)";
+              img.style.transform = "translate(0px, 0px) scale(1)";
+            }
+          };
+
+          const updateTransform = (img, animate = false) => {
+            if (!img) return;
+            img.style.transition = animate ? "transform 0.2s cubic-bezier(0.2, 0, 0.2, 1)" : "none";
+            img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+          };
+
+          const closeLightbox = () => {
+            const overlay = document.getElementById("paper-rss-lightbox-overlay");
+            if (overlay && overlay.classList.contains("is-active")) {
+              const lightboxImg = overlay.querySelector(".paper-rss-lightbox-img");
+              resetZoom(lightboxImg);
+              overlay.classList.remove("is-active");
+              document.body.style.overflow = "";
+            }
+          };
+
+          const openLightbox = img => {
+            let overlay = document.getElementById("paper-rss-lightbox-overlay");
+            if (!overlay) {
+              overlay = document.createElement("div");
+              overlay.id = "paper-rss-lightbox-overlay";
+              overlay.className = "paper-rss-lightbox";
+              overlay.innerHTML = `
+                <div class="paper-rss-lightbox-backdrop"></div>
+                <div class="paper-rss-lightbox-content">
+                  <img class="paper-rss-lightbox-img" src="" alt="" />
+                  <button class="paper-rss-lightbox-close" title="关闭 (Esc)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  </button>
+                </div>
+              `;
+              document.body.appendChild(overlay);
+
+              const lightboxImg = overlay.querySelector(".paper-rss-lightbox-img");
+
+              overlay.addEventListener("click", e => {
+                if (e.target === overlay || e.target.classList.contains("paper-rss-lightbox-backdrop") || e.target.closest(".paper-rss-lightbox-close")) {
+                  closeLightbox();
+                }
+              });
+
+              // macOS 触控板 Pinch 手势与滚轮事件
+              overlay.addEventListener("wheel", e => {
+                if (e.ctrlKey) {
+                  e.preventDefault();
+                  const zoomFactor = Math.exp(-e.deltaY * 0.01);
+                  scale = Math.min(Math.max(1, scale * zoomFactor), 5);
+                  if (scale === 1) {
+                    translateX = 0;
+                    translateY = 0;
+                  }
+                  updateTransform(lightboxImg, false);
+                } else if (scale > 1) {
+                  e.preventDefault();
+                  translateX -= e.deltaX;
+                  translateY -= e.deltaY;
+                  updateTransform(lightboxImg, false);
+                }
+              }, { passive: false });
+
+              // WebKit 原生手势
+              overlay.addEventListener("gesturestart", e => {
+                e.preventDefault();
+                initialScale = scale;
+              }, { passive: false });
+
+              overlay.addEventListener("gesturechange", e => {
+                e.preventDefault();
+                scale = Math.min(Math.max(1, initialScale * e.scale), 5);
+                if (scale === 1) {
+                  translateX = 0;
+                  translateY = 0;
+                }
+                updateTransform(lightboxImg, false);
+              }, { passive: false });
+
+              // 触控屏 Pinch 捏合
+              overlay.addEventListener("touchstart", e => {
+                if (e.touches.length === 2) {
+                  e.preventDefault();
+                  initialDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                  );
+                  initialScale = scale;
+                } else if (e.touches.length === 1 && scale > 1) {
+                  isDragging = true;
+                  startX = e.touches[0].clientX;
+                  startY = e.touches[0].clientY;
+                  initialTx = translateX;
+                  initialTy = translateY;
+                }
+              }, { passive: false });
+
+              overlay.addEventListener("touchmove", e => {
+                if (e.touches.length === 2 && initialDistance > 0) {
+                  e.preventDefault();
+                  const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                  );
+                  scale = Math.min(Math.max(1, initialScale * (currentDistance / initialDistance)), 5);
+                  if (scale === 1) {
+                    translateX = 0;
+                    translateY = 0;
+                  }
+                  updateTransform(lightboxImg, false);
+                } else if (e.touches.length === 1 && isDragging && scale > 1) {
+                  e.preventDefault();
+                  translateX = initialTx + (e.touches[0].clientX - startX);
+                  translateY = initialTy + (e.touches[0].clientY - startY);
+                  updateTransform(lightboxImg, false);
+                }
+              }, { passive: false });
+
+              overlay.addEventListener("touchend", () => {
+                isDragging = false;
+                if (scale < 1) resetZoom(lightboxImg);
+              }, { passive: false });
+
+              // 鼠标拖拽 (Scale > 1)
+              lightboxImg.addEventListener("mousedown", e => {
+                if (scale > 1) {
+                  e.preventDefault();
+                  isDragging = true;
+                  startX = e.clientX;
+                  startY = e.clientY;
+                  initialTx = translateX;
+                  initialTy = translateY;
+                }
+              });
+
+              window.addEventListener("mousemove", e => {
+                if (isDragging && scale > 1) {
+                  translateX = initialTx + (e.clientX - startX);
+                  translateY = initialTy + (e.clientY - startY);
+                  updateTransform(lightboxImg, false);
+                }
+              });
+
+              window.addEventListener("mouseup", () => {
+                isDragging = false;
+              });
+
+              // 双击快速放大 / 重置
+              lightboxImg.addEventListener("click", e => {
+                e.stopPropagation();
+                const now = Date.now();
+                if (now - lastTapTime < 300) {
+                  if (scale > 1.2) {
+                    resetZoom(lightboxImg);
+                  } else {
+                    scale = 2.5;
+                    translateX = 0;
+                    translateY = 0;
+                    updateTransform(lightboxImg, true);
+                  }
+                }
+                lastTapTime = now;
+              });
+            }
+
+            const lightboxImg = overlay.querySelector(".paper-rss-lightbox-img");
+            if (lightboxImg) {
+              resetZoom(lightboxImg);
+              lightboxImg.src = img.currentSrc || img.src;
+              lightboxImg.alt = img.alt || "";
+            }
+
+            overlay.classList.add("is-active");
+            document.body.style.overflow = "hidden";
+          };
+
+          document.addEventListener("click", event => {
+            const target = event.target.closest("img, video");
+            if (!target) return;
+            if (target.classList.contains("paper-summary-icon") || target.classList.contains("paper-rss-annotation-icon") || target.closest(".paper-rss-explanation")) {
+              return;
+            }
+
+            if (target.tagName === "VIDEO") {
+              if (document.fullscreenElement || document.webkitFullscreenElement) {
+                const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                if (exit) exit.call(document);
+              } else {
+                const req = target.requestFullscreen || target.webkitRequestFullscreen;
+                if (req) req.call(target);
+              }
+            } else if (target.tagName === "IMG") {
+              if (target.classList.contains("paper-rss-lightbox-img")) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              openLightbox(target);
+            }
+          }, true);
+
+          window.addEventListener("keydown", event => {
+            if (event.key === "Escape" || event.keyCode === 27) {
+              closeLightbox();
+            }
+          }, true);
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
+    static let fontSizeMessageName = "paperRssFontSize"
+
+    static let fontSizeScript = WKUserScript(
+        source: """
+        (() => {
+          window.addEventListener("keydown", event => {
+            if (event.metaKey || event.ctrlKey) {
+              const isIncrease = (event.key === "=" || event.key === "+" || event.keyCode === 187 || event.keyCode === 61 || event.keyCode === 107);
+              const isDecrease = (event.key === "-" || event.key === "_" || event.keyCode === 189 || event.keyCode === 173 || event.keyCode === 109);
+              const isReset = (event.key === "0" || event.keyCode === 48 || event.keyCode === 96);
+              if (isIncrease || isDecrease || isReset) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(fontSizeMessageName)) {
+                  const action = isIncrease ? "increase" : (isDecrease ? "decrease" : "reset");
+                  window.webkit.messageHandlers.\(fontSizeMessageName).postMessage({ action: action });
+                }
+              }
+            }
+          }, true);
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
 }
 
 #if os(macOS)
+private final class ArticleWebViewContainer: NSView {
+    let webView: WKWebView
+
+    init(webView: WKWebView) {
+        self.webView = webView
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+
+        webView.translatesAutoresizingMaskIntoConstraints = true
+        webView.autoresizingMask = [.width, .height]
+        webView.frame = bounds
+        addSubview(webView)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        if webView.superview === self {
+            webView.frame = bounds
+        }
+    }
+}
+
 private struct ArticleHTMLView: NSViewRepresentable {
     let entry: Entry
     let feedTitle: String?
@@ -2025,10 +2576,13 @@ private struct ArticleHTMLView: NSViewRepresentable {
     ) async -> ReaderSelectionResponse
     let onGenerateSummary: (Bool) -> Void
     let onToggleSummary: () -> Void
+    var onSelectNextEntry: () -> Void = {}
+    var onFocusListView: () -> Void = {}
+    var onAdjustFontSize: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> ArticleWebViewContainer {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -2052,6 +2606,26 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.explainSelectionMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.askSelectionMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.nextArticleMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.focusListMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.fontSizeMessageName
+        )
         // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
         // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
         configuration.userContentController.add(
@@ -2067,6 +2641,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.fontSizeScript)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.wantsLayer = true
@@ -2086,10 +2663,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
         webView.enclosingScrollView?.drawsBackground = false
         context.coordinator.webView = webView
         context.coordinator.loadIfNeeded(into: webView)
-        return webView
+        return ArticleWebViewContainer(webView: webView)
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ container: ArticleWebViewContainer, context: Context) {
+        let webView = container.webView
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeSummaryCard(in: webView)
@@ -2099,7 +2677,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
     }
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: ArticleWebViewContainer, coordinator: Coordinator) {
+        let webView = container.webView
         webView.isHidden = true
         webView.removeFromSuperview()
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -2112,6 +2691,14 @@ private struct ArticleHTMLView: NSViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.explainSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.askSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.nextArticleMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -2206,12 +2793,13 @@ private struct ArticleHTMLView: NSViewRepresentable {
             case PaperReaderBridge.visibleParagraphsMessageName:
                 guard let paragraphIDs = message.body as? [String] else { return }
                 parent.onVisibleParagraphIDsChange(paragraphIDs)
-            case PaperReaderBridge.explainSelectionMessageName:
+            case PaperReaderBridge.explainSelectionMessageName, PaperReaderBridge.askSelectionMessageName:
                 guard let payload = message.body as? [String: Any],
                       let id = payload["id"] as? String,
                       let selection = payload["selection"] as? String,
                       let localContext = payload["localContext"] as? String,
                       !selection.isEmpty else { return }
+                let question = payload["question"] as? String
                 let anchorPayload = payload["anchor"] as? [String: Any]
                 let anchor = anchorPayload.flatMap { payload -> AISelectionAnchor? in
                     guard let paragraphID = payload["paragraphID"] as? String,
@@ -2222,12 +2810,21 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 let request = ReaderSelectionRequest(
                     id: id,
                     selection: selection,
+                    question: question,
                     localContext: localContext,
                     kind: ReaderSelectionKind(rawValue: payload["kind"] as? String ?? "explanation") ?? .explanation,
                     anchor: anchor
                 )
                 pendingSelectionExplanationRequests.append(request)
                 startNextSelectionExplanationIfNeeded()
+            case PaperReaderBridge.nextArticleMessageName:
+                parent.onSelectNextEntry()
+            case PaperReaderBridge.focusListMessageName:
+                parent.onFocusListView()
+            case PaperReaderBridge.fontSizeMessageName:
+                guard let body = message.body as? [String: Any],
+                      let action = body["action"] as? String else { return }
+                parent.onAdjustFontSize?(action)
             case "paperRssGenerateSummary":
                 let force = (message.body as? [String: Any])?["force"] as? Bool ?? false
                 parent.onGenerateSummary(force)
@@ -2531,6 +3128,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
     ) async -> ReaderSelectionResponse
     let onGenerateSummary: (Bool) -> Void
     let onToggleSummary: () -> Void
+    var onSelectNextEntry: () -> Void = {}
+    var onFocusListView: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -2559,6 +3158,16 @@ private struct ArticleHTMLView: UIViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.explainSelectionMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.askSelectionMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.nextArticleMessageName
+        )
         // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
         // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
         configuration.userContentController.add(
@@ -2574,6 +3183,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -2605,6 +3216,14 @@ private struct ArticleHTMLView: UIViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.explainSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.askSelectionMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.nextArticleMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -2664,12 +3283,13 @@ private struct ArticleHTMLView: UIViewRepresentable {
             case PaperReaderBridge.visibleParagraphsMessageName:
                 guard let paragraphIDs = message.body as? [String] else { return }
                 parent.onVisibleParagraphIDsChange(paragraphIDs)
-            case PaperReaderBridge.explainSelectionMessageName:
+            case PaperReaderBridge.explainSelectionMessageName, PaperReaderBridge.askSelectionMessageName:
                 guard let payload = message.body as? [String: Any],
                       let id = payload["id"] as? String,
                       let selection = payload["selection"] as? String,
                       let localContext = payload["localContext"] as? String,
                       !selection.isEmpty else { return }
+                let question = payload["question"] as? String
                 let anchorPayload = payload["anchor"] as? [String: Any]
                 let anchor = anchorPayload.flatMap { payload -> AISelectionAnchor? in
                     guard let paragraphID = payload["paragraphID"] as? String,
@@ -2680,12 +3300,15 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 let request = ReaderSelectionRequest(
                     id: id,
                     selection: selection,
+                    question: question,
                     localContext: localContext,
                     kind: ReaderSelectionKind(rawValue: payload["kind"] as? String ?? "explanation") ?? .explanation,
                     anchor: anchor
                 )
                 pendingSelectionExplanationRequests.append(request)
                 startNextSelectionExplanationIfNeeded()
+            case PaperReaderBridge.nextArticleMessageName:
+                parent.onSelectNextEntry()
             case "paperRssGenerateSummary":
                 let force = (message.body as? [String: Any])?["force"] as? Bool ?? false
                 parent.onGenerateSummary(force)
@@ -3011,10 +3634,12 @@ struct ReaderCapsuleToolbar: View {
     let isBilingualActive: Bool
     let isRead: Bool
     let isStarred: Bool
+    var isZenMode: Bool = false
     let disabled: Bool
     let onToggleBilingual: () -> Void
     let onToggleRead: () -> Void
     let onToggleStar: () -> Void
+    var onToggleZenMode: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -3044,9 +3669,19 @@ struct ReaderCapsuleToolbar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(isStarred ? "取消收藏" : "收藏")
             .help(isStarred ? "取消收藏" : "收藏")
+
+            Button(action: onToggleZenMode) {
+                toolbarSymbol(
+                    isZenMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                    isActive: isZenMode
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
+            .help(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
         }
         .padding(.horizontal, 8)
-        .frame(width: 108, height: 28)
+        .frame(width: 140, height: 28)
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {

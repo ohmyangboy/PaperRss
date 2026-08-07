@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
+import WebKit
 #elseif os(iOS)
 import UIKit
 #endif
@@ -41,6 +42,11 @@ struct RootView: View {
     @State private var showsSettings = false
     @State private var showsImporter = false
     @State private var showsExporter = false
+    @State private var isZenMode = false
+    @State private var autoScrollTrigger = UUID()
+    @State private var toastMessage: String?
+    @State private var toastTask: Task<Void, Never>?
+    @State private var pendingNextArticleEntryID: String?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -110,7 +116,7 @@ struct RootView: View {
             // 会顶到窗口最上方,落在 unified NSToolbar 的不可交互条带内,
             // 「全部已读」按钮点击会被工具栏吞掉。纸张背景已在 EntryListView
             // 内用 .ignoresSafeArea() 单独延伸到工具栏之下,观感保持一致。
-            content: EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID)
+            content: EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID, autoScrollTrigger: autoScrollTrigger)
                 .ignoresSafeArea(),
             detail: detailContent
                 .ignoresSafeArea(),
@@ -124,8 +130,14 @@ struct RootView: View {
                 selectionTitle: headerTitle,
                 hasUnread: currentHasUnread,
                 onMarkAllRead: { markCurrentAllRead() },
+                onFocusAndScrollArticle: { focusAndScrollArticle() },
+                isZenMode: isZenMode,
+                onToggleZenMode: { withAnimation { isZenMode.toggle() } },
                 showsReaderCapsule: selectedEntryID != nil,
-                readerCapsule: AnyView(readerToolbarCapsule)
+                readerCapsule: AnyView(readerToolbarCapsule),
+                onIncreaseFontSize: { store.increaseArticleFontSize() },
+                onDecreaseFontSize: { store.decreaseArticleFontSize() },
+                onResetFontSize: { store.resetArticleFontSize() }
             )
         )
         .ignoresSafeArea()
@@ -144,7 +156,7 @@ struct RootView: View {
                 onDeleteSelection: { selectedEntryID = nil }
             )
         } content: {
-            EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID)
+            EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID, autoScrollTrigger: autoScrollTrigger)
         } detail: {
             detailContent
         }
@@ -184,13 +196,206 @@ struct RootView: View {
         store.markRead(entryIDs: unreadIDs, read: true)
     }
 
+    private func showToast(_ message: String) {
+        toastTask?.cancel()
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            toastMessage = message
+        }
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                toastMessage = nil
+            }
+        }
+    }
+
+    private func dismissToast() {
+        toastTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            toastMessage = nil
+        }
+    }
+
+    @ViewBuilder
+    private var toastOverlay: some View {
+        if let toastMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(PaperTheme.accent)
+                Text(toastMessage)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(colorScheme == .dark ? Color.white.opacity(0.9) : Color.black.opacity(0.85))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background {
+                Capsule()
+                    .fill(PaperTheme.surface(.page, scheme: colorScheme))
+                    .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.15), radius: 12, x: 0, y: 6)
+                    .overlay {
+                        Capsule()
+                            .stroke(PaperTheme.accent.opacity(0.3), lineWidth: 1)
+                    }
+            }
+            .padding(.bottom, 28)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .zIndex(100)
+        }
+    }
+
+    private func selectNextEntry() {
+        let entries: [EntryListItem]
+        switch currentSelection {
+        case .today:
+            entries = store.todayEntryListItems
+        case .unread:
+            entries = store.unreadEntryListItems(retainingIDs: selectedEntryID.map { [$0] } ?? [])
+        case .starred:
+            entries = store.starredEntryListItems
+        case let .folder(folder):
+            let retained = selectedEntryID.map { [$0] } ?? []
+            entries = store.entryListItems(folder: folder).filter { !$0.isRead || retained.contains($0.id) }
+        case let .feed(id):
+            entries = store.entryListItems(feedID: id)
+        }
+
+        guard !entries.isEmpty else {
+            showToast("列表已经阅读完毕")
+            return
+        }
+
+        if let selectedEntryID,
+           let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) {
+            if currentIndex + 1 < entries.count {
+                if pendingNextArticleEntryID == selectedEntryID {
+                    pendingNextArticleEntryID = nil
+                    dismissToast()
+                    self.selectedEntryID = entries[currentIndex + 1].id
+                    self.autoScrollTrigger = UUID()
+                } else {
+                    pendingNextArticleEntryID = selectedEntryID
+                    showToast("再次按下空格切换下一篇")
+                }
+            } else {
+                showToast("列表已经阅读完毕")
+            }
+        } else {
+            self.selectedEntryID = entries.first?.id
+            if self.selectedEntryID != nil { self.autoScrollTrigger = UUID() }
+        }
+    }
+
+    private func focusAndScrollArticle() {
+        if selectedEntryID == nil {
+            selectedEntryID = currentDisplayEntries.first?.id
+        }
+
+        #if os(macOS)
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
+
+            func findWKWebView(in view: NSView) -> WKWebView? {
+                if let webView = view as? WKWebView {
+                    return webView
+                }
+                for subview in view.subviews {
+                    if let found = findWKWebView(in: subview) {
+                        return found
+                    }
+                }
+                return nil
+            }
+
+            if let contentView = window.contentView, let webView = findWKWebView(in: contentView) {
+                window.makeFirstResponder(webView)
+                let js = """
+                (() => {
+                  const scrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+                  const clientHeight = window.innerHeight;
+                  const scrollTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+                  const isAtBottom = (scrollTop + clientHeight) >= (scrollHeight - 6);
+                  if (isAtBottom) {
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(PaperReaderBridge.nextArticleMessageName)) {
+                      window.webkit.messageHandlers.\(PaperReaderBridge.nextArticleMessageName).postMessage({});
+                    }
+                  } else {
+                    const pageDistance = Math.max(120, clientHeight * 0.382);
+                    window.scrollBy({ top: pageDistance, behavior: 'smooth' });
+                  }
+                })();
+                """
+                webView.evaluateJavaScript(js)
+            } else {
+                selectNextEntry()
+            }
+        }
+        #endif
+    }
+
+    private func focusListView() {
+        #if os(macOS)
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
+
+            func findSplitVC(in view: NSView) -> NSSplitViewController? {
+                if let next = view.nextResponder as? NSSplitViewController { return next }
+                for subview in view.subviews {
+                    if let found = findSplitVC(in: subview) { return found }
+                }
+                return nil
+            }
+
+            func findFocusTarget(in view: NSView) -> NSView {
+                func findPrimary(in v: NSView) -> NSView? {
+                    if v is NSTableView || v is NSOutlineView || v is WKWebView { return v }
+                    for subview in v.subviews {
+                        if let found = findPrimary(in: subview) { return found }
+                    }
+                    return nil
+                }
+                if let primary = findPrimary(in: view) { return primary }
+
+                func findAnyAccepting(in v: NSView) -> NSView? {
+                    if v.acceptsFirstResponder { return v }
+                    for subview in v.subviews {
+                        if let found = findAnyAccepting(in: subview) { return found }
+                    }
+                    return nil
+                }
+                return findAnyAccepting(in: view) ?? view
+            }
+
+            if let contentView = window.contentView,
+               let splitVC = findSplitVC(in: contentView),
+               splitVC.splitViewItems.count >= 2 {
+                let listView = splitVC.splitViewItems[1].viewController.view
+                let target = findFocusTarget(in: listView)
+                window.makeFirstResponder(target)
+            }
+        }
+        #endif
+    }
+
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedEntry {
-            ArticleReaderView(store: store, entry: selectedEntry)
+        ZStack(alignment: .bottom) {
+            if let selectedEntry {
+                ArticleReaderView(
+                    store: store,
+                    entry: selectedEntry,
+                    onSelectNextEntry: { selectNextEntry() },
+                    onFocusListView: { focusListView() },
+                    isZenMode: isZenMode,
+                    onToggleZenMode: { withAnimation { isZenMode.toggle() } }
+                )
                 .ignoresSafeArea()
-        } else {
-            emptyDetailPlaceholder
+            } else {
+                emptyDetailPlaceholder
+            }
+
+            toastOverlay
         }
     }
 
@@ -209,6 +414,7 @@ struct RootView: View {
             set: { newSelection in
                 guard newSelection != selection else { return }
                 selectedEntryID = nil
+                pendingNextArticleEntryID = nil
                 selection = newSelection
             }
         )
@@ -222,6 +428,7 @@ struct RootView: View {
                 isBilingualActive: store.isBilingualActive(for: current.id),
                 isRead: current.isRead,
                 isStarred: current.isStarred,
+                isZenMode: isZenMode,
                 disabled: store.activeAIRequest != nil,
                 onToggleBilingual: {
                     store.toggleBilingualMode(for: current.id)
@@ -231,6 +438,11 @@ struct RootView: View {
                 },
                 onToggleStar: {
                     store.toggleStar(current)
+                },
+                onToggleZenMode: {
+                    withAnimation {
+                        isZenMode.toggle()
+                    }
                 }
             )
         } else {
@@ -718,7 +930,10 @@ private struct EntryListView: View {
     @ObservedObject var store: AppStore
     let selection: SidebarSelection
     @Binding var selectedEntryID: String?
+    var autoScrollTrigger: UUID
     @State private var retainedUnreadIDs: Set<String> = []
+
+    @State private var isScrolled = false
 
     private var displayEntries: [EntryListItem] {
         switch selection {
@@ -744,71 +959,186 @@ private struct EntryListView: View {
     }
 
     var body: some View {
-        List(selection: $selectedEntryID) {
-            ForEach(displayEntries) { entry in
-                EntryRow(entry: entry)
-                    .tag(entry.id)
-                    .contentShape(Rectangle())
-                    .listRowBackground(Color.clear)
-                    .contextMenu {
-                        Button(entry.isRead ? "标为未读" : "标为已读") {
-                            store.markRead(entryID: entry.id, read: !entry.isRead)
+        ScrollViewReader { proxy in
+            List(selection: $selectedEntryID) {
+                ForEach(displayEntries) { entry in
+                    EntryRow(entry: entry)
+                        .tag(entry.id)
+                        .contentShape(Rectangle())
+                        .listRowBackground(Color.clear)
+                        .contextMenu {
+                            Button(entry.isRead ? "标为未读" : "标为已读") {
+                                store.markRead(entryID: entry.id, read: !entry.isRead)
+                            }
+                            Button(entry.isStarred ? "取消收藏" : "收藏") {
+                                store.toggleStar(entryID: entry.id)
+                            }
                         }
-                        Button(entry.isStarred ? "取消收藏" : "收藏") {
-                            store.toggleStar(entryID: entry.id)
+                    }
+            }
+            #if os(macOS)
+            .listStyle(.inset(alternatesRowBackgrounds: false))
+            #else
+            .listStyle(.inset)
+            #endif
+            .scrollContentBackground(.hidden)
+            .background {
+                // 让纸张背景延伸到窗口顶部（unified NSToolbar 之下、safeAreaInset 占位区），
+                // 否则占位区会透出窗口默认白色背景，形成顶部空白条
+                PaperSurface(kind: .articleList, textureOpacity: 0.62).ignoresSafeArea()
+            }
+            #if os(iOS)
+            .navigationTitle(selection.title)
+            #endif
+            .onChange(of: selectedEntryID) { _, newID in
+                if let newID {
+                    retainedUnreadIDs.insert(newID)
+                }
+            }
+            .onChange(of: selection) { _, _ in
+                retainedUnreadIDs.removeAll()
+            }
+            .onChange(of: autoScrollTrigger) { _, _ in
+                if let newID = selectedEntryID {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation {
+                            proxy.scrollTo(newID, anchor: .center)
                         }
                     }
                 }
-        }
-        #if os(macOS)
-        .listStyle(.inset(alternatesRowBackgrounds: false))
-        #else
-        .listStyle(.inset)
-        #endif
-        .scrollContentBackground(.hidden)
-        .background {
-            // 让纸张背景延伸到窗口顶部（unified NSToolbar 之下、safeAreaInset 占位区），
-            // 否则占位区会透出窗口默认白色背景，形成顶部空白条
-            PaperSurface(kind: .articleList, textureOpacity: 0.62).ignoresSafeArea()
-        }
-        #if os(iOS)
-        .navigationTitle(selection.title)
-        #endif
-        .onChange(of: selectedEntryID) { _, newID in
-            if let newID {
-                retainedUnreadIDs.insert(newID)
             }
-        }
-        .onChange(of: selection) { _, _ in
-            retainedUnreadIDs.removeAll()
-        }
-        #if os(iOS)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    markAllRead()
-                } label: {
-                    Label("全部标为已读", systemImage: "envelope.open")
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        markAllRead()
+                    } label: {
+                        Label("全部标为已读", systemImage: "envelope.open")
+                    }
+                    .help("将当前列表全部标为已读")
+                    .disabled(!hasUnread)
                 }
-                .help("将当前列表全部标为已读")
-                .disabled(!hasUnread)
             }
-        }
-        #endif
-        #if os(macOS)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Color.clear.frame(height: 52)
-        }
-        #endif
-        .overlay {
-            if displayEntries.isEmpty {
-                ContentUnavailableView("没有文章", systemImage: "text.line.first.and.arrowtriangle.forward", description: Text(store.feeds.isEmpty ? "添加订阅后，这里会显示文章。" : "切换到其他分类，或等待下一次订阅更新。"))
+            #endif
+            #if os(macOS)
+            .background {
+                ScrollOffsetObserver { offset in
+                    let shouldBlur = offset > 5
+                    if isScrolled != shouldBlur {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isScrolled = shouldBlur
+                        }
+                    }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear.frame(height: 52)
+                    .background {
+                        ZStack(alignment: .bottom) {
+                            Rectangle()
+                                .fill(.ultraThinMaterial)
+                            Divider()
+                                .opacity(0.15)
+                        }
+                        .opacity(isScrolled ? 1 : 0)
+                    }
+            }
+            #endif
+            .overlay {
+                if displayEntries.isEmpty {
+                    ContentUnavailableView("没有文章", systemImage: "text.line.first.and.arrowtriangle.forward", description: Text(store.feeds.isEmpty ? "添加订阅后，这里会显示文章。" : "切换到其他分类，或等待下一次订阅更新。"))
+                }
             }
         }
     }
 }
 
 #if os(macOS)
+private struct ScrollOffsetObserver: NSViewRepresentable {
+    let onOffsetChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // 延迟搜索：视图挂载后才能遍历视图树
+        DispatchQueue.main.async {
+            guard let scrollView = Self.findScrollView(from: view) else { return }
+            let clipView = scrollView.contentView
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                context.coordinator,
+                selector: #selector(Coordinator.boundsChanged(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+            context.coordinator.clipView = clipView
+            context.coordinator.onOffsetChange = onOffsetChange
+            context.coordinator.checkOffset(clipView)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onOffsetChange = onOffsetChange
+        // 如果已绑定 clipView，同步检查一次
+        if let clipView = context.coordinator.clipView {
+            context.coordinator.checkOffset(clipView)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onOffsetChange: onOffsetChange)
+    }
+
+    /// 从给定视图出发，向上遍历父视图链，在每一层检查其所有子视图中是否包含 NSScrollView。
+    /// .background 插入的视图与 List 的 NSScrollView 是同一个父容器的兄弟节点。
+    private static func findScrollView(from view: NSView) -> NSScrollView? {
+        var current: NSView? = view
+        while let parent = current?.superview {
+            // 在兄弟节点中搜索
+            for sibling in parent.subviews where sibling !== current {
+                if let sv = findScrollViewInSubtree(sibling) {
+                    return sv
+                }
+            }
+            // 父节点本身是 NSScrollView
+            if let sv = parent as? NSScrollView {
+                return sv
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    private static func findScrollViewInSubtree(_ view: NSView) -> NSScrollView? {
+        if let sv = view as? NSScrollView { return sv }
+        for child in view.subviews {
+            if let found = findScrollViewInSubtree(child) { return found }
+        }
+        return nil
+    }
+
+    @MainActor
+    class Coordinator: NSObject {
+        var onOffsetChange: (CGFloat) -> Void
+        weak var clipView: NSClipView?
+
+        init(onOffsetChange: @escaping (CGFloat) -> Void) {
+            self.onOffsetChange = onOffsetChange
+        }
+
+        @objc func boundsChanged(_ notification: Notification) {
+            if let clipView = notification.object as? NSClipView {
+                checkOffset(clipView)
+            }
+        }
+
+        func checkOffset(_ clipView: NSClipView) {
+            let y = clipView.bounds.origin.y
+            onOffsetChange(y)
+        }
+    }
+}
+
 /// 与顶部 NSToolbar 一致的 AppKit 胶囊按钮（texturedRounded bezel）。
 /// 工具栏的刷新/添加按钮用 NSButton + texturedRounded 实现，这里用同一风格
 /// 保证列表头与窗口工具栏视觉统一。

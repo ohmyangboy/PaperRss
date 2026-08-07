@@ -487,6 +487,18 @@ public final class AppStore: ObservableObject {
         UserDefaults.standard.set(clamped, forKey: PreferenceKey.articleFontSize)
     }
 
+    public func increaseArticleFontSize() {
+        setArticleFontSize(articleFontSize + 1)
+    }
+
+    public func decreaseArticleFontSize() {
+        setArticleFontSize(articleFontSize - 1)
+    }
+
+    public func resetArticleFontSize() {
+        setArticleFontSize(17)
+    }
+
     /// Starts the app-level refresh loop. The first refresh is intentionally
     /// immediate so reopening the app always checks for new articles.
     public func startAutomaticRefresh() {
@@ -955,7 +967,7 @@ public final class AppStore: ObservableObject {
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
         let configuration = database.llmConfiguration
-        let promptVersion = 4
+        let promptVersion = 5
         let articleHash = articleText.stableDigest
         let normalizedSelection = selection.paperRssNormalizedWhitespace
         let normalizedLocalContext = localContext.paperRssNormalizedWhitespace
@@ -965,6 +977,7 @@ public final class AppStore: ObservableObject {
             normalizedLocalContext.stableDigest,
             configuration.model,
             configuration.targetLanguage,
+            configuration.customPrompt.stableDigest,
             String(promptVersion)
         ].joined(separator: "|").stableDigest
 
@@ -1069,6 +1082,97 @@ public final class AppStore: ObservableObject {
                 entryID: entry.id,
                 kind: .selectionExplanation,
                 contentHash: explanationHash,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: promptVersion,
+                content: result,
+                selectionText: normalizedSelection,
+                selectionArticleHash: articleHash,
+                selectionAnchor: selectionAnchor,
+                isComplete: true
+            )
+        )
+        persist()
+        return result
+    }
+
+    public func askSelection(
+        entry: Entry,
+        selection: String,
+        question: String,
+        localContext: String,
+        articleText: String,
+        selectionAnchor: AISelectionAnchor? = nil,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> String {
+        let configuration = database.llmConfiguration
+        let promptVersion = 5
+        let articleHash = articleText.stableDigest
+        let normalizedSelection = selection.paperRssNormalizedWhitespace
+        let normalizedQuestion = question.paperRssNormalizedWhitespace
+        let normalizedLocalContext = localContext.paperRssNormalizedWhitespace
+        let askHash = [
+            articleHash,
+            normalizedSelection.stableDigest,
+            normalizedQuestion.stableDigest,
+            normalizedLocalContext.stableDigest,
+            configuration.model,
+            configuration.targetLanguage,
+            configuration.customPrompt.stableDigest,
+            String(promptVersion)
+        ].joined(separator: "|").stableDigest
+
+        if let cached = database.artifacts
+            .filter({
+                $0.entryID == entry.id
+                    && $0.kind == .selectionExplanation
+                    && $0.contentHash == askHash
+                    && $0.model == configuration.model
+                    && $0.targetLanguage == configuration.targetLanguage
+                    && $0.promptVersion == promptVersion
+                    && $0.isComplete
+                    && !$0.isDeleted
+            })
+            .sorted(by: { $0.updatedAt > $1.updatedAt })
+            .first {
+            return cached.content
+        }
+
+        guard activeAIRequest == nil else { throw LLMServiceError.requestInProgress }
+
+        activeAIRequest = AIRequestStatus(
+            entryID: entry.id,
+            kind: .selectionExplanation,
+            phase: .generating
+        )
+        defer { activeAIRequest = nil }
+
+        let apiKey = loadAPIKey()
+        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
+            throw LLMServiceError.missingAPIKey
+        }
+
+        let articleContext = ArticleChunker.contextualArticle(
+            articleText,
+            around: "\(selection)\n\n\(localContext)",
+            maximumCharacters: 24_000
+        )
+
+        let result = try await llm.askSelection(
+            selection: selection,
+            question: question,
+            localContext: localContext,
+            articleContext: articleContext,
+            configuration: configuration,
+            apiKey: apiKey,
+            onDelta: onDelta
+        )
+        try Task.checkCancellation()
+        database.artifacts.append(
+            AIArtifact(
+                entryID: entry.id,
+                kind: .selectionExplanation,
+                contentHash: askHash,
                 model: configuration.model,
                 targetLanguage: configuration.targetLanguage,
                 promptVersion: promptVersion,

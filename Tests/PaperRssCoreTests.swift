@@ -455,6 +455,17 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(configuration.model, "local-model")
         XCTAssertTrue(configuration.showsAISummary)
         XCTAssertFalse(configuration.automaticallyGenerateSummary)
+        XCTAssertEqual(configuration.customPrompt, "")
+    }
+
+    func testLLMConfigurationEncodesAndDecodesCustomPrompt() throws {
+        var configuration = LLMConfiguration.default
+        configuration.customPrompt = "请用通俗易懂的口语解释"
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(LLMConfiguration.self, from: data)
+
+        XCTAssertEqual(decoded.customPrompt, "请用通俗易懂的口语解释")
     }
 
     func testLLMConfigurationCanHideAISummaryModule() throws {
@@ -679,4 +690,33 @@ final class PaperRssCoreTests: XCTestCase {
         let text = try await store.articleText(for: entry)
         XCTAssertEqual(text, "Test tweet body from RSS feed")
     }
+
+    @MainActor
+    func testArticleFontSizeAdjustmentsAndClamping() {
+        let store = AppStore()
+        XCTAssertEqual(store.articleFontSize, 17)
+
+        store.increaseArticleFontSize()
+        XCTAssertEqual(store.articleFontSize, 18)
+
+        store.decreaseArticleFontSize()
+        XCTAssertEqual(store.articleFontSize, 17)
+
+        // Test upper clamp bound (25)
+        for _ in 0..<20 {
+            store.increaseArticleFontSize()
+        }
+        XCTAssertEqual(store.articleFontSize, 25)
+
+        // Test lower clamp bound (13)
+        for _ in 0..<30 {
+            store.decreaseArticleFontSize()
+        }
+        XCTAssertEqual(store.articleFontSize, 13)
+
+        // Test reset to default 17
+        store.resetArticleFontSize()
+        XCTAssertEqual(store.articleFontSize, 17)
+    }
 }
+

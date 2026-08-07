@@ -56,7 +56,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @ObservedObject var store: AppStore
-    @State private var selectedSection: SettingsSection = .aiService
+    @State private var selectedSection: SettingsSection = .appearance
     @State private var configuration = LLMConfiguration.default
     @State private var apiKey = ""
     @State private var showsAPIKey = false
@@ -73,6 +73,12 @@ struct SettingsView: View {
             #endif
         }
         .preferredColorScheme(store.appTheme.colorScheme)
+        .onChange(of: configuration) {
+            save(updateStatus: false)
+        }
+        .onChange(of: apiKey) {
+            save(updateStatus: false)
+        }
     }
 
     #if os(macOS)
@@ -575,6 +581,24 @@ struct SettingsView: View {
             }
 
             settingsGroup(
+                "个性化 Prompt",
+                footer: "自定义指令会附加在系统默认 Prompt 之后（例如：“请用通俗易懂的口语解释”或“侧重分析工程实现细节”）。"
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $configuration.customPrompt)
+                        .font(.body)
+                        .frame(minHeight: 70, maxHeight: 120)
+                        .padding(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                        )
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+            }
+
+            settingsGroup(
                 "生成偏好（高级）",
                 footer: reasoningFooter
             ) {
@@ -592,21 +616,6 @@ struct SettingsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 150, alignment: .trailing)
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
-                settingsRow(
-                    "输出温度",
-                    description: "较低值更稳定，较高值更多样；默认值适合摘要和翻译。"
-                ) {
-                    HStack(spacing: 10) {
-                        Slider(value: $configuration.temperature, in: 0...1, step: 0.1)
-                            .frame(width: 220)
-                        Text(configuration.temperature, format: .number.precision(.fractionLength(1)))
-                            .font(.body.monospacedDigit())
-                            .frame(width: 28, alignment: .trailing)
-                    }
                 }
             }
 
@@ -995,14 +1004,17 @@ struct SettingsView: View {
     }
 
     private func loadConfiguration() {
+        selectedSection = .appearance
         configuration = store.database.llmConfiguration
         apiKey = store.loadAPIKey()
         usesCustomModel = !["deepseek-v4-flash", "deepseek-v4-pro"].contains(configuration.model)
     }
 
-    private func save() {
+    private func save(updateStatus: Bool = true) {
         let storage = store.saveLLMConfiguration(configuration, apiKey: apiKey)
-        status = storage.savedMessage
+        if updateStatus {
+            status = storage.savedMessage
+        }
     }
 
     private func useDeepSeekDefaults() {

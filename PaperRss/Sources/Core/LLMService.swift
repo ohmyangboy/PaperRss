@@ -39,7 +39,8 @@ public struct LLMService: Sendable {
         configuration: LLMConfiguration,
         apiKey: String,
         onDelta: (@Sendable (String) async -> Void)? = nil,
-        forceDisableReasoning: Bool = false
+        forceDisableReasoning: Bool = false,
+        overrideTemperature: Double? = nil
     ) async throws -> String {
         let urlRequest = try makeRequest(
             prompt: prompt,
@@ -47,7 +48,8 @@ public struct LLMService: Sendable {
             configuration: configuration,
             apiKey: apiKey,
             stream: onDelta != nil,
-            forceDisableReasoning: forceDisableReasoning
+            forceDisableReasoning: forceDisableReasoning,
+            overrideTemperature: overrideTemperature
         )
         if let onDelta {
             do { return try await stream(request: urlRequest, onDelta: onDelta) }
@@ -62,7 +64,8 @@ public struct LLMService: Sendable {
                     configuration: configuration,
                     apiKey: apiKey,
                     stream: false,
-                    forceDisableReasoning: forceDisableReasoning
+                    forceDisableReasoning: forceDisableReasoning,
+                    overrideTemperature: overrideTemperature
                 )
                 let text = try await nonStreaming(request: fallback)
                 await onDelta(text)
@@ -76,7 +79,8 @@ public struct LLMService: Sendable {
         try await complete(
             prompt: "Article:\n\n\(ArticleChunker.truncate(text, maximumCharacters: 28_000))",
             system: "Summarize the article in \(configuration.targetLanguage). Start with one concise conclusion, then give 3 to 7 factual bullets. Do not invent sources or facts.",
-            configuration: configuration, apiKey: apiKey, onDelta: onDelta
+            configuration: configuration, apiKey: apiKey, onDelta: onDelta,
+            overrideTemperature: 0.1
         )
     }
 
@@ -93,7 +97,8 @@ public struct LLMService: Sendable {
             """,
             system: "Create a compact reusable context memo for later questions about this article, in \(configuration.targetLanguage). Preserve the thesis, section structure, key entities, definitions, evidence, and relationships between claims. State only what the article says. Use concise structured prose and keep the memo under 1,200 words.",
             configuration: configuration,
-            apiKey: apiKey
+            apiKey: apiKey,
+            overrideTemperature: 0.1
         )
     }
 
@@ -105,7 +110,20 @@ public struct LLMService: Sendable {
         apiKey: String,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
-        try await complete(
+        var systemPrompt = """
+        你是一位清晰、讲人话的阅读助手。读者在阅读文章时划选了一段文字（由于划词操作可能存在 1-2 行误差，请自动定位读者真正未理解的核心语句或名词概念），请用\(configuration.targetLanguage)进行通俗解构。
+
+        回答准则：
+        1. 直白解读：直接用平实、易懂的语言解释这句话或关键句到底在表达什么意思。
+        2. 术语与概念拆解：若划选内容中包含专业术语、缩写、技术名词或暗喻，单列并简要解释清楚。
+        3. 严禁事项：绝对禁止分析文章结构、段落作用、修辞手法、起承转合或“呼应上下文/前文”等阅读理解式套话。只聚焦于帮助读者看懂语句本身。
+        4. 格式与字数：保持简洁直接（控制在 100-180 个字左右），不要重复引用原文，不要使用问候套话。
+        """
+        let trimmedCustom = configuration.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCustom.isEmpty {
+            systemPrompt += "\n\nAdditional user preference: \(trimmedCustom)"
+        }
+        return try await complete(
             prompt: """
             Article context memo:
             \(ArticleChunker.truncate(articleContext, maximumCharacters: 10_000))
@@ -116,14 +134,60 @@ public struct LLMService: Sendable {
             Selected passage:
             \(ArticleChunker.truncate(selection, maximumCharacters: 4_000))
             """,
-            system: "Explain the selected passage within this article in \(configuration.targetLanguage). Give only the key meaning and its role in the surrounding argument. Distinguish article facts from your inference. Do not restate the quote, add headings, greetings, or unrelated background. Keep it concise: 1 short paragraph, at most 120 Chinese characters (or about 70 English words).",
+            system: systemPrompt,
             configuration: configuration,
             apiKey: apiKey,
             onDelta: onDelta,
             // Selection explanations are an interactive reader gesture. Keep
             // DeepSeek's hidden reasoning off so the first visible delta is
             // not delayed by a reasoning trace the reader never sees.
-            forceDisableReasoning: true
+            forceDisableReasoning: true,
+            overrideTemperature: 0.2
+        )
+    }
+
+    public func askSelection(
+        selection: String,
+        question: String,
+        localContext: String,
+        articleContext: String,
+        configuration: LLMConfiguration,
+        apiKey: String,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> String {
+        var systemPrompt = """
+        你是一位渊博且贴心的阅读助手。读者正在阅读一篇文章，并针对划选的文本提出了具体问题。请结合划选内容与文章上下文，用\(configuration.targetLanguage)进行针对性回答。
+
+        回答准则：
+        1. 针对性解答：切中读者提问的核心，直接回答问题，语言平实易懂。
+        2. 结合划选文本：紧扣划选段落与上下文，拆解相关专业概念或逻辑。
+        3. 严禁事项：绝对禁止分析文章结构起承转合，不要重复问题或完整引用原文，不要使用问候套话。
+        4. 格式与字数：控制在 120-220 字左右，可适度使用 Markdown 加粗或短列表。
+        """
+        let trimmedCustom = configuration.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCustom.isEmpty {
+            systemPrompt += "\n\n额外用户偏好指令：\(trimmedCustom)"
+        }
+        return try await complete(
+            prompt: """
+            文章全局上下文:
+            \(ArticleChunker.truncate(articleContext, maximumCharacters: 10_000))
+
+            划选段落上下文:
+            \(ArticleChunker.truncate(localContext, maximumCharacters: 5_000))
+
+            划选文本:
+            \(ArticleChunker.truncate(selection, maximumCharacters: 4_000))
+
+            读者的提问:
+            \(ArticleChunker.truncate(question, maximumCharacters: 1_000))
+            """,
+            system: systemPrompt,
+            configuration: configuration,
+            apiKey: apiKey,
+            onDelta: onDelta,
+            forceDisableReasoning: true,
+            overrideTemperature: 0.2
         )
     }
 
@@ -142,7 +206,8 @@ public struct LLMService: Sendable {
             // Translation is an extraction task rather than a reasoning task.
             // DeepSeek's automatic thinking can materially delay the first
             // visible paragraph while adding no reader-facing value.
-            forceDisableReasoning: true
+            forceDisableReasoning: true,
+            overrideTemperature: 0.0
         )
     }
 
@@ -170,7 +235,8 @@ public struct LLMService: Sendable {
             system: "You are a precise translation engine. The response must be valid JSON and must contain exactly one translated string for every input string.",
             configuration: configuration,
             apiKey: apiKey,
-            forceDisableReasoning: true
+            forceDisableReasoning: true,
+            overrideTemperature: 0.0
         )
         let translations = try Self.decodeBatchTranslations(output)
         guard translations.count == paragraphs.count,
@@ -215,7 +281,8 @@ public struct LLMService: Sendable {
         configuration: LLMConfiguration,
         apiKey: String,
         stream: Bool,
-        forceDisableReasoning: Bool = false
+        forceDisableReasoning: Bool = false,
+        overrideTemperature: Double? = nil
     ) throws -> URLRequest {
         guard var base = URLComponents(string: configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw LLMServiceError.invalidBaseURL }
         guard base.scheme == "https" || (configuration.allowInsecureLocalEndpoint && base.scheme == "http") else { throw LLMServiceError.insecureEndpoint }
@@ -257,7 +324,8 @@ public struct LLMService: Sendable {
         } else {
             deepSeekReasoning = (nil, nil)
         }
-        request.httpBody = try JSONEncoder().encode(Body(model: configuration.model, messages: [Message(role: "system", content: system), Message(role: "user", content: prompt)], temperature: configuration.temperature, stream: stream, thinking: deepSeekReasoning.0, reasoningEffort: deepSeekReasoning.1))
+        let temp = overrideTemperature ?? configuration.temperature
+        request.httpBody = try JSONEncoder().encode(Body(model: configuration.model, messages: [Message(role: "system", content: system), Message(role: "user", content: prompt)], temperature: temp, stream: stream, thinking: deepSeekReasoning.0, reasoningEffort: deepSeekReasoning.1))
         return request
     }
 
