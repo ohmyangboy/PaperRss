@@ -58,7 +58,7 @@
 ## 🚀 下载与安装说明 (Installation)
 
 ### 官方 Release 下载
-前往 [Releases 页面](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载最新版本的 `PaperRss-v1.0.0-macOS.zip` 解压后拖入 `Applications` 应用程序文件夹。
+前往 [Releases 页面](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载最新版本的 `PaperRss-v1.0.0.dmg`，打开后拖入 `Applications` 应用程序文件夹。
 
 ### macOS 安全提示（解除隔离标记）
 由于软件为个人独立开源构建版本（未付费购买 Apple 签名公证证书），初次打开若提示 `“PaperRss”已损坏，无法打开`，请打开终端（Terminal）执行以下命令绕过系统隔离校验：
