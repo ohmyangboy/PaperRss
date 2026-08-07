@@ -1,53 +1,110 @@
-# PaperRss
+<div align="center">
 
-一个面向 macOS 与 iPhone 的本地优先 RSS 阅读器。它提供三栏阅读、OPML、RSS/Atom/JSON Feed、离线正文缓存，以及通过你自己的 OpenAI Chat Completions 兼容 API 手动生成翻译、上下对照、总结和解读。
+  <img src="assets/app-icon.png" alt="Paper RSS Logo" width="120" height="120" style="border-radius: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);" />
 
-## 当前实现
+  # Paper RSS
 
-- macOS 三栏 / iPhone 折叠导航，深色模式、Dynamic Type、VoiceOver 标签和 Mac 快捷键。
-- RSS、Atom、JSON Feed 解析；ETag / Last-Modified 条件刷新；稳定 ID 去重。
-- OPML 导入导出，已读、收藏、本地 JSON 持久化和正文缓存。
-- 网页正文的安全降级提取：先使用 Feed 正文，再从 `article` / `main` / `body` 提取纯文本；失败时回退 Feed 摘要并保留原网页链接。
-- OpenAI 兼容 `POST /chat/completions`：SSE 流式输出优先，失败后自动重试普通响应；API Key 仅存当前 Mac 的本地应用配置，不参与 iCloud 同步。
-- 全文翻译、逐段上下对照、总结与解读。翻译逐段保存，可在中断后复用已完成内容。
-- iPhone 通过 `BGAppRefreshTask` 请求后台刷新；系统并不保证精确执行时间。
+  ***把散落的网络资讯，重塑为纯粹的纸质阅读。***
 
-## 构建现状与 Xcode 27
+  [![Release](https://img.shields.io/github/v/release/ohmyangboy/PaperRss?style=flat-square&color=1d4ed8)](https://github.com/ohmyangboy/PaperRss/releases/latest)
+  [![Platform](https://img.shields.io/badge/platform-macOS%2013.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
+  [![License](https://img.shields.io/badge/license-MIT-c92a2a?style=flat-square)](LICENSE)
+  [![GitHub Pages](https://img.shields.io/badge/website-gh--pages-10b981?style=flat-square)](https://ohmyangboy.github.io/PaperRss/)
 
-此机器运行 macOS 27.0 beta，但安装的 Xcode 26.6 无法加载 `IDESimulatorFoundation`，即使运行 `xcodebuild -runFirstLaunch` 后仍然失败。这是工具链与系统的二进制不匹配，不是工程错误。
+  [**官方网站**](https://ohmyangboy.github.io/PaperRss/) | [**下载最新版 v1.0.0**](https://github.com/ohmyangboy/PaperRss/releases/latest) | [**问题反馈 Issues**](https://github.com/ohmyangboy/PaperRss/issues)
 
-请从 Apple Developer 下载或更新到**与 macOS 27 对应的 Xcode beta / RC**，然后：
+</div>
 
-1. 打开 `PaperRss.xcodeproj`。
-2. 在两个 target 选择你的 Development Team，并把 Bundle Identifier 改为你自己的反向域名。
-3. Mac target 可以直接运行；iOS target 选择真机或模拟器运行。
-4. 真机后台刷新需要在 Xcode 的 Signing & Capabilities 中确认 Background Modes。
+---
 
-当前代码仍可不依赖 Xcode 工程生成器地校验：
+## 📖 软件简介
 
-```sh
-swift test
-swift build --product PaperRssDesktop
+**Paper RSS** 是一款专为 macOS 打造的现代纸感 RSS 订阅与 AI 强力阅读助手。
+
+在快节奏的碎片化时代，Paper RSS 致力于恢复实体报刊与精装杂志般的温润阅读体验。结合大语言模型（DeepSeek / OpenAI 兼容服务），为读者提供**全文深度摘要**、**划词实时双语翻译与概念解释**，以及**私密安全的 100% 本地 API 架构**。
+
+---
+
+## ✦ 核心亮点 (Key Features)
+
+- 📜 **极简纸墨风格**：精心调配的羊皮纸亮色与暗夜深色主题，辅以典雅衬线排版与流畅的侧边栏索引。
+- 🤖 **AI 深度摘要**：打开文章或一键手动触发全文本要旨分析，快速掌握复杂资讯核心逻辑。
+- 🔤 **划词即享翻译与解释**：长按或滑动选中任何非母词汇、难懂概念，悬浮助手即刻给出精准上下文翻译与百科阐释。
+- 🔒 **100% 本地隐私保障**：所有 API Key 仅保存在本机 Keychain / 局部配置中，不参与任何第三方服务端上传或云端收集。
+- ⚙️ **灵活的模型服务接入**：内置 DeepSeek 官方推荐 Endpoint (Flash / Pro)，同时支持自建 Ollama、LocalAI 或任意 OpenAI 兼容接口。
+- ☁️ **iCloud 状态同步**：跨设备无缝同步订阅源列表、已读/未读状态、收藏夹与 AI 生成记录。
+
+---
+
+## 🖼 真实界面展示 (Screenshots)
+
+### 1. 三栏式纸感排版主界面
+![Paper RSS 三栏主界面](assets/screenshots/paper-rss-main.png)
+
+### 2. AI 智能全文摘要模块
+![AI 摘要解析卡片](assets/screenshots/ai-summary-card.png)
+
+### 3. 划词实时 AI 概念解释与翻译浮窗
+<p align="center">
+  <img src="assets/screenshots/ai-explain-popover.png" width="48%" alt="划词 AI 解释" />
+  <img src="assets/screenshots/ai-translate-popover.png" width="48%" alt="划词 AI 翻译" />
+</p>
+
+### 4. 灵活的 AI 功能与模型配置
+![Paper RSS AI 设置面板](assets/screenshots/settings-ai-config.png)
+
+---
+
+## 🚀 下载与安装说明 (Installation)
+
+### 官方 Release 下载
+前往 [Releases 页面](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载最新版本的 `PaperRss-v1.0.0-macOS.zip` 解压后拖入 `Applications` 应用程序文件夹。
+
+### macOS 安全提示（解除隔离标记）
+由于软件为个人独立开源构建版本（未付费购买 Apple 签名公证证书），初次打开若提示 `“PaperRss”已损坏，无法打开`，请打开终端（Terminal）执行以下命令绕过系统隔离校验：
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app
 ```
 
-## 启用 iCloud / CloudKit
+---
 
-项目提供了 `PaperRss/Resources/PaperRss.entitlements.template`。在 Xcode 中复制为每个 target 的 `.entitlements` 文件，修改容器 ID，并在 Signing & Capabilities 添加 iCloud + CloudKit。CloudKit 容器必须在你的开发者账号中创建；它不能由此仓库安全地代为创建。
+## 🛠 本地构建指南 (Building from Source)
 
-代码已实现 CloudKit 私有数据库镜像：订阅、删除 tombstone、已读/收藏状态和 AI 成果会合并后写入一个私有 `CKAsset` 记录；按 `updatedAt` 取较新版本。网页正文、图片和 HTTP 缓存始终只保存在本地。完成签名配置后，在设置中开启“同步订阅、已读、收藏和 AI 结果”。没有可用 Team / 容器时应用会显示同步失败，而不会伪造“已同步”。
+环境要求：
+- macOS 13.0 +
+- Xcode 15.0+ / Swift 5.9+
 
-### 本地 API Key
+```bash
+# 克隆项目仓库
+git clone https://github.com/ohmyangboy/PaperRss.git
+cd PaperRss
 
-API Key 只保存在当前 Mac 的 PaperRss 本地应用配置中，不参与 iCloud 同步、OPML 导出或日志记录；读取它不会触发 macOS 钥匙串密码弹窗。这样更适合个人设备上“配置一次、直接使用”的工作流。作为权衡，它不具备系统 Keychain 的静态加密保护；请不要在多人共用的 Mac 账户中保存长期有效的 Key。
+# 使用 Swift Package Manager 进行构建
+swift build -c release
 
-## 隐私与限制
+# 或直接使用 Xcode 打开 PaperRss.xcodeproj 进行运行/调试
+open PaperRss.xcodeproj
+```
 
-- AI 请求仅在你手动点击后发生。正文会发送给你配置的 API 服务，请只使用可信端点。
-- 默认要求 HTTPS。局域网 HTTP 是高级选项；iPhone 建议改用 HTTPS 的局域网反向代理。
-- 网页正文提取不是浏览器渲染；登录墙、付费墙和强动态站点会回退为 Feed 摘要。
-- 本版本不包含账号系统、多人协作、商业支付或服务端全文搜索。
+---
 
-## 开源协议
+## 💖 赞赏与支持 (Sponsor & Community)
 
-本项目采用 [MIT License](LICENSE) 许可协议。
+如果 **Paper RSS** 提升了您的日常阅读体验，欢迎使用微信扫码赞赏支持开发者的持续更新！
 
+<div align="center">
+
+  <img src="assets/wechat-sponsor-qr.jpg" alt="微信赞赏码" width="220" />
+
+  <p><i>感谢每一位热爱独立软件与专注阅读的读者！</i></p>
+
+</div>
+
+如有问题反馈、功能想法或代码改进，欢迎在 [GitHub Issues](https://github.com/ohmyangboy/PaperRss/issues) 中随时与我交流。
+
+---
+
+## 📄 开源协议 (License)
+
+本项目基于 [MIT License](LICENSE) 协议开源。

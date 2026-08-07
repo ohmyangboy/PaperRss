@@ -14,6 +14,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case refresh
     case language
     case sync
+    case feedback
     case about
 
     var id: Self { self }
@@ -26,6 +27,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .refresh: I18N.shared.tr("刷新", "Refresh")
         case .language: I18N.shared.tr("语言", "Language")
         case .sync: I18N.shared.tr("同步", "Sync")
+        case .feedback: I18N.shared.tr("反馈与赞赏", "Feedback & Sponsor")
         case .about: I18N.shared.tr("关于", "About")
         }
     }
@@ -37,6 +39,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .refresh: "arrow.clockwise.circle"
         case .language: "globe"
         case .sync: "icloud"
+        case .feedback: "heart.circle"
         case .about: "info.circle"
         }
     }
@@ -49,6 +52,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .refresh: I18N.shared.tr("控制订阅的自动更新", "Control automatic feed updates")
         case .language: I18N.shared.tr("切换应用界面语言", "Switch application display language")
         case .sync: I18N.shared.tr("同步阅读状态和 AI 结果", "Synchronize reading state and AI results")
+        case .feedback: I18N.shared.tr("赞赏支持开发者、提交问题反馈与交流", "Support developer, submit feedback, and get in touch")
         case .about: I18N.shared.tr("版本信息、GitHub 仓库与软件更新", "Version info, GitHub repository, and update checks")
         }
     }
@@ -297,8 +301,96 @@ struct SettingsView: View {
                 languageSettings
             case .sync:
                 syncSettings
+            case .feedback:
+                feedbackSettings
             case .about:
                 aboutSettings
+            }
+        }
+    }
+
+    private var feedbackSettings: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            settingsGroup(
+                I18N.shared.tr("赞赏与支持", "Support & Sponsor"),
+                footer: I18N.shared.tr("如果 Paper RSS 帮助到了您的日常阅读，欢迎使用微信扫码赞赏支持开发者持续更新！", "If Paper RSS helps your daily reading, feel free to scan WeChat QR code to support continuous updates!")
+            ) {
+                VStack(spacing: 16) {
+                    HStack(alignment: .center, spacing: 20) {
+                        Image("SponsorQR", bundle: nil)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 150, height: 150)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "heart.fill")
+                                    .foregroundStyle(Color.red)
+                                Text(I18N.shared.tr("微信赞赏码", "WeChat Sponsor"))
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+
+                            Text(I18N.shared.tr("感谢每一位热爱独立软件与专注阅读的读者。", "Thanks to everyone who loves independent software and thoughtful reading."))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Text(I18N.shared.tr("您的支持是 Paper RSS 持续进化与维护的源源动力。", "Your support is the continuous driving force for Paper RSS evolution."))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                }
+            }
+
+            settingsGroup(
+                I18N.shared.tr("问题反馈与建议", "Feedback & Issues"),
+                footer: I18N.shared.tr("遇到了 Bug 或有新的功能想法？欢迎随时提交 GitHub Issue 或联系开发者。", "Encountered a bug or have new feature ideas? Welcome to submit GitHub Issues or contact developer.")
+            ) {
+                settingsRow(
+                    I18N.shared.tr("提交 GitHub Issue", "Submit GitHub Issue"),
+                    description: I18N.shared.tr("直接前往 GitHub 仓库提交反馈或功能建议", "Submit feedback or feature requests on GitHub")
+                ) {
+                    Button {
+                        if let url = URL(string: "https://github.com/ohmyangboy/PaperRss/issues") {
+                            UpdateCheckService.openURL(url)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bubble.left.and.bubble.right.fill")
+                            Text(I18N.shared.tr("新建 Issue", "New Issue"))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow(
+                    I18N.shared.tr("开发者社区", "Developer Community"),
+                    description: "GitHub @ohmyangboy"
+                ) {
+                    Button {
+                        if let url = URL(string: "https://github.com/ohmyangboy") {
+                            UpdateCheckService.openURL(url)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("GitHub Profile")
+                            Image(systemName: "arrow.up.right")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
         }
     }

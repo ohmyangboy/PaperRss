@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Paper RSS — 把散落的网络资讯，重塑为纯粹的纸质阅读</title>
+  <meta name="description" content="Paper RSS 是一款专为 macOS 打造的现代纸感 RSS 订阅与 AI 强力阅读助手。支持 AI 智能摘要、划词实时翻译与解释、DeepSeek/OpenAI模型配置与 iCloud 私密同步。" />
+  <link rel="icon" type="image/png" href="assets/app-icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <a href="#" class="brand">
+      <img src="assets/app-icon.png" alt="Paper RSS Logo" />
+      <div class="brand-text">
+        <span class="brand-name">Paper RSS</span>
+        <span class="brand-tag">PAPER & AI READER</span>
+      </div>
+    </a>
+    <nav class="site-nav">
+      <a href="#features">功能特性</a>
+      <a href="#ai-assistant">AI 助手</a>
+      <a href="#sponsor">赞赏支持</a>
+      <a href="#install">安装说明</a>
+    </nav>
+    <div class="header-actions">
+      <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener">GitHub 仓库</a>
+      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">下载 v1.0.0</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Hero Section -->
+    <section class="hero">
+      <div class="hero-stamp">Editorial Zine Reader · macOS Version</div>
+      <h1>把散落的网络资讯，<br /><em>重塑为纯粹的纸质阅读。</em></h1>
+      <p class="hero-subtitle">
+        告别嘈杂的信息流。优雅暖纸排版、AI 全文深度摘要、划词即刻翻译解释，让阅读回归专注与思考。
+      </p>
+
+      <div class="hero-ctas">
+        <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.0.0/PaperRss-v1.0.0-macOS.zip" class="hero-cta-main">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          下载 macOS 版本 (v1.0.0)
+        </a>
+        <a href="#features" class="hero-cta-secondary">浏览核心特性 ↓</a>
+      </div>
+      <p class="hero-meta">Apple Silicon & Intel Mac · macOS 13.0+ · 100% 本地隐私安全</p>
+    </section>
+
+    <!-- Stage Showcase -->
+    <section class="stage-section">
+      <div class="stage-window">
+        <div class="stage-bar">
+          <div class="window-dots">
+            <span class="window-dot red"></span>
+            <span class="window-dot yellow"></span>
+            <span class="window-dot green"></span>
+          </div>
+          <span class="stage-title">Paper RSS — 优雅羊皮纸风三栏主界面</span>
+        </div>
+        <img src="assets/screenshots/paper-rss-main.png" alt="Paper RSS 界面" class="stage-image" />
+      </div>
+    </section>
+
+    <!-- Trust Rail -->
+    <aside class="trust-rail">
+      <div class="trust-item">
+        <strong>100% 本地隐私</strong>
+        <span>API Key 仅存于本机设备</span>
+      </div>
+      <div class="trust-item">
+        <strong>AI 智能阅读</strong>
+        <span>全文深度摘要与思考推理</span>
+      </div>
+      <div class="trust-item">
+        <strong>划词实时解读</strong>
+        <span>选字即得多语翻译与名词解释</span>
+      </div>
+      <div class="trust-item">
+        <strong>自由模型接入</strong>
+        <span>支持 DeepSeek 与 OpenAI 兼容服务</span>
+      </div>
+    </aside>
+
+    <!-- Feature Grid Section -->
+    <section id="features" style="padding-top: 2rem;">
+      <div class="section-title-group">
+        <p class="section-eyebrow">EDITORIAL EXPERIENCE</p>
+        <h2>兼具美感与效能的阅读仪式</h2>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">01 / DESIGN</div>
+            <h3>沉浸式纸感排版</h3>
+            <p>专为长文阅读微调的衬线字号与优雅行距。提供羊皮纸暖色调与深色暗夜模式，带来如实体杂志般的视觉温润感。</p>
+          </div>
+          <img src="assets/screenshots/article-reader-detail.png" alt="文章阅读细致排版" class="feature-card-img" />
+        </div>
+
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">02 / SUMMARY</div>
+            <h3>一键生成 AI 摘要</h3>
+            <p>基于大语言模型的全文本分析，在阅读前快速提炼要点与要旨结论，高亮呈现最关键的观点与事实。</p>
+          </div>
+          <img src="assets/screenshots/ai-summary-card.png" alt="AI 摘要展示" class="feature-card-img" />
+        </div>
+
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">03 / TRANSLATE</div>
+            <h3>划词双语解释与翻译</h3>
+            <p>阅读外文资讯无缝衔接。滑动选中任何生词或段落，悬浮助手即刻给出精准上下文翻译与背景概念阐释。</p>
+          </div>
+          <img src="assets/screenshots/ai-explain-popover.png" alt="划词 AI 解释浮窗" class="feature-card-img" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Deep AI Focus Feature Section -->
+    <section id="ai-assistant" class="deep-feature">
+      <div class="deep-feature-text">
+        <p class="section-eyebrow">AI POWERED ENGINE</p>
+        <h3>灵敏的 AI 智能助手</h3>
+        <p>
+          Paper RSS 完美兼容 DeepSeek 官方 Flash / Pro 模型，以及任何标准的 OpenAI 兼容接口。你可以自由配置自定义 Prompt 指令、推理强度（Thinking effort）以及局域网自建模型 Endpoint。
+        </p>
+        <div class="feature-tags">
+          <span class="feature-tag">DeepSeek Flash / Pro</span>
+          <span class="feature-tag">OpenAI API</span>
+          <span class="feature-tag">Local Ollama HTTP</span>
+          <span class="feature-tag">Custom Prompts</span>
+        </div>
+      </div>
+      <div>
+        <img src="assets/screenshots/settings-ai-config.png" alt="Paper RSS AI 功能配置面板" class="deep-feature-img" />
+      </div>
+    </section>
+
+    <!-- Sponsor & Feedback Section -->
+    <section id="sponsor" class="sponsor-section">
+      <span class="sponsor-badge">SPONSOR & COMMUNITY</span>
+      <h2>支持 Paper RSS 持续进化</h2>
+      <p class="sponsor-desc">
+        Paper RSS 是一款独立开发并开源的软件。如果您喜欢它的设计与功能，欢迎通过微信赞赏支持开发者，或在 GitHub 提交反馈！
+      </p>
+
+      <div class="sponsor-box">
+        <div class="qr-card">
+          <img src="assets/wechat-sponsor-qr.jpg" alt="微信赞赏码" />
+          <div class="qr-caption">微信扫码赞赏支持</div>
+        </div>
+
+        <div class="feedback-links">
+          <a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn" target="_blank" rel="noopener">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            提交 GitHub Issue / 反馈建议
+          </a>
+          <a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn" style="background: transparent; color: var(--text-main); border: 1px solid var(--border-medium);" target="_blank" rel="noopener">
+            ★ 给项目点个 Star
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Install Guide -->
+    <section id="install" class="install-section">
+      <div class="section-title-group" style="margin-bottom: 1.5rem; text-align: left;">
+        <p class="section-eyebrow">INSTALLATION GUIDE</p>
+        <h2 style="font-size: 1.8rem;">安装与安全说明</h2>
+      </div>
+
+      <div class="install-box">
+        <p style="color: var(--text-muted); font-size: 0.95rem;">
+          由于软件当前为个人独立构建开源版本（未付费购买 Apple 开发者公证证书），初次下载打开若提示“已损坏”或“无法打开”，请在终端执行以下清除隔离标记命令：
+        </p>
+        <div class="install-cmd">
+          sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-nav">
+        <a href="#features">功能</a>
+        <a href="#ai-assistant">AI 助手</a>
+        <a href="#sponsor">赞赏</a>
+        <a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">MIT 开源协议</a>
+        <a href="https://github.com/ohmyangboy/PaperRss">GitHub</a>
+      </div>
+      <p>© 2026 Paper RSS. Made with care by @ohmyangboy.</p>
+    </div>
+  </footer>
+
+</body>
+</html>
