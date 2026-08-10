@@ -35,7 +35,10 @@
     <!-- Hero Section -->
     <section class="hero">
       <div class="hero-stamp">Bilingual & Restrained AI Reader · macOS Version</div>
-      <h1>双语流转，克制智能化。<br /><em>让阅读回归纯粹与沉浸。</em></h1>
+      <h1 class="scramble-title">
+        <span class="scramble-target" data-text="双语流转，克制智能化。">双语流转，克制智能化。</span><br />
+        <em class="scramble-target" data-text="让阅读回归纯粹与沉浸。">让阅读回归纯粹与沉浸。</em>
+      </h1>
       <p class="hero-subtitle">
         没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。
       </p>
@@ -201,5 +204,92 @@
     </div>
   </footer>
 
+  <script>
+    class TextScramble {
+      constructor(el) {
+        this.el = el;
+        this.chars = '!@#$%^&*()_+-=[]{}|;:,.<>?/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ¶§ØÆΞX∆';
+        this.update = this.update.bind(this);
+      }
+
+      setText(newText) {
+        const oldText = this.el.innerText;
+        const length = Math.max(oldText.length, newText.length);
+        const promise = new Promise((resolve) => this.resolve = resolve);
+        this.queue = [];
+
+        for (let i = 0; i < length; i++) {
+          const from = oldText[i] || '';
+          const to = newText[i] || '';
+          const start = Math.floor(Math.random() * 15);
+          const end = start + Math.floor(Math.random() * 20) + 12;
+          this.queue.push({ from, to, start, end, char: '' });
+        }
+
+        cancelAnimationFrame(this.frameRequest);
+        this.frame = 0;
+        this.update();
+        return promise;
+      }
+
+      update() {
+        let output = '';
+        let complete = 0;
+
+        for (let i = 0, n = this.queue.length; i < n; i++) {
+          let { from, to, start, end, char } = this.queue[i];
+          if (this.frame >= end) {
+            complete++;
+            output += to;
+          } else if (this.frame >= start) {
+            if (!char || Math.random() < 0.3) {
+              char = this.randomChar();
+              this.queue[i].char = char;
+            }
+            output += `<span class="scramble-char">${char}</span>`;
+          } else {
+            output += `<span class="scramble-char">${this.randomChar()}</span>`;
+          }
+        }
+
+        this.el.innerHTML = output;
+        if (complete === this.queue.length) {
+          this.resolve();
+        } else {
+          this.frameRequest = requestAnimationFrame(this.update);
+          this.frame++;
+        }
+      }
+
+      randomChar() {
+        return this.chars[Math.floor(Math.random() * this.chars.length)];
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const targets = document.querySelectorAll('.scramble-target');
+      
+      const runAnimation = () => {
+        targets.forEach((target, index) => {
+          const fx = new TextScramble(target);
+          const finalGoal = target.getAttribute('data-text');
+          
+          setTimeout(() => {
+            fx.setText(finalGoal);
+          }, index * 400);
+        });
+      };
+
+      runAnimation();
+
+      // 点击标题可重复播放该归位动画
+      const titleBox = document.querySelector('.scramble-title');
+      if (titleBox) {
+        titleBox.style.cursor = 'pointer';
+        titleBox.title = '点击重新播放解密归位动画';
+        titleBox.addEventListener('click', runAnimation);
+      }
+    });
+  </script>
 </body>
 </html>

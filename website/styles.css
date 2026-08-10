@@ -212,6 +212,15 @@ body {
   padding-bottom: 2px;
 }
 
+.scramble-char {
+  font-family: var(--font-mono);
+  color: var(--color-cobalt);
+  opacity: 0.78;
+  font-size: 0.88em;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 .hero-subtitle {
   font-size: 1.15rem;
   color: var(--text-muted);
