@@ -7,6 +7,73 @@ import UserNotifications
 import PaperRssCore
 #endif
 
+private final class DockUnreadBadgeView: NSView {
+    private let icon: NSImage
+    var label: String {
+        didSet { needsDisplay = true }
+    }
+
+    init(icon: NSImage, label: String, size: NSSize) {
+        self.icon = icon
+        self.label = label
+        super.init(frame: NSRect(origin: .zero, size: size))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        icon.draw(
+            in: bounds,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+
+        let badgeHeight = max(28, bounds.height * 0.30)
+        let font = NSFont.systemFont(ofSize: badgeHeight * 0.58, weight: .bold)
+        let textSize = (label as NSString).size(withAttributes: [.font: font])
+        let badgeWidth = max(badgeHeight, textSize.width + badgeHeight * 0.42)
+        let badgeRect = NSRect(
+            x: bounds.maxX - badgeWidth - 2,
+            y: bounds.maxY - badgeHeight - 2,
+            width: badgeWidth,
+            height: badgeHeight
+        )
+
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.32)
+        shadow.shadowBlurRadius = 3
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.set()
+        NSColor.systemRed.setFill()
+        NSBezierPath(roundedRect: badgeRect, xRadius: badgeHeight / 2, yRadius: badgeHeight / 2).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        (label as NSString).draw(
+            in: NSRect(
+                x: badgeRect.minX,
+                y: badgeRect.midY - textSize.height / 2,
+                width: badgeRect.width,
+                height: textSize.height
+            ),
+            withAttributes: [
+                .font: font,
+                .foregroundColor: NSColor.white,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+}
+
 @MainActor
 final class MacSystemAttentionController: NSObject, ObservableObject {
     @Published private(set) var dockBadgeEnabled: Bool
@@ -25,6 +92,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     private let notificationCenter: UNUserNotificationCenter
     private var cancellables: Set<AnyCancellable> = []
     private var latestDatabase: AppDatabase
+    private var dockBadgeView: DockUnreadBadgeView?
 
     init(
         store: AppStore,
@@ -150,10 +218,30 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         let unreadCount = latestDatabase.entries.lazy.filter {
             activeFeedIDs.contains($0.feedID) && !$0.isRead
         }.count
-        NSApp.dockTile.badgeLabel = FeedAttentionPolicy.dockBadgeLabel(
+        let label = FeedAttentionPolicy.dockBadgeLabel(
             unreadCount: unreadCount,
             enabled: dockBadgeEnabled
         )
+        let dockTile = NSApp.dockTile
+        dockTile.badgeLabel = nil
+
+        guard let label else {
+            dockBadgeView = nil
+            dockTile.contentView = nil
+            dockTile.display()
+            return
+        }
+
+        let badgeView = dockBadgeView ?? DockUnreadBadgeView(
+            icon: NSApp.applicationIconImage,
+            label: label,
+            size: dockTile.size
+        )
+        badgeView.frame = NSRect(origin: .zero, size: dockTile.size)
+        badgeView.label = label
+        dockBadgeView = badgeView
+        dockTile.contentView = badgeView
+        dockTile.display()
     }
 
     private func deliverNotification(
