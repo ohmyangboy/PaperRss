@@ -4,7 +4,7 @@
 
   # Paper RSS
 
-  ***把散落的网络资讯，重塑为纯粹的纸质阅读。***
+  ***双语流转，克制智能化。让阅读回归纯粹与沉浸。***
 
   [![Release](https://img.shields.io/github/v/release/ohmyangboy/PaperRss?style=flat-square&color=1d4ed8)](https://github.com/ohmyangboy/PaperRss/releases/latest)
   [![Platform](https://img.shields.io/badge/platform-macOS%2013.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
@@ -21,7 +21,7 @@
 
 **Paper RSS** 是一款专为 macOS 打造的现代纸感 RSS 订阅与 AI 强力阅读助手。
 
-在快节奏的碎片化时代，Paper RSS 致力于恢复实体报刊与精装杂志般的温润阅读体验。结合大语言模型（DeepSeek / OpenAI 兼容服务），为读者提供**全文深度摘要**、**划词实时双语翻译与概念解释**，以及**私密安全的 100% 本地 API 架构**。
+没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。结合大语言模型（DeepSeek / OpenAI 兼容服务），为您提供**全文深度摘要**、**划词实时双语翻译与概念解释**，以及**私密安全的 100% 本地 API 架构**。
 
 ---
 
