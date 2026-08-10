@@ -83,12 +83,12 @@ final class PaperRssCoreTests: XCTestCase {
     @MainActor
     func testRefreshOutcomeUsesUnreadStateAtEndOfWholeRound() async {
         let firstFeed = Feed(
-            id: UUID(),
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             title: "First",
             feedURL: URL(string: "https://example.com/first.xml")!
         )
         let secondFeed = Feed(
-            id: UUID(),
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             title: "Second",
             feedURL: URL(string: "https://example.com/second.xml")!
         )
@@ -103,6 +103,7 @@ final class PaperRssCoreTests: XCTestCase {
             llmConfiguration: .default
         )) { feed in
             if feed.id == secondFeed.id {
+                try? await Task.sleep(nanoseconds: 50_000_000)
                 await gate.pause()
                 return .notModified(etag: nil, lastModified: nil)
             }
@@ -909,5 +910,31 @@ final class PaperRssCoreTests: XCTestCase {
         // Test reset to default 17
         store.resetArticleFontSize()
         XCTAssertEqual(store.articleFontSize, 17)
+    }
+
+    @MainActor
+    func testBatchFeedOperations() throws {
+        let feed1 = Feed(title: "Feed 1", feedURL: URL(string: "https://example.com/1.xml")!, folder: "Tech")
+        let feed2 = Feed(title: "Feed 2", feedURL: URL(string: "https://example.com/2.xml")!, folder: "Tech")
+        let feed3 = Feed(title: "Feed 3", feedURL: URL(string: "https://example.com/3.xml")!, folder: nil)
+        let database = AppDatabase(feeds: [feed1, feed2, feed3], entries: [], articleCaches: [:], readingStates: [:], artifacts: [], llmConfiguration: .default)
+        let store = AppStore(testDatabase: database) { _ in fatalError("Unused in test") }
+
+        // 1. 测试批量移动分类
+        store.setFeedFolder(feedIDs: [feed1.id, feed3.id], folder: "News")
+        XCTAssertEqual(store.feeds.first(where: { $0.id == feed1.id })?.folder, "News")
+        XCTAssertEqual(store.feeds.first(where: { $0.id == feed2.id })?.folder, "Tech")
+        XCTAssertEqual(store.feeds.first(where: { $0.id == feed3.id })?.folder, "News")
+
+        // 2. 测试批量获取 EntryListItems
+        let items = store.entryListItems(feedIDs: [feed1.id, feed2.id])
+        // 刚插入无文章，返回空数组
+        XCTAssertTrue(items.isEmpty)
+
+        // 3. 测试批量删除
+        store.deleteFeeds([feed1.id, feed2.id])
+        XCTAssertNil(store.feeds.first(where: { $0.id == feed1.id }))
+        XCTAssertNil(store.feeds.first(where: { $0.id == feed2.id }))
+        XCTAssertNotNil(store.feeds.first(where: { $0.id == feed3.id }))
     }
 }

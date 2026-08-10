@@ -402,6 +402,21 @@ public final class AppStore: ObservableObject {
         persist()
     }
 
+    public func setFeedFolder(feedIDs: Set<UUID>, folder: String?) {
+        guard !feedIDs.isEmpty else { return }
+        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        var updated = false
+        for index in database.feeds.indices where feedIDs.contains(database.feeds[index].id) {
+            database.feeds[index].folder = cleanFolder
+            database.feeds[index].updatedAt = .now
+            updated = true
+        }
+        if updated {
+            rebuildEntryIndex()
+            persist()
+        }
+    }
+
     public func addFolder(_ name: String) {
         guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
         if !database.customFolders.contains(clean) {
@@ -441,6 +456,10 @@ public final class AppStore: ObservableObject {
 
     public func entries(folder: String) -> [Entry] { entryIndex.byFolder[folder] ?? [] }
     public func entryListItems(feedID: UUID) -> [EntryListItem] { entryIndex.listItemsByFeed[feedID] ?? [] }
+    public func entryListItems(feedIDs: Set<UUID>) -> [EntryListItem] {
+        guard !feedIDs.isEmpty else { return [] }
+        return entryIndex.allListItems.filter { feedIDs.contains($0.feedID) }
+    }
     public func entryListItems(folder: String) -> [EntryListItem] { entryIndex.listItemsByFolder[folder] ?? [] }
     public func entry(id: String) -> Entry? { entryIndex.byID[id] }
     public func feed(for entry: Entry) -> Feed? { database.feeds.first { $0.id == entry.feedID } }
@@ -788,6 +807,31 @@ public final class AppStore: ObservableObject {
         for artifactIndex in database.artifacts.indices where entryIDs.contains(database.artifacts[artifactIndex].entryID) {
             // Keep only a small tombstone so CloudKit can remove the synced
             // result instead of restoring it from another offline device.
+            database.artifacts[artifactIndex].content = ""
+            database.artifacts[artifactIndex].segments = []
+            database.artifacts[artifactIndex].selectionText = nil
+            database.artifacts[artifactIndex].selectionArticleHash = nil
+            database.artifacts[artifactIndex].selectionAnchor = nil
+            database.artifacts[artifactIndex].isComplete = false
+            database.artifacts[artifactIndex].isDeleted = true
+            database.artifacts[artifactIndex].updatedAt = deletedAt
+        }
+        rebuildEntryIndex()
+        persist()
+    }
+
+    public func deleteFeeds(_ feedIDs: Set<UUID>) {
+        guard !feedIDs.isEmpty else { return }
+        let entryIDs = Set(database.entries.lazy.filter { feedIDs.contains($0.feedID) }.map(\.id))
+        let deletedAt = Date.now
+        for index in database.feeds.indices where feedIDs.contains(database.feeds[index].id) {
+            database.feeds[index].isDeleted = true
+            database.feeds[index].updatedAt = deletedAt
+        }
+        database.entries.removeAll { entryIDs.contains($0.id) }
+        database.articleCaches = database.articleCaches.filter { !entryIDs.contains($0.key) }
+        database.readingStates = database.readingStates.filter { !entryIDs.contains($0.key) }
+        for artifactIndex in database.artifacts.indices where entryIDs.contains(database.artifacts[artifactIndex].entryID) {
             database.artifacts[artifactIndex].content = ""
             database.artifacts[artifactIndex].segments = []
             database.artifacts[artifactIndex].selectionText = nil

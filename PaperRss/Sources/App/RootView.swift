@@ -16,6 +16,7 @@ enum SidebarSelection: Hashable {
     case starred
     case folder(String)
     case feed(UUID)
+    case feeds(Set<UUID>)
 
     var title: String {
         switch self {
@@ -24,6 +25,7 @@ enum SidebarSelection: Hashable {
         case .starred: "收藏"
         case let .folder(name): name
         case .feed: "订阅"
+        case let .feeds(ids): "\(ids.count) 个订阅"
         }
     }
 }
@@ -37,6 +39,7 @@ struct RootView: View {
     // List's synthesized Hashable selection after the first click. A stable ID
     // makes selection, focus, and the visible detail all describe the same item.
     @State private var selectedEntryID: String?
+    @State private var selectedFeedIDs: Set<UUID> = []
     @State private var showsAddFeed = false
     @State private var showsAddFolder = false
     @State private var renamingFolder: String? = nil
@@ -110,6 +113,7 @@ struct RootView: View {
             sidebar: SidebarView(
                 store: store,
                 selection: sidebarSelection,
+                selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
                 renamingFolder: $renamingFolder,
@@ -154,6 +158,7 @@ struct RootView: View {
             SidebarView(
                 store: store,
                 selection: sidebarSelection,
+                selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
                 renamingFolder: $renamingFolder,
@@ -191,6 +196,7 @@ struct RootView: View {
         case .starred: return store.starredEntryListItems
         case let .folder(folder): return store.entryListItems(folder: folder)
         case let .feed(id): return store.entryListItems(feedID: id)
+        case let .feeds(ids): return store.entryListItems(feedIDs: ids)
         }
     }
 
@@ -266,6 +272,8 @@ struct RootView: View {
             entries = store.entryListItems(folder: folder).filter { !$0.isRead || retained.contains($0.id) }
         case let .feed(id):
             entries = store.entryListItems(feedID: id)
+        case let .feeds(ids):
+            entries = store.entryListItems(feedIDs: ids)
         }
 
         guard !entries.isEmpty else {
@@ -470,6 +478,7 @@ struct RootView: View {
 private struct SidebarView: View {
     @ObservedObject var store: AppStore
     @Binding var selection: SidebarSelection?
+    @Binding var selectedFeedIDs: Set<UUID>
     @Binding var showsAddFeed: Bool
     @Binding var showsAddFolder: Bool
     @Binding var renamingFolder: String?
@@ -482,14 +491,51 @@ private struct SidebarView: View {
     /// an empty capsule placeholder.
     var onDeleteSelection: () -> Void
     @State private var expandedFolders: Set<String> = []
+    @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
     #endif
 
+    private var selectedSidebarSelections: Binding<Set<SidebarSelection>> {
+        Binding(
+            get: {
+                if !selectedFeedIDs.isEmpty {
+                    return Set(selectedFeedIDs.map { SidebarSelection.feed($0) })
+                }
+                if let sel = selection {
+                    return [sel]
+                }
+                return []
+            },
+            set: { newSet in
+                let feeds = newSet.compactMap { sel -> UUID? in
+                    if case let .feed(id) = sel { return id }
+                    return nil
+                }
+                if feeds.count > 1 {
+                    selectedFeedIDs = Set(feeds)
+                    selection = .feeds(Set(feeds))
+                } else if feeds.count == 1, newSet.count == 1 {
+                    let singleID = feeds[0]
+                    selectedFeedIDs = [singleID]
+                    selection = .feed(singleID)
+                } else if let firstNonFeed = newSet.first(where: {
+                    if case .feed = $0 { return false } else { return true }
+                }) {
+                    selectedFeedIDs = []
+                    selection = firstNonFeed
+                } else {
+                    selectedFeedIDs = []
+                    selection = nil
+                }
+            }
+        )
+    }
+
     var body: some View {
-        List(selection: $selection) {
+        List(selection: selectedSidebarSelections) {
             readingSection
             subscriptionsSection
         }
@@ -533,6 +579,25 @@ private struct SidebarView: View {
             }
         }
         #endif
+        .alert("确认删除订阅", isPresented: Binding(
+            get: { batchDeleteConfirmFeedIDs != nil },
+            set: { if !$0 { batchDeleteConfirmFeedIDs = nil } }
+        )) {
+            Button("取消", role: .cancel) { batchDeleteConfirmFeedIDs = nil }
+            Button("删除", role: .destructive) {
+                if let ids = batchDeleteConfirmFeedIDs {
+                    store.deleteFeeds(ids)
+                    selectedFeedIDs = []
+                    selection = .today
+                    onDeleteSelection()
+                }
+                batchDeleteConfirmFeedIDs = nil
+            }
+        } message: {
+            if let ids = batchDeleteConfirmFeedIDs {
+                Text("确定要删除选中的 \(ids.count) 个订阅源及其所有文章吗？此操作无法撤销。")
+            }
+        }
     }
     @ViewBuilder
     private var settingsFooter: some View {
@@ -603,8 +668,8 @@ private struct SidebarView: View {
                 store.reorderFolders(fromOffsets: fromOffsets, toOffset: toOffset)
             }
         } header: {
-            SubscriptionsHeaderView { feedID in
-                store.setFeedFolder(feedID: feedID, folder: nil)
+            SubscriptionsHeaderView { feedIDs in
+                store.setFeedFolder(feedIDs: feedIDs, folder: nil)
             }
         }
     }
@@ -650,8 +715,8 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func folderRow(_ folder: String) -> some View {
-        FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder)) { feedID in
-            store.setFeedFolder(feedID: feedID, folder: folder)
+        FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder)) { feedIDs in
+            store.setFeedFolder(feedIDs: feedIDs, folder: folder)
             expandedFolders.insert(folder)
         }
         .contentShape(Rectangle())
@@ -705,7 +770,7 @@ private struct SidebarView: View {
         SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id))
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
-            .draggable(feed.id.uuidString) {
+            .draggable(selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 ? selectedFeedIDs.map(\.uuidString).joined(separator: ",") : feed.id.uuidString) {
                 HStack(spacing: 6) {
                     if let iconURL = feed.iconURL {
                         FeedFaviconView(iconURL: iconURL, title: feed.title, size: 14)
@@ -715,6 +780,14 @@ private struct SidebarView: View {
                     }
                     Text(feed.title)
                         .font(.system(size: 13, weight: .medium))
+                    if selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 {
+                        Text("\(selectedFeedIDs.count)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(PaperTheme.accent, in: Capsule())
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
@@ -722,67 +795,121 @@ private struct SidebarView: View {
                 .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
             }
             .contextMenu {
-                Button {
-                    let unreadIDs = store.entryListItems(feedID: feed.id).filter { !$0.isRead }.map { $0.id }
-                    store.markRead(entryIDs: unreadIDs)
-                } label: {
-                    Label("全部已读", systemImage: "checkmark.circle")
-                }
-
-                Button {
-                    copyToClipboard(feed.feedURL.absoluteString)
-                } label: {
-                    Label("复制订阅", systemImage: "doc.on.doc")
-                }
-
-                Menu {
+                if selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 {
                     Button {
-                        store.setFeedFolder(feed, folder: nil)
+                        let unreadIDs = store.entryListItems(feedIDs: selectedFeedIDs).filter { !$0.isRead }.map { $0.id }
+                        store.markRead(entryIDs: unreadIDs)
                     } label: {
-                        if feed.folder == nil {
-                            Label("无分类", systemImage: "checkmark")
-                        } else {
-                            Text("无分类")
-                        }
+                        Label("标记选中源全部已读 (\(selectedFeedIDs.count))", systemImage: "checkmark.circle")
                     }
 
-                    if !store.folders.isEmpty {
-                        Divider()
-                        ForEach(store.folders, id: \.self) { targetFolder in
-                            Button {
-                                store.setFeedFolder(feed, folder: targetFolder)
-                                expandedFolders.insert(targetFolder)
-                            } label: {
-                                if feed.folder == targetFolder {
-                                    Label(targetFolder, systemImage: "checkmark")
-                                } else {
+                    Button {
+                        let urls = store.feeds.filter { selectedFeedIDs.contains($0.id) }.map { $0.feedURL.absoluteString }.joined(separator: "\n")
+                        copyToClipboard(urls)
+                    } label: {
+                        Label("复制选中订阅链接 (\(selectedFeedIDs.count))", systemImage: "doc.on.doc")
+                    }
+
+                    Menu {
+                        Button {
+                            store.setFeedFolder(feedIDs: selectedFeedIDs, folder: nil)
+                        } label: {
+                            Text("无分类")
+                        }
+
+                        if !store.folders.isEmpty {
+                            Divider()
+                            ForEach(store.folders, id: \.self) { targetFolder in
+                                Button {
+                                    store.setFeedFolder(feedIDs: selectedFeedIDs, folder: targetFolder)
+                                    expandedFolders.insert(targetFolder)
+                                } label: {
                                     Text(targetFolder)
                                 }
                             }
                         }
+
+                        Divider()
+
+                        Button {
+                            showsAddFolder = true
+                        } label: {
+                            Label("新建文件夹...", systemImage: "folder.badge.plus")
+                        }
+                    } label: {
+                        Label("移动选中项到文件夹", systemImage: "folder")
                     }
 
                     Divider()
 
-                    Button {
-                        showsAddFolder = true
+                    Button(role: .destructive) {
+                        batchDeleteConfirmFeedIDs = selectedFeedIDs
                     } label: {
-                        Label("新建文件夹...", systemImage: "folder.badge.plus")
+                        Label("删除选中的订阅 (\(selectedFeedIDs.count))", systemImage: "trash")
                     }
-                } label: {
-                    Label("移动到文件夹", systemImage: "folder")
-                }
-
-                Divider()
-
-                Button(role: .destructive) {
-                    store.deleteFeed(feed)
-                    if selection == .feed(feed.id) {
-                        selection = .today
+                } else {
+                    Button {
+                        let unreadIDs = store.entryListItems(feedID: feed.id).filter { !$0.isRead }.map { $0.id }
+                        store.markRead(entryIDs: unreadIDs)
+                    } label: {
+                        Label("全部已读", systemImage: "checkmark.circle")
                     }
-                    onDeleteSelection()
-                } label: {
-                    Label("删除订阅", systemImage: "trash")
+
+                    Button {
+                        copyToClipboard(feed.feedURL.absoluteString)
+                    } label: {
+                        Label("复制订阅", systemImage: "doc.on.doc")
+                    }
+
+                    Menu {
+                        Button {
+                            store.setFeedFolder(feed, folder: nil)
+                        } label: {
+                            if feed.folder == nil {
+                                Label("无分类", systemImage: "checkmark")
+                            } else {
+                                Text("无分类")
+                            }
+                        }
+
+                        if !store.folders.isEmpty {
+                            Divider()
+                            ForEach(store.folders, id: \.self) { targetFolder in
+                                Button {
+                                    store.setFeedFolder(feed, folder: targetFolder)
+                                    expandedFolders.insert(targetFolder)
+                                } label: {
+                                    if feed.folder == targetFolder {
+                                        Label(targetFolder, systemImage: "checkmark")
+                                    } else {
+                                        Text(targetFolder)
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Button {
+                            showsAddFolder = true
+                        } label: {
+                            Label("新建文件夹...", systemImage: "folder.badge.plus")
+                        }
+                    } label: {
+                        Label("移动到文件夹", systemImage: "folder")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        store.deleteFeed(feed)
+                        if selection == .feed(feed.id) {
+                            selection = .today
+                        }
+                        onDeleteSelection()
+                    } label: {
+                        Label("删除订阅", systemImage: "trash")
+                    }
                 }
             }
     }
@@ -875,7 +1002,7 @@ private struct SidebarRow: View {
 }
 
 private struct SubscriptionsHeaderView: View {
-    let onDrop: (UUID) -> Void
+    let onDropBatch: (Set<UUID>) -> Void
     @State private var isTargeted = false
 
     var body: some View {
@@ -898,8 +1025,9 @@ private struct SubscriptionsHeaderView: View {
         )
         .dropDestination(for: String.self) { items, _ -> Bool in
             isTargeted = false
-            guard let idString = items.first, let feedID = UUID(uuidString: idString) else { return false }
-            onDrop(feedID)
+            let feedIDs = Set(items.flatMap { $0.components(separatedBy: ",").compactMap { UUID(uuidString: $0) } })
+            guard !feedIDs.isEmpty else { return false }
+            onDropBatch(feedIDs)
             return true
         } isTargeted: { targeted in
             isTargeted = targeted
@@ -910,7 +1038,7 @@ private struct SubscriptionsHeaderView: View {
 private struct FolderRowView: View {
     let folder: String
     let unreadCount: Int
-    let onDrop: (UUID) -> Void
+    let onDropBatch: (Set<UUID>) -> Void
 
     @State private var isTargeted = false
 
@@ -924,8 +1052,9 @@ private struct FolderRowView: View {
             )
             .dropDestination(for: String.self) { items, _ -> Bool in
                 isTargeted = false
-                guard let idString = items.first, let feedID = UUID(uuidString: idString) else { return false }
-                onDrop(feedID)
+                let feedIDs = Set(items.flatMap { $0.components(separatedBy: ",").compactMap { UUID(uuidString: $0) } })
+                guard !feedIDs.isEmpty else { return false }
+                onDropBatch(feedIDs)
                 return true
             } isTargeted: { targeted in
                 isTargeted = targeted
@@ -949,6 +1078,7 @@ private struct EntryListView: View {
         case .starred: return store.starredEntryListItems
         case let .folder(folder): return store.entryListItems(folder: folder).filter { !$0.isRead || retainedUnreadIDs.contains($0.id) }
         case let .feed(id): return store.entryListItems(feedID: id)
+        case let .feeds(ids): return store.entryListItems(feedIDs: ids)
         }
     }
 
