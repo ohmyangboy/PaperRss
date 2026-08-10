@@ -194,6 +194,7 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var iCloudSyncStatus = "未启用"
     @Published public private(set) var activeAIRequest: AIRequestStatus?
     @Published public private(set) var updateStatus: UpdateCheckStatus = .idle
+    @Published public private(set) var ignoredVersion: String?
     @Published public private(set) var activeBilingualEntryIDs: Set<String> = []
 
     public func isBilingualActive(for entryID: String) -> Bool {
@@ -225,6 +226,7 @@ public final class AppStore: ObservableObject {
         static let refreshOnLaunch = "PaperRss.refreshOnLaunch"
         static let appTheme = "PaperRss.appTheme"
         static let articleFontSize = "PaperRss.articleFontSize"
+        static let ignoredVersion = "PaperRss.ignoredVersion"
     }
 
     public init(fileManager: FileManager = .default) {
@@ -262,6 +264,7 @@ public final class AppStore: ObservableObject {
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
         articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
+        ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
         let storedICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
         if storedICloudSyncEnabled && !CloudSyncService.isICloudEntitled {
             // 先前构建可能保存了启用标记，但当前二进制没有 CloudKit
@@ -298,9 +301,13 @@ public final class AppStore: ObservableObject {
         articleFontSize = 17
         isICloudSyncEnabled = false
         iCloudSyncStatus = "未启用"
+        ignoredVersion = nil
     }
 
     public func checkForUpdates(isUserInitiated: Bool = false) async {
+        if isUserInitiated {
+            clearIgnoredVersion()
+        }
         if isUserInitiated || updateStatus == .idle {
             updateStatus = .checking
         }
@@ -537,6 +544,19 @@ public final class AppStore: ObservableObject {
 
     public func resetArticleFontSize() {
         setArticleFontSize(17)
+    }
+
+    public func ignoreVersion(_ version: String) {
+        let clean = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        guard ignoredVersion != clean else { return }
+        ignoredVersion = clean
+        UserDefaults.standard.set(clean, forKey: PreferenceKey.ignoredVersion)
+    }
+
+    public func clearIgnoredVersion() {
+        guard ignoredVersion != nil else { return }
+        ignoredVersion = nil
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.ignoredVersion)
     }
 
     /// Starts the app-level refresh loop. The first refresh is intentionally

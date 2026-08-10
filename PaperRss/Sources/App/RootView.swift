@@ -599,18 +599,60 @@ private struct SidebarView: View {
             }
         }
     }
+    private var availableUpdateRelease: AppReleaseInfo? {
+        guard case let .hasUpdate(release, _) = store.updateStatus else { return nil }
+        let releaseVersionClean = release.version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        if let ignored = store.ignoredVersion, ignored == releaseVersionClean {
+            return nil
+        }
+        return release
+    }
+
     @ViewBuilder
     private var settingsFooter: some View {
         VStack(spacing: 0) {
             Divider()
                 .opacity(0.15)
-            HStack {
+            HStack(spacing: 8) {
                 Button(action: showSettings) {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("设置")
                 .help("设置")
+
+                if let release = availableUpdateRelease {
+                    HStack(spacing: 5) {
+                        Button {
+                            UpdateCheckService.openURL(release.htmlURL)
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text("NEW")
+                                    .font(.system(size: 10, weight: .black))
+                                    .foregroundStyle(.white)
+                                Text("v\(release.version)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white.opacity(0.95))
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .help("点击前往下载新版本 v\(release.version)")
+
+                        Button {
+                            store.ignoreVersion(release.version)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .black))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("忽略此版本更新")
+                        .help("不再提示此版本更新")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.orange, in: Capsule())
+                }
 
                 Spacer()
             }
