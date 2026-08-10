@@ -728,6 +728,36 @@ struct SettingsView: View {
 
     private var syncSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "clock.badge.exclamationmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(I18N.shared.tr("同步功能暂未上线", "Sync is not available yet"))
+                        .font(.body.weight(.semibold))
+
+                    Text(I18N.shared.tr(
+                        "我们正在完善 iCloud 同步功能，正式上线前请继续使用本机数据。",
+                        "We are still working on iCloud sync. Please continue using local data until it is released."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.orange.opacity(0.28), lineWidth: 0.8)
+            }
+            .accessibilityElement(children: .combine)
+
             settingsGroup(
                 "iCloud",
                 footer: "API Key、网页正文、网页缓存、HTTP 缓存和调试日志不会同步。"
