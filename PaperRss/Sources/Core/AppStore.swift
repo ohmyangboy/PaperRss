@@ -572,14 +572,50 @@ public final class AppStore: ObservableObject {
 
     public func importOPML(_ data: Data) async {
         let urls = OPMLService.importURLs(data: data)
+        var newFeedIDs: [UUID] = []
         for url in urls where !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) {
-            database.feeds.append(Feed(title: url.host ?? url.absoluteString, feedURL: url))
+            let feed = Feed(title: url.host ?? url.absoluteString, feedURL: url)
+            database.feeds.append(feed)
+            newFeedIDs.append(feed.id)
         }
+        guard !newFeedIDs.isEmpty else { return }
         persist()
-        await refresh(origin: .subscriptionManagement)
+        await refresh(feedIDs: newFeedIDs, origin: .subscriptionManagement)
     }
 
     public func exportOPML() -> Data { OPMLService.export(feeds: database.feeds) }
+
+    private struct FeedFetchTaskResult: Sendable {
+        let feedID: UUID
+        let oldTitle: String
+        let result: Result<FeedFetchResult, Error>
+    }
+
+    private static func fetchFeedWithTimeout(
+        feed: Feed,
+        fetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
+        timeoutSeconds: Double = 10.0
+    ) async -> FeedFetchTaskResult {
+        let feedID = feed.id
+        let title = feed.title
+        do {
+            let fetchResult = try await withThrowingTaskGroup(of: FeedFetchResult.self) { group in
+                group.addTask {
+                    try await fetcher(feed)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    throw URLError(.timedOut)
+                }
+                let res = try await group.next()!
+                group.cancelAll()
+                return res
+            }
+            return FeedFetchTaskResult(feedID: feedID, oldTitle: title, result: .success(fetchResult))
+        } catch {
+            return FeedFetchTaskResult(feedID: feedID, oldTitle: title, result: .failure(error))
+        }
+    }
 
     @discardableResult
     public func refresh(
@@ -592,7 +628,11 @@ public final class AppStore: ObservableObject {
         isRefreshing = true
         refreshStatus = .refreshing
         let ids = feedIDs ?? feeds.map(\.id)
-        let total = ids.count
+        let targetFeeds: [Feed] = ids.compactMap { id in
+            guard let feed = database.feeds.first(where: { $0.id == id }), !feed.isDeleted else { return nil }
+            return feed
+        }
+        let total = targetFeeds.count
         refreshProgress = (0, total)
         defer {
             refreshProgress = nil
@@ -602,32 +642,56 @@ public final class AppStore: ObservableObject {
         var updatedFeeds = 0
         var newUnreadEntries: [Entry] = []
         var completedCount = 0
-        for id in ids {
-            guard let index = database.feeds.firstIndex(where: { $0.id == id }), !database.feeds[index].isDeleted else { continue }
-            let oldFeed = database.feeds[index]
-            do {
-                switch try await feedFetcher(oldFeed) {
-                case let .notModified(etag, lastModified):
-                    database.feeds[index].etag = etag
-                    database.feeds[index].lastModified = lastModified
-                    database.feeds[index].lastRefreshedAt = .now
-                    database.feeds[index].updatedAt = .now
-                case let .updated(parsed, etag, lastModified):
-                    updatedFeeds += 1
-                    database.feeds[index].title = parsed.title
-                    database.feeds[index].siteURL = parsed.siteURL
-                    database.feeds[index].storedIconURL = parsed.iconURL ?? database.feeds[index].storedIconURL
-                    database.feeds[index].etag = etag
-                    database.feeds[index].lastModified = lastModified
-                    database.feeds[index].lastRefreshedAt = .now
-                    database.feeds[index].updatedAt = .now
-                    newUnreadEntries.append(contentsOf: merge(entries: parsed.entries, into: oldFeed.id))
+
+        let maxConcurrency = 6
+        let fetcher = self.feedFetcher
+
+        await withTaskGroup(of: FeedFetchTaskResult.self) { group in
+            var feedIndex = 0
+
+            while feedIndex < targetFeeds.count && feedIndex < maxConcurrency {
+                let feed = targetFeeds[feedIndex]
+                feedIndex += 1
+                group.addTask {
+                    await Self.fetchFeedWithTimeout(feed: feed, fetcher: fetcher)
                 }
-            } catch {
-                failures.append("\(oldFeed.title)：\(error.localizedDescription)")
             }
-            completedCount += 1
-            refreshProgress = (completedCount, total)
+
+            while let taskResult = await group.next() {
+                completedCount += 1
+                refreshProgress = (completedCount, total)
+
+                if let index = database.feeds.firstIndex(where: { $0.id == taskResult.feedID }), !database.feeds[index].isDeleted {
+                    switch taskResult.result {
+                    case let .success(.notModified(etag, lastModified)):
+                        database.feeds[index].etag = etag
+                        database.feeds[index].lastModified = lastModified
+                        database.feeds[index].lastRefreshedAt = .now
+                        database.feeds[index].updatedAt = .now
+                    case let .success(.updated(parsed, etag, lastModified)):
+                        updatedFeeds += 1
+                        database.feeds[index].title = parsed.title
+                        database.feeds[index].siteURL = parsed.siteURL
+                        database.feeds[index].storedIconURL = parsed.iconURL ?? database.feeds[index].storedIconURL
+                        database.feeds[index].etag = etag
+                        database.feeds[index].lastModified = lastModified
+                        database.feeds[index].lastRefreshedAt = .now
+                        database.feeds[index].updatedAt = .now
+                        newUnreadEntries.append(contentsOf: merge(entries: parsed.entries, into: taskResult.feedID))
+                        rebuildEntryIndex()
+                    case let .failure(error):
+                        failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                    }
+                }
+
+                if feedIndex < targetFeeds.count {
+                    let feed = targetFeeds[feedIndex]
+                    feedIndex += 1
+                    group.addTask {
+                        await Self.fetchFeedWithTimeout(feed: feed, fetcher: fetcher)
+                    }
+                }
+            }
         }
         rebuildEntryIndex()
         persist()

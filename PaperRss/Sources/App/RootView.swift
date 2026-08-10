@@ -87,7 +87,7 @@ struct RootView: View {
             #if os(iOS)
             .sheet(isPresented: $showsSettings) { NavigationStack { SettingsView(store: store).navigationTitle("设置") } }
             #endif
-            .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.xml]) { result in
+            .fileImporter(isPresented: $showsImporter, allowedContentTypes: OPMLDocument.readableContentTypes) { result in
                 guard case let .success(url) = result else { return }
                 let didAccess = url.startAccessingSecurityScopedResource()
                 defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
@@ -1341,8 +1341,19 @@ private struct AddFeedSheet: View {
     }
 }
 
+extension UTType {
+    static var opml: UTType {
+        UTType(importedAs: "public.opml", conformingTo: .xml)
+    }
+}
+
 private struct OPMLDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.xml] }
+    static var readableContentTypes: [UTType] {
+        var types: [UTType] = [.xml, .opml]
+        if let extType = UTType(filenameExtension: "opml") { types.append(extType) }
+        if let extTypeUpper = UTType(filenameExtension: "OPML") { types.append(extTypeUpper) }
+        return types
+    }
     var data: Data
     init(data: Data) { self.data = data }
     init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
