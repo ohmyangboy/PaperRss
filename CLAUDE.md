@@ -74,3 +74,17 @@ The App layer uses `#if SWIFT_PACKAGE; import PaperRssCore; #endif` since Xcode 
 - Preserve the user's uncommitted changes.
 - When making code changes, verify with `swift test` before declaring done.
 - The HANDOFF files (`HANDOFF.md`, `HANDOFF_CURRENT_*.md`) are project documentation — read them for context on recent decisions and known issues.
+
+## Agent skills
+
+### Issue tracker
+
+工单以本地 Markdown 文件保存在 `.scratch/`。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五类分诊标签。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+仓库使用 single-context 领域文档布局。详见 `docs/agents/domain.md`。

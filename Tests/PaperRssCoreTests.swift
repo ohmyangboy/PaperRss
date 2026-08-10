@@ -1,7 +1,199 @@
 import XCTest
 @testable import PaperRssCore
 
+private actor RefreshTestGate {
+    private var isPaused = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        isPaused = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilPaused() async {
+        while !isPaused {
+            await Task.yield()
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 final class PaperRssCoreTests: XCTestCase {
+    @MainActor
+    func testScheduledRefreshReportsOnlyNewEntriesThatRemainUnread() async throws {
+        let updatedFeed = Feed(
+            id: UUID(),
+            title: "Updated",
+            feedURL: URL(string: "https://example.com/updated.xml")!
+        )
+        let failingFeed = Feed(
+            id: UUID(),
+            title: "Failing",
+            feedURL: URL(string: "https://example.com/failing.xml")!
+        )
+        let existingID = "\(updatedFeed.id.uuidString)|existing".stableDigest
+        let syncedReadID = "\(updatedFeed.id.uuidString)|synced-read".stableDigest
+        let database = AppDatabase(
+            feeds: [updatedFeed, failingFeed],
+            entries: [
+                Entry(id: existingID, feedID: updatedFeed.id, title: "Existing", isRead: false)
+            ],
+            articleCaches: [:],
+            readingStates: [
+                syncedReadID: ReadingState(entryID: syncedReadID, isRead: true, isStarred: false)
+            ],
+            artifacts: [],
+            llmConfiguration: .default
+        )
+        let store = AppStore(testDatabase: database) { feed in
+            if feed.id == failingFeed.id {
+                throw URLError(.cannotConnectToHost)
+            }
+            return .updated(
+                ParsedFeed(
+                    title: "Updated",
+                    siteURL: URL(string: "https://example.com"),
+                    iconURL: nil,
+                    entries: [
+                        ParsedFeedEntry(id: "existing", title: "Existing changed", author: nil, url: nil, publishedAt: nil, summary: "", contentHTML: nil),
+                        ParsedFeedEntry(id: "new-unread", title: "New unread", author: nil, url: nil, publishedAt: nil, summary: "", contentHTML: nil),
+                        ParsedFeedEntry(id: "synced-read", title: "Already read elsewhere", author: nil, url: nil, publishedAt: nil, summary: "", contentHTML: nil)
+                    ]
+                ),
+                etag: "etag-1",
+                lastModified: nil
+            )
+        }
+
+        let outcome = await store.refresh(origin: .scheduled)
+
+        XCTAssertEqual(outcome?.origin, .scheduled)
+        XCTAssertEqual(outcome?.updatedFeedCount, 1)
+        XCTAssertEqual(outcome?.failedFeedCount, 1)
+        XCTAssertEqual(outcome?.newUnreadEntries.map(\.title), ["New unread"])
+        XCTAssertEqual(store.latestRefreshOutcome?.id, outcome?.id)
+        XCTAssertEqual(store.entry(id: existingID)?.title, "Existing changed")
+        XCTAssertTrue(store.entry(id: syncedReadID)?.isRead == true)
+    }
+
+    @MainActor
+    func testRefreshOutcomeUsesUnreadStateAtEndOfWholeRound() async {
+        let firstFeed = Feed(
+            id: UUID(),
+            title: "First",
+            feedURL: URL(string: "https://example.com/first.xml")!
+        )
+        let secondFeed = Feed(
+            id: UUID(),
+            title: "Second",
+            feedURL: URL(string: "https://example.com/second.xml")!
+        )
+        let newEntryID = "\(firstFeed.id.uuidString)|new".stableDigest
+        let gate = RefreshTestGate()
+        let store = AppStore(testDatabase: AppDatabase(
+            feeds: [firstFeed, secondFeed],
+            entries: [],
+            articleCaches: [:],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: .default
+        )) { feed in
+            if feed.id == secondFeed.id {
+                await gate.pause()
+                return .notModified(etag: nil, lastModified: nil)
+            }
+            return .updated(
+                ParsedFeed(
+                    title: "First",
+                    siteURL: nil,
+                    iconURL: nil,
+                    entries: [
+                        ParsedFeedEntry(id: "new", title: "New", author: nil, url: nil, publishedAt: nil, summary: "", contentHTML: nil)
+                    ]
+                ),
+                etag: nil,
+                lastModified: nil
+            )
+        }
+
+        let refreshTask = Task { @MainActor in
+            await store.refresh(origin: .scheduled)
+        }
+        await gate.waitUntilPaused()
+        store.markRead(entryID: newEntryID)
+        await gate.resume()
+
+        let outcome = await refreshTask.value
+        XCTAssertTrue(store.entry(id: newEntryID)?.isRead == true)
+        XCTAssertEqual(outcome?.newUnreadEntries, [])
+    }
+
+    func testRefreshOriginsCoverEveryCallSiteCategory() {
+        XCTAssertEqual(Set(FeedRefreshOrigin.allCases), [
+            .launch,
+            .scheduled,
+            .manual,
+            .subscriptionManagement,
+            .systemBackground
+        ])
+    }
+
+    func testFeedAttentionPolicyFormatsDockBadgeWithoutRequestingNotificationState() {
+        XCTAssertNil(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 12, enabled: false))
+        XCTAssertNil(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 0, enabled: true))
+        XCTAssertEqual(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 1, enabled: true), "1")
+        XCTAssertEqual(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 99, enabled: true), "99")
+        XCTAssertEqual(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 100, enabled: true), "99+")
+    }
+
+    func testFeedAttentionPolicyAllowsOneScheduledBackgroundSummary() {
+        let primary = UUID()
+        let beta = UUID()
+        let gamma = UUID()
+        let delta = UUID()
+        let entries = [
+            Entry(id: "1", feedID: primary, title: "One"),
+            Entry(id: "2", feedID: primary, title: "Two"),
+            Entry(id: "3", feedID: gamma, title: "Three"),
+            Entry(id: "4", feedID: beta, title: "Four"),
+            Entry(id: "5", feedID: delta, title: "Five")
+        ]
+        let outcome = FeedRefreshOutcome(
+            origin: .scheduled,
+            newUnreadEntries: entries,
+            updatedFeedCount: 4,
+            failedFeedCount: 1,
+            finishedAt: Date(timeIntervalSince1970: 100)
+        )
+        let titles = [primary: "Primary", beta: "Beta", gamma: "Gamma", delta: "Delta"]
+
+        let summary = FeedAttentionPolicy.notificationSummary(
+            outcome: outcome,
+            feedTitles: titles,
+            enabled: true,
+            appIsActive: false
+        )
+
+        XCTAssertEqual(summary?.newUnreadCount, 5)
+        XCTAssertEqual(summary?.visibleSourceNames, ["Primary", "Beta", "Delta"])
+        XCTAssertEqual(summary?.remainingSourceCount, 1)
+        XCTAssertNil(FeedAttentionPolicy.notificationSummary(outcome: outcome, feedTitles: titles, enabled: false, appIsActive: false))
+        XCTAssertNil(FeedAttentionPolicy.notificationSummary(outcome: outcome, feedTitles: titles, enabled: true, appIsActive: true))
+
+        let launchOutcome = FeedRefreshOutcome(
+            origin: .launch,
+            newUnreadEntries: entries,
+            updatedFeedCount: 4,
+            failedFeedCount: 0,
+            finishedAt: .now
+        )
+        XCTAssertNil(FeedAttentionPolicy.notificationSummary(outcome: launchOutcome, feedTitles: titles, enabled: true, appIsActive: false))
+    }
+
         func testFeedRefreshIntervalOffersExpectedChoices() {
         XCTAssertEqual(FeedRefreshInterval.allCases.map(\.title), [
             "仅手动",
@@ -719,4 +911,3 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(store.articleFontSize, 17)
     }
 }
-

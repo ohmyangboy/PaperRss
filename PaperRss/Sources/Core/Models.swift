@@ -47,6 +47,39 @@ public enum FeedRefreshStatus: Equatable, Sendable {
     case failed(message: String, finishedAt: Date)
 }
 
+public enum FeedRefreshOrigin: String, CaseIterable, Hashable, Sendable {
+    case launch
+    case scheduled
+    case manual
+    case subscriptionManagement
+    case systemBackground
+}
+
+public struct FeedRefreshOutcome: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let origin: FeedRefreshOrigin
+    public let newUnreadEntries: [Entry]
+    public let updatedFeedCount: Int
+    public let failedFeedCount: Int
+    public let finishedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        origin: FeedRefreshOrigin,
+        newUnreadEntries: [Entry],
+        updatedFeedCount: Int,
+        failedFeedCount: Int,
+        finishedAt: Date
+    ) {
+        self.id = id
+        self.origin = origin
+        self.newUnreadEntries = newUnreadEntries
+        self.updatedFeedCount = updatedFeedCount
+        self.failedFeedCount = failedFeedCount
+        self.finishedAt = finishedAt
+    }
+}
+
 public struct Feed: Identifiable, Codable, Hashable, Sendable {
     public var id: UUID
     public var title: String

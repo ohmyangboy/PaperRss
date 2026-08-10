@@ -60,6 +60,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @ObservedObject var store: AppStore
+    #if os(macOS)
+    @ObservedObject var attention: MacSystemAttentionController
+    #endif
     @State private var selectedSection: SettingsSection = .appearance
     @State private var configuration = LLMConfiguration.default
     @State private var apiKey = ""
@@ -968,8 +971,70 @@ struct SettingsView: View {
                     .disabled(store.isRefreshing)
                 }
             }
+
+            #if os(macOS)
+            reminderSettings
+            #endif
         }
     }
+
+    #if os(macOS)
+    private var reminderSettings: some View {
+        settingsGroup(
+            I18N.shared.tr("提醒", "Alerts"),
+            footer: I18N.shared.tr(
+                "Dock 徽标显示全部未读文章；系统通知只在应用不位于前台的定时刷新中发送。",
+                "The Dock badge shows all unread articles. System notifications are sent only for scheduled refreshes while the app is not active."
+            )
+        ) {
+            settingsRow(
+                I18N.shared.tr("Dock 未读徽标", "Dock unread badge"),
+                description: I18N.shared.tr("立即显示当前未读数，超过 99 显示 99+。", "Shows the current unread count immediately, capped at 99+.")
+            ) {
+                Toggle(
+                    I18N.shared.tr("Dock 未读徽标", "Dock unread badge"),
+                    isOn: Binding(
+                        get: { attention.dockBadgeEnabled },
+                        set: { attention.setDockBadgeEnabled($0) }
+                    )
+                )
+                .labelsHidden()
+            }
+
+            Divider().padding(.horizontal, 18).opacity(0.35)
+
+            settingsRow(
+                I18N.shared.tr("新文章系统通知", "New article notifications"),
+                description: I18N.shared.tr("每轮定时刷新最多发送一条数量与来源汇总。", "Sends at most one count-and-source summary per scheduled refresh.")
+            ) {
+                Toggle(
+                    I18N.shared.tr("新文章系统通知", "New article notifications"),
+                    isOn: Binding(
+                        get: { attention.feedNotificationsEnabled },
+                        set: { enabled in
+                            Task { await attention.setFeedNotificationsEnabled(enabled) }
+                        }
+                    )
+                )
+                .labelsHidden()
+                .disabled(attention.isRequestingNotificationAuthorization)
+            }
+
+            if attention.isNotificationPermissionDenied {
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow(
+                    I18N.shared.tr("通知权限已关闭", "Notifications are disabled"),
+                    description: I18N.shared.tr("请在 macOS 系统设置中允许 Paper RSS 发送通知。", "Allow Paper RSS notifications in macOS System Settings.")
+                ) {
+                    Button(I18N.shared.tr("打开系统设置", "Open System Settings")) {
+                        attention.openSystemNotificationSettings()
+                    }
+                }
+            }
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func settingsGroup<Content: View>(

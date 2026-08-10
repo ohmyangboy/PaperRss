@@ -5,11 +5,25 @@ import PaperRssCore
 
 @main
 struct PaperRssApp: App {
-    @StateObject private var store = AppStore()
+    @StateObject private var store: AppStore
+    @StateObject private var navigation: AppNavigationModel
+    #if os(macOS)
+    @StateObject private var attention: MacSystemAttentionController
+    #endif
+
+    init() {
+        let store = AppStore()
+        let navigation = AppNavigationModel()
+        _store = StateObject(wrappedValue: store)
+        _navigation = StateObject(wrappedValue: navigation)
+        #if os(macOS)
+        _attention = StateObject(wrappedValue: MacSystemAttentionController(store: store, navigation: navigation))
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
-            RootView(store: store)
+            RootView(store: store, navigation: navigation)
                 #if os(macOS)
                 .onAppear {
                     NSApplication.shared.activate(ignoringOtherApps: true)
@@ -19,7 +33,7 @@ struct PaperRssApp: App {
         #if os(iOS)
         .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
             if await store.refreshInterval != .manual {
-                await store.refresh(reportErrors: false)
+                await store.refresh(reportErrors: false, origin: .systemBackground)
             }
             BackgroundRefresh.schedule(interval: await store.refreshInterval)
         }
@@ -54,7 +68,7 @@ struct PaperRssApp: App {
 
         #if os(macOS)
         Settings {
-            SettingsView(store: store)
+            SettingsView(store: store, attention: attention)
         }
         #endif
     }

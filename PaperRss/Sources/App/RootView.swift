@@ -30,6 +30,7 @@ enum SidebarSelection: Hashable {
 
 struct RootView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var navigation: AppNavigationModel
     @State private var selection: SidebarSelection? = .today
     // Keep selection independent from the value-semantic Entry model. Reading an
     // item updates its `isRead` / `updatedAt` fields, which used to invalidate the
@@ -62,6 +63,12 @@ struct RootView: View {
                 // 处理，并尊重"启动时刷新"开关——此前 startAutomaticRefresh
                 // 从未被调用，设置里的刷新间隔选项完全不生效。
                 store.startAutomaticRefresh()
+            }
+            .onReceive(navigation.$request.compactMap { $0 }) { request in
+                guard request.destination == .unread else { return }
+                selection = .unread
+                selectedEntryID = nil
+                autoScrollTrigger = UUID()
             }
             .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
             .sheet(isPresented: $showsAddFolder) { AddFolderSheet(store: store) }

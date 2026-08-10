@@ -186,6 +186,7 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
+    @Published public private(set) var latestRefreshOutcome: FeedRefreshOutcome?
     @Published public private(set) var refreshInterval: FeedRefreshInterval
     @Published public private(set) var refreshOnLaunch: Bool
     @Published public private(set) var lastError: String?
@@ -208,6 +209,7 @@ public final class AppStore: ObservableObject {
     }
 
     private let persistenceURL: URL
+    private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
     private let persistenceWriter = DatabasePersistenceWriter()
     private var iCloudSyncTask: Task<Void, Never>?
@@ -226,6 +228,7 @@ public final class AppStore: ObservableObject {
     }
 
     public init(fileManager: FileManager = .default) {
+        feedFetcher = FeedService.fetch
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -277,6 +280,24 @@ public final class AppStore: ObservableObject {
         Task { [weak self] in
             await self?.checkForUpdates(isUserInitiated: false)
         }
+    }
+
+    init(
+        testDatabase: AppDatabase,
+        feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult
+    ) {
+        self.feedFetcher = feedFetcher
+        persistenceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
+            .appendingPathComponent("library.json")
+        database = testDatabase
+        entryIndex = EntryLibraryIndex(entries: testDatabase.entries, feeds: testDatabase.feeds)
+        refreshInterval = .twoHours
+        refreshOnLaunch = true
+        appTheme = .system
+        articleFontSize = 17
+        isICloudSyncEnabled = false
+        iCloudSyncStatus = "未启用"
     }
 
     public func checkForUpdates(isUserInitiated: Bool = false) async {
@@ -506,7 +527,7 @@ public final class AppStore: ObservableObject {
         automaticRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
             if self.refreshOnLaunch {
-                await self.refresh(reportErrors: false)
+                await self.refresh(reportErrors: false, origin: .launch)
             }
 
             while !Task.isCancelled {
@@ -524,7 +545,7 @@ public final class AppStore: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                await self.refresh(reportErrors: false)
+                await self.refresh(reportErrors: false, origin: .scheduled)
             }
         }
     }
@@ -546,7 +567,7 @@ public final class AppStore: ObservableObject {
         let feed = Feed(title: url.host ?? url.absoluteString, feedURL: url, folder: folder?.nonEmpty)
         database.feeds.append(feed)
         persist()
-        await refresh(feedIDs: [feed.id])
+        await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
     }
 
     public func importOPML(_ data: Data) async {
@@ -555,13 +576,18 @@ public final class AppStore: ObservableObject {
             database.feeds.append(Feed(title: url.host ?? url.absoluteString, feedURL: url))
         }
         persist()
-        await refresh()
+        await refresh(origin: .subscriptionManagement)
     }
 
     public func exportOPML() -> Data { OPMLService.export(feeds: database.feeds) }
 
-    public func refresh(feedIDs: [UUID]? = nil, reportErrors: Bool = true) async {
-        guard !isRefreshing else { return }
+    @discardableResult
+    public func refresh(
+        feedIDs: [UUID]? = nil,
+        reportErrors: Bool = true,
+        origin: FeedRefreshOrigin = .manual
+    ) async -> FeedRefreshOutcome? {
+        guard !isRefreshing else { return nil }
         let startedAt = Date.now
         isRefreshing = true
         refreshStatus = .refreshing
@@ -574,12 +600,13 @@ public final class AppStore: ObservableObject {
         }
         var failures: [String] = []
         var updatedFeeds = 0
+        var newUnreadEntries: [Entry] = []
         var completedCount = 0
         for id in ids {
             guard let index = database.feeds.firstIndex(where: { $0.id == id }), !database.feeds[index].isDeleted else { continue }
             let oldFeed = database.feeds[index]
             do {
-                switch try await FeedService.fetch(oldFeed) {
+                switch try await feedFetcher(oldFeed) {
                 case let .notModified(etag, lastModified):
                     database.feeds[index].etag = etag
                     database.feeds[index].lastModified = lastModified
@@ -594,7 +621,7 @@ public final class AppStore: ObservableObject {
                     database.feeds[index].lastModified = lastModified
                     database.feeds[index].lastRefreshedAt = .now
                     database.feeds[index].updatedAt = .now
-                    merge(entries: parsed.entries, into: oldFeed.id)
+                    newUnreadEntries.append(contentsOf: merge(entries: parsed.entries, into: oldFeed.id))
                 }
             } catch {
                 failures.append("\(oldFeed.title)：\(error.localizedDescription)")
@@ -605,6 +632,24 @@ public final class AppStore: ObservableObject {
         rebuildEntryIndex()
         persist()
         let finishedAt = Date.now
+        let currentEntriesByID = Dictionary(
+            uniqueKeysWithValues: database.entries.map { ($0.id, $0) }
+        )
+        var reportedEntryIDs: Set<String> = []
+        newUnreadEntries = newUnreadEntries.compactMap { candidate in
+            guard reportedEntryIDs.insert(candidate.id).inserted,
+                  let currentEntry = currentEntriesByID[candidate.id],
+                  !currentEntry.isRead else { return nil }
+            return currentEntry
+        }
+        let outcome = FeedRefreshOutcome(
+            origin: origin,
+            newUnreadEntries: newUnreadEntries,
+            updatedFeedCount: updatedFeeds,
+            failedFeedCount: failures.count,
+            finishedAt: finishedAt
+        )
+        latestRefreshOutcome = outcome
         if failures.isEmpty {
             refreshStatus = .completed(updatedFeeds: updatedFeeds, finishedAt: finishedAt)
         } else {
@@ -617,7 +662,7 @@ public final class AppStore: ObservableObject {
         if remainingDuration > 0 {
             try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
         }
-        isRefreshing = false
+        return outcome
     }
 
     public func markRead(_ entry: Entry, read: Bool = true) {
@@ -1376,7 +1421,7 @@ public final class AppStore: ObservableObject {
     public func reportError(_ message: String) { lastError = message }
     public func dismissError() { lastError = nil }
 
-    private func merge(entries parsed: [ParsedFeedEntry], into feedID: UUID) {
+    private func merge(entries parsed: [ParsedFeedEntry], into feedID: UUID) -> [Entry] {
         // `firstIndex(where:)` for every incoming item made a refresh O(n*m).
         // A feed refresh can finish while the user is clicking the sidebar, so
         // that main-actor work showed up as an apparently slow selection.
@@ -1384,6 +1429,7 @@ public final class AppStore: ObservableObject {
             uniqueKeysWithValues: database.entries.indices.map { (database.entries[$0].id, $0) }
         )
         entryIndexByID.reserveCapacity(database.entries.count + parsed.count)
+        var newUnreadEntries: [Entry] = []
 
         for incoming in parsed {
             let id = "\(feedID.uuidString)|\(incoming.id)".stableDigest
@@ -1394,10 +1440,15 @@ public final class AppStore: ObservableObject {
                 database.entries[index] = Entry(id: id, feedID: feedID, title: incoming.title, author: incoming.author, url: incoming.url, publishedAt: incoming.publishedAt, summary: summary, contentHTML: incoming.contentHTML, isRead: readingState.isRead, isStarred: readingState.isStarred, updatedAt: readingState.updatedAt)
             } else {
                 let readingState = database.readingStates[id]
-                database.entries.append(Entry(id: id, feedID: feedID, title: incoming.title, author: incoming.author, url: incoming.url, publishedAt: incoming.publishedAt, summary: summary, contentHTML: incoming.contentHTML, isRead: readingState?.isRead ?? false, isStarred: readingState?.isStarred ?? false, updatedAt: readingState?.updatedAt ?? .now))
+                let entry = Entry(id: id, feedID: feedID, title: incoming.title, author: incoming.author, url: incoming.url, publishedAt: incoming.publishedAt, summary: summary, contentHTML: incoming.contentHTML, isRead: readingState?.isRead ?? false, isStarred: readingState?.isStarred ?? false, updatedAt: readingState?.updatedAt ?? .now)
+                database.entries.append(entry)
                 entryIndexByID[id] = database.entries.count - 1
+                if !entry.isRead {
+                    newUnreadEntries.append(entry)
+                }
             }
         }
+        return newUnreadEntries
     }
 
     private func update(entryID: String, operation: (inout Entry) -> Void) {
