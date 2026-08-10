@@ -11,7 +11,7 @@
 				<string>arm64</string>
 			</array>
 			<key>buildNumber</key>
-			<string>3</string>
+			<string>4</string>
 			<key>certificate</key>
 			<dict>
 				<key>SHA1</key>
@@ -31,7 +31,7 @@
 				<string>不困 杨</string>
 			</dict>
 			<key>versionNumber</key>
-			<string>1.1.0</string>
+			<string>1.2.0</string>
 		</dict>
 	</array>
 </dict>
