@@ -106,15 +106,13 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         self.notificationCenter = notificationCenter
         latestDatabase = store.database
         dockBadgeEnabled = preferences.bool(forKey: PreferenceKey.dockBadgeEnabled)
-        feedNotificationsEnabled = preferences.bool(forKey: PreferenceKey.feedNotificationsEnabled)
+        feedNotificationsEnabled = false
+        preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
         super.init()
 
         notificationCenter.delegate = self
         observeStore()
         updateDockBadge()
-        Task { [weak self] in
-            await self?.refreshNotificationAuthorization()
-        }
     }
 
     func setDockBadgeEnabled(_ enabled: Bool) {
@@ -124,54 +122,13 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     func setFeedNotificationsEnabled(_ enabled: Bool) async {
-        guard enabled else {
-            feedNotificationsEnabled = false
-            preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
-            await refreshNotificationAuthorization()
-            return
-        }
-
-        isRequestingNotificationAuthorization = true
-        defer { isRequestingNotificationAuthorization = false }
-        do {
-            let settings = await notificationCenter.notificationSettings()
-            let authorized: Bool
-            switch settings.authorizationStatus {
-            case .authorized, .provisional, .ephemeral:
-                authorized = true
-            case .notDetermined:
-                authorized = try await notificationCenter.requestAuthorization(options: [.alert, .sound])
-            case .denied:
-                authorized = false
-            @unknown default:
-                authorized = false
-            }
-            feedNotificationsEnabled = authorized
-            isNotificationPermissionDenied = !authorized
-            preferences.set(authorized, forKey: PreferenceKey.feedNotificationsEnabled)
-        } catch {
-            feedNotificationsEnabled = false
-            preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
-            await refreshNotificationAuthorization()
-        }
+        feedNotificationsEnabled = false
+        preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
     }
 
     func refreshNotificationAuthorization() async {
-        let settings = await notificationCenter.notificationSettings()
-        isNotificationPermissionDenied = settings.authorizationStatus == .denied
-        let canDeliverNotifications: Bool
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            canDeliverNotifications = true
-        case .notDetermined, .denied:
-            canDeliverNotifications = false
-        @unknown default:
-            canDeliverNotifications = false
-        }
-        if !canDeliverNotifications, feedNotificationsEnabled {
-            feedNotificationsEnabled = false
-            preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
-        }
+        feedNotificationsEnabled = false
+        preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
     }
 
     func openSystemNotificationSettings() {
@@ -248,41 +205,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         for outcome: FeedRefreshOutcome,
         appWasActive: Bool
     ) async {
-        let feedTitles = Dictionary(
-            uniqueKeysWithValues: latestDatabase.feeds
-                .filter { !$0.isDeleted }
-                .map { ($0.id, $0.title) }
-        )
-        guard let summary = FeedAttentionPolicy.notificationSummary(
-            outcome: outcome,
-            feedTitles: feedTitles,
-            enabled: feedNotificationsEnabled,
-            appIsActive: appWasActive
-        ) else { return }
-
-        let content = UNMutableNotificationContent()
-        content.title = I18N.shared.tr(
-            "Paper RSS：\(summary.newUnreadCount) 篇新文章",
-            "Paper RSS: \(summary.newUnreadCount) new articles"
-        )
-        let sourceList = summary.visibleSourceNames.joined(separator: I18N.shared.tr("、", ", "))
-        if summary.remainingSourceCount > 0 {
-            content.body = I18N.shared.tr(
-                "来自 \(sourceList)，另有 \(summary.remainingSourceCount) 个订阅源",
-                "From \(sourceList), plus \(summary.remainingSourceCount) more sources"
-            )
-        } else {
-            content.body = I18N.shared.tr("来自 \(sourceList)", "From \(sourceList)")
-        }
-        content.sound = .default
-        content.userInfo = ["destination": "unread"]
-
-        let request = UNNotificationRequest(
-            identifier: "feed-refresh-\(outcome.id.uuidString)",
-            content: content,
-            trigger: nil
-        )
-        try? await notificationCenter.add(request)
+        // 新文章系统通知功能已被停用
     }
 
     private func openUnreadFromNotification() {
