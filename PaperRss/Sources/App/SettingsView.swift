@@ -70,6 +70,7 @@ struct SettingsView: View {
     @State private var usesCustomModel = false
     @State private var status = ""
     @State private var isTesting = false
+    @State private var showingTargetLanguagePopover = false
 
     var body: some View {
         Group {
@@ -658,20 +659,53 @@ struct SettingsView: View {
 
             settingsGroup(
                 "阅读助手：翻译与划词",
-                footer: "逐段翻译只处理当前屏幕视口内容；划词解释需手动触发。"
+                footer: "逐段翻译只处理当前屏幕视口内容；划词功能触发后以浮窗形式呈现。"
             ) {
                 settingsRow("翻译目标语言") {
-                    TextField("简体中文", text: $configuration.targetLanguage)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 240)
+                    HStack(spacing: 8) {
+                        Button {
+                            showingTargetLanguagePopover.toggle()
+                        } label: {
+                            Image(systemName: "exclamationmark.circle")
+                                .foregroundStyle(PaperTheme.accent)
+                                .font(.system(size: 15))
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { isHovered in
+                            showingTargetLanguagePopover = isHovered
+                        }
+                        .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
+                            Text("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。")
+                                .font(.subheadline)
+                                .padding(12)
+                                .frame(width: 220)
+                        }
+
+                        TextField("简体中文", text: $configuration.targetLanguage)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 200)
+                    }
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
-                settingsRow("划词解释触发") {
-                    Text("选中文字后手动触发")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 180, alignment: .trailing)
+                settingsRow("划词解释按钮", description: "开启后，划词选择文本时展示“直接解释”按钮") {
+                    Toggle("划词解释按钮", isOn: $configuration.showsSelectionExplanation)
+                        .labelsHidden()
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow("划词提问按钮", description: "开启后，划词选择文本时展示“向 AI 提问”按钮") {
+                    Toggle("划词提问按钮", isOn: $configuration.showsSelectionAsk)
+                        .labelsHidden()
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow("划词翻译按钮", description: "开启后，划词选择文本时展示“翻译”按钮") {
+                    Toggle("划词翻译按钮", isOn: $configuration.showsSelectionTranslation)
+                        .labelsHidden()
                 }
             }
 
@@ -1175,8 +1209,14 @@ struct SettingsView: View {
     private func useDeepSeekDefaults() {
         let currentKey = apiKey
         let automaticallyGenerateSummary = configuration.automaticallyGenerateSummary
+        let showsSelectionExplanation = configuration.showsSelectionExplanation
+        let showsSelectionAsk = configuration.showsSelectionAsk
+        let showsSelectionTranslation = configuration.showsSelectionTranslation
         configuration = .deepSeek
         configuration.automaticallyGenerateSummary = automaticallyGenerateSummary
+        configuration.showsSelectionExplanation = showsSelectionExplanation
+        configuration.showsSelectionAsk = showsSelectionAsk
+        configuration.showsSelectionTranslation = showsSelectionTranslation
         apiKey = currentKey
         usesCustomModel = false
         status = "已填入 DeepSeek 推荐配置；保存后即可测试。"

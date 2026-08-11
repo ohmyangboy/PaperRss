@@ -671,6 +671,24 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(decoded.showsAISummary)
     }
 
+    func testLLMConfigurationSelectionOptionsEncodingAndDecoding() throws {
+        var configuration = LLMConfiguration.default
+        XCTAssertTrue(configuration.showsSelectionExplanation)
+        XCTAssertTrue(configuration.showsSelectionAsk)
+        XCTAssertTrue(configuration.showsSelectionTranslation)
+
+        configuration.showsSelectionExplanation = false
+        configuration.showsSelectionAsk = false
+        configuration.showsSelectionTranslation = false
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(LLMConfiguration.self, from: data)
+
+        XCTAssertFalse(decoded.showsSelectionExplanation)
+        XCTAssertFalse(decoded.showsSelectionAsk)
+        XCTAssertFalse(decoded.showsSelectionTranslation)
+    }
+
     func testDeepSeekPresetUsesOfficialAPIHost() {
         let configuration = LLMConfiguration.deepSeek
         XCTAssertEqual(configuration.baseURL, "https://api.deepseek.com")

@@ -248,7 +248,8 @@ struct ArticleReaderView: View {
             articleBaseURL = store.articleSourceURL(for: requestedEntry)
             isLoading = false
             requestVisibleTranslationsIfPossible()
-            if store.database.llmConfiguration.automaticallyGenerateSummary,
+            if store.database.llmConfiguration.showsAISummary,
+               store.database.llmConfiguration.automaticallyGenerateSummary,
                store.artifact(for: requestedEntry, kind: .summary) == nil,
                !text.isEmpty {
                 isSummaryExpanded = true
@@ -296,6 +297,10 @@ struct ArticleReaderView: View {
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
                 errorMessage: store.lastError,
+                showsAISummary: store.database.llmConfiguration.showsAISummary,
+                showsSelectionExplanation: store.database.llmConfiguration.showsSelectionExplanation,
+                showsSelectionAsk: store.database.llmConfiguration.showsSelectionAsk,
+                showsSelectionTranslation: store.database.llmConfiguration.showsSelectionTranslation,
                 onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
@@ -342,6 +347,10 @@ struct ArticleReaderView: View {
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
                 errorMessage: store.lastError,
+                showsAISummary: store.database.llmConfiguration.showsAISummary,
+                showsSelectionExplanation: store.database.llmConfiguration.showsSelectionExplanation,
+                showsSelectionAsk: store.database.llmConfiguration.showsSelectionAsk,
+                showsSelectionTranslation: store.database.llmConfiguration.showsSelectionTranslation,
                 onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
@@ -451,112 +460,115 @@ struct ArticleReaderView: View {
         }
     }
 
+    @ViewBuilder
     private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Label("AI 摘要", systemImage: "sparkles")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PaperTheme.accent)
-                Spacer()
-                if store.summaryArtifact(for: entry) != nil {
-                    Button {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
-                            isSummaryExpanded.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isSummaryExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(PaperTheme.accent)
-                            .frame(width: 24, height: 24)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(PaperTheme.accent.opacity(0.09), in: Circle())
-                    .accessibilityLabel(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要")
-                    .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
-                }
-            }
-
-            if let summary = store.summaryArtifact(for: entry), !summary.content.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(summary.content)
-                        .font(.body)
-                        .lineSpacing(4)
-                        .lineLimit(isSummaryExpanded ? nil : 3)
-                        .textSelection(.enabled)
-                        .contentTransition(.opacity)
-                    if !summary.isComplete {
-                        if activeAIStatus(for: .summary) != nil {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text("AI 正在生成摘要…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.top, 2)
-                        } else {
-                            // A partially generated summary survived an app
-                            // relaunch or cancellation. Offer a visible retry
-                            // instead of leaving an eternal spinner.
-                            HStack(spacing: 8) {
-                                Text("上次生成未完成")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button("重新生成") { generateSummary(force: true) }
-                                    .buttonStyle(.borderless)
-                                    .font(.caption.weight(.semibold))
-                            }
-                            .padding(.top, 2)
-                        }
-                    }
-                }
-            } else if let status = activeAIStatus(for: .summary) {
+        if store.database.llmConfiguration.showsAISummary {
+            VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(status.phase.message)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let error = store.lastError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
+                    Label("AI 摘要", systemImage: "sparkles")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PaperTheme.accent)
+                    Spacer()
+                    if store.summaryArtifact(for: entry) != nil {
+                        Button {
+                            withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
+                                isSummaryExpanded.toggle()
+                            }
+                        } label: {
+                            Image(systemName: isSummaryExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(PaperTheme.accent)
+                                .frame(width: 24, height: 24)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(PaperTheme.accent.opacity(0.09), in: Circle())
+                        .accessibilityLabel(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要")
+                        .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
                     }
+                }
+
+                if let summary = store.summaryArtifact(for: entry), !summary.content.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(summary.content)
+                            .font(.body)
+                            .lineSpacing(4)
+                            .lineLimit(isSummaryExpanded ? nil : 3)
+                            .textSelection(.enabled)
+                            .contentTransition(.opacity)
+                        if !summary.isComplete {
+                            if activeAIStatus(for: .summary) != nil {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("AI 正在生成摘要…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.top, 2)
+                            } else {
+                                // A partially generated summary survived an app
+                                // relaunch or cancellation. Offer a visible retry
+                                // instead of leaving an eternal spinner.
+                                HStack(spacing: 8) {
+                                    Text("上次生成未完成")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Button("重新生成") { generateSummary(force: true) }
+                                        .buttonStyle(.borderless)
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                    }
+                } else if let status = activeAIStatus(for: .summary) {
                     HStack(spacing: 8) {
-                        Text("尚未生成；仅在你点按后发送正文。")
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(status.phase.message)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        Button("生成摘要") { generateSummary(force: false) }
-                            .buttonStyle(.borderless)
-                            .font(.subheadline.weight(.semibold))
-                            .disabled(effectiveArticleText.isEmpty)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let error = store.lastError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                        HStack(spacing: 8) {
+                            Text("尚未生成；仅在你点按后发送正文。")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("生成摘要") { generateSummary(force: false) }
+                                .buttonStyle(.borderless)
+                                .font(.subheadline.weight(.semibold))
+                                .disabled(effectiveArticleText.isEmpty)
+                        }
                     }
                 }
             }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            PaperTheme.noteBackground(scheme: colorScheme),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(PaperTheme.noteBorder(scheme: colorScheme), lineWidth: 1)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if store.summaryArtifact(for: entry) != nil {
-                withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
-                    isSummaryExpanded.toggle()
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                PaperTheme.noteBackground(scheme: colorScheme),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(PaperTheme.noteBorder(scheme: colorScheme), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if store.summaryArtifact(for: entry) != nil {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
+                        isSummaryExpanded.toggle()
+                    }
                 }
             }
+            .accessibilityElement(children: .contain)
         }
-        .accessibilityElement(children: .contain)
     }
 
     private var currentEntry: Entry {
@@ -857,6 +869,7 @@ private enum PaperReaderHeaderBuilder {
         isSummaryExpanded: Bool,
         isGeneratingSummary: Bool,
         aiStatusMessage: String?,
+        showsAISummary: Bool = true,
         isBilingualMode: Bool = false,
         titleSegment: BilingualSegment? = nil,
         isTitlePending: Bool = false
@@ -896,12 +909,18 @@ private enum PaperReaderHeaderBuilder {
         }
         let metaHTML = metaParts.joined(separator: " &bull; ")
 
-        let summaryHTML = summaryCardHTML(
-            summaryArtifact: summaryArtifact,
-            isSummaryExpanded: isSummaryExpanded,
-            isGeneratingSummary: isGeneratingSummary,
-            aiStatusMessage: aiStatusMessage
-        )
+        let summaryCardHTMLString: String
+        if showsAISummary {
+            let summaryHTML = summaryCardHTML(
+                summaryArtifact: summaryArtifact,
+                isSummaryExpanded: isSummaryExpanded,
+                isGeneratingSummary: isGeneratingSummary,
+                aiStatusMessage: aiStatusMessage
+            )
+            summaryCardHTMLString = "<div class=\"paper-summary-card\" id=\"paper-summary-card\">\(summaryHTML)</div>"
+        } else {
+            summaryCardHTMLString = ""
+        }
 
         let titleAttr = " data-paper-rss-id=\"title\""
 
@@ -910,7 +929,7 @@ private enum PaperReaderHeaderBuilder {
           <h1 class="paper-header-title"\(titleAttr)>\(titleHTML)</h1>
           \(titleTranslationHTML)
           <div class="paper-header-meta">\(metaHTML)</div>
-          <div class="paper-summary-card" id="paper-summary-card">\(summaryHTML)</div>
+          \(summaryCardHTMLString)
           <hr class="paper-header-divider">
         </header>
         """
@@ -2058,7 +2077,13 @@ enum PaperReaderBridge {
               });
               return button;
             };
-            bar.append(makeButton("note", "解释所选文字"), makeButton("ask", "问 AI 所选文字"), makeButton("translation", "翻译所选文字"));
+            const opts = window.paperRssSelectionOptions || { showsExplanation: true, showsAsk: true, showsTranslation: true };
+            const buttons = [];
+            if (opts.showsExplanation !== false) buttons.push(makeButton("note", "解释所选文字"));
+            if (opts.showsAsk !== false) buttons.push(makeButton("ask", "问 AI 所选文字"));
+            if (opts.showsTranslation !== false) buttons.push(makeButton("translation", "翻译所选文字"));
+            if (buttons.length === 0) return;
+            buttons.forEach(btn => bar.append(btn));
             actionBar = bar;
             document.body.append(bar);
             positionNear(bar, { left: focusRect.left - 36, top: focusRect.top, width: 72, height: Math.max(1, focusRect.height), bottom: focusRect.bottom });
@@ -2568,6 +2593,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let isGeneratingSummary: Bool
     let aiStatusMessage: String?
     let errorMessage: String?
+    var showsAISummary: Bool = true
+    var showsSelectionExplanation: Bool = true
+    var showsSelectionAsk: Bool = true
+    var showsSelectionTranslation: Bool = true
     let onVisibleParagraphIDsChange: ([String]) -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
     let onSelectionRequest: (
@@ -2671,6 +2700,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeSummaryCard(in: webView)
+        context.coordinator.synchronizeSelectionOptions(in: webView)
         webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
         for segment in inlineTranslations {
             context.coordinator.updateInlineTranslationInWebView(id: segment.id, translation: segment.translation)
@@ -2736,6 +2766,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
+            guard parent.showsAISummary else {
+                let script = "(() => { const card = document.getElementById('paper-summary-card'); if (card) card.style.display = 'none'; })();"
+                webView.evaluateJavaScript(script)
+                return
+            }
             let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
@@ -2749,10 +2784,19 @@ private struct ArticleHTMLView: NSViewRepresentable {
             (() => {
               const card = document.getElementById('paper-summary-card');
               if (card) {
+                card.style.display = '';
                 card.innerHTML = \(jsonEncoded);
               }
             })();
             """
+            webView.evaluateJavaScript(script)
+        }
+
+        func synchronizeSelectionOptions(in webView: WKWebView) {
+            let showsExplanation = parent.showsSelectionExplanation
+            let showsAsk = parent.showsSelectionAsk
+            let showsTranslation = parent.showsSelectionTranslation
+            let script = "window.paperRssSelectionOptions = { showsExplanation: \(showsExplanation), showsAsk: \(showsAsk), showsTranslation: \(showsTranslation) };"
             webView.evaluateJavaScript(script)
         }
 
@@ -2888,6 +2932,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
                 synchronizeSummaryCard(in: webView)
+                synchronizeSelectionOptions(in: webView)
                 return
             }
             let initialTranslationState = translationState()
@@ -2903,6 +2948,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
+                showsAISummary: parent.showsAISummary,
                 isBilingualMode: parent.isBilingualMode,
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
@@ -2918,6 +2964,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
             pendingScrollOffset = readerScrollView(in: webView)?.contentView.bounds.origin.y
             webView.loadHTMLString(document, baseURL: secureBaseURL)
+            synchronizeSelectionOptions(in: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -3120,6 +3167,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let isGeneratingSummary: Bool
     let aiStatusMessage: String?
     let errorMessage: String?
+    var showsAISummary: Bool = true
+    var showsSelectionExplanation: Bool = true
+    var showsSelectionAsk: Bool = true
+    var showsSelectionTranslation: Bool = true
     let onVisibleParagraphIDsChange: ([String]) -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
     let onSelectionRequest: (
@@ -3203,6 +3254,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeSummaryCard(in: webView)
+        context.coordinator.synchronizeSelectionOptions(in: webView)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -3255,6 +3307,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
+            guard parent.showsAISummary else {
+                let script = "(() => { const card = document.getElementById('paper-summary-card'); if (card) card.style.display = 'none'; })();"
+                webView.evaluateJavaScript(script)
+                return
+            }
             let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
@@ -3268,10 +3325,19 @@ private struct ArticleHTMLView: UIViewRepresentable {
             (() => {
               const card = document.getElementById('paper-summary-card');
               if (card) {
+                card.style.display = '';
                 card.innerHTML = \(jsonEncoded);
               }
             })();
             """
+            webView.evaluateJavaScript(script)
+        }
+
+        func synchronizeSelectionOptions(in webView: WKWebView) {
+            let showsExplanation = parent.showsSelectionExplanation
+            let showsAsk = parent.showsSelectionAsk
+            let showsTranslation = parent.showsSelectionTranslation
+            let script = "window.paperRssSelectionOptions = { showsExplanation: \(showsExplanation), showsAsk: \(showsAsk), showsTranslation: \(showsTranslation) };"
             webView.evaluateJavaScript(script)
         }
 
@@ -3369,6 +3435,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
                 synchronizeSummaryCard(in: webView)
+                synchronizeSelectionOptions(in: webView)
                 return
             }
             let initialTranslationState = translationState()
@@ -3384,6 +3451,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
+                showsAISummary: parent.showsAISummary,
                 isBilingualMode: parent.isBilingualMode,
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
@@ -3399,6 +3467,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
             pendingContentOffset = webView.scrollView.contentOffset
             webView.loadHTMLString(document, baseURL: secureBaseURL)
+            synchronizeSelectionOptions(in: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

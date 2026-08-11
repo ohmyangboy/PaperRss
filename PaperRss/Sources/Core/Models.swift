@@ -397,10 +397,13 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var allowInsecureLocalEndpoint: Bool
     public var showsAISummary: Bool
     public var automaticallyGenerateSummary: Bool
+    public var showsSelectionExplanation: Bool
+    public var showsSelectionAsk: Bool
+    public var showsSelectionTranslation: Bool
 
     public var customPrompt: String
 
-    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false, customPrompt: "")
+    public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false, showsSelectionExplanation: true, showsSelectionAsk: true, showsSelectionTranslation: true, customPrompt: "")
 
     /// DeepSeek's OpenAI-compatible endpoint expects the API root here.  The
     /// service appends `/chat/completions` itself, so users never need to guess
@@ -416,6 +419,9 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         allowInsecureLocalEndpoint: false,
         showsAISummary: true,
         automaticallyGenerateSummary: false,
+        showsSelectionExplanation: true,
+        showsSelectionAsk: true,
+        showsSelectionTranslation: true,
         customPrompt: ""
     )
 
@@ -424,7 +430,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         return host == "api.deepseek.com"
     }
 
-    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, customPrompt: String = "") {
+    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "") {
         self.providerName = providerName
         self.providerDescription = providerDescription
         self.baseURL = baseURL
@@ -435,10 +441,13 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         self.allowInsecureLocalEndpoint = allowInsecureLocalEndpoint
         self.showsAISummary = showsAISummary
         self.automaticallyGenerateSummary = automaticallyGenerateSummary
+        self.showsSelectionExplanation = showsSelectionExplanation
+        self.showsSelectionAsk = showsSelectionAsk
+        self.showsSelectionTranslation = showsSelectionTranslation
         self.customPrompt = customPrompt
     }
 
-    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, customPrompt }
+    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -452,6 +461,9 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         allowInsecureLocalEndpoint = try container.decodeIfPresent(Bool.self, forKey: .allowInsecureLocalEndpoint) ?? false
         showsAISummary = try container.decodeIfPresent(Bool.self, forKey: .showsAISummary) ?? true
         automaticallyGenerateSummary = try container.decodeIfPresent(Bool.self, forKey: .automaticallyGenerateSummary) ?? false
+        showsSelectionExplanation = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionExplanation) ?? true
+        showsSelectionAsk = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionAsk) ?? true
+        showsSelectionTranslation = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true
         customPrompt = try container.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
     }
 }
