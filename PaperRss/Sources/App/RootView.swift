@@ -233,13 +233,16 @@ struct RootView: View {
         store.markRead(entryIDs: unreadIDs, read: true)
     }
 
-    private func showToast(_ message: String) {
+    private func showToast(
+        _ message: String,
+        duration: TimeInterval = ReaderNavigationConfirmation.defaultTimeout
+    ) {
         toastTask?.cancel()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             toastMessage = message
         }
         toastTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(max(0, duration) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 toastMessage = nil
@@ -276,11 +279,12 @@ struct RootView: View {
             dismissToast()
             return true
         case .armed:
-            showToast(prompt)
-            let expectedPending = navigationConfirmation.pending
+            guard let expectedPending = navigationConfirmation.pending else { return false }
+            let remainingDuration = max(0, expectedPending.expiresAt - now)
+            showToast(prompt, duration: remainingDuration)
             navigationConfirmationExpiryTask?.cancel()
             navigationConfirmationExpiryTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
                 guard !Task.isCancelled,
                       navigationConfirmation.pending == expectedPending else { return }
                 navigationConfirmation.cancel()
@@ -378,7 +382,7 @@ struct RootView: View {
         case .unread:
             return store.unreadEntryListItems(retainingIDs: retainedIDs)
         case .starred:
-            return store.starredEntryListItems
+            return store.starredEntryListItems(retainingIDs: retainedIDs)
         case let .folder(folder):
             return store.entryListItems(folder: folder).filter { !$0.isRead || retainedIDs.contains($0.id) }
         case let .feed(id):

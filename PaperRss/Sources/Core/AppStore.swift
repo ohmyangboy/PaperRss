@@ -171,6 +171,11 @@ struct EntryLibraryIndex: Sendable {
         guard !retainingIDs.isEmpty else { return unreadListItems }
         return allListItems.filter { !$0.isRead || retainingIDs.contains($0.id) }
     }
+
+    func starredListItems(retainingIDs: Set<String>) -> [EntryListItem] {
+        guard !retainingIDs.isEmpty else { return starredListItems }
+        return allListItems.filter { $0.isStarred || retainingIDs.contains($0.id) }
+    }
 }
 
 @MainActor
@@ -414,6 +419,7 @@ public final class AppStore: ObservableObject {
     public var unreadEntryListItems: [EntryListItem] { entryIndex.unreadListItems }
     public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] { entryIndex.unreadListItems(retainingIDs: retainingIDs) }
     public var starredEntryListItems: [EntryListItem] { entryIndex.starredListItems }
+    public func starredEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] { entryIndex.starredListItems(retainingIDs: retainingIDs) }
     public func unreadCount(feedID: UUID) -> Int { entryIndex.unreadByFeed[feedID, default: 0] }
     public func unreadCount(folder: String) -> Int { entryIndex.unreadByFolder[folder, default: 0] }
 

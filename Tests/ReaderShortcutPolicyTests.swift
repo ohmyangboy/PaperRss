@@ -60,4 +60,54 @@ final class ReaderShortcutPolicyTests: XCTestCase {
         XCTAssertEqual(confirmation.register(.nextArticle, entryID: "entry-1", at: 11), .armed)
         XCTAssertEqual(confirmation.register(.nextArticle, entryID: "entry-1", at: 12), .confirmed)
     }
+
+    func testBilingualShortcutCanTurnOffWhileBusyButCannotStart() {
+        XCTAssertEqual(
+            ReaderShortcutPolicy.bilingualDecision(isBilingualActive: true, isAIRequestActive: true),
+            .toggle
+        )
+        XCTAssertEqual(
+            ReaderShortcutPolicy.bilingualDecision(isBilingualActive: false, isAIRequestActive: true),
+            .rejectBusy
+        )
+        XCTAssertEqual(
+            ReaderShortcutPolicy.bilingualDecision(isBilingualActive: false, isAIRequestActive: false),
+            .toggle
+        )
+    }
+
+    func testSummaryShortcutPrioritizesVisibilityAndCachedContentBeforeBusyState() {
+        XCTAssertEqual(
+            ReaderShortcutPolicy.summaryDecision(
+                showsAISummary: false,
+                hasCachedSummary: true,
+                isAIRequestActive: false
+            ),
+            .promptToEnable
+        )
+        XCTAssertEqual(
+            ReaderShortcutPolicy.summaryDecision(
+                showsAISummary: true,
+                hasCachedSummary: true,
+                isAIRequestActive: true
+            ),
+            .revealCached
+        )
+        XCTAssertEqual(
+            ReaderShortcutPolicy.summaryDecision(
+                showsAISummary: true,
+                hasCachedSummary: false,
+                isAIRequestActive: true
+            ),
+            .rejectBusy
+        )
+        XCTAssertEqual(
+            ReaderShortcutPolicy.summaryDecision(
+                showsAISummary: true,
+                hasCachedSummary: false,
+                isAIRequestActive: false
+            ),
+            .generate
+        )
+    }
 }

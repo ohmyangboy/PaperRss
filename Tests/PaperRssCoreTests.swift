@@ -848,6 +848,24 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertTrue(retained.first(where: { $0.id == "item-1" })?.isRead == true)
     }
 
+    func testStarredListItemsRetainsAnUnstarredCurrentEntryForNavigation() {
+        let feedID = UUID()
+        let feed = Feed(id: feedID, title: "Test", feedURL: URL(string: "https://example.com")!)
+        var entry1 = Entry(id: "item-1", feedID: feedID, title: "Starred 1", isStarred: true)
+        let entry2 = Entry(id: "item-2", feedID: feedID, title: "Starred 2", isStarred: true)
+
+        var index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
+        XCTAssertEqual(index.starredListItems.map(\.id), ["item-1", "item-2"])
+
+        entry1.isStarred = false
+        index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
+        XCTAssertEqual(index.starredListItems.map(\.id), ["item-2"])
+
+        let retained = index.starredListItems(retainingIDs: ["item-1"])
+        XCTAssertEqual(retained.map(\.id), ["item-1", "item-2"])
+        XCTAssertFalse(retained[0].isStarred)
+    }
+
     @MainActor
     func testSummaryForceRegenerationAndMissingKeyError() async throws {
         let defaults = UserDefaults.standard

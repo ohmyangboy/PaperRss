@@ -673,22 +673,31 @@ struct ArticleReaderView: View {
     private func handleReaderShortcut(_ action: ReaderShortcutAction) {
         switch action {
         case .toggleBilingual:
-            if readerMode != .bilingual, store.activeAIRequest != nil {
+            switch ReaderShortcutPolicy.bilingualDecision(
+                isBilingualActive: readerMode == .bilingual,
+                isAIRequestActive: store.activeAIRequest != nil
+            ) {
+            case .toggle:
+                toggleBilingualTranslation()
+            case .rejectBusy:
                 store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请稍后再试。"))
-                return
             }
-            toggleBilingualTranslation()
         case .showSummary:
-            guard store.database.llmConfiguration.showsAISummary else {
+            switch ReaderShortcutPolicy.summaryDecision(
+                showsAISummary: store.database.llmConfiguration.showsAISummary,
+                hasCachedSummary: store.summaryArtifact(for: entry) != nil,
+                isAIRequestActive: store.activeAIRequest != nil
+            ) {
+            case .promptToEnable:
                 store.reportError(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
-                return
-            }
-            if store.summaryArtifact(for: entry) != nil {
+            case .revealCached:
                 withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
                     isSummaryExpanded = true
                 }
-            } else {
+            case .generate:
                 generateSummary(force: false)
+            case .rejectBusy:
+                store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
             }
         case .toggleStar:
             store.toggleStar(currentEntry)

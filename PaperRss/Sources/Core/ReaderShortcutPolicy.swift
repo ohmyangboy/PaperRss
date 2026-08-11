@@ -19,6 +19,18 @@ public struct ReaderShortcutInvocation: Sendable, Equatable, Identifiable {
 }
 
 public enum ReaderShortcutPolicy {
+    public enum BilingualDecision: Sendable, Equatable {
+        case toggle
+        case rejectBusy
+    }
+
+    public enum SummaryDecision: Sendable, Equatable {
+        case revealCached
+        case generate
+        case promptToEnable
+        case rejectBusy
+    }
+
     public static func action(
         for charactersIgnoringModifiers: String?,
         hasDisallowedModifiers: Bool = false,
@@ -37,9 +49,28 @@ public enum ReaderShortcutPolicy {
         default: return nil
         }
     }
+
+    public static func bilingualDecision(
+        isBilingualActive: Bool,
+        isAIRequestActive: Bool
+    ) -> BilingualDecision {
+        isAIRequestActive && !isBilingualActive ? .rejectBusy : .toggle
+    }
+
+    public static func summaryDecision(
+        showsAISummary: Bool,
+        hasCachedSummary: Bool,
+        isAIRequestActive: Bool
+    ) -> SummaryDecision {
+        guard showsAISummary else { return .promptToEnable }
+        if hasCachedSummary { return .revealCached }
+        return isAIRequestActive ? .rejectBusy : .generate
+    }
 }
 
 public struct ReaderNavigationConfirmation: Sendable {
+    public static let defaultTimeout: TimeInterval = 2.5
+
     public enum Key: Sendable, Equatable {
         case spaceNextArticle
         case previousArticle
@@ -60,7 +91,7 @@ public struct ReaderNavigationConfirmation: Sendable {
     public private(set) var pending: Pending?
     public let timeout: TimeInterval
 
-    public init(timeout: TimeInterval = 2.5) {
+    public init(timeout: TimeInterval = Self.defaultTimeout) {
         self.timeout = timeout
     }
 

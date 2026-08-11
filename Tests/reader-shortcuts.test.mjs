@@ -62,16 +62,26 @@ function keyboardEvent(key, overrides = {}) {
   };
 }
 
-test('bare reader key publishes one native action and consumes the event', () => {
-  const harness = installReaderShortcutHandler();
-  const event = keyboardEvent('C');
+test('every bare reader key publishes its native action and consumes the event', () => {
+  const mappings = {
+    C: 'toggleBilingual',
+    V: 'showSummary',
+    B: 'previousArticle',
+    N: 'nextArticle',
+    M: 'toggleStar'
+  };
 
-  harness.keydown(event);
+  for (const [key, action] of Object.entries(mappings)) {
+    const harness = installReaderShortcutHandler();
+    const event = keyboardEvent(key);
 
-  assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].action, 'toggleBilingual');
-  assert.equal(event.prevented, true);
-  assert.equal(event.stopped, true);
+    harness.keydown(event);
+
+    assert.equal(harness.messages.length, 1, `${key} must publish one action`);
+    assert.equal(harness.messages[0].action, action);
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+  }
 });
 
 test('modified and repeated keys remain available to system shortcuts', () => {
