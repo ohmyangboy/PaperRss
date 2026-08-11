@@ -273,7 +273,7 @@
     "其他 OpenAI 兼容接口只在明确支持时使用对应推理参数。" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Other OpenAI-compatible APIs receive reasoning parameters only when they explicitly support them."}}}},
     "已填入 DeepSeek 推荐配置；保存后即可测试。" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Recommended DeepSeek settings are ready. Save them before testing."}}}},
     "成功：接口可以响应。" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Success: the API responded."}}}},
-    "已保存于此 Mac 的本地应用配置；不会同步到 iCloud，也不会再请求钥匙串密码。" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Saved in this Mac’s local app configuration. It will not sync to iCloud or request a Keychain password."}}}},
+    "已保存到 Mac 本地。" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Saved locally on this Mac."}}}},
     "正在请求订阅源最新内容" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Requesting the latest feed content"}}}},
     "订阅刷新完成" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Feed refresh complete"}}}},
     "部分订阅刷新失败" : {"localizations":{"en":{"stringUnit":{"state":"translated","value":"Some feeds failed to refresh"}}}},

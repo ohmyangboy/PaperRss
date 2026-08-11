@@ -1721,6 +1721,10 @@ enum PaperReaderBridge {
           if (window.paperRssSelectionAssistant) return;
 
           const selectionLabel = (key, fallback) => window.paperRssSelectionOptions?.labels?.[key] || fallback;
+          const hasEnabledAction = options =>
+            options?.showsExplanation !== false ||
+            options?.showsAsk !== false ||
+            options?.showsTranslation !== false;
 
           let actionBar = null;
           let activeRange = null;
@@ -2091,6 +2095,8 @@ enum PaperReaderBridge {
             if (origin?.closest?.(".paper-rss-selection-actions")) return;
             const focusRect = focusRectForSelection(selection, range);
             if (!focusRect || (!focusRect.width && !focusRect.height)) return;
+            const opts = window.paperRssSelectionOptions || { showsExplanation: true, showsAsk: true, showsTranslation: true };
+            if (!hasEnabledAction(opts)) return;
             activeRange = range;
             activeSelection = selectedText;
             const bar = document.createElement("div");
@@ -2113,7 +2119,6 @@ enum PaperReaderBridge {
               });
               return button;
             };
-            const opts = window.paperRssSelectionOptions || { showsExplanation: true, showsAsk: true, showsTranslation: true };
             const buttons = [];
             if (opts.showsExplanation !== false) buttons.push(makeButton("note", opts.labels?.explain || "解释所选文字"));
             if (opts.showsAsk !== false) buttons.push(makeButton("ask", opts.labels?.ask || "问 AI 所选文字"));
@@ -2161,6 +2166,11 @@ enum PaperReaderBridge {
           }, { passive: true });
 
           window.paperRssSelectionAssistant = {
+            updateOptions(options) {
+              window.paperRssSelectionOptions = options;
+              removeAction();
+              if (!hasEnabledAction(options)) dismissPopover();
+            },
             updateInlineTranslation(id, text) {
               const el = document.getElementById("paper-rss-translation-" + id);
               if (!el) return;
@@ -2848,8 +2858,17 @@ private struct ArticleHTMLView: NSViewRepresentable {
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: options),
                   let json = String(data: data, encoding: .utf8) else { return }
-            let script = "window.paperRssSelectionOptions = \(json);"
-            webView.evaluateJavaScript(script)
+            let script = """
+            (() => {
+              const options = \(json);
+              if (window.paperRssSelectionAssistant) {
+                window.paperRssSelectionAssistant.updateOptions(options);
+              } else {
+                window.paperRssSelectionOptions = options;
+              }
+            })();
+            """
+            webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { _ in }
         }
 
         private func readerScrollView(in webView: WKWebView) -> NSScrollView? {
@@ -3031,6 +3050,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.synchronizeContentTopInset(in: webView)
                 self.synchronizeTranslations(in: webView)
                 self.synchronizeSummaryCard(in: webView)
+                self.synchronizeSelectionOptions(in: webView)
                 self.restoreSelectionAnnotations(in: webView)
             }
         }
@@ -3399,8 +3419,17 @@ private struct ArticleHTMLView: UIViewRepresentable {
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: options),
                   let json = String(data: data, encoding: .utf8) else { return }
-            let script = "window.paperRssSelectionOptions = \(json);"
-            webView.evaluateJavaScript(script)
+            let script = """
+            (() => {
+              const options = \(json);
+              if (window.paperRssSelectionAssistant) {
+                window.paperRssSelectionAssistant.updateOptions(options);
+              } else {
+                window.paperRssSelectionOptions = options;
+              }
+            })();
+            """
+            webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { _ in }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -3545,6 +3574,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 self.synchronizeContentTopInset(in: webView)
                 self.synchronizeTranslations(in: webView)
                 self.synchronizeSummaryCard(in: webView)
+                self.synchronizeSelectionOptions(in: webView)
                 self.restoreSelectionAnnotations(in: webView)
             }
         }
