@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download v1.2.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Report an Issue](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download v1.2.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Report an Issue](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -58,7 +58,7 @@ The screenshots currently show the Chinese interface; the macOS app itself suppo
 
 ## Download and Install
 
-Download `PaperRss-v1.2.1.dmg` from the [latest release](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
+Download `PaperRss-v1.2.2.dmg` from the [latest release](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
 
 The current release is not notarized by Apple. If macOS says the app cannot be verified or is damaged, run:
 
