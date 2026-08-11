@@ -70,16 +70,20 @@ echo "✅ App 编译成功: $APP_PATH"
 echo "💿 3/5 正在制作 DMG 镜像包: ${DMG_PATH}..."
 rm -f "$DMG_PATH"
 
+echo "🎨 正在生成 DMG 安装包背景图..."
+swift scripts/generate_dmg_background.swift
+
 if command -v create-dmg &> /dev/null; then
     echo "💡 使用 create-dmg 制作 UI 镜像..."
     create-dmg \
       --volname "$PROJECT_NAME" \
       --window-pos 200 120 \
-      --window-size 600 400 \
+      --window-size 660 440 \
       --icon-size 100 \
       --icon "${PROJECT_NAME}.app" 175 120 \
       --hide-extension "${PROJECT_NAME}.app" \
-      --app-drop-link 425 120 \
+      --app-drop-link 485 120 \
+      --background "assets/dmg-background.png" \
       --no-internet-enable \
       "$DMG_PATH" \
       "$APP_PATH" || true
