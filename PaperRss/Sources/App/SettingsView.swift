@@ -841,9 +841,17 @@ struct SettingsView: View {
             VStack(spacing: 12) {
                 appIconView
 
-                VStack(spacing: 4) {
-                    Text("Paper RSS")
-                        .font(.system(size: 22, weight: .bold))
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("Paper RSS")
+                            .font(.system(size: 22, weight: .bold))
+                        Text("Beta")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(PaperTheme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(PaperTheme.accent.opacity(0.12), in: Capsule())
+                    }
 
                     Text("Version \(UpdateCheckService.currentVersion) (Build \(UpdateCheckService.currentBuild))")
                         .font(.footnote)
@@ -853,6 +861,12 @@ struct SettingsView: View {
                 Text("专为沉浸式阅读打造的现代 RSS 订阅与 AI 强力阅读助手。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+
+                Text("当前为个人 Beta 版本，感谢您的使用和反馈。")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(PaperTheme.accent)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 6)
