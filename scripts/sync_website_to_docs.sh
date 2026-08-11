@@ -15,6 +15,7 @@ done
 mkdir -p docs/en docs/zh-CN docs/assets
 cp website/index.html docs/index.html
 cp website/locale.mjs docs/locale.mjs
+cp website/scramble-title.js docs/scramble-title.js
 cp website/styles.css docs/styles.css
 cp website/en/index.html docs/en/index.html
 cp website/zh-CN/index.html docs/zh-CN/index.html
@@ -23,6 +24,7 @@ cp -R website/assets/. docs/assets/
 test -d docs/agents
 test -d docs/research
 cmp website/index.html docs/index.html
+cmp website/scramble-title.js docs/scramble-title.js
 cmp website/en/index.html docs/en/index.html
 cmp website/zh-CN/index.html docs/zh-CN/index.html
 diff -qr website/assets docs/assets

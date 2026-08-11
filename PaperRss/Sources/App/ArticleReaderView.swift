@@ -77,6 +77,7 @@ struct ArticleReaderView: View {
     let entry: Entry
     var shortcutInvocation: ReaderShortcutInvocation?
     var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
+    var onShortcutFeedback: (String) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var isZenMode: Bool = false
@@ -680,7 +681,7 @@ struct ArticleReaderView: View {
             case .toggle:
                 toggleBilingualTranslation()
             case .rejectBusy:
-                store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请稍后再试。"))
+                onShortcutFeedback(I18N.shared.localized("已有 AI 任务正在进行，请稍后再试。"))
             }
         case .showSummary:
             switch ReaderShortcutPolicy.summaryDecision(
@@ -689,15 +690,19 @@ struct ArticleReaderView: View {
                 isAIRequestActive: store.activeAIRequest != nil
             ) {
             case .promptToEnable:
-                store.reportError(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
+                onShortcutFeedback(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
             case .revealCached:
                 withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
                     isSummaryExpanded = true
                 }
             case .generate:
+                guard !effectiveArticleText.isEmpty else {
+                    onShortcutFeedback(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
+                    return
+                }
                 generateSummary(force: false)
             case .rejectBusy:
-                store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
+                onShortcutFeedback(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
             }
         case .toggleStar:
             store.toggleStar(currentEntry)

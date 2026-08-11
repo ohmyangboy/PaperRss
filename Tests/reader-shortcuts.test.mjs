@@ -120,3 +120,13 @@ test('typing selection and transient reader UI block article shortcuts', () => {
     assert.equal(event.prevented, false);
   }
 });
+
+test('reader shortcut rejections use transient feedback instead of blocking alerts', () => {
+  const handler = source.match(
+    /private func handleReaderShortcut\(_ action: ReaderShortcutAction\) \{([\s\S]*?)\n    private var effectiveArticleText:/
+  )?.[1] ?? '';
+
+  assert.notEqual(handler, '', 'reader shortcut handler must remain discoverable');
+  assert.doesNotMatch(handler, /store\.reportError/);
+  assert.match(handler, /onShortcutFeedback/);
+});

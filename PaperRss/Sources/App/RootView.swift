@@ -541,6 +541,7 @@ struct RootView: View {
                     entry: selectedEntry,
                     shortcutInvocation: readerShortcutInvocation,
                     onReaderShortcut: dispatchReaderShortcut,
+                    onShortcutFeedback: { showToast($0) },
                     onSelectNextEntry: { selectNextEntry() },
                     onFocusListView: { focusListView() },
                     isZenMode: isZenMode,

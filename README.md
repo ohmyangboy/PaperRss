@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.2.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.2.3](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -56,7 +56,7 @@ PaperRss 是一款专为 macOS 打造的现代纸感 RSS 阅读器，并在真�
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载 `PaperRss-v1.2.2.dmg`，打开后将 PaperRss 拖入 Applications 文件夹。
+从 [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载 `PaperRss-v1.2.3.dmg`，打开后将 PaperRss 拖入 Applications 文件夹。
 
 当前 Release 没有 Apple 公证。若首次打开提示无法验证或应用已损坏，请在终端执行：
 

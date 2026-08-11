@@ -11,6 +11,7 @@
   <link rel="alternate" hreflang="x-default" href="https://ohmyangboy.github.io/PaperRss/" />
   <link rel="icon" type="image/png" href="../assets/app-icon.png" />
   <link rel="stylesheet" href="../styles.css" />
+  <script src="../scramble-title.js" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -19,20 +20,25 @@
     <div class="header-actions">
       <a class="language-switcher" href="../zh-CN/" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')" aria-label="切换到简体中文">🌐 English</a>
       <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github">GitHub</a>
-      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">Download v1.2.2</a>
+      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">Download v1.2.3</a>
     </div>
   </header>
 
   <main class="container">
     <section class="hero">
-      <div class="hero-stamp">Bilingual & Restrained AI Reader · macOS</div>
-      <h1>Move between languages.<br /><em>Keep intelligence in its place.</em></h1>
-      <p class="hero-subtitle">A calm, paper-inspired home for your feeds, with summaries and contextual translation available when they help—not competing for your attention.</p>
-      <div class="hero-ctas"><a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.2.2/PaperRss-v1.2.2.dmg" class="hero-cta-main">Download for macOS (v1.2.2)</a><a href="#features" class="hero-cta-secondary">Explore Features ↓</a></div>
-      <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API keys stay on your Mac</p>
+      <div class="hero-content">
+        <div class="hero-app-icon"><img src="../assets/app-icon.png" alt="PaperRss app icon" /></div>
+        <h1 class="scramble-title" title="Click to replay the decode animation">
+          <span class="scramble-target" data-text="Move between languages.">Move between languages.</span><br />
+          <em class="scramble-target" data-text="Keep intelligence in its place.">Keep intelligence in its place.</em>
+        </h1>
+        <p class="hero-subtitle">A calm, paper-inspired home for your feeds, with summaries and contextual translation available when they help—not competing for your attention.</p>
+        <div class="hero-ctas"><a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.2.3/PaperRss-v1.2.3.dmg" class="hero-cta-main">Download for macOS (v1.2.3)</a><a href="#features" class="hero-cta-secondary">Explore Features ↓</a></div>
+        <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API keys stay on your Mac</p>
+      </div>
     </section>
 
-    <section class="stage-section"><div class="stage-window"><div class="stage-bar"><div class="window-dots"><span class="window-dot red"></span><span class="window-dot yellow"></span><span class="window-dot green"></span></div><span class="stage-title">PaperRss — A focused three-column reading space</span></div><img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss main window (Chinese interface shown)" class="stage-image" /></div></section>
+    <section class="stage-section"><img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss three-column reading workspace (Chinese interface shown)" class="stage-image" /></section>
 
     <aside class="trust-rail">
       <div class="trust-item"><strong>Local First</strong><span>API keys stay on your Mac</span></div>
@@ -44,15 +50,10 @@
     <section id="features" style="padding-top:2rem">
       <div class="section-title-group"><p class="section-eyebrow">EDITORIAL EXPERIENCE</p><h2>A reading ritual built for beauty and focus</h2></div>
       <div class="features-grid">
-        <div class="feature-card"><div><div class="feature-num">01 / DESIGN</div><h3>Paper-inspired typography</h3><p>Serif typography and measured spacing tuned for long-form reading, with light and dark appearances.</p></div><img src="../assets/screenshots/article-reader-detail.png" alt="PaperRss article typography (Chinese interface shown)" class="feature-card-img" /></div>
-        <div class="feature-card"><div><div class="feature-num">02 / SUMMARY</div><h3>Summaries when you ask</h3><p>Pull out the key ideas before reading, manually or automatically when an uncached article is opened.</p></div><img src="../assets/screenshots/ai-summary-card.png" alt="AI summary card (Chinese interface shown)" class="feature-card-img" /></div>
-        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>Translate, explain, or ask</h3><p>Select text in an article to get a translation or explanation grounded in the surrounding context.</p></div><img src="../assets/screenshots/ai-explain-popover.png" alt="Selection assistant (Chinese interface shown)" class="feature-card-img" /></div>
+        <div class="feature-card"><div><div class="feature-num">01 / BILINGUAL</div><h3>Side-by-side translation</h3><p>Keep each translated paragraph beside its source so long-form reading never loses context.</p></div><img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss paragraph-by-paragraph English and Chinese translation" class="feature-card-img" /></div>
+        <div class="feature-card" id="ai-assistant"><div><div class="feature-num">02 / EXPLAIN & ASK</div><h3>Explain & ask</h3><p>Select a passage to ask a focused question or get unfamiliar terms, ideas, and context explained by AI.</p></div><div class="feature-card-gallery"><img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss Ask AI input for selected text (Chinese interface shown)" class="feature-card-img" /><img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss AI explanation popover (Chinese interface shown)" class="feature-card-img" /></div></div>
+        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>Translate in place</h3><p>Get a contextual translation for the selected passage without leaving the reader.</p></div><img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss selection translation popover (Chinese interface shown)" class="feature-card-img" /></div>
       </div>
-    </section>
-
-    <section id="ai-assistant" class="deep-feature">
-      <div class="deep-feature-text"><p class="section-eyebrow">AI POWERED ENGINE</p><h3>An assistant you can configure</h3><p>Use DeepSeek or any standard OpenAI-compatible API. Choose your model, translation target, reasoning preference, and custom instructions. The AI output language remains independent from the app interface language.</p><div class="feature-tags"><span class="feature-tag">DeepSeek</span><span class="feature-tag">OpenAI API</span><span class="feature-tag">Local Models</span><span class="feature-tag">Custom Prompts</span></div></div>
-      <div><img src="../assets/screenshots/settings-ai-config.png" alt="PaperRss AI settings (Chinese interface shown)" class="deep-feature-img" /></div>
     </section>
 
     <section id="sponsor" class="sponsor-section">

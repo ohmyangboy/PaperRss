@@ -11,6 +11,7 @@
   <link rel="alternate" hreflang="x-default" href="https://ohmyangboy.github.io/PaperRss/" />
   <link rel="icon" type="image/png" href="../assets/app-icon.png" />
   <link rel="stylesheet" href="../styles.css" />
+  <script src="../scramble-title.js" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -22,24 +23,29 @@
     <div class="header-actions">
       <a class="language-switcher" href="../en/" lang="en" hreflang="en" onclick="localStorage.setItem('paperrss.locale','en')" aria-label="Switch to English">🌐 简体中文</a>
       <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github">GitHub 仓库</a>
-      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">下载 v1.2.2</a>
+      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">下载 v1.2.3</a>
     </div>
   </header>
 
   <main class="container">
     <section class="hero">
-      <div class="hero-stamp">Bilingual & Restrained AI Reader · macOS</div>
-      <h1>双语流转，克制智能化。<br /><em>让阅读回归纯粹与沉浸。</em></h1>
-      <p class="hero-subtitle">没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。</p>
-      <div class="hero-ctas">
-        <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.2.2/PaperRss-v1.2.2.dmg" class="hero-cta-main">下载 macOS 版本 (v1.2.2)</a>
-        <a href="#features" class="hero-cta-secondary">浏览核心特性 ↓</a>
+      <div class="hero-content">
+        <div class="hero-app-icon"><img src="../assets/app-icon.png" alt="PaperRss App 图标" /></div>
+        <h1 class="scramble-title" title="点击重新播放解密归位动画">
+          <span class="scramble-target" data-text="双语流转，克制智能化">双语流转，克制智能化</span><br />
+          <em class="scramble-target" data-text="让阅读回归纯粹与沉浸">让阅读回归纯粹与沉浸</em>
+        </h1>
+        <p class="hero-subtitle">没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。</p>
+        <div class="hero-ctas">
+          <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.2.3/PaperRss-v1.2.3.dmg" class="hero-cta-main">下载 macOS 版本 (v1.2.3)</a>
+          <a href="#features" class="hero-cta-secondary">浏览核心特性 ↓</a>
+        </div>
+        <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API Key 仅存本机</p>
       </div>
-      <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API Key 仅存本机</p>
     </section>
 
     <section class="stage-section">
-      <div class="stage-window"><div class="stage-bar"><div class="window-dots"><span class="window-dot red"></span><span class="window-dot yellow"></span><span class="window-dot green"></span></div><span class="stage-title">PaperRss — 三栏纸感阅读界面</span></div><img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss 主界面" class="stage-image" /></div>
+      <img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss 三栏纸感阅读主界面" class="stage-image" />
     </section>
 
     <aside class="trust-rail">
@@ -52,15 +58,10 @@
     <section id="features" style="padding-top:2rem">
       <div class="section-title-group"><p class="section-eyebrow">EDITORIAL EXPERIENCE</p><h2>兼具美感与效能的阅读体验</h2></div>
       <div class="features-grid">
-        <div class="feature-card"><div><div class="feature-num">01 / DESIGN</div><h3>沉浸式纸感排版</h3><p>为长文阅读微调的衬线字号与行距，并提供明暗主题。</p></div><img src="../assets/screenshots/article-reader-detail.png" alt="文章阅读排版" class="feature-card-img" /></div>
-        <div class="feature-card"><div><div class="feature-num">02 / SUMMARY</div><h3>按需生成 AI 摘要</h3><p>阅读前快速提炼要点，也可以选择首次打开文章时自动生成。</p></div><img src="../assets/screenshots/ai-summary-card.png" alt="AI 摘要" class="feature-card-img" /></div>
-        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>划词翻译、解释与提问</h3><p>选择文章中的文字，即可获得结合上下文的翻译与解释。</p></div><img src="../assets/screenshots/ai-explain-popover.png" alt="划词 AI 助手" class="feature-card-img" /></div>
+        <div class="feature-card"><div><div class="feature-num">01 / BILINGUAL</div><h3>中英文对照翻译</h3><p>逐段保留原文与译文，在长文中连续阅读，也能清楚对应上下文。</p></div><img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss 中英文逐段对照翻译" class="feature-card-img" /></div>
+        <div class="feature-card" id="ai-assistant"><div><div class="feature-num">02 / EXPLAIN & ASK</div><h3>AI 解释 & 提问</h3><p>选中文字后，可以结合文章语境直接提问，也可以让 AI 解释陌生词语、概念与背景。</p></div><div class="feature-card-gallery"><img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss 划词向 AI 提问输入框" class="feature-card-img" /><img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss 划词 AI 解释浮窗" class="feature-card-img" /></div></div>
+        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>划词即时翻译</h3><p>无需离开阅读页，即可获得当前选中文字的上下文翻译。</p></div><img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss 划词翻译浮窗" class="feature-card-img" /></div>
       </div>
-    </section>
-
-    <section id="ai-assistant" class="deep-feature">
-      <div class="deep-feature-text"><p class="section-eyebrow">AI POWERED ENGINE</p><h3>可配置的 AI 阅读助手</h3><p>兼容 DeepSeek 和标准 OpenAI API。你可以设置模型、目标翻译语言、推理偏好与个性化指令；AI 输出语言独立于界面语言。</p><div class="feature-tags"><span class="feature-tag">DeepSeek</span><span class="feature-tag">OpenAI API</span><span class="feature-tag">Local Models</span><span class="feature-tag">Custom Prompts</span></div></div>
-      <div><img src="../assets/screenshots/settings-ai-config.png" alt="PaperRss AI 设置" class="deep-feature-img" /></div>
     </section>
 
     <section id="sponsor" class="sponsor-section">
