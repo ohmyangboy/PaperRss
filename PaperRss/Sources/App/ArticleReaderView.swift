@@ -268,7 +268,7 @@ struct ArticleReaderView: View {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.small)
-                Text("正在准备正文…")
+                Text(I18N.localized("正在准备正文…"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -443,8 +443,8 @@ struct ArticleReaderView: View {
                         .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("在默认浏览器打开原网页")
-                .help("打开原网页")
+                .accessibilityHint(I18N.localized("在默认浏览器打开原网页"))
+                .help(I18N.localized("打开原网页"))
             } else {
                 Text(entry.title)
                     .font(.system(.title, design: .serif).weight(.bold))
@@ -465,7 +465,7 @@ struct ArticleReaderView: View {
         if store.database.llmConfiguration.showsAISummary {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
-                    Label("AI 摘要", systemImage: "sparkles")
+                    Label(I18N.localized("AI 摘要"), systemImage: "sparkles")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(PaperTheme.accent)
                     Spacer()
@@ -483,7 +483,7 @@ struct ArticleReaderView: View {
                         }
                         .buttonStyle(.plain)
                         .background(PaperTheme.accent.opacity(0.09), in: Circle())
-                        .accessibilityLabel(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要")
+            .accessibilityLabel(I18N.shared.localized(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要"))
                         .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
                     }
                 }
@@ -501,7 +501,7 @@ struct ArticleReaderView: View {
                                 HStack(spacing: 6) {
                                     ProgressView()
                                         .controlSize(.small)
-                                    Text("AI 正在生成摘要…")
+                                    Text(I18N.localized("AI 正在生成摘要…"))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -511,10 +511,10 @@ struct ArticleReaderView: View {
                                 // relaunch or cancellation. Offer a visible retry
                                 // instead of leaving an eternal spinner.
                                 HStack(spacing: 8) {
-                                    Text("上次生成未完成")
+                                    Text(I18N.localized("上次生成未完成"))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                    Button("重新生成") { generateSummary(force: true) }
+                                    Button(I18N.localized("重新生成")) { generateSummary(force: true) }
                                         .buttonStyle(.borderless)
                                         .font(.caption.weight(.semibold))
                                 }
@@ -538,10 +538,10 @@ struct ArticleReaderView: View {
                                 .foregroundStyle(.red)
                         }
                         HStack(spacing: 8) {
-                            Text("尚未生成；仅在你点按后发送正文。")
+                            Text(I18N.localized("尚未生成；仅在你点按后发送正文。"))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
-                            Button("生成摘要") { generateSummary(force: false) }
+                            Button(I18N.localized("生成摘要")) { generateSummary(force: false) }
                                 .buttonStyle(.borderless)
                                 .font(.subheadline.weight(.semibold))
                                 .disabled(effectiveArticleText.isEmpty)
@@ -585,8 +585,8 @@ struct ArticleReaderView: View {
             }
             .buttonStyle(.borderless)
             .disabled(text.isEmpty || store.activeAIRequest != nil)
-            .accessibilityLabel(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
-            .help(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")
+            .accessibilityLabel(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译"))
+            .help(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译"))
 
             Button {
                 store.markRead(currentEntry, read: !currentEntry.isRead)
@@ -594,8 +594,8 @@ struct ArticleReaderView: View {
                 toolbarSymbol(currentEntry.isRead ? "envelope.open" : "envelope", isActive: false)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(currentEntry.isRead ? "标为未读" : "标为已读")
-            .help(currentEntry.isRead ? "标为未读" : "标为已读")
+            .accessibilityLabel(I18N.shared.localized(currentEntry.isRead ? "标为未读" : "标为已读"))
+            .help(I18N.shared.localized(currentEntry.isRead ? "标为未读" : "标为已读"))
 
             Button {
                 store.toggleStar(currentEntry)
@@ -603,8 +603,8 @@ struct ArticleReaderView: View {
                 toolbarSymbol(currentEntry.isStarred ? "star.fill" : "star", isActive: currentEntry.isStarred)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(currentEntry.isStarred ? "取消收藏" : "收藏")
-            .help(currentEntry.isStarred ? "取消收藏" : "收藏")
+            .accessibilityLabel(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏"))
+            .help(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏"))
 
             Button {
                 onToggleZenMode()
@@ -615,8 +615,8 @@ struct ArticleReaderView: View {
                 )
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
-            .help(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
+            .accessibilityLabel(I18N.shared.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
+            .help(I18N.shared.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -685,11 +685,11 @@ struct ArticleReaderView: View {
     private func generateSummary(force: Bool = false) {
         let targetText = effectiveArticleText
         guard !targetText.isEmpty else {
-            store.reportError("文章暂无正文内容，无法生成摘要。")
+            store.reportError(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
             return
         }
         if store.activeAIRequest != nil {
-            store.reportError("已有 AI 任务正在进行，请等待它完成后再试。")
+            store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
             return
         }
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
@@ -832,12 +832,12 @@ struct ArticleReaderView: View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.regular)
-            Text("正在生成 \(status.kind.title)")
+            Text(I18N.shared.localizedFormat("正在生成 %@", status.kind.title))
                 .font(.headline)
             Text(status.phase.message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("你可以继续阅读；结果完成后会自动出现。")
+            Text(I18N.localized("你可以继续阅读；结果完成后会自动出现。"))
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
         }
@@ -847,12 +847,16 @@ struct ArticleReaderView: View {
 
     private func unavailable(_ title: String, actionTitle: String? = nil, action: (() -> Void)? = nil) -> some View {
         ContentUnavailableView {
-            Label(title, systemImage: "sparkles")
+            Label {
+                Text(LocalizedStringKey(title))
+            } icon: {
+                Image(systemName: "sparkles")
+            }
         } description: {
-            Text("仅在你点按生成后，正文才会发送给模型。")
+            Text(I18N.localized("仅在你点按生成后，正文才会发送给模型。"))
         } actions: {
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
+                Button(I18N.shared.localized(actionTitle), action: action)
                     .buttonStyle(.borderedProminent)
                     .disabled(store.activeAIRequest != nil)
             }
@@ -971,14 +975,14 @@ private enum PaperReaderHeaderBuilder {
                     statusFooter = """
                     <div class="paper-summary-status">
                       <span class="paper-spinner"></span>
-                      <span>AI 正在生成摘要…</span>
+                      <span>\(I18N.localized("AI 正在生成摘要…").htmlEscaped)</span>
                     </div>
                     """
                 } else {
-                    let errStr = errorMessage.map { "<span class=\"paper-summary-error\">\($0.htmlEscaped)</span> " } ?? "<span>上次生成未完成</span> "
+                    let errStr = errorMessage.map { "<span class=\"paper-summary-error\">\($0.htmlEscaped)</span> " } ?? "<span>\(I18N.localized("上次生成未完成").htmlEscaped)</span> "
                     statusFooter = """
                     <div class="paper-summary-status">
-                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true">重新生成</button>
+                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true">\(I18N.localized("重新生成").htmlEscaped)</button>
                     </div>
                     """
                 }
@@ -986,7 +990,7 @@ private enum PaperReaderHeaderBuilder {
 
             return """
             <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
               <button class="paper-summary-toggle-btn" data-paper-action="toggleSummary">
                 \(toggleIcon)
               </button>
@@ -997,10 +1001,10 @@ private enum PaperReaderHeaderBuilder {
             </div>
             """
         } else if isGeneratingSummary {
-            let msg = aiStatusMessage ?? "AI 正在准备摘要…"
+            let msg = aiStatusMessage ?? I18N.localized("AI 正在准备摘要…")
             return """
             <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
             </div>
             <div class="paper-summary-status">
               <span class="paper-spinner"></span>
@@ -1017,12 +1021,12 @@ private enum PaperReaderHeaderBuilder {
             } ?? ""
             return """
             <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) AI 摘要</span>
+              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
             </div>
             \(errNotice)
             <div class="paper-summary-placeholder">
-              <span>尚未生成；仅在你点按后发送正文。</span>
-              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false">生成摘要</button>
+              <span>\(I18N.localized("尚未生成；仅在你点按后发送正文。").htmlEscaped)</span>
+              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false">\(I18N.localized("生成摘要").htmlEscaped)</button>
             </div>
             """
         }
@@ -1562,6 +1566,30 @@ enum PaperReaderBridge {
     static let visibleParagraphsMessageName = "paperRssVisibleParagraphs"
     static let explainSelectionMessageName = "paperRssExplainSelection"
     static let askSelectionMessageName = "paperRssAskSelection"
+    static var localizedSelectionLabels: [String: String] {
+        [
+            "explain": I18N.localized("解释所选文字"),
+            "ask": I18N.localized("问 AI 所选文字"),
+            "translate": I18N.localized("翻译所选文字"),
+            "questionPrefix": I18N.localized("问："),
+            "questionPlaceholder": I18N.localized("针对划选文字提问..."),
+            "sendQuestion": I18N.localized("发送提问"),
+            "translationTitle": I18N.localized("翻译"),
+            "questionTitle": I18N.localized("问 AI 答疑"),
+            "explanationTitle": I18N.localized("AI 解释"),
+            "loadingTranslation": I18N.localized("正在翻译…"),
+            "loadingAnswer": I18N.localized("正在生成解答…"),
+            "loadingExplanation": I18N.localized("正在结合全文理解这段文字…"),
+            "loadingGeneric": I18N.localized("正在生成…"),
+            "retryError": I18N.localized("暂时无法完成，请稍后重试。"),
+            "unavailableExplanation": I18N.localized("解释暂不可用。"),
+            "reopenExplanation": I18N.localized("点击重新查看 AI 解释"),
+            "completedExplanation": I18N.localized("已完成解释，点击重新查看"),
+            "closeImage": I18N.localized("关闭（Esc）"),
+            "translationLabel": I18N.localized("译文"),
+            "generatingTranslation": I18N.localized("正在生成译文")
+        ]
+    }
     static let observerScript = WKUserScript(
         source: """
         (() => {
@@ -1691,6 +1719,8 @@ enum PaperReaderBridge {
         source: """
         (() => {
           if (window.paperRssSelectionAssistant) return;
+
+          const selectionLabel = (key, fallback) => window.paperRssSelectionOptions?.labels?.[key] || fallback;
 
           let actionBar = null;
           let activeRange = null;
@@ -1952,19 +1982,23 @@ enum PaperReaderBridge {
             header.className = "paper-rss-explanation-header";
             header.append(svgIcon(kind === "translation" ? "translation" : "note"));
             const title = document.createElement("span");
-            title.textContent = kind === "translation" ? "翻译" : (question ? "问 AI 答疑" : "AI 解释");
+            title.textContent = kind === "translation"
+              ? selectionLabel("translationTitle", "翻译")
+              : (question ? selectionLabel("questionTitle", "问 AI 答疑") : selectionLabel("explanationTitle", "AI 解释"));
             header.append(title);
             popover.append(header);
             if (question) {
               const qBox = document.createElement("div");
               qBox.className = "paper-rss-question-tag";
               qBox.style.cssText = "font-size:12px;opacity:0.8;margin:4px 0 8px;font-weight:600;";
-              qBox.textContent = "问：" + question;
+              qBox.textContent = (window.paperRssSelectionOptions?.labels?.questionPrefix || "问：") + question;
               popover.append(qBox);
             }
             const body = document.createElement("div");
             body.className = "paper-rss-explanation-body";
-            body.textContent = text || (kind === "translation" ? "正在翻译…" : "正在生成解答…");
+            body.textContent = text || (kind === "translation"
+              ? selectionLabel("loadingTranslation", "正在翻译…")
+              : (question ? selectionLabel("loadingAnswer", "正在生成解答…") : selectionLabel("loadingExplanation", "正在结合全文理解这段文字…")));
             popover.append(body);
             document.body.append(popover);
             activePopover = popover;
@@ -1975,7 +2009,9 @@ enum PaperReaderBridge {
             if (!activePopover || activePopover.dataset.explanationId !== id) return;
             activePopover.className = "paper-rss-explanation " + (state || "") + (kind === "translation" ? " is-translation" : "");
             const body = activePopover.querySelector(".paper-rss-explanation-body");
-            if (body) body.textContent = text || (state === "is-error" ? "暂时无法完成，请稍后重试。" : "正在生成…");
+            if (body) body.textContent = text || (state === "is-error"
+              ? selectionLabel("retryError", "暂时无法完成，请稍后重试。")
+              : selectionLabel("loadingGeneric", "正在生成…"));
             const rect = activeAnchorElement?.isConnected ? activeAnchorElement.getBoundingClientRect() : activeAnchorRect;
             positionNear(activePopover, rect, true);
           };
@@ -2021,14 +2057,14 @@ enum PaperReaderBridge {
             const input = document.createElement("input");
             input.type = "text";
             input.className = "paper-rss-ask-input";
-            input.placeholder = "针对划选文字提问...";
+            input.placeholder = window.paperRssSelectionOptions?.labels?.questionPlaceholder || "针对划选文字提问...";
             input.style.cssText = "border:none;background:transparent;outline:none;font-size:13px;color:var(--paper-ink);width:150px;";
 
             const sendBtn = document.createElement("button");
             sendBtn.type = "submit";
             sendBtn.className = "paper-rss-selection-action";
             sendBtn.append(svgIcon("ask"));
-            sendBtn.setAttribute("title", "发送提问");
+            sendBtn.setAttribute("title", window.paperRssSelectionOptions?.labels?.sendQuestion || "发送提问");
 
             form.append(input, sendBtn);
             bar.append(form);
@@ -2079,9 +2115,9 @@ enum PaperReaderBridge {
             };
             const opts = window.paperRssSelectionOptions || { showsExplanation: true, showsAsk: true, showsTranslation: true };
             const buttons = [];
-            if (opts.showsExplanation !== false) buttons.push(makeButton("note", "解释所选文字"));
-            if (opts.showsAsk !== false) buttons.push(makeButton("ask", "问 AI 所选文字"));
-            if (opts.showsTranslation !== false) buttons.push(makeButton("translation", "翻译所选文字"));
+            if (opts.showsExplanation !== false) buttons.push(makeButton("note", opts.labels?.explain || "解释所选文字"));
+            if (opts.showsAsk !== false) buttons.push(makeButton("ask", opts.labels?.ask || "问 AI 所选文字"));
+            if (opts.showsTranslation !== false) buttons.push(makeButton("translation", opts.labels?.translate || "翻译所选文字"));
             if (buttons.length === 0) return;
             buttons.forEach(btn => bar.append(btn));
             actionBar = bar;
@@ -2110,7 +2146,7 @@ enum PaperReaderBridge {
               const target = icon;
               const loading = target.classList.contains("is-pending");
               const rect = icon.getBoundingClientRect();
-              showPopover(target.dataset.explanationId, rect, loading ? "" : (target.dataset.explanation || "解释暂不可用。"), loading ? "is-loading" : "", "explanation", icon);
+              showPopover(target.dataset.explanationId, rect, loading ? "" : (target.dataset.explanation || selectionLabel("unavailableExplanation", "解释暂不可用。")), loading ? "is-loading" : "", "explanation", icon);
               return;
             }
             if (!event.target.closest?.(".paper-rss-explanation") && !event.target.closest?.(".paper-rss-selection-actions")) dismissPopover();
@@ -2135,7 +2171,15 @@ enum PaperReaderBridge {
             append(id, text, kind) {
               if (!text) return;
               const body = activePopover?.dataset.explanationId === id ? activePopover.querySelector(".paper-rss-explanation-body") : null;
-              if (body) body.textContent = (body.textContent === "正在结合全文理解这段文字…" || body.textContent === "正在翻译…") ? text : body.textContent + text;
+              if (body) {
+                const loadingTexts = [
+                  selectionLabel("loadingExplanation", "正在结合全文理解这段文字…"),
+                  selectionLabel("loadingTranslation", "正在翻译…"),
+                  selectionLabel("loadingAnswer", "正在生成解答…"),
+                  selectionLabel("loadingGeneric", "正在生成…")
+                ];
+                body.textContent = loadingTexts.includes(body.textContent) ? text : body.textContent + text;
+              }
             },
             resolve(id, text, isError, kind) {
               const marks = Array.from(document.querySelectorAll('.paper-rss-explained[data-explanation-id="' + CSS.escape(id) + '"]'));
@@ -2156,14 +2200,14 @@ enum PaperReaderBridge {
                   const btn = mark.querySelector(".paper-rss-annotation-icon");
                   if (btn) {
                     btn.classList.remove("is-pending");
-                    btn.setAttribute("title", "点击重新查看 AI 解释");
+                    btn.setAttribute("title", selectionLabel("reopenExplanation", "点击重新查看 AI 解释"));
                   }
                 });
                 standaloneIcons.forEach(icon => {
                   icon.classList.remove("is-pending");
                   icon.dataset.explanation = text;
-                  icon.setAttribute("aria-label", "已完成解释，点击重新查看");
-                  icon.setAttribute("title", "点击重新查看 AI 解释");
+                  icon.setAttribute("aria-label", selectionLabel("completedExplanation", "已完成解释，点击重新查看"));
+                  icon.setAttribute("title", selectionLabel("reopenExplanation", "点击重新查看 AI 解释"));
                 });
                 updatePopover(id, text, "", kind);
               }
@@ -2336,7 +2380,7 @@ enum PaperReaderBridge {
                 <div class="paper-rss-lightbox-backdrop"></div>
                 <div class="paper-rss-lightbox-content">
                   <img class="paper-rss-lightbox-img" src="" alt="" />
-                  <button class="paper-rss-lightbox-close" title="关闭 (Esc)">
+                  <button class="paper-rss-lightbox-close" title="${window.paperRssSelectionOptions?.labels?.closeImage || "关闭（Esc）"}">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                   </button>
                 </div>
@@ -2684,7 +2728,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         if #available(macOS 12.0, *) {
             webView.underPageBackgroundColor = .clear
         }
-        webView.setAccessibilityLabel(isBilingualMode ? "原文与中文逐段翻译" : "原文内容")
+        webView.setAccessibilityLabel(I18N.localized(isBilingualMode ? "原文与逐段翻译" : "原文内容"))
         webView.enclosingScrollView?.hasVerticalScroller = true
         webView.enclosingScrollView?.autohidesScrollers = true
         webView.enclosingScrollView?.verticalScrollElasticity = .automatic
@@ -2796,7 +2840,15 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let showsExplanation = parent.showsSelectionExplanation
             let showsAsk = parent.showsSelectionAsk
             let showsTranslation = parent.showsSelectionTranslation
-            let script = "window.paperRssSelectionOptions = { showsExplanation: \(showsExplanation), showsAsk: \(showsAsk), showsTranslation: \(showsTranslation) };"
+            let options: [String: Any] = [
+                "showsExplanation": showsExplanation,
+                "showsAsk": showsAsk,
+                "showsTranslation": showsTranslation,
+                "labels": PaperReaderBridge.localizedSelectionLabels
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: options),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let script = "window.paperRssSelectionOptions = \(json);"
             webView.evaluateJavaScript(script)
         }
 
@@ -3030,7 +3082,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 updates.append(["id": id, "text": translation, "isLoading": false])
             }
             for id in desired.pendingIDs.sorted() where !renderedPendingTranslationIDs.contains(id) || renderedTranslations[id] != nil {
-                updates.append(["id": id, "text": "正在翻译…", "isLoading": true])
+                updates.append(["id": id, "text": I18N.localized("正在翻译…"), "isLoading": true])
             }
 
             guard !updates.isEmpty || !removals.isEmpty else { return }
@@ -3090,7 +3142,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
           const label = document.createElement("span");
           label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", "译文");
+          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
           ["A", "文"].forEach(value => {
             const chip = document.createElement("span");
             chip.className = "paper-rss-language-chip";
@@ -3118,7 +3170,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
             source.insertAdjacentElement("afterend", aside);
           }
           aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading ? "正在生成中文翻译" : "中文翻译");
+          aside.setAttribute("aria-label", update.isLoading
+            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
+            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
           if (update.isLoading) aside.setAttribute("aria-live", "polite");
           else aside.removeAttribute("aria-live");
           const paragraph = aside.querySelector(".paper-rss-translation-text");
@@ -3244,7 +3298,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.alwaysBounceVertical = true
-        webView.accessibilityLabel = isBilingualMode ? "原文与中文逐段翻译" : "原文内容"
+        webView.accessibilityLabel = I18N.localized(isBilingualMode ? "原文与逐段翻译" : "原文内容")
         context.coordinator.webView = webView
         context.coordinator.loadIfNeeded(into: webView)
         return webView
@@ -3337,7 +3391,15 @@ private struct ArticleHTMLView: UIViewRepresentable {
             let showsExplanation = parent.showsSelectionExplanation
             let showsAsk = parent.showsSelectionAsk
             let showsTranslation = parent.showsSelectionTranslation
-            let script = "window.paperRssSelectionOptions = { showsExplanation: \(showsExplanation), showsAsk: \(showsAsk), showsTranslation: \(showsTranslation) };"
+            let options: [String: Any] = [
+                "showsExplanation": showsExplanation,
+                "showsAsk": showsAsk,
+                "showsTranslation": showsTranslation,
+                "labels": PaperReaderBridge.localizedSelectionLabels
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: options),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let script = "window.paperRssSelectionOptions = \(json);"
             webView.evaluateJavaScript(script)
         }
 
@@ -3534,7 +3596,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 updates.append(["id": id, "text": translation, "isLoading": false])
             }
             for id in desired.pendingIDs.sorted() where !renderedPendingTranslationIDs.contains(id) || renderedTranslations[id] != nil {
-                updates.append(["id": id, "text": "正在翻译…", "isLoading": true])
+                updates.append(["id": id, "text": I18N.localized("正在翻译…"), "isLoading": true])
             }
 
             guard !updates.isEmpty || !removals.isEmpty else { return }
@@ -3590,7 +3652,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
           const label = document.createElement("span");
           label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", "译文");
+          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
           ["A", "文"].forEach(value => {
             const chip = document.createElement("span");
             chip.className = "paper-rss-language-chip";
@@ -3618,7 +3680,9 @@ private struct ArticleHTMLView: UIViewRepresentable {
             source.insertAdjacentElement("afterend", aside);
           }
           aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading ? "正在生成中文翻译" : "中文翻译");
+          aside.setAttribute("aria-label", update.isLoading
+            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
+            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
           if (update.isLoading) aside.setAttribute("aria-live", "polite");
           else aside.removeAttribute("aria-live");
           const paragraph = aside.querySelector(".paper-rss-translation-text");
@@ -3671,10 +3735,10 @@ private struct BilingualContent: View {
                     if isLoadingNextBatch {
                         ProgressView()
                             .controlSize(.small)
-                        Text("正在翻译接下来的段落…")
+                        Text(I18N.localized("正在翻译接下来的段落…"))
                     } else {
                         Image(systemName: "arrow.down.circle")
-                        Text("继续向下阅读以翻译下一段")
+                        Text(I18N.localized("继续向下阅读以翻译下一段"))
                     }
                 }
                 .font(.footnote)
@@ -3687,7 +3751,7 @@ private struct BilingualContent: View {
                     loadNextBatch()
                 }
             } else {
-                Label("全文翻译完成", systemImage: "checkmark.circle.fill")
+                Label(I18N.localized("全文翻译完成"), systemImage: "checkmark.circle.fill")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3722,22 +3786,22 @@ struct ReaderCapsuleToolbar: View {
             }
             .buttonStyle(.plain)
             .disabled(disabled)
-            .accessibilityLabel(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")
-            .help(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")
+            .accessibilityLabel(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译"))
+            .help(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译"))
 
             Button(action: onToggleRead) {
                 toolbarSymbol(isRead ? "envelope.open" : "envelope", isActive: false)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isRead ? "标为未读" : "标为已读")
-            .help(isRead ? "标为未读" : "标为已读")
+            .accessibilityLabel(I18N.localized(isRead ? "标为未读" : "标为已读"))
+            .help(I18N.localized(isRead ? "标为未读" : "标为已读"))
 
             Button(action: onToggleStar) {
                 toolbarSymbol(isStarred ? "star.fill" : "star", isActive: isStarred)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isStarred ? "取消收藏" : "收藏")
-            .help(isStarred ? "取消收藏" : "收藏")
+            .accessibilityLabel(I18N.localized(isStarred ? "取消收藏" : "收藏"))
+            .help(I18N.localized(isStarred ? "取消收藏" : "收藏"))
 
             Button(action: onToggleZenMode) {
                 toolbarSymbol(
@@ -3746,8 +3810,8 @@ struct ReaderCapsuleToolbar: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
-            .help(isZenMode ? "退出禅模式" : "禅模式全屏阅读")
+            .accessibilityLabel(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
+            .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
         }
         .padding(.horizontal, 8)
         .frame(width: 140, height: 28)

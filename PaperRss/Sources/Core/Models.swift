@@ -12,12 +12,12 @@ public enum FeedRefreshInterval: String, CaseIterable, Codable, Hashable, Identi
 
     public var title: String {
         switch self {
-        case .manual: "仅手动"
-        case .thirtyMinutes: "每 30 分钟"
-        case .oneHour: "每小时"
-        case .twoHours: "每 2 小时"
-        case .fourHours: "每 4 小时"
-        case .eightHours: "每 8 小时"
+        case .manual: I18N.localized("仅手动")
+        case .thirtyMinutes: I18N.localized("每 30 分钟")
+        case .oneHour: I18N.localized("每小时")
+        case .twoHours: I18N.localized("每 2 小时")
+        case .fourHours: I18N.localized("每 4 小时")
+        case .eightHours: I18N.localized("每 8 小时")
         }
     }
 
@@ -34,8 +34,8 @@ public enum FeedRefreshInterval: String, CaseIterable, Codable, Hashable, Identi
 
     public var detail: String {
         switch self {
-        case .manual: "应用保持打开时不自动刷新；打开应用时仍会按上方开关刷新。"
-        default: "应用保持打开时按此频率检查订阅；系统后台刷新时间可能会有所延迟。"
+        case .manual: I18N.localized("应用保持打开时不自动刷新；打开应用时仍会按上方开关刷新。")
+        default: I18N.localized("应用保持打开时按此频率检查订阅；系统后台刷新时间可能会有所延迟。")
         }
     }
 }
@@ -272,12 +272,12 @@ public enum AIArtifactKind: String, Codable, CaseIterable, Sendable {
 
     public var title: String {
         switch self {
-        case .translation: "全文翻译"
-        case .bilingual: "上下对照"
-        case .summary: "AI 总结"
-        case .articleContext: "文章上下文缓存"
-        case .selectionExplanation: "选中文字解释"
-        case .interpretation: "旧版 AI 解读"
+        case .translation: I18N.localized("全文翻译")
+        case .bilingual: I18N.localized("上下对照")
+        case .summary: I18N.localized("AI 总结")
+        case .articleContext: I18N.localized("文章上下文缓存")
+        case .selectionExplanation: I18N.localized("选中文字解释")
+        case .interpretation: I18N.localized("旧版 AI 解读")
         }
     }
 }

@@ -23,8 +23,8 @@ public enum FeedParserError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupported: "此地址不是可识别的 RSS、Atom 或 JSON Feed。"
-        case .malformed: "Feed 内容格式不完整。"
+        case .unsupported: I18N.localized("此地址不是可识别的 RSS、Atom 或 JSON Feed。")
+        case .malformed: I18N.localized("Feed 内容格式不完整。")
         }
     }
 }

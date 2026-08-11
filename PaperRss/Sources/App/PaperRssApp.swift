@@ -30,6 +30,7 @@ struct PaperRssApp: App {
                 }
                 #endif
         }
+        .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
         #if os(iOS)
         .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
             if await store.refreshInterval != .manual {
@@ -40,26 +41,26 @@ struct PaperRssApp: App {
         #endif
         .commands {
             CommandGroup(after: .newItem) {
-                Button("刷新全部订阅") { Task { await store.refresh() } }
+                Button(I18N.localized("刷新全部订阅")) { Task { await store.refresh() } }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
             CommandGroup(after: .textFormatting) {
-                Button("放大正文字号") {
+                Button(I18N.localized("放大正文字号")) {
                     store.increaseArticleFontSize()
                 }
                 .keyboardShortcut("=", modifiers: .command)
 
-                Button("放大正文字号") {
+                Button(I18N.localized("放大正文字号")) {
                     store.increaseArticleFontSize()
                 }
                 .keyboardShortcut("+", modifiers: .command)
 
-                Button("缩小正文字号") {
+                Button(I18N.localized("缩小正文字号")) {
                     store.decreaseArticleFontSize()
                 }
                 .keyboardShortcut("-", modifiers: .command)
 
-                Button("默认正文字号") {
+                Button(I18N.localized("默认正文字号")) {
                     store.resetArticleFontSize()
                 }
                 .keyboardShortcut("0", modifiers: .command)
@@ -69,6 +70,7 @@ struct PaperRssApp: App {
         #if os(macOS)
         Settings {
             SettingsView(store: store, attention: attention)
+                .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
         }
         #endif
     }

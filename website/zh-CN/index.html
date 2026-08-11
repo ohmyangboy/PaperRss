@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaperRss — 双语流转，克制智能化</title>
+  <meta name="description" content="PaperRss 是一款专为 macOS 打造的现代纸感 RSS 阅读器，支持 AI 摘要、划词翻译与兼容 OpenAI 的模型服务。" />
+  <link rel="canonical" href="https://ohmyangboy.github.io/PaperRss/zh-CN/" />
+  <link rel="alternate" hreflang="zh-CN" href="https://ohmyangboy.github.io/PaperRss/zh-CN/" />
+  <link rel="alternate" hreflang="en" href="https://ohmyangboy.github.io/PaperRss/en/" />
+  <link rel="alternate" hreflang="x-default" href="https://ohmyangboy.github.io/PaperRss/" />
+  <link rel="icon" type="image/png" href="../assets/app-icon.png" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a href="./" class="brand">
+      <img src="../assets/app-icon.png" alt="PaperRss 图标" />
+      <div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">PAPER & AI READER</span></div>
+    </a>
+    <nav class="site-nav"><a href="#features">功能特性</a><a href="#ai-assistant">AI 助手</a><a href="#sponsor">赞赏支持</a><a href="#install">安装说明</a></nav>
+    <div class="header-actions">
+      <a class="language-switcher" href="../en/" lang="en" hreflang="en" onclick="localStorage.setItem('paperrss.locale','en')" aria-label="Switch to English">🌐 简体中文</a>
+      <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github">GitHub 仓库</a>
+      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">下载 v1.2.1</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="hero-stamp">Bilingual & Restrained AI Reader · macOS</div>
+      <h1>双语流转，克制智能化。<br /><em>让阅读回归纯粹与沉浸。</em></h1>
+      <p class="hero-subtitle">没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。</p>
+      <div class="hero-ctas">
+        <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.2.1/PaperRss-v1.2.1.dmg" class="hero-cta-main">下载 macOS 版本 (v1.2.1)</a>
+        <a href="#features" class="hero-cta-secondary">浏览核心特性 ↓</a>
+      </div>
+      <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API Key 仅存本机</p>
+    </section>
+
+    <section class="stage-section">
+      <div class="stage-window"><div class="stage-bar"><div class="window-dots"><span class="window-dot red"></span><span class="window-dot yellow"></span><span class="window-dot green"></span></div><span class="stage-title">PaperRss — 三栏纸感阅读界面</span></div><img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss 主界面" class="stage-image" /></div>
+    </section>
+
+    <aside class="trust-rail">
+      <div class="trust-item"><strong>本地优先</strong><span>API Key 仅存于本机设备</span></div>
+      <div class="trust-item"><strong>AI 智能阅读</strong><span>按需生成全文摘要</span></div>
+      <div class="trust-item"><strong>划词实时解读</strong><span>翻译、解释与提问</span></div>
+      <div class="trust-item"><strong>自由模型接入</strong><span>兼容 DeepSeek 与 OpenAI API</span></div>
+    </aside>
+
+    <section id="features" style="padding-top:2rem">
+      <div class="section-title-group"><p class="section-eyebrow">EDITORIAL EXPERIENCE</p><h2>兼具美感与效能的阅读体验</h2></div>
+      <div class="features-grid">
+        <div class="feature-card"><div><div class="feature-num">01 / DESIGN</div><h3>沉浸式纸感排版</h3><p>为长文阅读微调的衬线字号与行距，并提供明暗主题。</p></div><img src="../assets/screenshots/article-reader-detail.png" alt="文章阅读排版" class="feature-card-img" /></div>
+        <div class="feature-card"><div><div class="feature-num">02 / SUMMARY</div><h3>按需生成 AI 摘要</h3><p>阅读前快速提炼要点，也可以选择首次打开文章时自动生成。</p></div><img src="../assets/screenshots/ai-summary-card.png" alt="AI 摘要" class="feature-card-img" /></div>
+        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>划词翻译、解释与提问</h3><p>选择文章中的文字，即可获得结合上下文的翻译与解释。</p></div><img src="../assets/screenshots/ai-explain-popover.png" alt="划词 AI 助手" class="feature-card-img" /></div>
+      </div>
+    </section>
+
+    <section id="ai-assistant" class="deep-feature">
+      <div class="deep-feature-text"><p class="section-eyebrow">AI POWERED ENGINE</p><h3>可配置的 AI 阅读助手</h3><p>兼容 DeepSeek 和标准 OpenAI API。你可以设置模型、目标翻译语言、推理偏好与个性化指令；AI 输出语言独立于界面语言。</p><div class="feature-tags"><span class="feature-tag">DeepSeek</span><span class="feature-tag">OpenAI API</span><span class="feature-tag">Local Models</span><span class="feature-tag">Custom Prompts</span></div></div>
+      <div><img src="../assets/screenshots/settings-ai-config.png" alt="PaperRss AI 设置" class="deep-feature-img" /></div>
+    </section>
+
+    <section id="sponsor" class="sponsor-section">
+      <span class="sponsor-badge">SPONSOR & COMMUNITY</span><h2>支持 PaperRss 持续进化</h2>
+      <p class="sponsor-desc">PaperRss 是独立开发并开源的软件。如果它改善了你的阅读体验，欢迎通过微信赞赏支持开发者，或在 GitHub 提交反馈。</p>
+      <div class="sponsor-box"><div class="qr-card"><img src="../assets/wechat-sponsor-qr.jpg" alt="微信赞赏码" /><div class="qr-caption">微信扫码赞赏支持</div></div><div class="feedback-links"><a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn">提交 GitHub Issue / 反馈建议</a><a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback">★ 给项目点个 Star</a></div></div>
+    </section>
+
+    <section id="install" class="install-section">
+      <div class="section-title-group install-title"><p class="section-eyebrow">INSTALLATION GUIDE</p><h2>安装与安全说明</h2></div>
+      <div class="install-box"><p>当前 Release 没有 Apple 公证。若首次打开提示无法验证或应用已损坏，请在终端执行：</p><div class="install-cmd">sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app</div></div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="container"><div class="footer-nav"><a href="#features">功能</a><a href="#ai-assistant">AI 助手</a><a href="#sponsor">赞赏</a><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">GPLv3</a><a href="https://github.com/ohmyangboy/PaperRss">GitHub</a></div><p>© 2026 PaperRss. Made with care by @ohmyangboy.</p></div></footer>
+</body>
+</html>

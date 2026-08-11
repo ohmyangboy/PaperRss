@@ -9,13 +9,22 @@ let package = Package(
         .executable(name: "PaperRssDesktop", targets: ["PaperRssDesktop"])
     ],
     targets: [
-        .target(name: "PaperRssCore", path: "PaperRss/Sources/Core"),
+        .target(
+            name: "PaperRssCore",
+            path: "PaperRss/Sources/Core",
+            resources: [.process("../../Resources/Localization/Localizable.xcstrings")]
+        ),
         .executableTarget(
             name: "PaperRssDesktop",
             dependencies: ["PaperRssCore"],
             path: "PaperRss/Sources/App",
             resources: [.process("../../Resources")]
         ),
-        .testTarget(name: "PaperRssCoreTests", dependencies: ["PaperRssCore"], path: "Tests")
+        .testTarget(
+            name: "PaperRssCoreTests",
+            dependencies: ["PaperRssCore"],
+            path: "Tests",
+            exclude: ["website-locale.test.mjs"]
+        )
     ]
 )

@@ -30,6 +30,16 @@ fi
 
 echo "🔧 开发者环境: $DEVELOPER_DIR"
 
+echo "🌐 正在同步双语官网到 GitHub Pages 目录..."
+bash ./scripts/sync_website_to_docs.sh
+
+PAGES_CHANGES=$(git status --porcelain -- docs/index.html docs/locale.mjs docs/styles.css docs/en docs/zh-CN docs/assets)
+if [ -n "$PAGES_CHANGES" ]; then
+    echo "❌ 官网同步后 docs/ 存在未提交变更。请先提交 website/ 与 docs/，再重新发布："
+    echo "$PAGES_CHANGES"
+    exit 1
+fi
+
 if [ "$LOCAL_ONLY" = "false" ]; then
     # 检查 GitHub CLI 所需工具
     if ! command -v gh &> /dev/null; then
@@ -176,6 +186,19 @@ RELEASE_NOTES=$(cat <<EOF
 - ⚡️ 高效内存与本地 JSON 持久化索引，长文章滑动流畅不卡顿。
 
 ### 📝 最近更新明细
+$CHANGELOG
+
+---
+
+🎉 PaperRss ${TAG_NAME} is now available!
+
+### 🌟 Highlights
+- 📰 A native three-column RSS reader for macOS with a calm, paper-inspired reading experience.
+- 🤖 DeepSeek and OpenAI-compatible APIs, with manual or automatic AI summaries.
+- ✦ Context-aware selection tools for explanation and translation, delivered in a lightweight popover.
+- ⚡️ Local JSON persistence and responsive scrolling for long-form articles.
+
+### 📝 Recent Changes
 $CHANGELOG
 EOF
 )

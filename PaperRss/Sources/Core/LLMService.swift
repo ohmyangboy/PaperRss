@@ -13,15 +13,15 @@ public enum LLMServiceError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidBaseURL: "Base URL 无效。"
-        case .insecureEndpoint: "仅允许 HTTPS；局域网 HTTP 需在设置中明确开启。"
-        case .invalidResponse: "模型返回的内容无法识别。"
-        case .emptyResponse: "模型没有返回文本。"
-        case .authenticationFailed: "身份验证失败。请在设置中检查 DeepSeek API Key 是否有效、完整且仍有权限。"
-        case .rateLimited: "请求过于频繁或当前额度受限。请稍后重试，并检查服务商账户额度。"
-        case .missingAPIKey: "尚未设置 API Key。请先在设置中完成 AI 服务配置。"
-        case .requestInProgress: "已有 AI 任务正在进行，请稍后再试。"
-        case let .httpStatus(code, message): "模型接口返回 HTTP \(code)：\(message)"
+        case .invalidBaseURL: I18N.localized("Base URL 无效。")
+        case .insecureEndpoint: I18N.localized("仅允许 HTTPS；局域网 HTTP 需在设置中明确开启。")
+        case .invalidResponse: I18N.localized("模型返回的内容无法识别。")
+        case .emptyResponse: I18N.localized("模型没有返回文本。")
+        case .authenticationFailed: I18N.localized("身份验证失败。请在设置中检查 DeepSeek API Key 是否有效、完整且仍有权限。")
+        case .rateLimited: I18N.localized("请求过于频繁或当前额度受限。请稍后重试，并检查服务商账户额度。")
+        case .missingAPIKey: I18N.localized("尚未设置 API Key。请先在设置中完成 AI 服务配置。")
+        case .requestInProgress: I18N.localized("已有 AI 任务正在进行，请稍后再试。")
+        case let .httpStatus(code, message): I18N.localizedFormat("模型接口返回 HTTP %lld：%@", arguments: [code, message])
         }
     }
 }

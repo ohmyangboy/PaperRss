@@ -6,7 +6,7 @@ public enum CloudSyncError: LocalizedError, Equatable, Sendable {
     case notEntitled
 
     public var errorDescription: String? {
-        "此构建未启用 iCloud 权限：请使用开发者证书签名并在 Xcode 中开启 CloudKit capability。"
+        I18N.localized("此构建未启用 iCloud 权限：请使用开发者证书签名并在 Xcode 中开启 CloudKit capability。")
     }
 }
 

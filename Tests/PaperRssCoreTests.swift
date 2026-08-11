@@ -195,7 +195,18 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertNil(FeedAttentionPolicy.notificationSummary(outcome: launchOutcome, feedTitles: titles, enabled: true, appIsActive: false))
     }
 
-        func testFeedRefreshIntervalOffersExpectedChoices() {
+    func testFeedRefreshIntervalOffersExpectedChoices() {
+        let defaults = UserDefaults.standard
+        let previousLanguage = defaults.string(forKey: "PaperRss.appLanguage")
+        defaults.set(AppLanguage.zhHans.rawValue, forKey: "PaperRss.appLanguage")
+        defer {
+            if let previousLanguage {
+                defaults.set(previousLanguage, forKey: "PaperRss.appLanguage")
+            } else {
+                defaults.removeObject(forKey: "PaperRss.appLanguage")
+            }
+        }
+
         XCTAssertEqual(FeedRefreshInterval.allCases.map(\.title), [
             "仅手动",
             "每 30 分钟",
@@ -839,6 +850,17 @@ final class PaperRssCoreTests: XCTestCase {
 
     @MainActor
     func testSummaryForceRegenerationAndMissingKeyError() async throws {
+        let defaults = UserDefaults.standard
+        let previousLanguage = defaults.string(forKey: "PaperRss.appLanguage")
+        defaults.set(AppLanguage.zhHans.rawValue, forKey: "PaperRss.appLanguage")
+        defer {
+            if let previousLanguage {
+                defaults.set(previousLanguage, forKey: "PaperRss.appLanguage")
+            } else {
+                defaults.removeObject(forKey: "PaperRss.appLanguage")
+            }
+        }
+
         let store = AppStore()
         var config = store.database.llmConfiguration
         config.baseURL = "https://api.deepseek.com"
@@ -970,5 +992,58 @@ final class PaperRssCoreTests: XCTestCase {
         // Clear ignored version
         store.clearIgnoredVersion()
         XCTAssertNil(store.ignoredVersion)
+    }
+
+    func testAppLanguageResolvesEnglishAndChineseFallbackFromSystemPreference() {
+        XCTAssertEqual(
+            AppLanguage.system.resolvedLocalization(preferredLanguages: ["en-US", "zh-Hans"]),
+            .en
+        )
+        XCTAssertEqual(
+            AppLanguage.system.resolvedLocalization(preferredLanguages: ["zh-Hans", "en-US"]),
+            .zhHans
+        )
+        XCTAssertEqual(
+            AppLanguage.system.resolvedLocalization(preferredLanguages: ["ja-JP", "en-US"]),
+            .zhHans
+        )
+        XCTAssertEqual(
+            AppLanguage.system.resolvedLocalization(preferredLanguages: []),
+            .zhHans
+        )
+    }
+
+    func testExplicitAppLanguageOverridesSystemPreference() {
+        XCTAssertEqual(
+            AppLanguage.en.resolvedLocalization(preferredLanguages: ["zh-Hans"]),
+            .en
+        )
+        XCTAssertEqual(
+            AppLanguage.zhHans.resolvedLocalization(preferredLanguages: ["en-US"]),
+            .zhHans
+        )
+    }
+
+    func testEnglishCatalogProvidesApplicationOwnedCopy() {
+        XCTAssertEqual(I18N.localized("今天", language: .zhHans), "今天")
+        XCTAssertEqual(I18N.localized("今天", language: .en), "Today")
+        XCTAssertEqual(I18N.localized("添加订阅", language: .en), "Add Feed")
+        XCTAssertEqual(
+            I18N.localizedFormat("%lld 个订阅", arguments: [3], language: .en),
+            "3 Feeds"
+        )
+    }
+
+    @MainActor
+    func testICloudSyncStatusTracksAppLanguageImmediately() {
+        let store = AppStore(testDatabase: .empty) { _ in
+            throw URLError(.badServerResponse)
+        }
+
+        store.appLanguage = .zhHans
+        XCTAssertEqual(store.iCloudSyncStatus, "未启用")
+
+        store.appLanguage = .en
+        XCTAssertEqual(store.iCloudSyncStatus, "Disabled")
     }
 }

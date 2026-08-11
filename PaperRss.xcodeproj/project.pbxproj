@@ -131,7 +131,7 @@
 			};
 			buildConfigurationList = A1000000000000000000001F /* Build configuration list for PBXProject "PaperRss" */;
 			compatibilityVersion = "Xcode 16.0";
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,

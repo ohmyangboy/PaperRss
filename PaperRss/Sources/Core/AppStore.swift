@@ -12,9 +12,9 @@ public enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     @MainActor
     public var title: String {
         switch self {
-        case .system: I18N.shared.tr("跟随系统", "System")
-        case .light: I18N.shared.tr("浅色模式", "Light")
-        case .dark: I18N.shared.tr("深色模式", "Dark")
+        case .system: I18N.shared.localized("跟随系统")
+        case .light: I18N.shared.localized("浅色模式")
+        case .dark: I18N.shared.localized("深色模式")
         }
     }
 
@@ -33,8 +33,8 @@ public enum AIRequestPhase: Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case .loadingLocalConfiguration: "正在读取本机 AI 配置…"
-        case .generating: "正在生成，完成后会自动显示。"
+        case .loadingLocalConfiguration: I18N.localized("正在读取本机 AI 配置…")
+        case .generating: I18N.localized("正在生成，完成后会自动显示。")
         }
     }
 }
@@ -191,7 +191,33 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var refreshOnLaunch: Bool
     @Published public private(set) var lastError: String?
     @Published public private(set) var isICloudSyncEnabled = false
-    @Published public private(set) var iCloudSyncStatus = "未启用"
+    private enum ICloudSyncState {
+        case disabled
+        case waiting
+        case synced(Date)
+        case failed(String)
+        case notEntitled
+    }
+
+    @Published private var iCloudSyncState: ICloudSyncState = .disabled
+    public var iCloudSyncStatus: String {
+        switch iCloudSyncState {
+        case .disabled:
+            return I18N.localized("未启用")
+        case .waiting:
+            return I18N.localized("等待同步")
+        case let .synced(date):
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: appLanguage.localeIdentifier)
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            return I18N.localizedFormat("上次同步：%@", arguments: [formatter.string(from: date)])
+        case let .failed(message):
+            return I18N.localizedFormat("同步失败：%@", arguments: [message])
+        case .notEntitled:
+            return CloudSyncError.notEntitled.localizedDescription
+        }
+    }
     @Published public private(set) var activeAIRequest: AIRequestStatus?
     @Published public private(set) var updateStatus: UpdateCheckStatus = .idle
     @Published public private(set) var ignoredVersion: String?
@@ -273,10 +299,10 @@ public final class AppStore: ObservableObject {
             // 异常无法被 Swift 捕获，会直接终止应用（SIGABRT）。
             UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
             isICloudSyncEnabled = false
-            iCloudSyncStatus = CloudSyncError.notEntitled.localizedDescription
+            iCloudSyncState = .notEntitled
         } else {
             isICloudSyncEnabled = storedICloudSyncEnabled
-            iCloudSyncStatus = isICloudSyncEnabled ? "等待同步" : "未启用"
+            iCloudSyncState = isICloudSyncEnabled ? .waiting : .disabled
         }
         if needsRepairPersistence { persist(scheduleICloud: false) }
 
@@ -300,7 +326,7 @@ public final class AppStore: ObservableObject {
         appTheme = .system
         articleFontSize = 17
         isICloudSyncEnabled = false
-        iCloudSyncStatus = "未启用"
+        iCloudSyncState = .disabled
         ignoredVersion = nil
     }
 
@@ -601,8 +627,8 @@ public final class AppStore: ObservableObject {
     }
 
     public func addFeed(urlText: String, folder: String? = nil) async {
-        guard let url = normalizedURL(urlText) else { lastError = "请输入有效的 Feed URL。"; return }
-        guard !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) else { lastError = "这个订阅已经存在。"; return }
+        guard let url = normalizedURL(urlText) else { lastError = I18N.localized("请输入有效的 Feed URL。"); return }
+        guard !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) else { lastError = I18N.localized("这个订阅已经存在。"); return }
         let feed = Feed(title: url.host ?? url.absoluteString, feedURL: url, folder: folder?.nonEmpty)
         database.feeds.append(feed)
         persist()
@@ -1043,18 +1069,18 @@ public final class AppStore: ObservableObject {
         guard enabled else {
             isICloudSyncEnabled = false
             UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
-            iCloudSyncStatus = "未启用"
+            iCloudSyncState = .disabled
             iCloudSyncTask?.cancel()
             iCloudSyncTask = nil
             return
         }
         guard CloudSyncService.isICloudEntitled else {
-            iCloudSyncStatus = CloudSyncError.notEntitled.localizedDescription
+            iCloudSyncState = .notEntitled
             return
         }
         isICloudSyncEnabled = true
         UserDefaults.standard.set(true, forKey: "PaperRss.iCloudSyncEnabled")
-        iCloudSyncStatus = "等待同步"
+        iCloudSyncState = .waiting
         scheduleICloudSync()
     }
 
@@ -1064,9 +1090,9 @@ public final class AppStore: ObservableObject {
             let remote = try await CloudSyncService.shared.synchronize(CloudLibrary.from(database))
             apply(cloud: remote)
             persist(scheduleICloud: false)
-            iCloudSyncStatus = "上次同步：\(Date.now.formatted(date: .omitted, time: .shortened))"
+            iCloudSyncState = .synced(.now)
         } catch {
-            iCloudSyncStatus = "同步失败：\(error.localizedDescription)"
+            iCloudSyncState = .failed(error.localizedDescription)
         }
     }
 
@@ -1082,7 +1108,7 @@ public final class AppStore: ObservableObject {
                 && $0.isComplete
         }) { return }
         guard activeAIRequest == nil else {
-            lastError = "已有 AI 任务正在进行，请等待它完成后再试。"
+            lastError = I18N.localized("已有 AI 任务正在进行，请等待它完成后再试。")
             return
         }
 
@@ -1094,7 +1120,7 @@ public final class AppStore: ObservableObject {
         }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            lastError = "尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。"
+            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
             return
         }
 
@@ -1414,7 +1440,7 @@ public final class AppStore: ObservableObject {
         let configuration = database.llmConfiguration
         let hash = text.stableDigest
         guard !paragraphs.isEmpty else {
-            lastError = "没有可翻译的正文。"
+            lastError = I18N.localized("没有可翻译的正文。")
             return
         }
 
@@ -1464,7 +1490,7 @@ public final class AppStore: ObservableObject {
         defer { activeAIRequest = nil }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            lastError = "尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。"
+            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
             return
         }
 

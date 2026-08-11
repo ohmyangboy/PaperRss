@@ -22,13 +22,13 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var title: String {
         switch self {
-        case .appearance: I18N.shared.tr("外观", "Appearance")
-        case .aiService: I18N.shared.tr("AI 功能", "AI Features")
-        case .refresh: I18N.shared.tr("刷新", "Refresh")
-        case .language: I18N.shared.tr("语言", "Language")
-        case .sync: I18N.shared.tr("同步", "Sync")
-        case .feedback: I18N.shared.tr("反馈与赞赏", "Feedback & Sponsor")
-        case .about: I18N.shared.tr("关于", "About")
+        case .appearance: I18N.shared.localized("外观", "Appearance")
+        case .aiService: I18N.shared.localized("AI 功能", "AI Features")
+        case .refresh: I18N.shared.localized("刷新", "Refresh")
+        case .language: I18N.shared.localized("语言", "Language")
+        case .sync: I18N.shared.localized("同步", "Sync")
+        case .feedback: I18N.shared.localized("反馈与赞赏", "Feedback & Sponsor")
+        case .about: I18N.shared.localized("关于", "About")
         }
     }
 
@@ -47,13 +47,13 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var subtitle: String {
         switch self {
-        case .appearance: I18N.shared.tr("控制界面颜色主题与文章阅读字号", "Control interface color theme and reading font size")
-        case .aiService: I18N.shared.tr("配置模型服务、阅读助手与生成偏好", "Configure model service, reading assistant, and preferences")
-        case .refresh: I18N.shared.tr("控制订阅的自动更新", "Control automatic feed updates")
-        case .language: I18N.shared.tr("切换应用界面语言", "Switch application display language")
-        case .sync: I18N.shared.tr("同步阅读状态和 AI 结果", "Synchronize reading state and AI results")
-        case .feedback: I18N.shared.tr("赞赏支持开发者、提交问题反馈与交流", "Support developer, submit feedback, and get in touch")
-        case .about: I18N.shared.tr("版本信息、GitHub 仓库与软件更新", "Version info, GitHub repository, and update checks")
+        case .appearance: I18N.shared.localized("控制界面颜色主题与文章阅读字号")
+        case .aiService: I18N.shared.localized("配置模型服务、阅读助手与生成偏好")
+        case .refresh: I18N.shared.localized("控制订阅的自动更新")
+        case .language: I18N.shared.localized("切换应用界面语言")
+        case .sync: I18N.shared.localized("同步阅读状态和 AI 结果")
+        case .feedback: I18N.shared.localized("赞赏支持开发者、提交问题反馈与交流")
+        case .about: I18N.shared.localized("版本信息、GitHub 仓库与软件更新")
         }
     }
 }
@@ -142,7 +142,7 @@ struct SettingsView: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    Picker("设置类别", selection: $selectedSection) {
+                    Picker(I18N.localized("设置类别"), selection: $selectedSection) {
                         ForEach(SettingsSection.allCases) { section in
                             Text(section.title).tag(section)
                         }
@@ -196,7 +196,7 @@ struct SettingsView: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.accentColor)
 
-            Text(I18N.shared.tr("设置", "Settings"))
+            Text(I18N.shared.localized("设置", "Settings"))
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.primary)
 
@@ -228,7 +228,7 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
 
                 if section == .about && store.updateStatus.hasNewVersion {
-                    Text("NEW")
+                    Text(I18N.localized("NEW"))
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
@@ -262,7 +262,7 @@ struct SettingsView: View {
                 Image(systemName: "doc.richtext")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
-                Text("Paper RSS")
+                Text(I18N.localized("PaperRss"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.tertiary)
             }
@@ -316,10 +316,40 @@ struct SettingsView: View {
     private var feedbackSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.tr("赞赏与支持", "Support & Sponsor"),
-                footer: I18N.shared.tr("如果 Paper RSS 帮助到了您的日常阅读，欢迎使用微信扫码赞赏支持开发者持续更新！", "If Paper RSS helps your daily reading, feel free to scan WeChat QR code to support continuous updates!")
+                I18N.shared.localized("赞赏与支持"),
+                footer: I18N.shared.localized(
+                    store.appLanguage.resolvedLocalization() == .en
+                        ? "如果 PaperRss 改善了你的阅读体验，可以通过 PayPal 支持持续开发。"
+                        : "如果 PaperRss 改善了你的阅读体验，欢迎使用微信扫码赞赏支持持续开发。"
+                )
             ) {
-                VStack(spacing: 16) {
+                if store.appLanguage.resolvedLocalization() == .en {
+                    HStack(spacing: 20) {
+                        Image(systemName: "heart.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(PaperTheme.accent)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(I18N.shared.localized("通过 PayPal 支持 PaperRss"))
+                                .font(.system(size: 16, weight: .bold))
+                            Text(I18N.shared.localized("感谢你支持独立软件与专注阅读。"))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Button(I18N.shared.localized("前往 PayPal")) {
+                            if let url = URL(string: "https://paypal.me/ohmyangboy") {
+                                UpdateCheckService.openURL(url)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                } else {
+                    VStack(spacing: 16) {
                     HStack(alignment: .center, spacing: 20) {
                         Image("SponsorQR", bundle: nil)
                             .resizable()
@@ -336,16 +366,16 @@ struct SettingsView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "heart.fill")
                                     .foregroundStyle(Color.red)
-                                Text(I18N.shared.tr("微信赞赏码", "WeChat Sponsor"))
+                                Text(I18N.shared.localized("微信赞赏码"))
                                     .font(.system(size: 16, weight: .bold))
                             }
 
-                            Text(I18N.shared.tr("感谢每一位热爱独立软件与专注阅读的读者。", "Thanks to everyone who loves independent software and thoughtful reading."))
+                            Text(I18N.shared.localized("感谢每一位热爱独立软件与专注阅读的读者。"))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
 
-                            Text(I18N.shared.tr("您的支持是 Paper RSS 持续进化与维护的源源动力。", "Your support is the continuous driving force for Paper RSS evolution."))
+                            Text(I18N.shared.localized("您的支持是 PaperRss 持续进化与维护的动力。"))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -353,16 +383,17 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.vertical, 14)
+                    }
                 }
             }
 
             settingsGroup(
-                I18N.shared.tr("问题反馈与建议", "Feedback & Issues"),
-                footer: I18N.shared.tr("遇到了 Bug 或有新的功能想法？欢迎随时提交 GitHub Issue 或联系开发者。", "Encountered a bug or have new feature ideas? Welcome to submit GitHub Issues or contact developer.")
+                I18N.shared.localized("问题反馈与建议", "Feedback & Issues"),
+                footer: I18N.shared.localized("遇到了 Bug 或有新的功能想法？欢迎随时提交 GitHub Issue 或联系开发者。")
             ) {
                 settingsRow(
-                    I18N.shared.tr("提交 GitHub Issue", "Submit GitHub Issue"),
-                    description: I18N.shared.tr("直接前往 GitHub 仓库提交反馈或功能建议", "Submit feedback or feature requests on GitHub")
+                    I18N.shared.localized("提交 GitHub Issue", "Submit GitHub Issue"),
+                    description: I18N.shared.localized("直接前往 GitHub 仓库提交反馈或功能建议")
                 ) {
                     Button {
                         if let url = URL(string: "https://github.com/ohmyangboy/PaperRss/issues") {
@@ -371,7 +402,7 @@ struct SettingsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
-                            Text(I18N.shared.tr("新建 Issue", "New Issue"))
+                            Text(I18N.shared.localized("新建 Issue", "New Issue"))
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -380,7 +411,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow(
-                    I18N.shared.tr("开发者社区", "Developer Community"),
+                    I18N.shared.localized("开发者社区", "Developer Community"),
                     description: "GitHub @ohmyangboy"
                 ) {
                     Button {
@@ -389,7 +420,7 @@ struct SettingsView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text("GitHub Profile")
+                            Text(I18N.localized("GitHub Profile"))
                             Image(systemName: "arrow.up.right")
                         }
                     }
@@ -402,12 +433,12 @@ struct SettingsView: View {
     private var appearanceSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.tr("颜色主题", "Color Theme"),
-                footer: I18N.shared.tr("选择浅色、深色或自动跟随系统的外观风格。", "Choose Light, Dark, or automatically follow system appearance.")
+                I18N.shared.localized("颜色主题"),
+                footer: I18N.shared.localized("选择浅色、深色或自动跟随系统的外观风格。", "Choose Light, Dark, or automatically follow system appearance.")
             ) {
-                settingsRow(I18N.shared.tr("外观模式", "Theme Mode")) {
+                settingsRow(I18N.shared.localized("外观模式", "Theme Mode")) {
                     Picker(
-                        I18N.shared.tr("外观模式", "Theme Mode"),
+                        I18N.shared.localized("外观模式", "Theme Mode"),
                         selection: Binding(
                             get: { store.appTheme },
                             set: { store.setAppTheme($0) }
@@ -424,26 +455,26 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.tr("正文字号", "Article Font Size"),
-                footer: I18N.shared.tr("调整文章阅读器中的正文字体大小，支持预设与微调。", "Adjust body font size in article reader with presets and fine tuning.")
+                I18N.shared.localized("正文字号", "Article Font Size"),
+                footer: I18N.shared.localized("调整文章阅读器中的正文字体大小，支持预设与微调。")
             ) {
                 settingsRow(
-                    I18N.shared.tr("预设字号", "Preset Sizes")
+                    I18N.shared.localized("预设字号", "Preset Sizes")
                 ) {
                     HStack(spacing: 8) {
-                        Button("小 (14pt)") { store.setArticleFontSize(14) }
+                        Button(I18N.localized("小 (14pt)")) { store.setArticleFontSize(14) }
                             .buttonStyle(.bordered)
                             .tint(store.articleFontSize == 14 ? Color.accentColor : .primary)
 
-                        Button("标准 (17pt)") { store.setArticleFontSize(17) }
+                        Button(I18N.localized("标准 (17pt)")) { store.setArticleFontSize(17) }
                             .buttonStyle(.bordered)
                             .tint(store.articleFontSize == 17 ? Color.accentColor : .primary)
 
-                        Button("大 (20pt)") { store.setArticleFontSize(20) }
+                        Button(I18N.localized("大 (20pt)")) { store.setArticleFontSize(20) }
                             .buttonStyle(.bordered)
                             .tint(store.articleFontSize == 20 ? Color.accentColor : .primary)
 
-                        Button("特大 (23pt)") { store.setArticleFontSize(23) }
+                        Button(I18N.localized("特大 (23pt)")) { store.setArticleFontSize(23) }
                             .buttonStyle(.bordered)
                             .tint(store.articleFontSize == 23 ? Color.accentColor : .primary)
                     }
@@ -452,8 +483,8 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow(
-                    I18N.shared.tr("精确调节", "Fine Tuning"),
-                    description: I18N.shared.tr("范围：13pt ~ 25pt", "Range: 13pt ~ 25pt")
+                    I18N.shared.localized("精确调节", "Fine Tuning"),
+                    description: I18N.shared.localized("范围：13pt ~ 25pt", "Range: 13pt ~ 25pt")
                 ) {
                     HStack(spacing: 12) {
                         Image(systemName: "textformat.size.smaller")
@@ -478,14 +509,14 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.tr("实时预览", "Live Preview")
+                I18N.shared.localized("实时预览", "Live Preview")
             ) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("The Morning Digest · 晨间速览")
+                    Text(I18N.localized("The Morning Digest · 晨间速览"))
                         .font(.system(size: CGFloat(store.articleFontSize) * 1.2, weight: .bold, design: .serif))
                         .foregroundStyle(.primary)
 
-                    Text("Paper RSS 专为沉浸式阅读打造。在保持传统报纸排版美感的同时，为您提供最舒适的阅读体验。调整字号可实时同步至所有文章阅读页面。")
+                    Text(I18N.localized("PaperRss 专为沉浸式阅读打造。在保持纸张排版美感的同时，提供舒适的长文阅读体验。字号调整会同步到所有文章。"))
                         .font(.system(size: CGFloat(store.articleFontSize), weight: .regular))
                         .lineSpacing(6)
                         .foregroundStyle(.secondary)
@@ -509,11 +540,11 @@ struct SettingsView: View {
     private var languageSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.tr("界面语言", "Display Language"),
-                footer: I18N.shared.tr("默认跟随系统设置或简体中文，可以自由切换为英文。", "Default uses Simplified Chinese or System, switchable to English.")
+                I18N.shared.localized("界面语言", "Display Language"),
+                footer: I18N.shared.localized("默认跟随系统设置；也可以随时在这里切换，应用界面会立即更新。")
             ) {
-                settingsRow(I18N.shared.tr("语言选择", "Select Language")) {
-                    Picker(I18N.shared.tr("语言选择", "Select Language"), selection: $store.appLanguage) {
+                settingsRow(I18N.shared.localized("语言选择", "Select Language")) {
+                    Picker(I18N.shared.localized("语言选择", "Select Language"), selection: $store.appLanguage) {
                         ForEach(AppLanguage.allCases) { lang in
                             Text(lang.title).tag(lang)
                         }
@@ -539,16 +570,16 @@ struct SettingsView: View {
                         .frame(width: 28)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DeepSeek 推荐配置")
+                        Text(I18N.localized("DeepSeek 推荐配置"))
                             .font(.body.weight(.medium))
-                        Text("官方 OpenAI 兼容地址与 Flash 模型")
+                        Text(I18N.localized("官方 OpenAI 兼容地址与 Flash 模型"))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
 
                     Spacer(minLength: 16)
 
-                    Button("使用推荐配置") { useDeepSeekDefaults() }
+                    Button(I18N.localized("使用推荐配置")) { useDeepSeekDefaults() }
                         .buttonStyle(.bordered)
                 }
                 .padding(.horizontal, 18)
@@ -557,7 +588,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("名称", description: "用于识别这组 AI 配置") {
-                    TextField("例如：DeepSeek", text: $configuration.providerName)
+                    TextField(I18N.localized("例如：DeepSeek"), text: $configuration.providerName)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 340)
                 }
@@ -565,7 +596,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("描述") {
-                    TextField("例如：个人阅读助手", text: $configuration.providerDescription)
+                    TextField(I18N.localized("例如：个人阅读助手"), text: $configuration.providerDescription)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 340)
                 }
@@ -576,9 +607,9 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Group {
                             if showsAPIKey {
-                                TextField("局域网模型可留空", text: $apiKey)
+                                TextField(I18N.localized("局域网模型可留空"), text: $apiKey)
                             } else {
-                                SecureField("局域网模型可留空", text: $apiKey)
+                                SecureField(I18N.localized("局域网模型可留空"), text: $apiKey)
                             }
                         }
                         .textFieldStyle(.roundedBorder)
@@ -589,7 +620,7 @@ struct SettingsView: View {
                             Image(systemName: showsAPIKey ? "eye.slash" : "eye")
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel(showsAPIKey ? "隐藏密钥" : "显示密钥")
+                        .accessibilityLabel(I18N.shared.localized(showsAPIKey ? "隐藏密钥" : "显示密钥"))
                     }
                     .frame(maxWidth: 360)
                 }
@@ -597,7 +628,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("Base URL") {
-                    TextField("https://api.deepseek.com", text: $configuration.baseURL)
+                    TextField(I18N.localized("https://api.deepseek.com"), text: $configuration.baseURL)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 360)
                 }
@@ -606,9 +637,9 @@ struct SettingsView: View {
 
                 settingsRow("模型") {
                     if configuration.usesDeepSeekAPI && !usesCustomModel {
-                        Picker("模型", selection: $configuration.model) {
-                            Text("deepseek-v4-flash（推荐）").tag("deepseek-v4-flash")
-                            Text("deepseek-v4-pro").tag("deepseek-v4-pro")
+                        Picker(I18N.localized("模型"), selection: $configuration.model) {
+                            Text(I18N.localized("deepseek-v4-flash（推荐）")).tag("deepseek-v4-flash")
+                            Text(I18N.localized("deepseek-v4-pro")).tag("deepseek-v4-pro")
                         }
                         .labelsHidden()
                         .frame(maxWidth: 300, alignment: .trailing)
@@ -626,7 +657,7 @@ struct SettingsView: View {
                     Divider().padding(.horizontal, 18).opacity(0.35)
 
                     settingsRow("自定义模型") {
-                        Toggle("输入自定义模型名称", isOn: $usesCustomModel)
+                        Toggle(I18N.localized("输入自定义模型名称"), isOn: $usesCustomModel)
                             .labelsHidden()
                     }
                 }
@@ -642,7 +673,7 @@ struct SettingsView: View {
                     "展示 AI 摘要模块",
                     description: "关闭后，文章阅读页不显示摘要模块；已生成的摘要不会被删除。"
                 ) {
-                    Toggle("展示 AI 摘要模块", isOn: $configuration.showsAISummary)
+                    Toggle(I18N.localized("展示 AI 摘要模块"), isOn: $configuration.showsAISummary)
                         .labelsHidden()
                 }
 
@@ -652,7 +683,7 @@ struct SettingsView: View {
                     "打开文章时自动生成 AI 摘要",
                     description: "开启后，打开没有缓存摘要的文章会自动发送正文到模型。"
                 ) {
-                    Toggle("自动生成摘要", isOn: $configuration.automaticallyGenerateSummary)
+                    Toggle(I18N.localized("自动生成摘要"), isOn: $configuration.automaticallyGenerateSummary)
                         .labelsHidden()
                 }
             }
@@ -675,13 +706,13 @@ struct SettingsView: View {
                             showingTargetLanguagePopover = isHovered
                         }
                         .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
-                            Text("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。")
+                            Text(I18N.localized("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。"))
                                 .font(.subheadline)
                                 .padding(12)
                                 .frame(width: 220)
                         }
 
-                        TextField("简体中文", text: $configuration.targetLanguage)
+                        TextField(I18N.localized("简体中文"), text: $configuration.targetLanguage)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 200)
                     }
@@ -690,21 +721,21 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("划词解释按钮", description: "开启后，划词选择文本时展示“直接解释”按钮") {
-                    Toggle("划词解释按钮", isOn: $configuration.showsSelectionExplanation)
+                    Toggle(I18N.localized("划词解释按钮"), isOn: $configuration.showsSelectionExplanation)
                         .labelsHidden()
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("划词提问按钮", description: "开启后，划词选择文本时展示“向 AI 提问”按钮") {
-                    Toggle("划词提问按钮", isOn: $configuration.showsSelectionAsk)
+                    Toggle(I18N.localized("划词提问按钮"), isOn: $configuration.showsSelectionAsk)
                         .labelsHidden()
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("划词翻译按钮", description: "开启后，划词选择文本时展示“翻译”按钮") {
-                    Toggle("划词翻译按钮", isOn: $configuration.showsSelectionTranslation)
+                    Toggle(I18N.localized("划词翻译按钮"), isOn: $configuration.showsSelectionTranslation)
                         .labelsHidden()
                 }
             }
@@ -735,12 +766,12 @@ struct SettingsView: View {
                     "推理偏好",
                     description: "仅在服务商明确支持时生效；翻译和划词解释会自动关闭推理。"
                 ) {
-                    Picker("推理偏好", selection: $configuration.reasoningMode) {
-                        Text("自动").tag("自动")
-                        Text("关闭").tag("关闭")
-                        Text("低").tag("低")
-                        Text("中").tag("中")
-                        Text("高").tag("高")
+                    Picker(I18N.localized("推理偏好"), selection: $configuration.reasoningMode) {
+                        Text(I18N.localized("自动")).tag("自动")
+                        Text(I18N.localized("关闭")).tag("关闭")
+                        Text(I18N.localized("低")).tag("低")
+                        Text(I18N.localized("中")).tag("中")
+                        Text(I18N.localized("高")).tag("高")
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
@@ -753,7 +784,7 @@ struct SettingsView: View {
                 footer: "仅用于模型 Base URL。HTTP 未加密，只有在你信任局域网环境时才建议开启。"
             ) {
                 settingsRow("允许局域网 HTTP（不安全）") {
-                    Toggle("允许局域网 HTTP", isOn: $configuration.allowInsecureLocalEndpoint)
+                    Toggle(I18N.localized("允许局域网 HTTP"), isOn: $configuration.allowInsecureLocalEndpoint)
                         .labelsHidden()
                 }
             }
@@ -769,10 +800,10 @@ struct SettingsView: View {
                     .frame(width: 22)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(I18N.shared.tr("同步功能暂未上线", "Sync is not available yet"))
+                    Text(I18N.shared.localized("同步功能暂未上线", "Sync is not available yet"))
                         .font(.body.weight(.semibold))
 
-                    Text(I18N.shared.tr(
+                    Text(I18N.shared.localized(
                         "我们正在完善 iCloud 同步功能，正式上线前请继续使用本机数据。",
                         "We are still working on iCloud sync. Please continue using local data until it is released."
                     ))
@@ -797,7 +828,7 @@ struct SettingsView: View {
                 footer: "API Key、网页正文、网页缓存、HTTP 缓存和调试日志不会同步。"
             ) {
                 settingsRow("同步内容", description: "订阅、已读、收藏和 AI 结果") {
-                    Toggle("同步订阅、已读、收藏和 AI 结果", isOn: Binding(
+                    Toggle(I18N.localized("同步订阅、已读、收藏和 AI 结果"), isOn: Binding(
                         get: { store.isICloudSyncEnabled },
                         set: { store.setICloudSyncEnabled($0) }
                     ))
@@ -819,7 +850,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("操作") {
-                    Button("立即同步") {
+                    Button(I18N.localized("立即同步")) {
                         Task { await store.syncICloud() }
                     }
                     .disabled(!store.isICloudSyncEnabled)
@@ -828,7 +859,7 @@ struct SettingsView: View {
 
             settingsGroup("隐私") {
                 settingsRow("API Key") {
-                    Text("仅存于本机，不参与同步")
+                    Text(I18N.localized("仅存于本机，不参与同步"))
                         .foregroundStyle(.secondary)
                         .frame(width: 240, alignment: .trailing)
                 }
@@ -843,9 +874,9 @@ struct SettingsView: View {
 
                 VStack(spacing: 6) {
                     HStack(spacing: 6) {
-                        Text("Paper RSS")
+                        Text(I18N.localized("PaperRss"))
                             .font(.system(size: 22, weight: .bold))
-                        Text("Beta")
+                        Text(I18N.localized("Beta"))
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(PaperTheme.accent)
                             .padding(.horizontal, 6)
@@ -858,13 +889,13 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("专为沉浸式阅读打造的现代 RSS 订阅与 AI 强力阅读助手。")
+                Text(I18N.localized("专为沉浸式阅读打造的现代 RSS 订阅与 AI 阅读助手。"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16)
 
-                Text("当前为个人 Beta 版本，感谢您的使用和反馈。")
+                Text(I18N.localized("当前为个人 Beta 版本，感谢您的使用和反馈。"))
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(PaperTheme.accent)
                     .multilineTextAlignment(.center)
@@ -880,18 +911,18 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.tr("开源社区", "Open Source"),
-                footer: I18N.shared.tr("欢迎在 GitHub 上提出 Issue、提交 Feedback 或 Star 本项目。", "Welcome to file issues, give feedback, or star this project on GitHub.")
+                I18N.shared.localized("开源社区", "Open Source"),
+                footer: I18N.shared.localized("欢迎在 GitHub 上提出 Issue、提交 Feedback 或 Star 本项目。")
             ) {
                 settingsRow(
-                    I18N.shared.tr("GitHub 官方仓库", "GitHub Repository"),
+                    I18N.shared.localized("GitHub 官方仓库", "GitHub Repository"),
                     description: "https://github.com/ohmyangboy/PaperRss"
                 ) {
                     Button {
                         UpdateCheckService.openURL(UpdateCheckService.githubRepositoryURL)
                     } label: {
                         HStack(spacing: 4) {
-                            Text(I18N.shared.tr("前往 GitHub", "Open GitHub"))
+                            Text(I18N.shared.localized("前往 GitHub", "Open GitHub"))
                             Image(systemName: "arrow.up.right")
                         }
                     }
@@ -900,11 +931,11 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.tr("软件更新", "Software Update"),
-                footer: I18N.shared.tr("应用启动时会自动在后台检查 Release 更新；您也可以随时点击右侧按钮手动检查。", "App automatically checks for release updates on launch; you can also manually check anytime.")
+                I18N.shared.localized("软件更新", "Software Update"),
+                footer: I18N.shared.localized("应用启动时会自动在后台检查 Release 更新；您也可以随时点击右侧按钮手动检查。")
             ) {
                 settingsRow(
-                    I18N.shared.tr("当前版本状态", "Current Version Status"),
+                    I18N.shared.localized("当前版本状态", "Current Version Status"),
                     description: updateStatusDescription
                 ) {
                     if store.updateStatus.isChecking {
@@ -914,7 +945,7 @@ struct SettingsView: View {
                         Button {
                             UpdateCheckService.openURL(release.htmlURL)
                         } label: {
-                            Label(I18N.shared.tr("下载新版本", "Download New Release"), systemImage: "arrow.down.circle.fill")
+                            Label(I18N.shared.localized("下载新版本", "Download New Release"), systemImage: "arrow.down.circle.fill")
                         }
                         .buttonStyle(.borderedProminent)
                     } else {
@@ -923,7 +954,7 @@ struct SettingsView: View {
                                 await store.checkForUpdates(isUserInitiated: true)
                             }
                         } label: {
-                            Text(I18N.shared.tr("检查更新", "Check for Updates"))
+                            Text(I18N.shared.localized("检查更新", "Check for Updates"))
                         }
                         .buttonStyle(.bordered)
                     }
@@ -933,7 +964,7 @@ struct SettingsView: View {
                     Divider().padding(.horizontal, 18).opacity(0.35)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("新版本更新说明 (\(release.tagName))")
+                        Text(I18N.shared.localizedFormat("新版本更新说明 (%@)", release.tagName))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
 
@@ -955,16 +986,16 @@ struct SettingsView: View {
     private var updateStatusDescription: String {
         switch store.updateStatus {
         case .idle:
-            return I18N.shared.tr("尚未检查", "Not checked yet")
+            return I18N.shared.localized("尚未检查", "Not checked yet")
         case .checking:
-            return I18N.shared.tr("正在连接 GitHub 检查 Release 更新…", "Checking GitHub for updates...")
+            return I18N.shared.localized("正在连接 GitHub 检查 Release 更新…", "Checking GitHub for updates...")
         case let .upToDate(checkedAt):
             let timeString = DateFormatter.localizedString(from: checkedAt, dateStyle: .none, timeStyle: .short)
-            return I18N.shared.tr("已是最新版本 (上次检查: \(timeString))", "Up to date (Last checked: \(timeString))")
+            return I18N.shared.localizedFormat("已是最新版本（上次检查：%@）", timeString)
         case let .hasUpdate(release, _):
-            return I18N.shared.tr("发现新版本: \(release.tagName)", "New version available: \(release.tagName)")
+            return I18N.shared.localizedFormat("发现新版本：%@", release.tagName)
         case let .failed(message):
-            return I18N.shared.tr("检查更新失败: \(message)", "Check failed: \(message)")
+            return I18N.shared.localizedFormat("检查更新失败：%@", message)
         }
     }
 
@@ -1001,11 +1032,11 @@ struct SettingsView: View {
             settingsGroup(
                 "启动",
                 footer: store.refreshOnLaunch
-                    ? "每次打开或回到前台时，Paper RSS 会立即检查所有订阅。"
+                    ? "每次打开或回到前台时，PaperRss 会立即检查所有订阅。"
                     : "已关闭启动刷新；你仍可以使用底部的刷新按钮手动获取最新消息。"
             ) {
                 settingsRow("打开应用时自动刷新") {
-                    Toggle("打开应用时自动刷新", isOn: Binding(
+                    Toggle(I18N.localized("打开应用时自动刷新"), isOn: Binding(
                         get: { store.refreshOnLaunch },
                         set: { store.setRefreshOnLaunch($0) }
                     ))
@@ -1044,7 +1075,7 @@ struct SettingsView: View {
                     Button {
                         Task { await store.refresh() }
                     } label: {
-                        Label("立即刷新", systemImage: "arrow.clockwise")
+                        Label(I18N.localized("立即刷新"), systemImage: "arrow.clockwise")
                     }
                     .disabled(store.isRefreshing)
                 }
@@ -1059,18 +1090,18 @@ struct SettingsView: View {
     #if os(macOS)
     private var reminderSettings: some View {
         settingsGroup(
-            I18N.shared.tr("提醒", "Alerts"),
-            footer: I18N.shared.tr(
+            I18N.shared.localized("提醒", "Alerts"),
+            footer: I18N.shared.localized(
                 "Dock 徽标显示全部未读文章。",
                 "The Dock badge shows all unread articles."
             )
         ) {
             settingsRow(
-                I18N.shared.tr("Dock 未读徽标", "Dock unread badge"),
-                description: I18N.shared.tr("立即显示当前未读数，超过 99 显示 99+。", "Shows the current unread count immediately, capped at 99+.")
+                I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
+                description: I18N.shared.localized("立即显示当前未读数，超过 99 显示 99+。")
             ) {
                 Toggle(
-                    I18N.shared.tr("Dock 未读徽标", "Dock unread badge"),
+                    I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
                     isOn: Binding(
                         get: { attention.dockBadgeEnabled },
                         set: { attention.setDockBadgeEnabled($0) }
@@ -1089,7 +1120,7 @@ struct SettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
+            Text(LocalizedStringKey(title))
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18)
@@ -1099,7 +1130,7 @@ struct SettingsView: View {
             content()
 
             if let footer, !footer.isEmpty {
-                Text(footer)
+                Text(LocalizedStringKey(footer))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1125,11 +1156,11 @@ struct SettingsView: View {
     ) -> some View {
         HStack(alignment: .center, spacing: 20) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(.body)
 
                 if let description, !description.isEmpty {
-                    Text(description)
+                    Text(LocalizedStringKey(description))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1158,12 +1189,12 @@ struct SettingsView: View {
             Spacer()
 
             if selectedSection == .aiService {
-                Button(isTesting ? "正在测试…" : "测试连接") { test() }
+                Button(I18N.shared.localized(isTesting ? "正在测试…" : "测试连接")) { test() }
                     .disabled(isTesting)
             }
 
             if selectedSection == .aiService {
-                Button("保存设置") { save() }
+                Button(I18N.localized("保存设置")) { save() }
                     .buttonStyle(.borderedProminent)
             }
         }
@@ -1204,6 +1235,7 @@ struct SettingsView: View {
 
     private var statusIsSuccess: Bool {
         status.hasPrefix("成功") || status.hasPrefix("已保存") || status.hasPrefix("已填入")
+            || status.hasPrefix("Success") || status.hasPrefix("Saved") || status.hasPrefix("Recommended")
     }
 
     private func loadConfiguration() {
@@ -1233,7 +1265,7 @@ struct SettingsView: View {
         configuration.showsSelectionTranslation = showsSelectionTranslation
         apiKey = currentKey
         usesCustomModel = false
-        status = "已填入 DeepSeek 推荐配置；保存后即可测试。"
+        status = I18N.shared.localized("已填入 DeepSeek 推荐配置；保存后即可测试。")
     }
 
     private func test() {
@@ -1243,7 +1275,7 @@ struct SettingsView: View {
         Task {
             do {
                 try await store.testLLM(configuration: configuration, apiKey: apiKey)
-                status = "成功：接口可以响应。"
+                status = I18N.shared.localized("成功：接口可以响应。")
             } catch {
                 status = error.localizedDescription
             }
@@ -1286,17 +1318,21 @@ struct RefreshStatusView: View {
     private var statusText: some View {
         switch store.refreshStatus {
         case .refreshing:
-            Text("正在刷新订阅…")
+            Text(I18N.localized("正在刷新订阅…"))
         case let .completed(updatedFeeds, finishedAt):
             HStack(spacing: 4) {
-                Text(updatedFeeds > 0 ? "已检查 \(updatedFeeds) 个订阅" : "已检查，没有新消息")
-                Text("·")
+                Text(
+                    updatedFeeds > 0
+                        ? I18N.shared.localizedFormat("已检查 %lld 个订阅", updatedFeeds)
+                        : I18N.shared.localized("已检查，没有新消息")
+                )
+                Text(I18N.localized("·"))
                 Text(finishedAt, style: .time)
             }
         case let .failed(message, _):
-            Text("刷新遇到问题：\(message)")
+            Text(I18N.shared.localizedFormat("刷新遇到问题：%@", message))
         case .idle:
-            Text("尚未刷新")
+            Text(I18N.localized("尚未刷新"))
         }
     }
 
@@ -1310,10 +1346,10 @@ struct RefreshStatusView: View {
 
     private var statusHelp: String {
         switch store.refreshStatus {
-        case .refreshing: "正在请求订阅源最新内容"
-        case .completed: "订阅刷新完成"
-        case .failed: "部分订阅刷新失败"
-        case .idle: "还没有进行刷新"
+        case .refreshing: I18N.shared.localized("正在请求订阅源最新内容")
+        case .completed: I18N.shared.localized("订阅刷新完成")
+        case .failed: I18N.shared.localized("部分订阅刷新失败")
+        case .idle: I18N.shared.localized("还没有进行刷新")
         }
     }
 }

@@ -15,7 +15,7 @@ public enum LocalAPIKeyStore {
         case localAppConfiguration
 
         public var savedMessage: String {
-            "已保存于此 Mac 的本地应用配置；不会同步到 iCloud，也不会再请求钥匙串密码。"
+            I18N.localized("已保存于此 Mac 的本地应用配置；不会同步到 iCloud，也不会再请求钥匙串密码。")
         }
     }
 

@@ -8,10 +8,26 @@ public enum AppLanguage: String, CaseIterable, Codable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    public func resolvedLocalization(
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> AppLanguage {
+        switch self {
+        case .zhHans, .en:
+            return self
+        case .system:
+            let preferred = preferredLanguages.first?.lowercased() ?? ""
+            return preferred.hasPrefix("en") ? .en : .zhHans
+        }
+    }
+
+    public var localeIdentifier: String {
+        resolvedLocalization().rawValue
+    }
+
     @MainActor
     public var title: String {
         switch self {
-        case .system: I18N.shared.tr("跟随系统", "System Default")
+        case .system: I18N.shared.localized("跟随系统")
         case .zhHans: "简体中文"
         case .en: "English"
         }
@@ -29,39 +45,68 @@ public final class I18N: ObservableObject {
     }
 
     private init() {
-        let raw = UserDefaults.standard.string(forKey: "PaperRss.appLanguage") ?? AppLanguage.zhHans.rawValue
-        self.language = AppLanguage(rawValue: raw) ?? .zhHans
+        let raw = UserDefaults.standard.string(forKey: "PaperRss.appLanguage")
+        self.language = raw.flatMap(AppLanguage.init(rawValue:)) ?? .system
     }
 
     public var isEnglish: Bool {
-        switch language {
-        case .system:
-            let preferred = Locale.preferredLanguages.first?.lowercased() ?? ""
-            return preferred.hasPrefix("en")
-        case .zhHans:
-            return false
-        case .en:
-            return true
-        }
+        language.resolvedLocalization() == .en
     }
 
-    public func tr(_ zh: String, _ en: String) -> String {
-        Self.tr(zh, en)
+    public func localized(_ key: String) -> String {
+        Self.localized(key, language: language)
     }
 
-    public nonisolated static func tr(_ zh: String, _ en: String) -> String {
-        let raw = UserDefaults.standard.string(forKey: "PaperRss.appLanguage") ?? AppLanguage.zhHans.rawValue
-        let lang = AppLanguage(rawValue: raw) ?? .zhHans
-        let isEn: Bool
-        switch lang {
-        case .system:
-            let preferred = Locale.preferredLanguages.first?.lowercased() ?? ""
-            isEn = preferred.hasPrefix("en")
-        case .zhHans:
-            isEn = false
-        case .en:
-            isEn = true
+    public func localizedFormat(_ key: String, _ arguments: CVarArg...) -> String {
+        Self.localizedFormat(key, arguments: arguments, language: language)
+    }
+
+    public func localized(_ key: String, _ englishFallback: String) -> String {
+        Self.localized(key, englishFallback: englishFallback, language: language)
+    }
+
+    public nonisolated static func localized(
+        _ key: String,
+        englishFallback: String? = nil,
+        language explicitLanguage: AppLanguage? = nil
+    ) -> String {
+        let raw = UserDefaults.standard.string(forKey: "PaperRss.appLanguage")
+        let language = explicitLanguage
+            ?? raw.flatMap(AppLanguage.init(rawValue:))
+            ?? .system
+        let localization = language.resolvedLocalization().rawValue
+        let baseBundle = resourceBundle
+        let fallback = localization == AppLanguage.en.rawValue ? englishFallback ?? key : key
+        guard let path = baseBundle.path(forResource: localization, ofType: "lproj"),
+              let bundle = Bundle(path: path) else {
+            return fallback
         }
-        return isEn ? en : zh
+        return bundle.localizedString(forKey: key, value: fallback, table: "Localizable")
+    }
+
+    public nonisolated static func localizedFormat(
+        _ key: String,
+        arguments: [CVarArg],
+        language explicitLanguage: AppLanguage? = nil
+    ) -> String {
+        let language = explicitLanguage ?? currentLanguage
+        return String(
+            format: localized(key, language: language),
+            locale: Locale(identifier: language.resolvedLocalization().rawValue),
+            arguments: arguments
+        )
+    }
+
+    private nonisolated static var currentLanguage: AppLanguage {
+        let raw = UserDefaults.standard.string(forKey: "PaperRss.appLanguage")
+        return raw.flatMap(AppLanguage.init(rawValue:)) ?? .system
+    }
+
+    private nonisolated static var resourceBundle: Bundle {
+        #if SWIFT_PACKAGE
+        Bundle.module
+        #else
+        Bundle.main
+        #endif
     }
 }

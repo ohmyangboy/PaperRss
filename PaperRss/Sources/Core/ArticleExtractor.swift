@@ -470,8 +470,8 @@ public enum ExtractionError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupportedEncoding: "网页编码无法读取。"
-        case .noReadableContent: "没有提取到足够的正文；可打开原网页阅读。"
+        case .unsupportedEncoding: I18N.localized("网页编码无法读取。")
+        case .noReadableContent: I18N.localized("没有提取到足够的正文；可打开原网页阅读。")
         }
     }
 }

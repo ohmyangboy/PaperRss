@@ -18,14 +18,15 @@ enum SidebarSelection: Hashable {
     case feed(UUID)
     case feeds(Set<UUID>)
 
+    @MainActor
     var title: String {
         switch self {
-        case .today: "今天"
-        case .unread: "未读"
-        case .starred: "收藏"
+        case .today: I18N.shared.localized("今天")
+        case .unread: I18N.shared.localized("未读")
+        case .starred: I18N.shared.localized("收藏")
         case let .folder(name): name
-        case .feed: "订阅"
-        case let .feeds(ids): "\(ids.count) 个订阅"
+        case .feed: I18N.shared.localized("订阅")
+        case let .feeds(ids): I18N.shared.localizedFormat("%lld 个订阅", ids.count)
         }
     }
 }
@@ -88,7 +89,7 @@ struct RootView: View {
                 }
             }
             #if os(iOS)
-            .sheet(isPresented: $showsSettings) { NavigationStack { SettingsView(store: store).navigationTitle("设置") } }
+            .sheet(isPresented: $showsSettings) { NavigationStack { SettingsView(store: store).navigationTitle(I18N.localized("设置")) } }
             #endif
             .fileImporter(isPresented: $showsImporter, allowedContentTypes: OPMLDocument.readableContentTypes) { result in
                 guard case let .success(url) = result else { return }
@@ -99,7 +100,7 @@ struct RootView: View {
             }
             .fileExporter(isPresented: $showsExporter, document: OPMLDocument(data: store.exportOPML()), contentType: .xml, defaultFilename: "PaperRss-Subscriptions") { _ in }
             .alert("PaperRss", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.dismissError() } })) {
-                Button("好", role: .cancel) { store.dismissError() }
+                Button(I18N.localized("好"), role: .cancel) { store.dismissError() }
             } message: { Text(store.lastError ?? "") }
     }
 
@@ -277,7 +278,7 @@ struct RootView: View {
         }
 
         guard !entries.isEmpty else {
-            showToast("列表已经阅读完毕")
+            showToast(I18N.shared.localized("列表已经阅读完毕"))
             return
         }
 
@@ -291,10 +292,10 @@ struct RootView: View {
                     self.autoScrollTrigger = UUID()
                 } else {
                     pendingNextArticleEntryID = selectedEntryID
-                    showToast("再次按下空格切换下一篇")
+                    showToast(I18N.shared.localized("再次按下空格切换下一篇"))
                 }
             } else {
-                showToast("列表已经阅读完毕")
+                showToast(I18N.shared.localized("列表已经阅读完毕"))
             }
         } else {
             self.selectedEntryID = entries.first?.id
@@ -469,7 +470,7 @@ struct RootView: View {
         ZStack {
             PaperSurface(kind: .page)
                 .ignoresSafeArea()
-            ContentUnavailableView("选择一篇文章", systemImage: "newspaper", description: Text("从列表中打开文章开始阅读。"))
+            ContentUnavailableView(I18N.localized("选择一篇文章"), systemImage: "newspaper", description: Text(I18N.localized("从列表中打开文章开始阅读。")))
         }
         .ignoresSafeArea()
     }
@@ -550,11 +551,11 @@ private struct SidebarView: View {
         .overlay {
             if store.feeds.isEmpty {
                 ContentUnavailableView {
-                    Label("还没有订阅", systemImage: "dot.radiowaves.left.and.right")
+                    Label(I18N.localized("还没有订阅"), systemImage: "dot.radiowaves.left.and.right")
                 } description: {
-                    Text("添加一个 RSS 地址，或导入 OPML 文件。")
+                    Text(I18N.localized("添加一个 RSS 地址，或导入 OPML 文件。"))
                 } actions: {
-                    Button("添加订阅") { showsAddFeed = true }
+                    Button(I18N.localized("添加订阅")) { showsAddFeed = true }
                 }
                 .padding()
             }
@@ -583,8 +584,8 @@ private struct SidebarView: View {
             get: { batchDeleteConfirmFeedIDs != nil },
             set: { if !$0 { batchDeleteConfirmFeedIDs = nil } }
         )) {
-            Button("取消", role: .cancel) { batchDeleteConfirmFeedIDs = nil }
-            Button("删除", role: .destructive) {
+            Button(I18N.localized("取消"), role: .cancel) { batchDeleteConfirmFeedIDs = nil }
+            Button(I18N.localized("删除"), role: .destructive) {
                 if let ids = batchDeleteConfirmFeedIDs {
                     store.deleteFeeds(ids)
                     selectedFeedIDs = []
@@ -595,7 +596,7 @@ private struct SidebarView: View {
             }
         } message: {
             if let ids = batchDeleteConfirmFeedIDs {
-                Text("确定要删除选中的 \(ids.count) 个订阅源及其所有文章吗？此操作无法撤销。")
+                Text(I18N.shared.localizedFormat("确定要删除选中的 %lld 个订阅源及其所有文章吗？此操作无法撤销。", ids.count))
             }
         }
     }
@@ -618,8 +619,8 @@ private struct SidebarView: View {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("设置")
-                .help("设置")
+                .accessibilityLabel(I18N.localized("设置"))
+                .help(I18N.localized("设置"))
 
                 if let release = availableUpdateRelease {
                     HStack(spacing: 5) {
@@ -627,7 +628,7 @@ private struct SidebarView: View {
                             UpdateCheckService.openURL(release.htmlURL)
                         } label: {
                             HStack(spacing: 3) {
-                                Text("NEW")
+                                Text(I18N.localized("NEW"))
                                     .font(.system(size: 10, weight: .black))
                                     .foregroundStyle(.white)
                                 Text("v\(release.version)")
@@ -636,7 +637,7 @@ private struct SidebarView: View {
                             }
                         }
                         .buttonStyle(.borderless)
-                        .help("点击前往下载新版本 v\(release.version)")
+                        .help(I18N.shared.localizedFormat("点击前往下载新版本 v%@", release.version))
 
                         Button {
                             store.ignoreVersion(release.version)
@@ -646,8 +647,8 @@ private struct SidebarView: View {
                                 .foregroundStyle(.white.opacity(0.85))
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("忽略此版本更新")
-                        .help("不再提示此版本更新")
+                        .accessibilityLabel(I18N.localized("忽略此版本更新"))
+                        .help(I18N.localized("不再提示此版本更新"))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -665,12 +666,12 @@ private struct SidebarView: View {
     }
     @ViewBuilder
     private var readingSection: some View {
-        Section("阅读") {
-            SidebarRow("今天", systemImage: "sun.max", count: store.todayUnreadCount)
+        Section(I18N.localized("阅读")) {
+            SidebarRow(I18N.shared.localized("今天"), systemImage: "sun.max", count: store.todayUnreadCount)
                 .tag(SidebarSelection.today)
-            SidebarRow("未读", systemImage: "circle", count: store.unreadEntries.count)
+            SidebarRow(I18N.shared.localized("未读"), systemImage: "circle", count: store.unreadEntries.count)
                 .tag(SidebarSelection.unread)
-            SidebarRow("收藏", systemImage: "star", count: store.starredEntries.count)
+            SidebarRow(I18N.shared.localized("收藏"), systemImage: "star", count: store.starredEntries.count)
                 .tag(SidebarSelection.starred)
         }
     }
@@ -726,8 +727,8 @@ private struct SidebarView: View {
             refreshIcon
         }
         .disabled(store.isRefreshing)
-        .accessibilityLabel("手动刷新")
-        .help("刷新所有订阅")
+        .accessibilityLabel(I18N.localized("手动刷新"))
+        .help(I18N.localized("刷新所有订阅"))
     }
 
     @ViewBuilder
@@ -743,16 +744,16 @@ private struct SidebarView: View {
     @ViewBuilder
     private var addButton: some View {
         Menu {
-            Button { showsAddFeed = true } label: { Label("添加订阅", systemImage: "plus") }
-            Button { showsAddFolder = true } label: { Label("新建文件夹", systemImage: "folder.badge.plus") }
+            Button { showsAddFeed = true } label: { Label(I18N.localized("添加订阅"), systemImage: "plus") }
+            Button { showsAddFolder = true } label: { Label(I18N.localized("新建文件夹"), systemImage: "folder.badge.plus") }
             Divider()
-            Button { showsImporter = true } label: { Label("导入 OPML", systemImage: "square.and.arrow.down") }
-            Button { showsExporter = true } label: { Label("导出 OPML", systemImage: "square.and.arrow.up") }
+            Button { showsImporter = true } label: { Label(I18N.localized("导入 OPML"), systemImage: "square.and.arrow.down") }
+            Button { showsExporter = true } label: { Label(I18N.localized("导出 OPML"), systemImage: "square.and.arrow.up") }
         } label: {
             Image(systemName: "plus")
         }
-        .accessibilityLabel("新建与更多")
-        .help("添加订阅或新建文件夹")
+        .accessibilityLabel(I18N.localized("新建与更多"))
+        .help(I18N.localized("添加订阅或新建文件夹"))
     }
 
     @ViewBuilder
@@ -784,13 +785,13 @@ private struct SidebarView: View {
                     let unreadIDs = store.entryListItems(folder: folder).filter { !$0.isRead }.map { $0.id }
                     store.markRead(entryIDs: unreadIDs)
                 } label: {
-                    Label("全部已读", systemImage: "checkmark.circle")
+                    Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                 }
 
                 Button {
                     renamingFolder = folder
                 } label: {
-                    Label("重命名文件夹", systemImage: "pencil")
+                    Label(I18N.localized("重命名文件夹"), systemImage: "pencil")
                 }
 
                 Divider()
@@ -802,7 +803,7 @@ private struct SidebarView: View {
                     }
                     onDeleteSelection()
                 } label: {
-                    Label("删除文件夹", systemImage: "trash")
+                    Label(I18N.localized("删除文件夹"), systemImage: "trash")
                 }
             }
     }
@@ -842,21 +843,21 @@ private struct SidebarView: View {
                         let unreadIDs = store.entryListItems(feedIDs: selectedFeedIDs).filter { !$0.isRead }.map { $0.id }
                         store.markRead(entryIDs: unreadIDs)
                     } label: {
-                        Label("标记选中源全部已读 (\(selectedFeedIDs.count))", systemImage: "checkmark.circle")
+                        Label(I18N.shared.localizedFormat("标记选中源全部已读 (%lld)", selectedFeedIDs.count), systemImage: "checkmark.circle")
                     }
 
                     Button {
                         let urls = store.feeds.filter { selectedFeedIDs.contains($0.id) }.map { $0.feedURL.absoluteString }.joined(separator: "\n")
                         copyToClipboard(urls)
                     } label: {
-                        Label("复制选中订阅链接 (\(selectedFeedIDs.count))", systemImage: "doc.on.doc")
+                        Label(I18N.shared.localizedFormat("复制选中订阅链接 (%lld)", selectedFeedIDs.count), systemImage: "doc.on.doc")
                     }
 
                     Menu {
                         Button {
                             store.setFeedFolder(feedIDs: selectedFeedIDs, folder: nil)
                         } label: {
-                            Text("无分类")
+                            Text(I18N.localized("无分类"))
                         }
 
                         if !store.folders.isEmpty {
@@ -876,10 +877,10 @@ private struct SidebarView: View {
                         Button {
                             showsAddFolder = true
                         } label: {
-                            Label("新建文件夹...", systemImage: "folder.badge.plus")
+                            Label(I18N.localized("新建文件夹..."), systemImage: "folder.badge.plus")
                         }
                     } label: {
-                        Label("移动选中项到文件夹", systemImage: "folder")
+                        Label(I18N.localized("移动选中项到文件夹"), systemImage: "folder")
                     }
 
                     Divider()
@@ -887,20 +888,20 @@ private struct SidebarView: View {
                     Button(role: .destructive) {
                         batchDeleteConfirmFeedIDs = selectedFeedIDs
                     } label: {
-                        Label("删除选中的订阅 (\(selectedFeedIDs.count))", systemImage: "trash")
+                        Label(I18N.shared.localizedFormat("删除选中的订阅 (%lld)", selectedFeedIDs.count), systemImage: "trash")
                     }
                 } else {
                     Button {
                         let unreadIDs = store.entryListItems(feedID: feed.id).filter { !$0.isRead }.map { $0.id }
                         store.markRead(entryIDs: unreadIDs)
                     } label: {
-                        Label("全部已读", systemImage: "checkmark.circle")
+                        Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                     }
 
                     Button {
                         copyToClipboard(feed.feedURL.absoluteString)
                     } label: {
-                        Label("复制订阅", systemImage: "doc.on.doc")
+                        Label(I18N.localized("复制订阅"), systemImage: "doc.on.doc")
                     }
 
                     Menu {
@@ -908,9 +909,9 @@ private struct SidebarView: View {
                             store.setFeedFolder(feed, folder: nil)
                         } label: {
                             if feed.folder == nil {
-                                Label("无分类", systemImage: "checkmark")
+                                Label(I18N.localized("无分类"), systemImage: "checkmark")
                             } else {
-                                Text("无分类")
+                                Text(I18N.localized("无分类"))
                             }
                         }
 
@@ -935,10 +936,10 @@ private struct SidebarView: View {
                         Button {
                             showsAddFolder = true
                         } label: {
-                            Label("新建文件夹...", systemImage: "folder.badge.plus")
+                            Label(I18N.localized("新建文件夹..."), systemImage: "folder.badge.plus")
                         }
                     } label: {
-                        Label("移动到文件夹", systemImage: "folder")
+                        Label(I18N.localized("移动到文件夹"), systemImage: "folder")
                     }
 
                     Divider()
@@ -950,7 +951,7 @@ private struct SidebarView: View {
                         }
                         onDeleteSelection()
                     } label: {
-                        Label("删除订阅", systemImage: "trash")
+                        Label(I18N.localized("删除订阅"), systemImage: "trash")
                     }
                 }
             }
@@ -1049,11 +1050,11 @@ private struct SubscriptionsHeaderView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text("订阅源")
+            Text(I18N.localized("订阅源"))
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(isTargeted ? PaperTheme.accent : .secondary)
             if isTargeted {
-                Text("(移出文件夹)")
+                Text(I18N.localized("(移出文件夹)"))
                     .font(.caption2)
                     .foregroundStyle(PaperTheme.accent)
             }
@@ -1146,10 +1147,10 @@ private struct EntryListView: View {
                         .contentShape(Rectangle())
                         .listRowBackground(Color.clear)
                         .contextMenu {
-                            Button(entry.isRead ? "标为未读" : "标为已读") {
+                            Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
                                 store.markRead(entryID: entry.id, read: !entry.isRead)
                             }
-                            Button(entry.isStarred ? "取消收藏" : "收藏") {
+                            Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
                                 store.toggleStar(entryID: entry.id)
                             }
                         }
@@ -1192,9 +1193,9 @@ private struct EntryListView: View {
                     Button {
                         markAllRead()
                     } label: {
-                        Label("全部标为已读", systemImage: "envelope.open")
+                        Label(I18N.localized("全部标为已读"), systemImage: "envelope.open")
                     }
-                    .help("将当前列表全部标为已读")
+                    .help(I18N.localized("将当前列表全部标为已读"))
                     .disabled(!hasUnread)
                 }
             }
@@ -1225,7 +1226,15 @@ private struct EntryListView: View {
             #endif
             .overlay {
                 if displayEntries.isEmpty {
-                    ContentUnavailableView("没有文章", systemImage: "text.line.first.and.arrowtriangle.forward", description: Text(store.feeds.isEmpty ? "添加订阅后，这里会显示文章。" : "切换到其他分类，或等待下一次订阅更新。"))
+                    ContentUnavailableView(
+                        "没有文章",
+                        systemImage: "text.line.first.and.arrowtriangle.forward",
+                        description: Text(I18N.shared.localized(
+                            store.feeds.isEmpty
+                                ? "添加订阅后，这里会显示文章。"
+                                : "切换到其他分类，或等待下一次订阅更新。"
+                        ))
+                    )
                 }
             }
         }
@@ -1376,7 +1385,7 @@ private struct EntryRow: View {
                 .fill(entry.isRead ? .clear : PaperTheme.accent)
                 .frame(width: 7, height: 7)
                 .padding(.top, 6)
-                .accessibilityLabel(entry.isRead ? "已读" : "未读")
+                .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.title)
                     .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
@@ -1404,7 +1413,7 @@ private struct EntryRow: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("单击以在右侧打开文章")
+        .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
     }
 }
 
@@ -1431,7 +1440,7 @@ private struct AddFeedSheet: View {
                     feedURLField
                     folderField
 
-                    Text("保存后会立即抓取一次 Feed。PaperRss 只保存订阅地址、文章和阅读状态。")
+                    Text(I18N.localized("保存后会立即抓取一次 Feed。PaperRss 只保存订阅地址、文章和阅读状态。"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1441,9 +1450,9 @@ private struct AddFeedSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .navigationTitle("添加订阅")
+            .navigationTitle(I18N.localized("添加订阅"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(I18N.localized("取消")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         submit()
@@ -1452,7 +1461,7 @@ private struct AddFeedSheet: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text("添加")
+                            Text(I18N.localized("添加"))
                         }
                     }
                     .disabled(!canSubmit)
@@ -1468,10 +1477,10 @@ private struct AddFeedSheet: View {
 
     private var feedURLField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("订阅地址", systemImage: "link")
+            Label(I18N.localized("订阅地址"), systemImage: "link")
                 .font(.headline)
 
-            TextField("https://example.com/feed.xml", text: $url)
+            TextField(I18N.localized("https://example.com/feed.xml"), text: $url)
                 .textFieldStyle(.roundedBorder)
                 .textContentType(.URL)
                 #if os(iOS)
@@ -1481,7 +1490,7 @@ private struct AddFeedSheet: View {
                 .onSubmit(submit)
 
             if usesInsecureHTTP {
-                Label("这是未加密的 HTTP 地址，内容可能被网络中间人篡改。仅在你信任该来源时使用。", systemImage: "exclamationmark.triangle.fill")
+                Label(I18N.localized("这是未加密的 HTTP 地址，内容可能被网络中间人篡改。仅在你信任该来源时使用。"), systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1491,10 +1500,10 @@ private struct AddFeedSheet: View {
 
     private var folderField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("可选分类", systemImage: "folder")
+            Label(I18N.localized("可选分类"), systemImage: "folder")
                 .font(.headline)
 
-            TextField("例如：技术", text: $folder)
+            TextField(I18N.localized("例如：技术"), text: $folder)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
         }
@@ -1549,25 +1558,25 @@ private struct AddFolderSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Label("文件夹名称", systemImage: "folder")
+                Label(I18N.localized("文件夹名称"), systemImage: "folder")
                     .font(.headline)
 
-                TextField("例如：科技、新闻、设计", text: $folderName)
+                TextField(I18N.localized("例如：科技、新闻、设计"), text: $folderName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submit)
 
-                Text("创建后可以将订阅源拖拽归类到此文件夹中。")
+                Text(I18N.localized("创建后可以将订阅源拖拽归类到此文件夹中。"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
                 Spacer()
             }
             .padding(24)
-            .navigationTitle("新建文件夹")
+            .navigationTitle(I18N.localized("新建文件夹"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(I18N.localized("取消")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("创建", action: submit)
+                    Button(I18N.localized("创建"), action: submit)
                         .disabled(!canSubmit)
                 }
             }
@@ -1612,21 +1621,21 @@ private struct RenameFolderSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Label("新文件夹名称", systemImage: "pencil")
+                Label(I18N.localized("新文件夹名称"), systemImage: "pencil")
                     .font(.headline)
 
-                TextField("文件夹名称", text: $newName)
+                TextField(I18N.localized("文件夹名称"), text: $newName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submit)
 
                 Spacer()
             }
             .padding(24)
-            .navigationTitle("重命名文件夹")
+            .navigationTitle(I18N.localized("重命名文件夹"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(I18N.localized("取消")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存", action: submit)
+                    Button(I18N.localized("保存"), action: submit)
                         .disabled(!canSubmit)
                 }
             }

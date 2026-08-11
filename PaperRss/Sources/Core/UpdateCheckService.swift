@@ -76,14 +76,14 @@ public struct UpdateCheckService: Sendable {
 
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    throw NSError(domain: "UpdateCheckService", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效的网络响应"])
+                    throw NSError(domain: "UpdateCheckService", code: 1, userInfo: [NSLocalizedDescriptionKey: I18N.localized("无效的网络响应")])
                 }
 
                 guard httpResponse.statusCode == 200 else {
                     if httpResponse.statusCode == 404 {
                         return (false, nil)
                     }
-                    throw NSError(domain: "UpdateCheckService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "GitHub Release API 返回状态码 \(httpResponse.statusCode)"])
+                    throw NSError(domain: "UpdateCheckService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: I18N.localizedFormat("GitHub Release API 返回状态码 %lld", arguments: [httpResponse.statusCode])])
                 }
 
                 let release = try JSONDecoder().decode(AppReleaseInfo.self, from: data)
@@ -93,11 +93,11 @@ public struct UpdateCheckService: Sendable {
 
             group.addTask {
                 try await Task.sleep(nanoseconds: 15_000_000_000)
-                throw NSError(domain: "UpdateCheckService", code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: "检查更新超时（超过 15 秒）"])
+                throw NSError(domain: "UpdateCheckService", code: NSURLErrorTimedOut, userInfo: [NSLocalizedDescriptionKey: I18N.localized("检查更新超时（超过 15 秒）")])
             }
 
             guard let result = try await group.next() else {
-                throw NSError(domain: "UpdateCheckService", code: NSURLErrorUnknown, userInfo: [NSLocalizedDescriptionKey: "未知错误"])
+                throw NSError(domain: "UpdateCheckService", code: NSURLErrorUnknown, userInfo: [NSLocalizedDescriptionKey: I18N.localized("未知错误")])
             }
             group.cancelAll()
             return result

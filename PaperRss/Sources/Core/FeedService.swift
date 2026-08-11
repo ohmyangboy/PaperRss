@@ -25,5 +25,7 @@ public enum FeedService {
 
 public struct HTTPStatusError: LocalizedError, Sendable {
     public let statusCode: Int
-    public var errorDescription: String? { "服务器返回 HTTP \(statusCode)。" }
+    public var errorDescription: String? {
+        I18N.localizedFormat("服务器返回 HTTP %lld。", arguments: [statusCode])
+    }
 }

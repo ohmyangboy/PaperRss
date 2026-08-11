@@ -2,6 +2,9 @@
 import SwiftUI
 import AppKit
 import WebKit
+#if SWIFT_PACKAGE
+import PaperRssCore
+#endif
 
 // MARK: - 工具栏动作回调
 
@@ -165,6 +168,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         }
 
         // 同步刷新按钮及 Header 状态
+        context.coordinator.syncLocalizedToolbarText()
         context.coordinator.syncRefreshState()
         context.coordinator.syncHeaderState()
 
@@ -544,7 +548,54 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 // 停止时：恢复系统原生刷新图标，隐藏菊花
                 spinner.stopAnimation(nil)
                 spinner.isHidden = true
-                button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "刷新")
+                button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: I18N.localized("刷新"))
+            }
+        }
+
+        /// SwiftUI 更新时重新写入原生工具栏文案，确保应用内切换语言无需重启。
+        func syncLocalizedToolbarText() {
+            guard let toolbar = splitViewController?.view.window?.toolbar else { return }
+
+            for item in toolbar.items {
+                switch item.itemIdentifier {
+                case .paperRefresh:
+                    item.label = I18N.localized("刷新")
+                    item.paletteLabel = I18N.localized("刷新所有订阅")
+                    item.toolTip = I18N.localized("刷新所有订阅")
+                    if !actions.isRefreshing {
+                        refreshButton?.image = NSImage(
+                            systemSymbolName: "arrow.clockwise",
+                            accessibilityDescription: I18N.localized("刷新")
+                        )
+                    }
+                case .paperAddMenu:
+                    item.label = I18N.localized("添加")
+                    item.toolTip = I18N.localized("添加订阅或新建文件夹")
+                    if let menuItem = item as? NSMenuToolbarItem {
+                        menuItem.image = NSImage(
+                            systemSymbolName: "plus",
+                            accessibilityDescription: I18N.localized("添加")
+                        )
+                        menuItem.menu.items.first(where: { $0.action == #selector(doAddFeed) })?.title = I18N.localized("添加订阅")
+                        menuItem.menu.items.first(where: { $0.action == #selector(doAddFolder) })?.title = I18N.localized("新建文件夹")
+                        menuItem.menu.items.first(where: { $0.action == #selector(doImport) })?.title = I18N.localized("导入 OPML")
+                        menuItem.menu.items.first(where: { $0.action == #selector(doExport) })?.title = I18N.localized("导出 OPML")
+                    }
+                case .paperMarkAllRead:
+                    item.label = I18N.localized("全部已读")
+                    item.paletteLabel = I18N.localized("全部标为已读")
+                    item.toolTip = I18N.localized("将当前列表全部标为已读")
+                    markAllReadButton?.image = NSImage(
+                        systemSymbolName: "envelope.open",
+                        accessibilityDescription: I18N.localized("全部已读")
+                    )
+                case .paperReaderCapsule:
+                    item.label = I18N.localized("阅读工具")
+                    item.paletteLabel = I18N.localized("阅读工具")
+                    item.toolTip = I18N.localized("翻译、已读与收藏")
+                default:
+                    break
+                }
             }
         }
 
@@ -612,14 +663,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             case .paperRefresh:
                 let item = NSToolbarItem(itemIdentifier: .paperRefresh)
-                item.label = "刷新"
-                item.paletteLabel = "刷新所有订阅"
-                item.toolTip = "刷新所有订阅"
+                item.label = I18N.localized("刷新")
+                item.paletteLabel = I18N.localized("刷新所有订阅")
+                item.toolTip = I18N.localized("刷新所有订阅")
                 item.autovalidates = false // 关闭原生验证以防意外置灰
                 
                 // 固定按钮样式，永不改变以防止布局抖动
                 let button = NSButton()
-                button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "刷新")
+                button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: I18N.localized("刷新"))
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
                 button.target = self
@@ -647,21 +698,21 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             case .paperAddMenu:
                 let item = NSMenuToolbarItem(itemIdentifier: .paperAddMenu)
-                item.label = "添加"
-                item.toolTip = "添加订阅或新建文件夹"
-                item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "添加")
+                item.label = I18N.localized("添加")
+                item.toolTip = I18N.localized("添加订阅或新建文件夹")
+                item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: I18N.localized("添加"))
                 item.isBordered = true
                 let menu = NSMenu()
-                let addFeed = NSMenuItem(title: "添加订阅", action: #selector(doAddFeed), keyEquivalent: "")
+                let addFeed = NSMenuItem(title: I18N.localized("添加订阅"), action: #selector(doAddFeed), keyEquivalent: "")
                 addFeed.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
                 addFeed.target = self
-                let addFolder = NSMenuItem(title: "新建文件夹", action: #selector(doAddFolder), keyEquivalent: "")
+                let addFolder = NSMenuItem(title: I18N.localized("新建文件夹"), action: #selector(doAddFolder), keyEquivalent: "")
                 addFolder.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
                 addFolder.target = self
-                let importItem = NSMenuItem(title: "导入 OPML", action: #selector(doImport), keyEquivalent: "")
+                let importItem = NSMenuItem(title: I18N.localized("导入 OPML"), action: #selector(doImport), keyEquivalent: "")
                 importItem.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
                 importItem.target = self
-                let exportItem = NSMenuItem(title: "导出 OPML", action: #selector(doExport), keyEquivalent: "")
+                let exportItem = NSMenuItem(title: I18N.localized("导出 OPML"), action: #selector(doExport), keyEquivalent: "")
                 exportItem.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
                 exportItem.target = self
                 menu.addItem(addFeed)
@@ -704,13 +755,13 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             case .paperMarkAllRead:
                 let item = NSToolbarItem(itemIdentifier: .paperMarkAllRead)
-                item.label = "全部已读"
-                item.paletteLabel = "全部标为已读"
-                item.toolTip = "将当前列表全部标为已读"
+                item.label = I18N.localized("全部已读")
+                item.paletteLabel = I18N.localized("全部标为已读")
+                item.toolTip = I18N.localized("将当前列表全部标为已读")
                 item.autovalidates = false
                 
                 let button = NSButton()
-                button.image = NSImage(systemSymbolName: "envelope.open", accessibilityDescription: "全部已读")
+                button.image = NSImage(systemSymbolName: "envelope.open", accessibilityDescription: I18N.localized("全部已读"))
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
                 button.target = self
@@ -731,9 +782,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             case .paperReaderCapsule:
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
-                item.label = "阅读工具"
-                item.paletteLabel = "阅读工具"
-                item.toolTip = "翻译、已读与收藏"
+                item.label = I18N.localized("阅读工具")
+                item.paletteLabel = I18N.localized("阅读工具")
+                item.toolTip = I18N.localized("翻译、已读与收藏")
                 item.autovalidates = false
                 item.isEnabled = true
                 if #available(macOS 15.0, *) {
@@ -827,4 +878,3 @@ final class PaperSplitViewController: NSSplitViewController {
     }
 }
 #endif
-
