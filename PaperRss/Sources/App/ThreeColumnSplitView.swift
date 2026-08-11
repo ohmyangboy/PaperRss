@@ -24,6 +24,7 @@ struct ToolbarActions {
     let onToggleZenMode: () -> Void
     let showsReaderCapsule: Bool
     let readerCapsule: AnyView
+    let onReaderShortcut: (ReaderShortcutAction) -> Void
 
     let onIncreaseFontSize: () -> Void
     let onDecreaseFontSize: () -> Void
@@ -44,6 +45,7 @@ struct ToolbarActions {
         onToggleZenMode: @escaping () -> Void = {},
         showsReaderCapsule: Bool = false,
         readerCapsule: AnyView = AnyView(EmptyView()),
+        onReaderShortcut: @escaping (ReaderShortcutAction) -> Void = { _ in },
         onIncreaseFontSize: @escaping () -> Void = {},
         onDecreaseFontSize: @escaping () -> Void = {},
         onResetFontSize: @escaping () -> Void = {}
@@ -62,6 +64,7 @@ struct ToolbarActions {
         self.onToggleZenMode = onToggleZenMode
         self.showsReaderCapsule = showsReaderCapsule
         self.readerCapsule = readerCapsule
+        self.onReaderShortcut = onReaderShortcut
         self.onIncreaseFontSize = onIncreaseFontSize
         self.onDecreaseFontSize = onDecreaseFontSize
         self.onResetFontSize = onResetFontSize
@@ -279,6 +282,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                         return nil
                     }
                 }
+
+                if MainActor.assumeIsolated({ self.consumeReaderShortcut(event, flags: flags) }) {
+                    return nil
+                }
                 
                 // 左/右方向键 (keyCode 123 左, 124 右)
                 if flags.isEmpty && (event.keyCode == 123 || event.keyCode == 124) {
@@ -355,7 +362,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
 
                 // Space 键 (keyCode 49), 且没有任何 modifier 键 (Cmd / Option / Ctrl / Shift)
-                guard event.keyCode == 49, flags.isEmpty else {
+                guard event.keyCode == 49, flags.isEmpty, !event.isARepeat else {
                     return event
                 }
                 guard let window = event.window ?? NSApp.keyWindow,
@@ -396,6 +403,47 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
                 return event
             }
+        }
+
+        private func consumeReaderShortcut(
+            _ event: NSEvent,
+            flags: NSEvent.ModifierFlags
+        ) -> Bool {
+            guard actions.showsReaderCapsule,
+                  let splitVC = splitViewController,
+                  let mainWindow = splitVC.view.window,
+                  (event.window ?? NSApp.keyWindow) === mainWindow,
+                  mainWindow.attachedSheet == nil,
+                  NSApp.modalWindow == nil,
+                  let firstResponder = mainWindow.firstResponder as? NSView else {
+                return false
+            }
+
+            let disallowedModifiers: NSEvent.ModifierFlags = [
+                .command, .option, .control, .shift, .function
+            ]
+            let action = ReaderShortcutPolicy.action(
+                for: event.charactersIgnoringModifiers,
+                hasDisallowedModifiers: !flags.intersection(disallowedModifiers).isEmpty,
+                isRepeat: event.isARepeat
+            )
+            guard let action else { return false }
+
+            // WebKit owns its editable descendants, selections and transient
+            // selection assistant UI. Its injected key handler performs the
+            // synchronous DOM checks and posts the same action only when safe.
+            var ancestor: NSView? = firstResponder
+            while let view = ancestor {
+                if view is WKWebView { return false }
+                ancestor = view.superview
+            }
+
+            if firstResponder is NSTextView || firstResponder is NSTextField {
+                return false
+            }
+
+            actions.onReaderShortcut(action)
+            return true
         }
 
         /// 在窗口上配置 NSToolbar，复刻 NetNewsWire 的布局方式
@@ -592,7 +640,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 case .paperReaderCapsule:
                     item.label = I18N.localized("阅读工具")
                     item.paletteLabel = I18N.localized("阅读工具")
-                    item.toolTip = I18N.localized("翻译、已读与收藏")
+                    item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
                 default:
                     break
                 }
@@ -784,7 +832,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
                 item.label = I18N.localized("阅读工具")
                 item.paletteLabel = I18N.localized("阅读工具")
-                item.toolTip = I18N.localized("翻译、已读与收藏")
+                item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
                 item.autovalidates = false
                 item.isEnabled = true
                 if #available(macOS 15.0, *) {

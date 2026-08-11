@@ -24,7 +24,11 @@ let package = Package(
             name: "PaperRssCoreTests",
             dependencies: ["PaperRssCore"],
             path: "Tests",
-            exclude: ["selection-assistant-sync.test.mjs", "website-locale.test.mjs"]
+            exclude: [
+                "reader-shortcuts.test.mjs",
+                "selection-assistant-sync.test.mjs",
+                "website-locale.test.mjs"
+            ]
         )
     ]
 )

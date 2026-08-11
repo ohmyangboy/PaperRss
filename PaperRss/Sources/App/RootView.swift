@@ -40,6 +40,7 @@ struct RootView: View {
     // List's synthesized Hashable selection after the first click. A stable ID
     // makes selection, focus, and the visible detail all describe the same item.
     @State private var selectedEntryID: String?
+    @State private var retainedEntryListIDs: Set<String> = []
     @State private var selectedFeedIDs: Set<UUID> = []
     @State private var showsAddFeed = false
     @State private var showsAddFolder = false
@@ -51,7 +52,9 @@ struct RootView: View {
     @State private var autoScrollTrigger = UUID()
     @State private var toastMessage: String?
     @State private var toastTask: Task<Void, Never>?
-    @State private var pendingNextArticleEntryID: String?
+    @State private var navigationConfirmation = ReaderNavigationConfirmation()
+    @State private var navigationConfirmationExpiryTask: Task<Void, Never>?
+    @State private var readerShortcutInvocation: ReaderShortcutInvocation?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -70,9 +73,16 @@ struct RootView: View {
             }
             .onReceive(navigation.$request.compactMap { $0 }) { request in
                 guard request.destination == .unread else { return }
+                cancelNavigationConfirmation(dismissToast: true)
                 selection = .unread
                 selectedEntryID = nil
+                retainedEntryListIDs.removeAll()
                 autoScrollTrigger = UUID()
+            }
+            .onChange(of: selectedEntryID) { oldID, newID in
+                if oldID != newID {
+                    cancelNavigationConfirmation(dismissToast: true)
+                }
             }
             .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
             .sheet(isPresented: $showsAddFolder) { AddFolderSheet(store: store) }
@@ -128,7 +138,13 @@ struct RootView: View {
             // 会顶到窗口最上方,落在 unified NSToolbar 的不可交互条带内,
             // 「全部已读」按钮点击会被工具栏吞掉。纸张背景已在 EntryListView
             // 内用 .ignoresSafeArea() 单独延伸到工具栏之下,观感保持一致。
-            content: EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID, autoScrollTrigger: autoScrollTrigger)
+            content: EntryListView(
+                store: store,
+                selection: selection ?? .today,
+                selectedEntryID: $selectedEntryID,
+                retainedUnreadIDs: $retainedEntryListIDs,
+                autoScrollTrigger: autoScrollTrigger
+            )
                 .ignoresSafeArea(),
             detail: detailContent
                 .ignoresSafeArea(),
@@ -147,6 +163,7 @@ struct RootView: View {
                 onToggleZenMode: { withAnimation { isZenMode.toggle() } },
                 showsReaderCapsule: selectedEntryID != nil,
                 readerCapsule: AnyView(readerToolbarCapsule),
+                onReaderShortcut: dispatchReaderShortcut,
                 onIncreaseFontSize: { store.increaseArticleFontSize() },
                 onDecreaseFontSize: { store.decreaseArticleFontSize() },
                 onResetFontSize: { store.resetArticleFontSize() }
@@ -169,7 +186,13 @@ struct RootView: View {
                 onDeleteSelection: { selectedEntryID = nil }
             )
         } content: {
-            EntryListView(store: store, selection: selection ?? .today, selectedEntryID: $selectedEntryID, autoScrollTrigger: autoScrollTrigger)
+            EntryListView(
+                store: store,
+                selection: selection ?? .today,
+                selectedEntryID: $selectedEntryID,
+                retainedUnreadIDs: $retainedEntryListIDs,
+                autoScrollTrigger: autoScrollTrigger
+            )
         } detail: {
             detailContent
         }
@@ -231,6 +254,42 @@ struct RootView: View {
         }
     }
 
+    private func cancelNavigationConfirmation(dismissToast shouldDismissToast: Bool) {
+        navigationConfirmationExpiryTask?.cancel()
+        navigationConfirmationExpiryTask = nil
+        navigationConfirmation.cancel()
+        if shouldDismissToast {
+            dismissToast()
+        }
+    }
+
+    private func confirmNavigation(
+        _ key: ReaderNavigationConfirmation.Key,
+        entryID: String,
+        prompt: String
+    ) -> Bool {
+        let now = Date.timeIntervalSinceReferenceDate
+        switch navigationConfirmation.register(key, entryID: entryID, at: now) {
+        case .confirmed:
+            navigationConfirmationExpiryTask?.cancel()
+            navigationConfirmationExpiryTask = nil
+            dismissToast()
+            return true
+        case .armed:
+            showToast(prompt)
+            let expectedPending = navigationConfirmation.pending
+            navigationConfirmationExpiryTask?.cancel()
+            navigationConfirmationExpiryTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled,
+                      navigationConfirmation.pending == expectedPending else { return }
+                navigationConfirmation.cancel()
+                navigationConfirmationExpiryTask = nil
+            }
+            return false
+        }
+    }
+
     @ViewBuilder
     private var toastOverlay: some View {
         if let toastMessage {
@@ -278,6 +337,7 @@ struct RootView: View {
         }
 
         guard !entries.isEmpty else {
+            cancelNavigationConfirmation(dismissToast: true)
             showToast(I18N.shared.localized("列表已经阅读完毕"))
             return
         }
@@ -285,21 +345,95 @@ struct RootView: View {
         if let selectedEntryID,
            let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) {
             if currentIndex + 1 < entries.count {
-                if pendingNextArticleEntryID == selectedEntryID {
-                    pendingNextArticleEntryID = nil
-                    dismissToast()
-                    self.selectedEntryID = entries[currentIndex + 1].id
-                    self.autoScrollTrigger = UUID()
-                } else {
-                    pendingNextArticleEntryID = selectedEntryID
-                    showToast(I18N.shared.localized("再次按下空格切换下一篇"))
-                }
+                guard confirmNavigation(
+                    .spaceNextArticle,
+                    entryID: selectedEntryID,
+                    prompt: I18N.shared.localized("再次按下空格切换下一篇")
+                ) else { return }
+                self.selectedEntryID = entries[currentIndex + 1].id
+                self.autoScrollTrigger = UUID()
             } else {
+                cancelNavigationConfirmation(dismissToast: true)
                 showToast(I18N.shared.localized("列表已经阅读完毕"))
             }
         } else {
             self.selectedEntryID = entries.first?.id
             if self.selectedEntryID != nil { self.autoScrollTrigger = UUID() }
+        }
+    }
+
+    private enum AdjacentArticleDirection {
+        case previous
+        case next
+    }
+
+    private var shortcutNavigationEntries: [EntryListItem] {
+        var retainedIDs = retainedEntryListIDs
+        if let selectedEntryID {
+            retainedIDs.insert(selectedEntryID)
+        }
+        switch currentSelection {
+        case .today:
+            return store.todayEntryListItems
+        case .unread:
+            return store.unreadEntryListItems(retainingIDs: retainedIDs)
+        case .starred:
+            return store.starredEntryListItems
+        case let .folder(folder):
+            return store.entryListItems(folder: folder).filter { !$0.isRead || retainedIDs.contains($0.id) }
+        case let .feed(id):
+            return store.entryListItems(feedID: id)
+        case let .feeds(ids):
+            return store.entryListItems(feedIDs: ids)
+        }
+    }
+
+    private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {
+        guard let selectedEntryID,
+              let currentIndex = shortcutNavigationEntries.firstIndex(where: { $0.id == selectedEntryID }) else {
+            cancelNavigationConfirmation(dismissToast: true)
+            return
+        }
+
+        let destinationIndex: Int
+        let confirmationKey: ReaderNavigationConfirmation.Key
+        let prompt: String
+        let boundaryMessage: String
+        switch direction {
+        case .previous:
+            destinationIndex = currentIndex - 1
+            confirmationKey = .previousArticle
+            prompt = I18N.shared.localized("再次按下 B 查看上一篇")
+            boundaryMessage = I18N.shared.localized("已经是列表第一篇")
+        case .next:
+            destinationIndex = currentIndex + 1
+            confirmationKey = .nextArticle
+            prompt = I18N.shared.localized("再次按下 N 查看下一篇")
+            boundaryMessage = I18N.shared.localized("列表已经阅读完毕")
+        }
+
+        let entries = shortcutNavigationEntries
+        guard entries.indices.contains(destinationIndex) else {
+            cancelNavigationConfirmation(dismissToast: true)
+            showToast(boundaryMessage)
+            return
+        }
+        guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
+
+        self.selectedEntryID = entries[destinationIndex].id
+        autoScrollTrigger = UUID()
+    }
+
+    private func dispatchReaderShortcut(_ action: ReaderShortcutAction) {
+        guard selectedEntryID != nil else { return }
+        switch action {
+        case .previousArticle:
+            requestAdjacentArticle(.previous)
+        case .nextArticle:
+            requestAdjacentArticle(.next)
+        case .toggleBilingual, .showSummary, .toggleStar:
+            cancelNavigationConfirmation(dismissToast: true)
+            readerShortcutInvocation = ReaderShortcutInvocation(action: action)
         }
     }
 
@@ -401,6 +535,8 @@ struct RootView: View {
                 ArticleReaderView(
                     store: store,
                     entry: selectedEntry,
+                    shortcutInvocation: readerShortcutInvocation,
+                    onReaderShortcut: dispatchReaderShortcut,
                     onSelectNextEntry: { selectNextEntry() },
                     onFocusListView: { focusListView() },
                     isZenMode: isZenMode,
@@ -429,8 +565,9 @@ struct RootView: View {
             get: { selection },
             set: { newSelection in
                 guard newSelection != selection else { return }
+                cancelNavigationConfirmation(dismissToast: true)
                 selectedEntryID = nil
-                pendingNextArticleEntryID = nil
+                retainedEntryListIDs.removeAll()
                 selection = newSelection
             }
         )
@@ -1109,8 +1246,8 @@ private struct EntryListView: View {
     @ObservedObject var store: AppStore
     let selection: SidebarSelection
     @Binding var selectedEntryID: String?
+    @Binding var retainedUnreadIDs: Set<String>
     var autoScrollTrigger: UUID
-    @State private var retainedUnreadIDs: Set<String> = []
 
     @State private var isScrolled = false
 

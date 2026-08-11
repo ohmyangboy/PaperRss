@@ -75,6 +75,8 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
 struct ArticleReaderView: View {
     @ObservedObject var store: AppStore
     let entry: Entry
+    var shortcutInvocation: ReaderShortcutInvocation?
+    var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var isZenMode: Bool = false
@@ -212,6 +214,10 @@ struct ArticleReaderView: View {
                 requestVisibleTranslationsIfPossible()
             }
         }
+        .onChange(of: shortcutInvocation) { _, invocation in
+            guard let invocation else { return }
+            handleReaderShortcut(invocation.action)
+        }
         .task(id: entry.id) {
             let requestedEntry = entry
             activeLoadEntryID = requestedEntry.id
@@ -306,6 +312,7 @@ struct ArticleReaderView: View {
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
                 onToggleSummary: toggleSummary,
+                onReaderShortcut: onReaderShortcut,
                 onSelectNextEntry: onSelectNextEntry,
                 onFocusListView: onFocusListView,
                 onAdjustFontSize: { action in
@@ -585,8 +592,8 @@ struct ArticleReaderView: View {
             }
             .buttonStyle(.borderless)
             .disabled(text.isEmpty || store.activeAIRequest != nil)
-            .accessibilityLabel(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译"))
-            .help(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译"))
+            .accessibilityLabel("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
+            .help("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
 
             Button {
                 store.markRead(currentEntry, read: !currentEntry.isRead)
@@ -603,8 +610,8 @@ struct ArticleReaderView: View {
                 toolbarSymbol(currentEntry.isStarred ? "star.fill" : "star", isActive: currentEntry.isStarred)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏"))
-            .help(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏"))
+            .accessibilityLabel("\(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏")) (M)")
+            .help("\(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏")) (M)")
 
             Button {
                 onToggleZenMode()
@@ -661,6 +668,33 @@ struct ArticleReaderView: View {
             store.toggleBilingualMode(for: entry.id)
         }
         requestVisibleTranslationsIfPossible()
+    }
+
+    private func handleReaderShortcut(_ action: ReaderShortcutAction) {
+        switch action {
+        case .toggleBilingual:
+            if readerMode != .bilingual, store.activeAIRequest != nil {
+                store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请稍后再试。"))
+                return
+            }
+            toggleBilingualTranslation()
+        case .showSummary:
+            guard store.database.llmConfiguration.showsAISummary else {
+                store.reportError(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
+                return
+            }
+            if store.summaryArtifact(for: entry) != nil {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
+                    isSummaryExpanded = true
+                }
+            } else {
+                generateSummary(force: false)
+            }
+        case .toggleStar:
+            store.toggleStar(currentEntry)
+        case .previousArticle, .nextArticle:
+            onReaderShortcut(action)
+        }
     }
 
     private var effectiveArticleText: String {
@@ -921,7 +955,7 @@ private enum PaperReaderHeaderBuilder {
                 isGeneratingSummary: isGeneratingSummary,
                 aiStatusMessage: aiStatusMessage
             )
-            summaryCardHTMLString = "<div class=\"paper-summary-card\" id=\"paper-summary-card\">\(summaryHTML)</div>"
+            summaryCardHTMLString = "<div class=\"paper-summary-card\" id=\"paper-summary-card\" title=\"\(I18N.localized("AI 摘要").htmlEscaped) (V)\" aria-keyshortcuts=\"V\">\(summaryHTML)</div>"
         } else {
             summaryCardHTMLString = ""
         }
@@ -982,7 +1016,7 @@ private enum PaperReaderHeaderBuilder {
                     let errStr = errorMessage.map { "<span class=\"paper-summary-error\">\($0.htmlEscaped)</span> " } ?? "<span>\(I18N.localized("上次生成未完成").htmlEscaped)</span> "
                     statusFooter = """
                     <div class="paper-summary-status">
-                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true">\(I18N.localized("重新生成").htmlEscaped)</button>
+                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true" title="V" aria-keyshortcuts="V">\(I18N.localized("重新生成").htmlEscaped)</button>
                     </div>
                     """
                 }
@@ -991,7 +1025,7 @@ private enum PaperReaderHeaderBuilder {
             return """
             <div class="paper-summary-header">
               <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
-              <button class="paper-summary-toggle-btn" data-paper-action="toggleSummary">
+              <button class="paper-summary-toggle-btn" data-paper-action="toggleSummary" title="V" aria-keyshortcuts="V">
                 \(toggleIcon)
               </button>
             </div>
@@ -1026,7 +1060,7 @@ private enum PaperReaderHeaderBuilder {
             \(errNotice)
             <div class="paper-summary-placeholder">
               <span>\(I18N.localized("尚未生成；仅在你点按后发送正文。").htmlEscaped)</span>
-              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false">\(I18N.localized("生成摘要").htmlEscaped)</button>
+              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false" title="V" aria-keyshortcuts="V">\(I18N.localized("生成摘要").htmlEscaped)</button>
             </div>
             """
         }
@@ -2281,12 +2315,60 @@ enum PaperReaderBridge {
 
     static let nextArticleMessageName = "paperRssNextArticle"
     static let focusListMessageName = "paperRssFocusList"
+    static let readerShortcutMessageName = "paperRssReaderShortcut"
+
+    static let readerShortcutScript = WKUserScript(
+        source: """
+        (() => {
+          const actions = {
+            c: "toggleBilingual",
+            v: "showSummary",
+            b: "previousArticle",
+            n: "nextArticle",
+            m: "toggleStar"
+          };
+
+          const isEditable = element => {
+            if (!element) return false;
+            const tag = String(element.tagName || "").toUpperCase();
+            return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+          };
+
+          const hasTransientReaderUI = () => Boolean(document.querySelector(
+            ".paper-rss-selection-actions, .paper-rss-explanation"
+          ));
+
+          window.addEventListener("keydown", event => {
+            if (event.defaultPrevented || event.isComposing || event.repeat) return;
+            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+
+            const action = actions[String(event.key || "").toLowerCase()];
+            if (!action) return;
+            if (isEditable(document.activeElement)) return;
+
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) return;
+            if (hasTransientReaderUI()) return;
+
+            const handler = window.webkit?.messageHandlers?.\(readerShortcutMessageName);
+            if (!handler) return;
+            event.preventDefault();
+            event.stopPropagation();
+            handler.postMessage({ action });
+          }, true);
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
 
     static let spacebarScript = WKUserScript(
         source: """
         (() => {
           window.addEventListener("keydown", event => {
             if (event.key === " " || event.keyCode === 32) {
+              if (event.repeat) return;
               const active = document.activeElement;
               if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
                 return;
@@ -2659,6 +2741,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
     ) async -> ReaderSelectionResponse
     let onGenerateSummary: (Bool) -> Void
     let onToggleSummary: () -> Void
+    var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var onAdjustFontSize: ((String) -> Void)? = nil
@@ -2709,6 +2792,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.fontSizeMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.readerShortcutMessageName
+        )
         // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
         // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
         configuration.userContentController.add(
@@ -2724,6 +2812,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.readerShortcutScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.fontSizeScript)
@@ -2783,6 +2872,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.nextArticleMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.readerShortcutMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -2934,6 +3027,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 startNextSelectionExplanationIfNeeded()
             case PaperReaderBridge.nextArticleMessageName:
                 parent.onSelectNextEntry()
+            case PaperReaderBridge.readerShortcutMessageName:
+                guard let payload = message.body as? [String: Any],
+                      let rawAction = payload["action"] as? String,
+                      let action = ReaderShortcutAction(rawValue: rawAction) else { return }
+                parent.onReaderShortcut(action)
             case PaperReaderBridge.focusListMessageName:
                 parent.onFocusListView()
             case PaperReaderBridge.fontSizeMessageName:
@@ -3816,8 +3914,8 @@ struct ReaderCapsuleToolbar: View {
             }
             .buttonStyle(.plain)
             .disabled(disabled)
-            .accessibilityLabel(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译"))
-            .help(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译"))
+            .accessibilityLabel("\(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
+            .help("\(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
 
             Button(action: onToggleRead) {
                 toolbarSymbol(isRead ? "envelope.open" : "envelope", isActive: false)
@@ -3830,8 +3928,8 @@ struct ReaderCapsuleToolbar: View {
                 toolbarSymbol(isStarred ? "star.fill" : "star", isActive: isStarred)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(I18N.localized(isStarred ? "取消收藏" : "收藏"))
-            .help(I18N.localized(isStarred ? "取消收藏" : "收藏"))
+            .accessibilityLabel("\(I18N.localized(isStarred ? "取消收藏" : "收藏")) (M)")
+            .help("\(I18N.localized(isStarred ? "取消收藏" : "收藏")) (M)")
 
             Button(action: onToggleZenMode) {
                 toolbarSymbol(
