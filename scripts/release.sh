@@ -4,7 +4,24 @@ set -e
 # 确保脚本在项目根目录下运行
 CDPATH= cd "$(dirname "$0")/.."
 
-# 1. 环境准备
+# 1. 参数解析
+LOCAL_ONLY=false
+VERSION=""
+
+for arg in "$@"; do
+    case $arg in
+        --local|--dmg-only)
+            LOCAL_ONLY=true
+            ;;
+        *)
+            if [ -z "$VERSION" ]; then
+                VERSION="$arg"
+            fi
+            ;;
+    esac
+done
+
+# 2. 环境准备
 if [ -d "/Applications/Xcode-beta.app/Contents/Developer" ]; then
     export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
 else
@@ -13,20 +30,21 @@ fi
 
 echo "🔧 开发者环境: $DEVELOPER_DIR"
 
-# 检查所需工具
-if ! command -v gh &> /dev/null; then
-    echo "❌ 错误: 未安装 GitHub CLI ('gh')。请先通过 brew install gh 安装。"
-    exit 1
+if [ "$LOCAL_ONLY" = "false" ]; then
+    # 检查 GitHub CLI 所需工具
+    if ! command -v gh &> /dev/null; then
+        echo "❌ 错误: 未安装 GitHub CLI ('gh')。请先通过 brew install gh 安装。"
+        exit 1
+    fi
+
+    if ! gh auth status &> /dev/null; then
+        echo "❌ 错误: gh 未登录，请先运行 'gh auth login'。"
+        exit 1
+    fi
 fi
 
-if ! gh auth status &> /dev/null; then
-    echo "❌ 错误: gh 未登录，请先运行 'gh auth login'。"
-    exit 1
-fi
-
-# 2. 版本号处理
+# 3. 版本号处理
 PROJECT_NAME="PaperRss"
-VERSION="$1"
 
 if [ -z "$VERSION" ]; then
     echo "🔍 未传递版本号，从 Xcode 项目配置中提取 MARKETING_VERSION..."
@@ -43,7 +61,11 @@ DMG_NAME="${PROJECT_NAME}-${TAG_NAME}.dmg"
 DIST_DIR="./dist"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
 
-echo "📦 准备发布版本: ${TAG_NAME}"
+if [ "$LOCAL_ONLY" = "true" ]; then
+    echo "📦 准备本地 DMG 打包: ${DMG_NAME}"
+else
+    echo "📦 准备正式发布版本: ${TAG_NAME}"
+fi
 
 # 3. 运行单元测试
 echo "🧪 1/5 正在运行单元测试..."
@@ -73,6 +95,11 @@ rm -f "$DMG_PATH"
 echo "🎨 正在生成 DMG 安装包背景图..."
 swift scripts/generate_dmg_background.swift
 
+STAGING_DIR="${DIST_DIR}/dmg_staging"
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR"
+cp -R "$APP_PATH" "$STAGING_DIR/"
+
 if command -v create-dmg &> /dev/null; then
     echo "💡 使用 create-dmg 制作 UI 镜像..."
     create-dmg \
@@ -84,18 +111,16 @@ if command -v create-dmg &> /dev/null; then
       --hide-extension "${PROJECT_NAME}.app" \
       --app-drop-link 485 120 \
       --background "assets/dmg-background.png" \
+      --disk-image-size 200 \
       --no-internet-enable \
+      --overwrite \
       "$DMG_PATH" \
-      "$APP_PATH" || true
+      "$STAGING_DIR" || true
 fi
 
-# 如果 create-dmg 失败或未安装，使用 hdiutil 备用方案
+# 如果 create-dmg 失败，使用 hdiutil 备用方案
 if [ ! -f "$DMG_PATH" ]; then
     echo "💡 使用系统原生 hdiutil 制作 DMG..."
-    STAGING_DIR="${DIST_DIR}/dmg_staging"
-    rm -rf "$STAGING_DIR"
-    mkdir -p "$STAGING_DIR"
-    cp -R "$APP_PATH" "$STAGING_DIR/"
     ln -s /Applications "$STAGING_DIR/Applications"
     
     hdiutil create \
@@ -104,9 +129,9 @@ if [ ! -f "$DMG_PATH" ]; then
       -ov \
       -format UDZO \
       "$DMG_PATH"
-      
-    rm -rf "$STAGING_DIR"
 fi
+
+rm -rf "$STAGING_DIR"
 
 if [ ! -f "$DMG_PATH" ]; then
     echo "❌ DMG 制作失败！"
@@ -114,6 +139,15 @@ if [ ! -f "$DMG_PATH" ]; then
 fi
 
 echo "🎉 DMG 制作成功！产物位置: $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"
+
+if [ "$LOCAL_ONLY" = "true" ]; then
+    echo "=================================================="
+    echo "🎉 本地 DMG 打包已完成！"
+    echo "📦 产物路径: $DMG_PATH"
+    echo "💡 提示: 可运行 'open ./dist' 或双击 DMG 镜像进行安装与验证。"
+    echo "=================================================="
+    exit 0
+fi
 
 # 6. Git Tag 处理
 echo "🏷️ 4/5 正在检查 Git Tag..."
