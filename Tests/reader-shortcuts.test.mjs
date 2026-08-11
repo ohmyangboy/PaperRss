@@ -8,6 +8,16 @@ const source = await readFile(
   'utf8'
 );
 
+const appSource = await readFile(
+  new URL('../PaperRss/Sources/App/PaperRssApp.swift', import.meta.url),
+  'utf8'
+);
+
+const helpSource = await readFile(
+  new URL('../PaperRss/Sources/App/KeyboardShortcutHelpView.swift', import.meta.url),
+  'utf8'
+);
+
 const script = source.match(
   /static let readerShortcutScript = WKUserScript\(\n        source: """([\s\S]*?)""",\n        injectionTime:/
 )?.[1]?.replace(/\\\(readerShortcutMessageName\)/g, 'paperRssReaderShortcut') ?? '';
@@ -129,4 +139,21 @@ test('reader shortcut rejections use transient feedback instead of blocking aler
   assert.notEqual(handler, '', 'reader shortcut handler must remain discoverable');
   assert.doesNotMatch(handler, /store\.reportError/);
   assert.match(handler, /onShortcutFeedback/);
+});
+
+test('Help menu opens a dedicated window documenting every current shortcut', () => {
+  assert.match(appSource, /KeyboardShortcutHelpCommands\(\)/);
+  assert.match(appSource, /Window\([\s\S]*id: KeyboardShortcutHelpWindow\.id/);
+  assert.match(helpSource, /CommandGroup\(replacing: \.help\)/);
+  assert.match(helpSource, /openWindow\(id: KeyboardShortcutHelpWindow\.id\)/);
+
+  for (const shortcut of [
+    '["C"]', '["V"]', '["B", "B"]', '["N", "N"]', '["M"]', '["Space"]',
+    '["←"]', '["→"]', '["⌘", "⇧", "R"]', '["⌘", "+"]',
+    '["⌘", "−"]', '["⌘", "0"]', '["⌘", "/"]'
+  ]) {
+    assert.ok(helpSource.includes(shortcut), `help must document ${shortcut}`);
+  }
+
+  assert.match(helpSource, /⌘C 与 ⌘V 始终保留系统复制、粘贴行为/);
 });

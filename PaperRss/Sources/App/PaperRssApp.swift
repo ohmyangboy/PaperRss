@@ -65,9 +65,19 @@ struct PaperRssApp: App {
                 }
                 .keyboardShortcut("0", modifiers: .command)
             }
+
+            #if os(macOS)
+            KeyboardShortcutHelpCommands()
+            #endif
         }
 
         #if os(macOS)
+        Window(I18N.localized("键盘快捷键", englishFallback: "Keyboard Shortcuts"), id: KeyboardShortcutHelpWindow.id) {
+            KeyboardShortcutHelpView()
+                .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
+        }
+        .defaultSize(width: 560, height: 620)
+
         Settings {
             SettingsView(store: store, attention: attention)
                 .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
