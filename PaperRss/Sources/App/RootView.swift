@@ -79,6 +79,11 @@ struct RootView: View {
                 retainedEntryListIDs.removeAll()
                 autoScrollTrigger = UUID()
             }
+            .onChange(of: isZenMode) { _, newZenMode in
+                if newZenMode {
+                    showToast(I18N.shared.localized("ESC退出，按下 ⌘/ 查看快捷键"))
+                }
+            }
             .onChange(of: selectedEntryID) { oldID, newID in
                 if oldID != newID {
                     cancelNavigationConfirmation(dismissToast: true)
@@ -166,7 +171,8 @@ struct RootView: View {
                 onReaderShortcut: dispatchReaderShortcut,
                 onIncreaseFontSize: { store.increaseArticleFontSize() },
                 onDecreaseFontSize: { store.decreaseArticleFontSize() },
-                onResetFontSize: { store.resetArticleFontSize() }
+                onResetFontSize: { store.resetArticleFontSize() },
+                onSelectFirstEntryIfNeeded: { selectFirstEntryIfNeeded() }
             )
         )
         .ignoresSafeArea()
@@ -450,6 +456,7 @@ struct RootView: View {
         DispatchQueue.main.async {
             guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
 
+            @MainActor
             func findWKWebView(in view: NSView) -> WKWebView? {
                 if let webView = view as? WKWebView {
                     return webView
@@ -488,11 +495,19 @@ struct RootView: View {
         #endif
     }
 
+    private func selectFirstEntryIfNeeded() {
+        if selectedEntryID == nil, let first = currentDisplayEntries.first {
+            selectedEntryID = first.id
+        }
+    }
+
     private func focusListView() {
+        selectFirstEntryIfNeeded()
         #if os(macOS)
         DispatchQueue.main.async {
             guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
 
+            @MainActor
             func findSplitVC(in view: NSView) -> NSSplitViewController? {
                 if let next = view.nextResponder as? NSSplitViewController { return next }
                 for subview in view.subviews {
@@ -501,7 +516,9 @@ struct RootView: View {
                 return nil
             }
 
+            @MainActor
             func findFocusTarget(in view: NSView) -> NSView {
+                @MainActor
                 func findPrimary(in v: NSView) -> NSView? {
                     if v is NSTableView || v is NSOutlineView || v is WKWebView { return v }
                     for subview in v.subviews {
@@ -511,6 +528,7 @@ struct RootView: View {
                 }
                 if let primary = findPrimary(in: view) { return primary }
 
+                @MainActor
                 func findAnyAccepting(in v: NSView) -> NSView? {
                     if v.acceptsFirstResponder { return v }
                     for subview in v.subviews {
@@ -587,7 +605,7 @@ struct RootView: View {
                 isRead: current.isRead,
                 isStarred: current.isStarred,
                 isZenMode: isZenMode,
-                disabled: store.activeAIRequest != nil,
+                disabled: false,
                 onToggleBilingual: {
                     store.toggleBilingualMode(for: current.id)
                 },

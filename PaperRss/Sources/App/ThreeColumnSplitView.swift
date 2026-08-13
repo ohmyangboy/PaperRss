@@ -29,6 +29,7 @@ struct ToolbarActions {
     let onIncreaseFontSize: () -> Void
     let onDecreaseFontSize: () -> Void
     let onResetFontSize: () -> Void
+    let onSelectFirstEntryIfNeeded: () -> Void
 
     init(
         onRefresh: @escaping () -> Void,
@@ -48,7 +49,8 @@ struct ToolbarActions {
         onReaderShortcut: @escaping (ReaderShortcutAction) -> Void = { _ in },
         onIncreaseFontSize: @escaping () -> Void = {},
         onDecreaseFontSize: @escaping () -> Void = {},
-        onResetFontSize: @escaping () -> Void = {}
+        onResetFontSize: @escaping () -> Void = {},
+        onSelectFirstEntryIfNeeded: @escaping () -> Void = {}
     ) {
         self.onRefresh = onRefresh
         self.onAddFeed = onAddFeed
@@ -68,6 +70,7 @@ struct ToolbarActions {
         self.onIncreaseFontSize = onIncreaseFontSize
         self.onDecreaseFontSize = onDecreaseFontSize
         self.onResetFontSize = onResetFontSize
+        self.onSelectFirstEntryIfNeeded = onSelectFirstEntryIfNeeded
     }
 }
 
@@ -240,19 +243,104 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var titleLabel: NSTextField?
         private weak var markAllReadButton: NSButton?
         nonisolated(unsafe) private var eventMonitor: Any?
+        nonisolated(unsafe) private var mouseDownMonitor: Any?
         private var blurCleanupTimer: DispatchSourceTimer?
 
         init(actions: ToolbarActions) {
             self.actions = actions
             super.init()
             setupLocalKeyMonitor()
+            setupMouseDownMonitor()
         }
 
         deinit {
             if let monitor = eventMonitor {
                 NSEvent.removeMonitor(monitor)
             }
+            if let monitor = mouseDownMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
             blurCleanupTimer?.cancel()
+        }
+
+        @MainActor
+        func findFocusTarget(in view: NSView) -> NSView {
+            @MainActor
+            func findPrimary(in v: NSView) -> NSView? {
+                if v is NSTableView || v is NSOutlineView || v is WKWebView {
+                    return v
+                }
+                for subview in v.subviews {
+                    if let found = findPrimary(in: subview) { return found }
+                }
+                return nil
+            }
+            if let primary = findPrimary(in: view) { return primary }
+
+            @MainActor
+            func findAnyAccepting(in v: NSView) -> NSView? {
+                if v.acceptsFirstResponder { return v }
+                for subview in v.subviews {
+                    if let found = findAnyAccepting(in: subview) { return found }
+                }
+                return nil
+            }
+            return findAnyAccepting(in: view) ?? view
+        }
+
+        @MainActor
+        func focusColumn(_ index: Int) {
+            guard let splitVC = splitViewController,
+                  let window = splitVC.view.window ?? NSApp.keyWindow,
+                  index < splitVC.splitViewItems.count else { return }
+
+            let targetContainer = splitVC.splitViewItems[index].viewController.view
+            let targetView = findFocusTarget(in: targetContainer)
+
+            if window.firstResponder !== targetView {
+                window.makeFirstResponder(targetView)
+            }
+
+            if index == 1 {
+                actions.onSelectFirstEntryIfNeeded()
+            }
+        }
+
+        private func setupMouseDownMonitor() {
+            guard mouseDownMonitor == nil else { return }
+            mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self = self else { return event }
+
+                guard let splitVC = MainActor.assumeIsolated({ self.splitViewController }),
+                      let window = splitVC.view.window,
+                      (event.window ?? NSApp.keyWindow) === window else { return event }
+
+                let loc = event.locationInWindow
+                let pointInSplitView = splitVC.view.convert(loc, from: nil)
+
+                let sidebarView = splitVC.splitViewItems[0].viewController.view
+                let listView = splitVC.splitViewItems[1].viewController.view
+                let detailView = splitVC.splitViewItems.count >= 3 ? splitVC.splitViewItems[2].viewController.view : nil
+
+                var clickedCol: Int? = nil
+                if sidebarView.frame.contains(pointInSplitView) && !splitVC.splitViewItems[0].isCollapsed {
+                    clickedCol = 0
+                } else if listView.frame.contains(pointInSplitView) && !splitVC.splitViewItems[1].isCollapsed {
+                    clickedCol = 1
+                } else if let detailView = detailView, detailView.frame.contains(pointInSplitView) {
+                    clickedCol = 2
+                }
+
+                if let col = clickedCol {
+                    DispatchQueue.main.async { [weak self] in
+                        MainActor.assumeIsolated {
+                            self?.focusColumn(col)
+                        }
+                    }
+                }
+
+                return event
+            }
         }
 
         private func setupLocalKeyMonitor() {
@@ -261,6 +349,16 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 guard let self = self else { return event }
 
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+                // ESC 键 (keyCode 53)：处于禅模式时按下 ESC 键退出禅模式
+                if event.keyCode == 53 && flags.isEmpty {
+                    if MainActor.assumeIsolated({ self.actions.isZenMode }) {
+                        MainActor.assumeIsolated {
+                            self.actions.onToggleZenMode()
+                        }
+                        return nil
+                    }
+                }
                 if flags.contains(.command) && !flags.contains(.control) && !flags.contains(.option) {
                     let chars = event.charactersIgnoringModifiers ?? ""
                     if chars == "=" || chars == "+" || event.keyCode == 24 || event.keyCode == 69 {
@@ -286,13 +384,13 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 if MainActor.assumeIsolated({ self.consumeReaderShortcut(event, flags: flags) }) {
                     return nil
                 }
-                
+
                 // 左/右方向键 (keyCode 123 左, 124 右)
                 if flags.isEmpty && (event.keyCode == 123 || event.keyCode == 124) {
                     guard let window = event.window ?? NSApp.keyWindow,
                           let splitVC = self.splitViewController,
                           splitVC.splitViewItems.count >= 3 else { return event }
-                          
+
                     let firstResponder = window.firstResponder as? NSView
                     if firstResponder is NSTextView || firstResponder is NSTextField {
                         return event
@@ -302,28 +400,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     let listView = splitVC.splitViewItems[1].viewController.view
                     let detailView = splitVC.splitViewItems[2].viewController.view
 
-                    func findFocusTarget(in view: NSView) -> NSView {
-                        func findPrimary(in v: NSView) -> NSView? {
-                            if v is NSTableView || v is NSOutlineView || v is WKWebView {
-                                return v
-                            }
-                            for subview in v.subviews {
-                                if let found = findPrimary(in: subview) { return found }
-                            }
-                            return nil
-                        }
-                        if let primary = findPrimary(in: view) { return primary }
-
-                        func findAnyAccepting(in v: NSView) -> NSView? {
-                            if v.acceptsFirstResponder { return v }
-                            for subview in v.subviews {
-                                if let found = findAnyAccepting(in: subview) { return found }
-                            }
-                            return nil
-                        }
-                        return findAnyAccepting(in: view) ?? view
-                    }
-
+                    @MainActor
                     func currentColumnIndex() -> Int? {
                         guard let firstResponder = firstResponder else { return nil }
                         var current: NSView? = firstResponder
@@ -336,26 +413,34 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                         return nil
                     }
 
-                    guard let colIndex = currentColumnIndex() else { return event }
+                    guard let colIndex = MainActor.assumeIsolated({ currentColumnIndex() }) else { return event }
 
                     if event.keyCode == 123 { // Left
                         if colIndex == 2 { // 从文章详情 -> 切到文章列表
-                            let target = findFocusTarget(in: listView)
-                            window.makeFirstResponder(target)
+                            MainActor.assumeIsolated {
+                                self.focusColumn(1)
+                            }
                             return nil
                         } else if colIndex == 1 { // 从文章列表 -> 切到侧边栏
-                            let target = findFocusTarget(in: sidebarView)
-                            window.makeFirstResponder(target)
+                            MainActor.assumeIsolated {
+                                self.focusColumn(0)
+                            }
+                            return nil
+                        } else if colIndex == 0 { // 侧边栏（最左边缘停留）
                             return nil
                         }
                     } else if event.keyCode == 124 { // Right
                         if colIndex == 0 { // 从侧边栏 -> 切到文章列表
-                            let target = findFocusTarget(in: listView)
-                            window.makeFirstResponder(target)
+                            MainActor.assumeIsolated {
+                                self.focusColumn(1)
+                            }
                             return nil
                         } else if colIndex == 1 { // 从文章列表 -> 切到文章详情
-                            let target = findFocusTarget(in: detailView)
-                            window.makeFirstResponder(target)
+                            MainActor.assumeIsolated {
+                                self.focusColumn(2)
+                            }
+                            return nil
+                        } else if colIndex == 2 { // 文章详情（最右边缘停留）
                             return nil
                         }
                     }
@@ -386,6 +471,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
 
                 if let detailVCView, firstResponder.isDescendant(of: detailVCView) {
+                    @MainActor
                     func findWKWebView(in view: NSView) -> WKWebView? {
                         if let webView = view as? WKWebView { return webView }
                         for subview in view.subviews {
@@ -461,7 +547,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             removeTitlebarBlur(from: window)
             DispatchQueue.main.async { [weak self, weak window] in
                 if let window {
-                    self?.removeTitlebarBlur(from: window)
+                    MainActor.assumeIsolated {
+                        self?.removeTitlebarBlur(from: window)
+                    }
                 }
             }
 
@@ -481,8 +569,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     queue: .main
                 ) { [weak self, weak window] _ in
                     guard let window = window else { return }
-                    self?.removeTitlebarBlur(from: window)
-                    self?.startBlurCleanupTimer(for: window)
+                    MainActor.assumeIsolated {
+                        self?.removeTitlebarBlur(from: window)
+                        self?.startBlurCleanupTimer(for: window)
+                    }
                 }
             }
 
@@ -497,7 +587,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     guard let appearedWindow = note.object as? NSWindow, appearedWindow !== mainWindow else { return }
                     let className = String(describing: type(of: appearedWindow))
                     if className.contains("Toolbar") || className.contains("Titlebar") || className.contains("FullScreen") {
-                        self?.removeTitlebarBlur(from: mainWindow)
+                        MainActor.assumeIsolated {
+                            self?.removeTitlebarBlur(from: mainWindow)
+                        }
                     }
                 }
             }
