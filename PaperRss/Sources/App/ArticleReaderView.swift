@@ -103,8 +103,16 @@ struct ArticleReaderView: View {
     /// Cleared for failed paragraphs so a truncated result never renders as
     /// a final translation (and never blocks an automatic retry).
     @State private var streamingBilingualTranslations: [String: String] = [:]
+    @State private var activeTranslationTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+
+    private func cancelBilingualTranslationLocal() {
+        activeTranslationTask?.cancel()
+        activeTranslationTask = nil
+        pendingBilingualParagraphIDs.removeAll()
+        store.cancelBilingualTranslation()
+    }
 
     private var paperTopMargin: CGFloat {
         0
@@ -213,6 +221,9 @@ struct ArticleReaderView: View {
         .onChange(of: readerMode) { _, newMode in
             if newMode == .bilingual {
                 requestVisibleTranslationsIfPossible()
+            } else {
+                cancelBilingualTranslationLocal()
+                onShortcutFeedback(I18N.shared.localized("已取消双语翻译"))
             }
         }
         .onChange(of: shortcutInvocation) { _, invocation in
@@ -220,6 +231,8 @@ struct ArticleReaderView: View {
             handleReaderShortcut(invocation.action)
         }
         .task(id: entry.id) {
+            cancelBilingualTranslationLocal()
+            store.dismissError()
             let requestedEntry = entry
             activeLoadEntryID = requestedEntry.id
             isLoading = true
@@ -592,7 +605,7 @@ struct ArticleReaderView: View {
                 )
             }
             .buttonStyle(.borderless)
-            .disabled(text.isEmpty || store.activeAIRequest != nil)
+            .disabled(text.isEmpty)
             .accessibilityLabel("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
             .help("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
 
@@ -611,9 +624,9 @@ struct ArticleReaderView: View {
                 toolbarSymbol(currentEntry.isStarred ? "star.fill" : "star", isActive: currentEntry.isStarred)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("\(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏")) (M)")
-            .help("\(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏")) (M)")
-
+            .accessibilityLabel(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏文章"))
+            .help(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏文章"))
+            
             Button {
                 onToggleZenMode()
             } label: {
@@ -628,26 +641,9 @@ struct ArticleReaderView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .frame(width: 140, height: 32)
-        .background(
-            Capsule()
-                .fill(
-                    colorScheme == .dark
-                        ? AnyShapeStyle(Color.white.opacity(0.08))
-                        : AnyShapeStyle(Color.black.opacity(0.04))
-                )
-                .shadow(
-                    color: .black.opacity(colorScheme == .dark ? 0.35 : 0.08),
-                    radius: 6,
-                    x: 0,
-                    y: 2
-                )
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
-        )
-        .contentShape(Rectangle())
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
@@ -665,35 +661,34 @@ struct ArticleReaderView: View {
 
     private func toggleBilingualTranslation() {
         failedBilingualParagraphIDs.removeAll()
+        pendingBilingualParagraphIDs.removeAll()
+        let isActivating = !store.isBilingualActive(for: entry.id)
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
             store.toggleBilingualMode(for: entry.id)
         }
-        requestVisibleTranslationsIfPossible()
+        if isActivating {
+            requestVisibleTranslationsIfPossible()
+        } else {
+            cancelBilingualTranslationLocal()
+            onShortcutFeedback(I18N.shared.localized("已取消双语翻译"))
+        }
     }
 
     private func handleReaderShortcut(_ action: ReaderShortcutAction) {
         switch action {
         case .toggleBilingual:
-            switch ReaderShortcutPolicy.bilingualDecision(
-                isBilingualActive: readerMode == .bilingual,
-                isAIRequestActive: store.activeAIRequest != nil
-            ) {
-            case .toggle:
-                toggleBilingualTranslation()
-            case .rejectBusy:
-                onShortcutFeedback(I18N.shared.localized("已有 AI 任务正在进行，请稍后再试。"))
-            }
+            toggleBilingualTranslation()
         case .showSummary:
             switch ReaderShortcutPolicy.summaryDecision(
                 showsAISummary: store.database.llmConfiguration.showsAISummary,
                 hasCachedSummary: store.summaryArtifact(for: entry) != nil,
-                isAIRequestActive: store.activeAIRequest != nil
+                isAIRequestActive: store.activeSummaryRequest != nil
             ) {
             case .promptToEnable:
                 onShortcutFeedback(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
             case .revealCached:
                 withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
-                    isSummaryExpanded = true
+                    isSummaryExpanded.toggle()
                 }
             case .generate:
                 guard !effectiveArticleText.isEmpty else {
@@ -702,7 +697,7 @@ struct ArticleReaderView: View {
                 }
                 generateSummary(force: false)
             case .rejectBusy:
-                onShortcutFeedback(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
+                onShortcutFeedback(I18N.shared.localized("已有 AI 摘要任务正在进行，请稍后再试。"))
             }
         case .toggleStar:
             store.toggleStar(currentEntry)
@@ -733,11 +728,11 @@ struct ArticleReaderView: View {
     private func generateSummary(force: Bool = false) {
         let targetText = effectiveArticleText
         guard !targetText.isEmpty else {
-            store.reportError(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
+            onShortcutFeedback(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
             return
         }
-        if store.activeAIRequest != nil {
-            store.reportError(I18N.shared.localized("已有 AI 任务正在进行，请等待它完成后再试。"))
+        if store.activeSummaryRequest != nil {
+            onShortcutFeedback(I18N.shared.localized("已有 AI 摘要任务正在进行，请稍后再试。"))
             return
         }
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
@@ -831,13 +826,13 @@ struct ArticleReaderView: View {
                         && !pendingBilingualParagraphIDs.contains($0)
                         && (failedBilingualParagraphIDs[$0] ?? 0) < Self.maximumTranslationFailures
                 }
-                .prefix(4)
+                .prefix(6)
         )
         guard !batch.isEmpty else { return }
 
         pendingBilingualParagraphIDs.formUnion(batch)
         let paragraphs = readerParagraphs
-        Task {
+        activeTranslationTask = Task {
             await store.translateBilingualParagraphs(
                 entry: entry,
                 text: text,
@@ -850,6 +845,7 @@ struct ArticleReaderView: View {
                 }
             )
 
+            guard !Task.isCancelled else { return }
             let completedIDs = Set(
                 store.bilingualArtifact(for: entry, text: text)?.segments.map(\.id) ?? []
             )
@@ -860,8 +856,6 @@ struct ArticleReaderView: View {
                 failedBilingualParagraphIDs.removeValue(forKey: id)
             }
             for id in unsuccessfulIDs {
-                // Never leave a truncated streamed text behind: it would
-                // render as a final translation and block automatic retries.
                 streamingBilingualTranslations.removeValue(forKey: id)
                 failedBilingualParagraphIDs[id, default: 0] += 1
             }
@@ -963,13 +957,13 @@ private enum PaperReaderHeaderBuilder {
 
         let summaryCardHTMLString: String
         if showsAISummary {
-            let summaryHTML = summaryCardHTML(
+            summaryCardHTMLString = summaryCardHTML(
                 summaryArtifact: summaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: isGeneratingSummary,
-                aiStatusMessage: aiStatusMessage
+                aiStatusMessage: aiStatusMessage,
+                errorMessage: nil
             )
-            summaryCardHTMLString = "<div class=\"paper-summary-card\" id=\"paper-summary-card\" title=\"\(I18N.localized("AI 摘要").htmlEscaped) (V)\" aria-keyshortcuts=\"V\">\(summaryHTML)</div>"
         } else {
             summaryCardHTMLString = ""
         }
@@ -987,6 +981,45 @@ private enum PaperReaderHeaderBuilder {
         """
     }
 
+    static func formatSimpleMarkdown(_ raw: String) -> String {
+        let lines = raw.components(separatedBy: "\n")
+        var formattedLines: [String] = []
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                continue
+            }
+            
+            var current = trimmed.htmlEscaped
+            
+            // 处理 # / ## / ### 标题，转为 <strong> 加粗，字号保持一致
+            if current.hasPrefix("#") {
+                let stripped = current.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+                current = "<strong>\(stripped)</strong>"
+            } else if current.hasPrefix("- ") || current.hasPrefix("* ") {
+                let content = current.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                current = "&bull;&nbsp;\(content)"
+            }
+            
+            // 处理 **粗体** 匹配
+            while let rangeStart = current.range(of: "**") {
+                let afterStart = current[rangeStart.upperBound...]
+                if let rangeEnd = afterStart.range(of: "**") {
+                    let boldText = afterStart[..<rangeEnd.lowerBound]
+                    let fullRange = rangeStart.lowerBound..<rangeEnd.upperBound
+                    current.replaceSubrange(fullRange, with: "<strong>\(boldText)</strong>")
+                } else {
+                    break
+                }
+            }
+            
+            formattedLines.append(current)
+        }
+        
+        return formattedLines.joined(separator: "<br>")
+    }
+
     static func summaryCardHTML(
         summaryArtifact: AIArtifact?,
         isSummaryExpanded: Bool,
@@ -994,27 +1027,23 @@ private enum PaperReaderHeaderBuilder {
         aiStatusMessage: String?,
         errorMessage: String? = nil
     ) -> String {
-        let sparklesSVG = """
-        <svg class="paper-summary-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 3l1.4 4.2L17.5 9l-4.1 1.8L12 15l-1.4-4.2L6.5 9l4.1-1.8L12 3z"/>
-        </svg>
-        """
-
-        let chevronUpSVG = """
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="18 15 12 9 6 15"></polyline>
+        let chevronRightSVG = """
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"></polyline>
         </svg>
         """
 
         let chevronDownSVG = """
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
         """
 
+        let titleText = I18N.localized("Ai摘要").htmlEscaped
+        let cardTitleAttr = "title=\"\(I18N.localized("AI 摘要").htmlEscaped) (V)\" aria-keyshortcuts=\"V\""
+
         if let summary = summaryArtifact, !summary.content.isEmpty {
-            let formattedContent = summary.content.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>")
-            let toggleIcon = isSummaryExpanded ? chevronUpSVG : chevronDownSVG
+            let formattedContent = formatSimpleMarkdown(summary.content)
             let bodyClass = isSummaryExpanded ? "expanded" : "collapsed"
             
             var statusFooter = ""
@@ -1036,27 +1065,48 @@ private enum PaperReaderHeaderBuilder {
                 }
             }
 
+            // 提取摘要第一句作为折叠预览（去除 # 和 ** 等标识符）
+            let rawContent = summary.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let firstLine = rawContent.components(separatedBy: CharacterSet(charactersIn: "\n。")).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?.trimmingCharacters(in: .whitespaces) ?? rawContent
+            let cleanFirstLine = firstLine
+                .replacingOccurrences(of: "#", with: "")
+                .replacingOccurrences(of: "**", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            let previewText = cleanFirstLine.isEmpty ? "" : (cleanFirstLine + (cleanFirstLine.count < rawContent.count ? "..." : ""))
+
+            let headerSubtextHTML = isSummaryExpanded ? "" : "<span class=\"paper-summary-subtext\">\(previewText.htmlEscaped)</span>"
+            let actionIcon = isSummaryExpanded ? chevronDownSVG : chevronRightSVG
+
             return """
-            <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
-              <button class="paper-summary-toggle-btn" data-paper-action="toggleSummary" title="V" aria-keyshortcuts="V">
-                \(toggleIcon)
-              </button>
-            </div>
-            <div class="paper-summary-body \(bodyClass)">
-              <p>\(formattedContent)</p>
-              \(statusFooter)
+            <div class="paper-summary-card paper-summary-collapse \(isSummaryExpanded ? "is-expanded" : "is-collapsed")" id="paper-summary-card" data-paper-action="toggleSummary" \(cardTitleAttr)>
+              <div class="paper-summary-header">
+                <div class="paper-summary-header-left">
+                  <span class="paper-summary-title">\(titleText)</span>
+                  \(headerSubtextHTML)
+                </div>
+                <button class="paper-summary-ai-btn" data-paper-action="toggleSummary" title="V" aria-keyshortcuts="V">
+                  \(actionIcon)
+                </button>
+              </div>
+              <div class="paper-summary-body \(bodyClass)">
+                <div class="paper-summary-text">\(formattedContent)</div>
+                \(statusFooter)
+              </div>
             </div>
             """
         } else if isGeneratingSummary {
-            let msg = aiStatusMessage ?? I18N.localized("AI 正在准备摘要…")
+            let msg = aiStatusMessage ?? I18N.localized("正在生成，完成后会自动显示。")
             return """
-            <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
-            </div>
-            <div class="paper-summary-status">
-              <span class="paper-spinner"></span>
-              <span>\(msg.htmlEscaped)</span>
+            <div class="paper-summary-card paper-summary-collapse generating" id="paper-summary-card" \(cardTitleAttr)>
+              <div class="paper-summary-header">
+                <div class="paper-summary-header-left">
+                  <span class="paper-summary-title">\(titleText)</span>
+                  <span class="paper-summary-subtext"><span class="paper-spinner"></span> \(msg.htmlEscaped)</span>
+                </div>
+                <button class="paper-summary-ai-btn">
+                  \(chevronRightSVG)
+                </button>
+              </div>
             </div>
             """
         } else {
@@ -1067,14 +1117,19 @@ private enum PaperReaderHeaderBuilder {
                 </div>
                 """
             } ?? ""
+            let placeholderText = I18N.localized("尚未生成，点击后发送正文生成摘要").htmlEscaped
             return """
-            <div class="paper-summary-header">
-              <span class="paper-summary-title">\(sparklesSVG) \(I18N.localized("AI 摘要").htmlEscaped)</span>
-            </div>
-            \(errNotice)
-            <div class="paper-summary-placeholder">
-              <span>\(I18N.localized("尚未生成；仅在你点按后发送正文。").htmlEscaped)</span>
-              <button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="false" title="V" aria-keyshortcuts="V">\(I18N.localized("生成摘要").htmlEscaped)</button>
+            <div class="paper-summary-card paper-summary-collapse ungenerated" id="paper-summary-card" data-paper-action="generateSummary" data-paper-force="false" \(cardTitleAttr)>
+              \(errNotice)
+              <div class="paper-summary-header">
+                <div class="paper-summary-header-left">
+                  <span class="paper-summary-title">\(titleText)</span>
+                  <span class="paper-summary-subtext">\(placeholderText)</span>
+                </div>
+                <button class="paper-summary-ai-btn" data-paper-action="generateSummary" data-paper-force="false" title="V" aria-keyshortcuts="V">
+                  \(chevronRightSVG)
+                </button>
+              </div>
             </div>
             """
         }
@@ -1168,33 +1223,54 @@ body {
 .paper-summary-card {
   background: var(--paper-card);
   border: 1px solid var(--paper-rule);
-  border-radius: 10px;
-  padding: 14px;
+  border-radius: 8px;
+  padding: 10px 14px;
   margin: 0 0 20px 0;
-  font-size: 0.95em;
+  font-size: 0.92em;
   cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  user-select: none;
+}
+.paper-summary-card:hover {
+  border-color: var(--paper-accent);
 }
 .paper-summary-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: var(--paper-accent);
+  gap: 10px;
+}
+.paper-summary-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
 }
 .paper-summary-title {
-  display: flex;
+  font-weight: 600;
+  color: var(--paper-accent);
+  white-space: nowrap;
+  font-size: 0.95em;
+  flex-shrink: 0;
+}
+.paper-summary-subtext {
+  font-size: 0.88em;
+  font-weight: normal;
+  color: var(--paper-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.paper-summary-icon {
-  width: 16px;
-  height: 16px;
-}
-.paper-summary-toggle-btn {
-  background: rgba(95, 115, 85, 0.1);
+.paper-summary-ai-btn {
+  background: transparent;
   border: none;
-  border-radius: 50%;
+  border-radius: 4px;
   width: 24px;
   height: 24px;
   display: flex;
@@ -1203,16 +1279,48 @@ body {
   cursor: pointer;
   color: var(--paper-accent);
   padding: 0;
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+.paper-summary-card:hover .paper-summary-ai-btn,
+.paper-summary-ai-btn:hover {
+  opacity: 1;
+}
+.paper-summary-icon {
+  width: 15px;
+  height: 15px;
 }
 .paper-summary-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--paper-rule);
   line-height: 1.6;
   color: var(--paper-ink);
+  font-size: 0.95em;
 }
 .paper-summary-body.collapsed {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: none;
+}
+.paper-summary-text {
+  line-height: 1.6;
+}
+.paper-summary-text strong,
+.paper-summary-text b {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--paper-ink);
+}
+.paper-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--paper-wash);
+  border-top-color: var(--paper-accent);
+  border-radius: 50%;
+  animation: paper-spin 0.8s linear infinite;
+  flex-shrink: 0;
+  vertical-align: middle;
 }
 .paper-summary-placeholder, .paper-summary-status {
   display: flex;
@@ -1416,6 +1524,10 @@ th, td {
   padding: .48em .68em;
   text-align: left;
   vertical-align: top;
+}
+.paper-rss-subparagraph {
+  margin: 0 0 1em 0;
+  line-height: 1.6;
 }
 .paper-rss-translation {
   margin: -.64em 0 1.32em;
@@ -1665,19 +1777,21 @@ enum PaperReaderBridge {
           const publishParagraphs = () => {
             scheduled.paragraphs = false;
             const viewportHeight = Math.max(window.innerHeight || 0, 1);
+            const topPreloadBound = -viewportHeight * 0.30;
+            const bottomPreloadBound = viewportHeight * 1.30;
             const paragraphIDs = Array.from(observedParagraphs.values())
               .map(node => ({ id: node.dataset.paperRssId, rect: node.getBoundingClientRect() }))
               .filter(item =>
                 item.id &&
-                item.rect.bottom > 0 &&
-                item.rect.top < viewportHeight * 1.75
+                item.rect.bottom > topPreloadBound &&
+                item.rect.top < bottomPreloadBound
               )
               .sort((lhs, rhs) => {
                 const lhsVisible = lhs.rect.top < viewportHeight && lhs.rect.bottom > 0 ? 0 : 1;
                 const rhsVisible = rhs.rect.top < viewportHeight && rhs.rect.bottom > 0 ? 0 : 1;
                 return lhsVisible - rhsVisible || lhs.rect.top - rhs.rect.top;
               })
-              .slice(0, 6)
+              .slice(0, 10)
               .map(item => item.id);
             const payload = JSON.stringify(paragraphIDs);
             if (payload !== lastParagraphPayload) {
@@ -1698,9 +1812,8 @@ enum PaperReaderBridge {
             requestAnimationFrame(publishParagraphs);
           };
 
-          // IntersectionObserver keeps the lazy-translation priority queue to
-          // the small visible/nearby set. The previous approach forced layout
-          // for every paragraph once per scroll frame on long essays.
+          // IntersectionObserver 覆盖当前视口以及屏幕外 30% 的上下预加载缓冲区，
+          // 支持用户快速滚动时的即时 AI 翻译预加载。
           const observer = new IntersectionObserver(entries => {
             entries.forEach(entry => {
               const id = entry.target.dataset.paperRssId;
@@ -1711,7 +1824,7 @@ enum PaperReaderBridge {
             scheduleParagraphs();
           }, {
             root: null,
-            rootMargin: "0px 0px 75% 0px",
+            rootMargin: "30% 0px 50% 0px",
             threshold: 0
           });
           allParagraphs.forEach(node => observer.observe(node));
@@ -2943,11 +3056,66 @@ private struct ArticleHTMLView: NSViewRepresentable {
                   let jsonEncoded = String(data: data, encoding: .utf8) else { return }
             let script = """
             (() => {
-              const card = document.getElementById('paper-summary-card');
-              if (card) {
-                card.style.display = '';
-                card.innerHTML = \(jsonEncoded);
+              const oldCard = document.getElementById('paper-summary-card');
+              if (!oldCard) return;
+
+              const temp = document.createElement('div');
+              temp.innerHTML = \(jsonEncoded);
+              const newCard = temp.firstElementChild;
+              if (!newCard) return;
+
+              if (oldCard.className === newCard.className) {
+                const oldText = oldCard.querySelector('.paper-summary-text');
+                const newText = newCard.querySelector('.paper-summary-text');
+                if (oldText && newText) {
+                  oldText.innerHTML = newText.innerHTML;
+                }
+
+                const oldSubtext = oldCard.querySelector('.paper-summary-subtext');
+                const newSubtext = newCard.querySelector('.paper-summary-subtext');
+                if (oldSubtext && !newSubtext) {
+                  oldSubtext.remove();
+                } else if (!oldSubtext && newSubtext) {
+                  const headerLeft = oldCard.querySelector('.paper-summary-header-left');
+                  if (headerLeft) headerLeft.appendChild(newSubtext.cloneNode(true));
+                } else if (oldSubtext && newSubtext) {
+                  const oldSpinner = oldSubtext.querySelector('.paper-spinner');
+                  const newSpinner = newSubtext.querySelector('.paper-spinner');
+                  if (oldSpinner && newSpinner) {
+                    const oldSpan = oldSubtext.querySelector('span:not(.paper-spinner)');
+                    const newSpan = newSubtext.querySelector('span:not(.paper-spinner)');
+                    if (oldSpan && newSpan) {
+                      oldSpan.innerHTML = newSpan.innerHTML;
+                    }
+                  } else {
+                    oldSubtext.innerHTML = newSubtext.innerHTML;
+                  }
+                }
+
+                const oldStatus = oldCard.querySelector('.paper-summary-status');
+                const newStatus = newCard.querySelector('.paper-summary-status');
+                if (oldStatus && !newStatus) {
+                  oldStatus.remove();
+                } else if (!oldStatus && newStatus) {
+                  const body = oldCard.querySelector('.paper-summary-body');
+                  if (body) body.appendChild(newStatus.cloneNode(true));
+                } else if (oldStatus && newStatus) {
+                  const oldSpinner = oldStatus.querySelector('.paper-spinner');
+                  const newSpinner = newStatus.querySelector('.paper-spinner');
+                  if (oldSpinner && newSpinner) {
+                    const oldSpan = oldStatus.querySelector('span:not(.paper-spinner)');
+                    const newSpan = newStatus.querySelector('span:not(.paper-spinner)');
+                    if (oldSpan && newSpan) {
+                      oldSpan.innerHTML = newSpan.innerHTML;
+                    }
+                  } else {
+                    oldStatus.innerHTML = newStatus.innerHTML;
+                  }
+                }
+                return;
               }
+
+              oldCard.outerHTML = \(jsonEncoded);
             })();
             """
             webView.evaluateJavaScript(script)
@@ -3509,11 +3677,66 @@ private struct ArticleHTMLView: UIViewRepresentable {
                   let jsonEncoded = String(data: data, encoding: .utf8) else { return }
             let script = """
             (() => {
-              const card = document.getElementById('paper-summary-card');
-              if (card) {
-                card.style.display = '';
-                card.innerHTML = \(jsonEncoded);
+              const oldCard = document.getElementById('paper-summary-card');
+              if (!oldCard) return;
+
+              const temp = document.createElement('div');
+              temp.innerHTML = \(jsonEncoded);
+              const newCard = temp.firstElementChild;
+              if (!newCard) return;
+
+              if (oldCard.className === newCard.className) {
+                const oldText = oldCard.querySelector('.paper-summary-text');
+                const newText = newCard.querySelector('.paper-summary-text');
+                if (oldText && newText) {
+                  oldText.innerHTML = newText.innerHTML;
+                }
+
+                const oldSubtext = oldCard.querySelector('.paper-summary-subtext');
+                const newSubtext = newCard.querySelector('.paper-summary-subtext');
+                if (oldSubtext && !newSubtext) {
+                  oldSubtext.remove();
+                } else if (!oldSubtext && newSubtext) {
+                  const headerLeft = oldCard.querySelector('.paper-summary-header-left');
+                  if (headerLeft) headerLeft.appendChild(newSubtext.cloneNode(true));
+                } else if (oldSubtext && newSubtext) {
+                  const oldSpinner = oldSubtext.querySelector('.paper-spinner');
+                  const newSpinner = newSubtext.querySelector('.paper-spinner');
+                  if (oldSpinner && newSpinner) {
+                    const oldSpan = oldSubtext.querySelector('span:not(.paper-spinner)');
+                    const newSpan = newSubtext.querySelector('span:not(.paper-spinner)');
+                    if (oldSpan && newSpan) {
+                      oldSpan.innerHTML = newSpan.innerHTML;
+                    }
+                  } else {
+                    oldSubtext.innerHTML = newSubtext.innerHTML;
+                  }
+                }
+
+                const oldStatus = oldCard.querySelector('.paper-summary-status');
+                const newStatus = newCard.querySelector('.paper-summary-status');
+                if (oldStatus && !newStatus) {
+                  oldStatus.remove();
+                } else if (!oldStatus && newStatus) {
+                  const body = oldCard.querySelector('.paper-summary-body');
+                  if (body) body.appendChild(newStatus.cloneNode(true));
+                } else if (oldStatus && newStatus) {
+                  const oldSpinner = oldStatus.querySelector('.paper-spinner');
+                  const newSpinner = newStatus.querySelector('.paper-spinner');
+                  if (oldSpinner && newSpinner) {
+                    const oldSpan = oldStatus.querySelector('span:not(.paper-spinner)');
+                    const newSpan = newStatus.querySelector('span:not(.paper-spinner)');
+                    if (oldSpan && newSpan) {
+                      oldSpan.innerHTML = newSpan.innerHTML;
+                    }
+                  } else {
+                    oldStatus.innerHTML = newStatus.innerHTML;
+                  }
+                }
+                return;
               }
+
+              oldCard.outerHTML = \(jsonEncoded);
             })();
             """
             webView.evaluateJavaScript(script)

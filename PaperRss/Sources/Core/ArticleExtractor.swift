@@ -227,6 +227,30 @@ public enum ArticleExtractor {
         return output
     }
 
+    private static func splitBlockTextIntoParagraphs(_ text: String) -> [String] {
+        let lines = text.components(separatedBy: "\n")
+        var result: [String] = []
+        var current = ""
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                if !current.isEmpty {
+                    result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+                    current = ""
+                }
+            } else {
+                if !current.isEmpty {
+                    current += "\n"
+                }
+                current += line
+            }
+        }
+        if !current.isEmpty {
+            result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return result.filter { !$0.isEmpty }
+    }
+
     /// Returns the source blocks WebKit can observe while the reader scrolls.
     /// The same expression is used by the renderer below, keeping paragraph IDs
     /// stable between translation requests and document reloads.
@@ -242,7 +266,15 @@ public enum ArticleExtractor {
             guard let match, let blockRange = Range(match.range, in: html) else { return }
             let original = String(html[blockRange]).plainText
             guard !original.isEmpty else { return }
-            paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
+
+            let subParagraphs = splitBlockTextIntoParagraphs(original)
+            if subParagraphs.count > 1 {
+                for (subIdx, subText) in subParagraphs.enumerated() {
+                    paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)_\(subIdx)", original: subText))
+                }
+            } else {
+                paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
+            }
             paragraphIndex += 1
         }
         return paragraphs
@@ -277,16 +309,30 @@ public enum ArticleExtractor {
                 return
             }
 
-            let id = "p\(paragraphIndex)"
-            paragraphIndex += 1
-            rendered += annotatedReaderBlock(block, id: id)
+            let subParagraphs = splitBlockTextIntoParagraphs(original)
+            if subParagraphs.count > 1 {
+                for (subIdx, subText) in subParagraphs.enumerated() {
+                    let subID = "p\(paragraphIndex)_\(subIdx)"
+                    let escapedSubText = htmlTextEscaped(subText).replacingOccurrences(of: "\n", with: "<br>")
+                    rendered += "<p class=\"paper-rss-subparagraph\" data-paper-rss-id=\"\(subID)\">\(escapedSubText)</p>"
+                    if let segment = segmentsByID[subID], subText.isSameReaderParagraph(as: segment.original) {
+                        rendered += translationMarkup(for: segment.translation, id: subID)
+                    } else if pendingIDs.contains(subID) {
+                        rendered += pendingTranslationMarkup(for: subID)
+                    }
+                }
+            } else {
+                let id = "p\(paragraphIndex)"
+                rendered += annotatedReaderBlock(block, id: id)
 
-            if let segment = segmentsByID[id],
-               original.isSameReaderParagraph(as: segment.original) {
-                rendered += translationMarkup(for: segment.translation, id: id)
-            } else if pendingIDs.contains(id) {
-                rendered += pendingTranslationMarkup(for: id)
+                if let segment = segmentsByID[id],
+                   original.isSameReaderParagraph(as: segment.original) {
+                    rendered += translationMarkup(for: segment.translation, id: id)
+                } else if pendingIDs.contains(id) {
+                    rendered += pendingTranslationMarkup(for: id)
+                }
             }
+            paragraphIndex += 1
         }
         rendered += html[cursor...]
         return rendered
@@ -299,6 +345,15 @@ public enum ArticleExtractor {
     private static func annotatedReaderBlock(_ block: String, id: String) -> String {
         guard let closingBracket = block.firstIndex(of: ">") else { return block }
         var output = block
+        output.insert(contentsOf: " data-paper-rss-id=\"\(id)\"", at: closingBracket)
+        return output
+    }
+
+    private static func annotatedReaderSpanBlock(_ blockHTML: String, id: String) -> String {
+        guard let closingBracket = blockHTML.firstIndex(of: ">") else {
+            return "<span data-paper-rss-id=\"\(id)\">\(blockHTML)</span>"
+        }
+        var output = blockHTML
         output.insert(contentsOf: " data-paper-rss-id=\"\(id)\"", at: closingBracket)
         return output
     }

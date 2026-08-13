@@ -436,21 +436,23 @@ final class PaperRssCoreTests: XCTestCase {
             baseURL: URL(string: "https://x.com/deepseek_ai/status/2049312932014813344")!
         )
 
-        // Both the tweet text and the quoted-tweet div are now observable
-        // blocks, so the viewport observer can request each one for
-        // translation and the first paragraph is no longer skipped.
+        // Both the tweet text and the quoted-tweet div are observable blocks.
+        // Top-level <br><br> runs split into sub-paragraphs (p0_0, p0_1) so the
+        // viewport observer can translate each sentence independently; the
+        // quoted-tweet div stays one block (p1).
         XCTAssertEqual(
             // RSSHub inserts an en-space after some labels; normalize it so the
             // assertion is readable while the paragraph boundaries stay exact.
             ArticleExtractor.readerParagraphs(in: sanitized).map(\.original).map { $0.replacingOccurrences(of: "\u{2002}", with: " ") },
             [
-                "We are making our discount permanent! 🎉\n\nEnjoy building with DeepSeek-V4-Pro!",
+                "We are making our discount permanent! 🎉",
+                "Enjoy building with DeepSeek-V4-Pro!",
                 "DeepSeek: The V4-Pro discount has been extended!"
             ]
         )
         XCTAssertEqual(
             ArticleExtractor.readerParagraphs(in: sanitized).map(\.id),
-            ["p0", "p1"]
+            ["p0_0", "p0_1", "p1"]
         )
     }
 

@@ -223,7 +223,30 @@ public final class AppStore: ObservableObject {
             return CloudSyncError.notEntitled.localizedDescription
         }
     }
-    @Published public private(set) var activeAIRequest: AIRequestStatus?
+    @Published public private(set) var activeSummaryRequest: AIRequestStatus?
+    @Published public private(set) var activeBilingualRequest: AIRequestStatus?
+    @Published public private(set) var activeSelectionRequest: AIRequestStatus?
+
+    public var activeAIRequest: AIRequestStatus? {
+        activeSummaryRequest ?? activeBilingualRequest ?? activeSelectionRequest
+    }
+
+    public func activeAIStatus(for kind: AIArtifactKind) -> AIRequestStatus? {
+        switch kind {
+        case .summary: return activeSummaryRequest
+        case .bilingual: return activeBilingualRequest
+        case .translation, .selectionExplanation, .articleContext, .interpretation: return activeSelectionRequest
+        }
+    }
+
+    private var activeBilingualTask: Task<Void, Never>?
+
+    public func cancelBilingualTranslation() {
+        activeBilingualTask?.cancel()
+        activeBilingualTask = nil
+        activeBilingualRequest = nil
+    }
+
     @Published public private(set) var updateStatus: UpdateCheckStatus = .idle
     @Published public private(set) var ignoredVersion: String?
     @Published public private(set) var activeBilingualEntryIDs: Set<String> = []
@@ -235,6 +258,7 @@ public final class AppStore: ObservableObject {
     public func toggleBilingualMode(for entryID: String) {
         if activeBilingualEntryIDs.contains(entryID) {
             activeBilingualEntryIDs.remove(entryID)
+            cancelBilingualTranslation()
         } else {
             activeBilingualEntryIDs.insert(entryID)
         }
@@ -537,7 +561,8 @@ public final class AppStore: ObservableObject {
     }
 
     public func isGeneratingAI(for entry: Entry, kind: AIArtifactKind) -> Bool {
-        activeAIRequest?.entryID == entry.id && activeAIRequest?.kind == kind
+        guard let status = activeAIStatus(for: kind) else { return false }
+        return status.entryID == entry.id && status.kind == kind
     }
 
     public func setRefreshInterval(_ interval: FeedRefreshInterval) {
@@ -1113,16 +1138,13 @@ public final class AppStore: ObservableObject {
                 && !$0.isDeleted
                 && $0.isComplete
         }) { return }
-        guard activeAIRequest == nil else {
-            lastError = I18N.localized("已有 AI 任务正在进行，请等待它完成后再试。")
-            return
-        }
+        guard activeSummaryRequest == nil else { return }
 
         lastError = nil
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
+        activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
         defer {
             cancelSummaryStreamNotification()
-            activeAIRequest = nil
+            activeSummaryRequest = nil
         }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
@@ -1130,7 +1152,7 @@ public final class AppStore: ObservableObject {
             return
         }
 
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .generating)
+        activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .generating)
         let artifact = AIArtifact(
             entryID: entry.id,
             kind: .summary,
@@ -1158,7 +1180,12 @@ public final class AppStore: ObservableObject {
                 }
             )
             completeArtifact(id: artifactID, content: result)
+        } catch is CancellationError {
+            // Task 被主动取消时属于正常的流式清理，绝不设 lastError 弹出 Alert 弹窗
         } catch {
+            if Task.isCancelled || (error as NSError).code == NSURLErrorCancelled {
+                return
+            }
             lastError = error.localizedDescription
         }
     }
@@ -1210,21 +1237,21 @@ public final class AppStore: ObservableObject {
             return cached.content
         }
 
-        guard activeAIRequest == nil else { throw LLMServiceError.requestInProgress }
+        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
 
-        activeAIRequest = AIRequestStatus(
+        activeSelectionRequest = AIRequestStatus(
             entryID: entry.id,
             kind: .selectionExplanation,
             phase: .loadingLocalConfiguration
         )
-        defer { activeAIRequest = nil }
+        defer { activeSelectionRequest = nil }
 
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
             throw LLMServiceError.missingAPIKey
         }
 
-        activeAIRequest = AIRequestStatus(
+        activeSelectionRequest = AIRequestStatus(
             entryID: entry.id,
             kind: .selectionExplanation,
             phase: .generating
@@ -1343,19 +1370,25 @@ public final class AppStore: ObservableObject {
             return cached.content
         }
 
-        guard activeAIRequest == nil else { throw LLMServiceError.requestInProgress }
+        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
 
-        activeAIRequest = AIRequestStatus(
+        activeSelectionRequest = AIRequestStatus(
             entryID: entry.id,
             kind: .selectionExplanation,
-            phase: .generating
+            phase: .loadingLocalConfiguration
         )
-        defer { activeAIRequest = nil }
+        defer { activeSelectionRequest = nil }
 
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
             throw LLMServiceError.missingAPIKey
         }
+
+        activeSelectionRequest = AIRequestStatus(
+            entryID: entry.id,
+            kind: .selectionExplanation,
+            phase: .generating
+        )
 
         let articleContext = ArticleChunker.contextualArticle(
             articleText,
@@ -1403,20 +1436,16 @@ public final class AppStore: ObservableObject {
     ) async throws -> String {
         let configuration = database.llmConfiguration
         let normalizedSelection = selection.paperRssNormalizedWhitespace
-        guard !normalizedSelection.isEmpty else { throw LLMServiceError.emptyResponse }
+        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
 
-        if let cached = cachedTranslation(for: normalizedSelection, configuration: configuration) {
-            return cached
-        }
-        guard activeAIRequest == nil else { throw LLMServiceError.requestInProgress }
-
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .loadingLocalConfiguration)
-        defer { activeAIRequest = nil }
+        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .loadingLocalConfiguration)
+        defer { activeSelectionRequest = nil }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
+            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
             throw LLMServiceError.missingAPIKey
         }
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .generating)
+        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .generating)
 
         let result = try await llm.translate(
             paragraph: normalizedSelection,
@@ -1490,33 +1519,33 @@ public final class AppStore: ObservableObject {
             persist()
         }
         guard !pendingParagraphs.isEmpty else { return }
-        guard activeAIRequest == nil else { return }
+        guard activeBilingualRequest == nil else { return }
 
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .loadingLocalConfiguration)
-        defer { activeAIRequest = nil }
+        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .loadingLocalConfiguration)
+        defer { activeBilingualRequest = nil }
         let apiKey = loadAPIKey()
         if configuration.usesDeepSeekAPI && apiKey.isEmpty {
             lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
             return
         }
 
-        activeAIRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
+        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
         let service = llm
         do {
-            // The viewport path opts into one paragraph per streamed request.
-            // This lets the first visible translation appear immediately and
-            // keeps each paragraph independently cacheable. Batch JSON remains
-            // available for non-interactive callers that do not need deltas.
             if let onDelta {
                 for paragraph in pendingParagraphs {
+                    if Task.isCancelled { break }
                     let translation = try await service.translate(
                         paragraph: paragraph.original,
                         configuration: configuration,
                         apiKey: apiKey,
                         onDelta: { delta in
-                            await onDelta(paragraph.id, delta)
+                            if !Task.isCancelled {
+                                await onDelta(paragraph.id, delta)
+                            }
                         }
                     )
+                    if Task.isCancelled { break }
                     let segment = BilingualSegment(id: paragraph.id, original: paragraph.original, translation: translation)
                     upsertSegments([segment], to: artifactID, paragraphOrder: paragraphOrder, persistChanges: false)
                     cacheTranslations([segment], configuration: configuration, persistChanges: false)
@@ -1571,9 +1600,12 @@ public final class AppStore: ObservableObject {
                 let content = artifact?.segments.map(\.translation).joined(separator: "\n\n") ?? ""
                 completeArtifact(id: artifactID, content: content)
             }
+        } catch is CancellationError {
+            // Task 被主动取消时属于正常的流式清理，绝不设 lastError 弹出 Alert 弹窗
         } catch {
-            // Existing paragraphs stay usable. A later viewport report retries
-            // only the IDs that are still missing.
+            if Task.isCancelled || (error as NSError).code == NSURLErrorCancelled {
+                return
+            }
             lastError = error.localizedDescription
         }
     }

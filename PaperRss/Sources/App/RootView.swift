@@ -454,6 +454,9 @@ struct RootView: View {
 
         #if os(macOS)
         DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                ThreeColumnSplitViewCoordinator.current?.setActiveColumn(2, makeFirstResponder: false)
+            }
             guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
 
             @MainActor
@@ -502,49 +505,11 @@ struct RootView: View {
     }
 
     private func focusListView() {
-        selectFirstEntryIfNeeded()
         #if os(macOS)
         DispatchQueue.main.async {
-            guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) else { return }
-
-            @MainActor
-            func findSplitVC(in view: NSView) -> NSSplitViewController? {
-                if let next = view.nextResponder as? NSSplitViewController { return next }
-                for subview in view.subviews {
-                    if let found = findSplitVC(in: subview) { return found }
-                }
-                return nil
-            }
-
-            @MainActor
-            func findFocusTarget(in view: NSView) -> NSView {
-                @MainActor
-                func findPrimary(in v: NSView) -> NSView? {
-                    if v is NSTableView || v is NSOutlineView || v is WKWebView { return v }
-                    for subview in v.subviews {
-                        if let found = findPrimary(in: subview) { return found }
-                    }
-                    return nil
-                }
-                if let primary = findPrimary(in: view) { return primary }
-
-                @MainActor
-                func findAnyAccepting(in v: NSView) -> NSView? {
-                    if v.acceptsFirstResponder { return v }
-                    for subview in v.subviews {
-                        if let found = findAnyAccepting(in: subview) { return found }
-                    }
-                    return nil
-                }
-                return findAnyAccepting(in: view) ?? view
-            }
-
-            if let contentView = window.contentView,
-               let splitVC = findSplitVC(in: contentView),
-               splitVC.splitViewItems.count >= 2 {
-                let listView = splitVC.splitViewItems[1].viewController.view
-                let target = findFocusTarget(in: listView)
-                window.makeFirstResponder(target)
+            MainActor.assumeIsolated {
+                guard let coordinator = ThreeColumnSplitViewCoordinator.current else { return }
+                coordinator.setActiveColumn(1)
             }
         }
         #endif
