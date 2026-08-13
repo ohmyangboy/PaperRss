@@ -388,6 +388,55 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(output.localizedCaseInsensitiveContains("javascript:"))
     }
 
+    func testHTMLReaderSanitizerPercentEncodesSpacesInRemoteImagePaths() {
+        let html = """
+        <p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813144954.png"></p>
+        <p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813131935.png"></p>
+        <p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813145240.png"></p>
+        <p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813150658.png"></p>
+        """
+
+        let output = ArticleExtractor.sanitizedHTML(html)
+
+        XCTAssertEqual(
+            ArticleExtractor.imageURLs(from: output, baseURL: nil).map(\.absoluteString),
+            [
+                "https://ohmyangboy.github.io/blog/assets/Pasted%20image%2020260813144954.png",
+                "https://ohmyangboy.github.io/blog/assets/Pasted%20image%2020260813131935.png",
+                "https://ohmyangboy.github.io/blog/assets/Pasted%20image%2020260813145240.png",
+                "https://ohmyangboy.github.io/blog/assets/Pasted%20image%2020260813150658.png"
+            ]
+        )
+    }
+
+    @MainActor
+    func testArticleHTMLRepairsImagePathsCollapsedByOlderSanitizer() {
+        let feedID = UUID()
+        let entry = Entry(
+            id: "paper-blog-hello",
+            feedID: feedID,
+            title: "👋你好，世界",
+            url: URL(string: "https://ohmyangboy.github.io/blog/posts/你好-世界/"),
+            contentHTML: #"<p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813144954.png"></p>"#
+        )
+        let cachedHTML = #"<p><img src="https://ohmyangboy.github.io/blog/assets/Pastedimage20260813144954.png" loading="eager" decoding="async"></p>"#
+        let database = AppDatabase(
+            feeds: [Feed(id: feedID, title: "Paper Blog", feedURL: URL(string: "https://ohmyangboy.github.io/blog/rss.xml")!)],
+            entries: [entry],
+            articleCaches: [entry.id: ArticleCache(entryID: entry.id, text: "", html: cachedHTML, sourceURL: entry.url, isSanitized: true)],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: .default
+        )
+        let store = AppStore(testDatabase: database) { _ in fatalError("Unused in test") }
+
+        let output = store.articleHTML(for: entry)
+
+        XCTAssertTrue(
+            output?.contains(#"src="https://ohmyangboy.github.io/blog/assets/Pasted%20image%2020260813144954.png""#) == true
+        )
+    }
+
     func testSanitizerEagerLoadsOnlyInitialImages() {
         let html = "<p>Lead</p><img src=\"https://example.com/one.jpg\"><img src=\"https://example.com/two.jpg\"><img src=\"https://example.com/three.jpg\">"
         let output = ArticleExtractor.sanitizedHTML(html)

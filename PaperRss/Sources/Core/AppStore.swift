@@ -1028,12 +1028,18 @@ public final class AppStore: ObservableObject {
 
         if let cache = database.articleCaches[entry.id], let html = cache.html, !html.isEmpty {
             if cache.isSanitized {
-                // A previous build marked RSSHub HTML as sanitized before
-                // normalizing nested entities in image query strings. Repair
-                // that cache lazily so existing Twitter/X articles do not
-                // need to be fetched again.
+                // Earlier builds could persist nested entities in RSSHub image
+                // queries or remove legal spaces from remote image paths. Repair
+                // those caches lazily so existing articles do not need a refetch.
                 let sourceURL = cache.sourceURL ?? entry.url
-                let repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
+                var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
+                if let sourceHTML = entry.contentHTML {
+                    repairedHTML = ArticleExtractor.repairingCollapsedWhitespaceImageURLs(
+                        in: repairedHTML,
+                        sourceHTML: sourceHTML,
+                        baseURL: sourceURL
+                    )
+                }
                 if repairedHTML != html {
                     var repaired = cache
                     repaired.html = repairedHTML

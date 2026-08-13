@@ -54,6 +54,45 @@ public enum ArticleExtractor {
         return result
     }
 
+    /// Repairs image URLs written by older builds that removed legal spaces
+    /// from remote paths before caching the sanitized article HTML.
+    static func repairingCollapsedWhitespaceImageURLs(
+        in sanitizedHTML: String,
+        sourceHTML: String,
+        baseURL: URL?
+    ) -> String {
+        let pattern = "(?is)<img\\b[^>]*?\\b(?:src|data-src|data-original|data-lazy-src)\\s*=\\s*(?:[\\\"']([^\\\"']+)[\\\"']|([^\\s>]+))[^>]*>"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return sanitizedHTML }
+        let range = NSRange(sourceHTML.startIndex..., in: sourceHTML)
+        var repairedHTML = sanitizedHTML
+
+        expression.enumerateMatches(in: sourceHTML, range: range) { match, _, _ in
+            guard let match else { return }
+            let captureRange = match.range(at: match.range(at: 1).location == NSNotFound ? 2 : 1)
+            guard let swiftRange = Range(captureRange, in: sourceHTML) else { return }
+            let source = htmlEntityDecoded(String(sourceHTML[swiftRange]))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard source.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) }),
+                  let correctedURL = safeRemoteURL(source, baseURL: baseURL) else { return }
+
+            let collapsedSource = source.unicodeScalars.reduce(into: "") { result, scalar in
+                if scalar.value >= 0x20,
+                   scalar.value != 0x7F,
+                   !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                    result.unicodeScalars.append(scalar)
+                }
+            }
+            guard let collapsedURL = URL(string: collapsedSource, relativeTo: baseURL)?.absoluteURL,
+                  collapsedURL != correctedURL else { return }
+
+            repairedHTML = repairedHTML.replacingOccurrences(
+                of: htmlAttributeEscaped(collapsedURL.absoluteString),
+                with: htmlAttributeEscaped(correctedURL.absoluteString)
+            )
+        }
+        return repairedHTML
+    }
+
     public static func content(from html: String, baseURL: URL?) -> Content {
         let cleaned = stripNoiseBlocks(html)
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|nav|footer|aside)[^>]*>.*?</\\1>", with: " ", options: .regularExpression)
@@ -442,12 +481,10 @@ public enum ArticleExtractor {
     }
 
     private static func safeRemoteURL(_ rawValue: String, baseURL: URL?) -> URL? {
-        let normalized = htmlEntityDecoded(rawValue).unicodeScalars.reduce(into: "") { result, scalar in
-            if scalar.value >= 0x20 && scalar.value != 0x7F && !CharacterSet.whitespacesAndNewlines.contains(scalar) {
-                result.unicodeScalars.append(scalar)
-            }
-        }
+        let normalized = htmlEntityDecoded(rawValue)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty,
+              !normalized.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }),
               let url = URL(string: normalized, relativeTo: baseURL)?.absoluteURL,
               let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) else { return nil }
 
