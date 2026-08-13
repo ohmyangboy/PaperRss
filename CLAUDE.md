@@ -83,7 +83,7 @@ The App layer uses `#if SWIFT_PACKAGE; import PaperRssCore; #endif` since Xcode 
 
 ### Triage labels
 
-使用默认五类分诊标签。详见 `docs/agents/triage-labels.md`。
+使用五类默认分诊标签，并新增 `in-draft`（草案与可行性调研）状态标签。详见 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 

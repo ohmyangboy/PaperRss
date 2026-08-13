@@ -22,3 +22,15 @@ xcuserdata/
 
 # Logs
 *.log
+
+# IDE & Agent workflows
+.agents/
+.claude/
+.scratch/
+.vscode/
+
+# Build & Release outputs
+.dist/
+dist/
+out/
+drafts/
