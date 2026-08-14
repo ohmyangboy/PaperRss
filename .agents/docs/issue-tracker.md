@@ -1,30 +1,25 @@
-# Issue tracker: Local Markdown
+# GitHub + 本地 Markdown 工单
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+GitHub Issue 是公开需求和分诊结论的权威来源；被 Git 忽略的 `.scratch/` 是 spec 与实施工单的本地执行区。完整生命周期见 [Matt 开发工作流](development-workflow.md)。
 
-## Conventions
+## 基本结构
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- 每个工作项一个目录：`.scratch/issue-<N>-<slug>/`
+- 待批准规格：`.scratch/issue-<N>-<slug>/spec.md`
+- 临时调研：`.scratch/issue-<N>-<slug>/research/<topic>.md`
+- 实现工单：`.scratch/issue-<N>-<slug>/issues/<NN>-<slug>.md`，从 `01` 开始，一票一文件
+- 工单头部使用 `Status:` 记录状态，标签含义见 `triage-labels.md`
+- 讨论追加在文件末尾的 `## Comments` 下
 
-## When a skill says "publish to the issue tracker"
+`triage` 对 GitHub Issue 读写；`research`、`to-spec` 与 `to-tickets` 按上面的本地路径写入。读取时优先使用用户提供的 Issue 编号或路径，并核对 Issue 与本地目录是否对应。
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+## Wayfinding 结构
 
-## When a skill says "fetch the relevant ticket"
+- 地图：`.scratch/<effort>/map.md`，保存 Notes、Decisions so far 与 Fog。
+- 子工单：`.scratch/<effort>/issues/NN-<slug>.md`，头部使用 `Type:` 与 `Status:`。
+- 阻塞：`Blocked by: NN, NN`；列出的工单全部为 `resolved` 后才算解除。
+- 前沿：按编号选择第一个未阻塞、未认领的开放工单。
+- 认领：工作前写入 `Status: claimed` 并保存。
+- 解决：在 `## Answer` 下写结论，改为 `Status: resolved`，再把摘要与链接加入地图的 Decisions so far。
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
-
-## Wayfinding operations
-
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
-
-- **Map**: `.scratch/<effort>/map.md` — the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+`.scratch/` 不进入公开提交，也不自动清理；需要长期保留的内容按工作流经维护者确认、脱敏后移动到 `docs/`。

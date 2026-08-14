@@ -26,6 +26,7 @@ let package = Package(
             path: "Tests",
             exclude: [
                 "reader-shortcuts.test.mjs",
+                "repository-policy.test.mjs",
                 "selection-assistant-sync.test.mjs",
                 "website-locale.test.mjs"
             ]

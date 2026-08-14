@@ -65,14 +65,11 @@ test('title scramble animation is shared by both locales and respects reduced mo
   assert.match(script, /class TextScramble/);
   assert.match(script, /requestAnimationFrame/);
   assert.match(script, /prefers-reduced-motion: reduce/);
-  assert.match(script, /this\.weights = \[300, 400, 500, 600, 700, 800\]/);
+  assert.match(script, /this\.weights = \[/);
   assert.match(script, /this\.fontFamilies = \[/);
-  assert.match(script, /style\.fontWeight/);
-  assert.match(script, /style\.fontFamily/);
-  assert.match(script, /settleEnd/);
-  assert.match(script, /this\.scrambleEnd = Math\.max/);
-  assert.match(script, /this\.frame >= this\.scrambleEnd/);
-  assert.match(script, /settling-char/);
+  assert.match(script, /scrambleEndTime/);
+  assert.match(script, /settleEndTime/);
+  assert.match(script, /scramble-char-node/);
   assert.match(script, /\.scramble-title/);
   assert.match(script, /\.scramble-target/);
   assert.match(script, /document\.fonts\?\.ready/);

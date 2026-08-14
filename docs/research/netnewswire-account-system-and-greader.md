@@ -3,7 +3,7 @@
 > 研究日期：2026-08-13  
 > 适用对象：PaperRss (iOS/macOS Swift) 架构师与开发团队  
 > 文档状态：完成 / 可行性调研报告（支撑 Issue #2 "接入 FreshRSS 服务账号"的产品决策）  
-> 前置文档：[freshrss-api-research.md](./freshrss-api-research.md)（协议规范调研）、[issue-2-freshrss-spec-draft.md](../../drafts/issue-2-freshrss-spec-draft.md)（集成草案）
+> 前置文档：[freshrss-api-research.md](./freshrss-api-research.md)（协议规范调研）、[GitHub Issue #2](https://github.com/ohmyangboy/PaperRss/issues/2)（功能需求）
 
 ---
 
@@ -389,7 +389,7 @@ FreshRSS/规范端点全集（[06_GoogleReader_API.html](https://freshrss.github
 
 - `PaperRss/Sources/Core/Models.swift`、`AppStore.swift`、`CloudSyncService.swift`、`FeedService.swift`、`FeedParser.swift`、`KeychainStore.swift`、`OPMLService.swift`
 - `PaperRss/Sources/App/RootView.swift`、`ThreeColumnSplitView.swift`、`SettingsView.swift`
-- 前置调研：[docs/research/freshrss-api-research.md](./freshrss-api-research.md)、[drafts/issue-2-freshrss-spec-draft.md](../../drafts/issue-2-freshrss-spec-draft.md)
+- 前置调研：[docs/research/freshrss-api-research.md](./freshrss-api-research.md)；功能来源：[GitHub Issue #2](https://github.com/ohmyangboy/PaperRss/issues/2)
 
 ---
 

@@ -1,22 +1,16 @@
-# Domain Docs
+# 领域文档使用说明
 
-How the engineering skills should consume this single-context repo's domain documentation when exploring the codebase.
+本仓库采用单上下文领域模型。只有在术语或架构决策确实需要长期稳定时才创建对应文档。
 
-## Before exploring, read these
+## 探索前
 
-- `CONTEXT.md` at the repo root when it exists.
-- ADRs under `docs/adr/` that touch the area being changed.
+- 根目录存在 `CONTEXT.md` 时，先读取其中的领域词汇与关系。
+- `docs/adr/` 存在且改动涉及相关架构决策时，读取对应 ADR。
+- 文件不存在时继续工作，不为了填充目录创建空白文档。
 
-If these files do not exist, proceed silently. Domain-modeling skills create them lazily when terminology or architectural decisions are actually resolved.
+## 使用规则
 
-## File structure
-
-This repository uses a single-context layout: one root `CONTEXT.md` and system-wide ADRs under `docs/adr/`.
-
-## Use the glossary's vocabulary
-
-Use terms as defined in `CONTEXT.md` for issues, tests, hypotheses, and implementation plans. If a needed concept is absent, reconsider whether a new term is necessary or record the gap for domain modeling.
-
-## Flag ADR conflicts
-
-Surface any conflict with an existing ADR explicitly instead of silently overriding it.
+- Issue、测试、假设与实现计划沿用 `CONTEXT.md` 的词汇。
+- 新术语必须代表已有词汇无法准确表达的领域概念；确认后再补入词汇表。
+- 发现实现方案与 ADR 冲突时明确指出冲突，由维护者决定修改方案或新增替代决策，不静默覆盖。
+- ADR 使用 `docs/adr/NNNN-short-title.md`，记录上下文、决策、后果与替代方案。
