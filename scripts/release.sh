@@ -80,8 +80,15 @@ DMG_NAME="${PROJECT_NAME}-${TAG_NAME}.dmg"
 DIST_DIR="./dist"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
 
+IS_PRERELEASE=false
+if [[ "$VERSION" =~ (beta|alpha|rc) ]]; then
+    IS_PRERELEASE=true
+fi
+
 if [ "$LOCAL_ONLY" = "true" ]; then
     echo "📦 准备本地 DMG 打包: ${DMG_NAME}"
+elif [ "$IS_PRERELEASE" = "true" ]; then
+    echo "📦 准备 Beta / 预发布版本: ${TAG_NAME} (Prerelease)"
 else
     echo "📦 准备正式发布版本: ${TAG_NAME}"
 fi
@@ -228,15 +235,25 @@ EOF
     fi
 fi
 
+PRERELEASE_FLAG=""
+if [ "$IS_PRERELEASE" = "true" ]; then
+    PRERELEASE_FLAG="--prerelease"
+fi
+
 if gh release view "$TAG_NAME" >/dev/null 2>&1; then
     echo "ℹ️ Release ${TAG_NAME} 已存在，正在更新附件与说明..."
     gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
-    gh release edit "$TAG_NAME" --notes "$RELEASE_NOTES"
+    if [ "$IS_PRERELEASE" = "true" ]; then
+        gh release edit "$TAG_NAME" --notes "$RELEASE_NOTES" --prerelease
+    else
+        gh release edit "$TAG_NAME" --notes "$RELEASE_NOTES"
+    fi
 else
     echo "🌟 创建全新的 Release ${TAG_NAME}..."
     gh release create "$TAG_NAME" "$DMG_PATH" \
       --title "PaperRss ${TAG_NAME}" \
-      --notes "$RELEASE_NOTES"
+      --notes "$RELEASE_NOTES" \
+      $PRERELEASE_FLAG
 fi
 
 echo "=================================================="

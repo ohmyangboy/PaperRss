@@ -34,4 +34,5 @@ trigger: always_on
 - Swift Core 改动运行 `swift test`；App 改动再运行 `swift build --product PaperRssDesktop`。
 - WebView Bridge 或网站改动运行 `node --test Tests/*.test.mjs`；视觉和交互变化还需要真实运行验证。
 - Agent 或文档结构改动运行 `node --test Tests/repository-policy.test.mjs` 与 `git diff --check`。
+- 版本规范：正式发布采用 SemVer `vX.Y.Z`；Beta/测试发布必须使用预发布位 `vX.Y.Z-beta.N` 并递增 Beta 位（如 `v1.3.0-beta.1`），严禁使用正式 Patch 位替代 Beta 位；Beta 发布自动标记 GitHub Prerelease。
 - “发布”只有在测试、构建、版本传播、产物、Tag/Release、官网部署和公开访问验证全部完成后才能宣称成功。
