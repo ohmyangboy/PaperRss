@@ -30,14 +30,11 @@ fi
 
 echo "🔧 开发者环境: $DEVELOPER_DIR"
 
-echo "🌐 正在同步双语官网到 GitHub Pages 目录..."
-bash ./scripts/sync_website_to_docs.sh
-
-PAGES_CHANGES=$(git status --porcelain -- docs/index.html docs/locale.mjs docs/styles.css docs/en docs/zh-CN docs/assets)
-if [ -n "$PAGES_CHANGES" ]; then
-    echo "❌ 官网同步后 docs/ 存在未提交变更。请先提交 website/ 与 docs/，再重新发布："
-    echo "$PAGES_CHANGES"
-    exit 1
+echo "🌐 正在检查官网目录状态..."
+WEBSITE_CHANGES=$(git status --porcelain -- website/)
+if [ -n "$WEBSITE_CHANGES" ]; then
+    echo "⚠️ 提示: website/ 存在未提交变更。请确保发布前提交官网变更以便 GitHub Actions 自动更新 Pages："
+    echo "$WEBSITE_CHANGES"
 fi
 
 if [ "$LOCAL_ONLY" = "false" ]; then

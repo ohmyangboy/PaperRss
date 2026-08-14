@@ -75,16 +75,13 @@ The App layer uses `#if SWIFT_PACKAGE; import PaperRssCore; #endif` since Xcode 
 - When making code changes, verify with `swift test` before declaring done.
 - The HANDOFF files (`HANDOFF.md`, `HANDOFF_CURRENT_*.md`) are project documentation — read them for context on recent decisions and known issues.
 
-## Agent skills
+## Agent Standards & Routing
 
-### Issue tracker
+全仓库所有 AI Agent（包括 Antigravity、Claude Code、Codex 等）统一遵循 [`.agents/`](file:///.agents) 目录下的标准规范：
 
-工单以本地 Markdown 文件保存在 `.scratch/`。详见 `docs/agents/issue-tracker.md`。
+- **目录结构与文件组织规范**：详见 [`docs/DIRECTORY_SPEC.md`](file:///docs/DIRECTORY_SPEC.md)
+- **本地工单与任务跟踪**：工单保存在 `.scratch/`，规范详见 [`.agents/docs/issue-tracker.md`](file:///.agents/docs/issue-tracker.md)
+- **分诊与状态标签**：标签定义与生命周期详见 [`.agents/docs/triage-labels.md`](file:///.agents/docs/triage-labels.md)
+- **领域模型与架构决策**：单上下文领域文档详见 [`.agents/docs/domain.md`](file:///.agents/docs/domain.md)
+- **通用工程与验证规则**：详见 [`.agents/rules/`](file:///.agents/rules)（如 `verification_workflow.md`、`prompt_design_language.md`）
 
-### Triage labels
-
-使用五类默认分诊标签，并新增 `in-draft`（草案与可行性调研）状态标签。详见 `docs/agents/triage-labels.md`。
-
-### Domain docs
-
-仓库使用 single-context 领域文档布局。详见 `docs/agents/domain.md`。
