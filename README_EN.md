@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download v1.2.4](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Report an Issue](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download v1.2.5](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Report an Issue](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -27,6 +27,7 @@ Use the focused three-column reading space for everyday browsing, generate a ful
 ## Highlights
 
 - **Focused, paper-inspired reading** with serif typography, light and dark appearances, and dependable three-column navigation.
+- **Article TOC Rail**: a compact right-hand chapter rail for long articles with wave hover expansion, visual focus scrolling, and continuous drag mapping.
 - **AI summaries on your terms**, generated manually or automatically when an uncached article is first opened.
 - **Contextual selection tools** for translation, explanation, and questions.
 - **Local-first credentials**: API keys stay on your Mac and are excluded from iCloud sync.
@@ -58,7 +59,7 @@ The screenshots currently show the Chinese interface; the macOS app itself suppo
 
 ## Download and Install
 
-Download `PaperRss-v1.2.4.dmg` from the [latest release](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
+Download `PaperRss-v1.2.5.dmg` from the [latest release](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
 
 The current release is not notarized by Apple. If macOS says the app cannot be verified or is damaged, run:
 

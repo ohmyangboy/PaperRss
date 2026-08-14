@@ -1886,7 +1886,14 @@ enum PaperReaderBridge {
           if (window.paperRssTOCRail?.destroy) window.paperRssTOCRail.destroy();
 
           const root = document.documentElement;
-          const state = { anchors: [], buttons: [], rail: null, preview: null, style: null, observer: null, resizeObserver: null, scheduled: false, hoverTimer: null, closeTimer: null, hoveredElement: null, dragging: false, dragged: false, dragPointerId: null, suppressClick: false };
+          const state = {
+            anchors: [], buttons: [], rail: null, preview: null, style: null,
+            observer: null, resizeObserver: null, scheduled: false,
+            hoverTimer: null, closeTimer: null, hoveredElement: null,
+            dragging: false, dragged: false, dragPointerId: null, dragTarget: null,
+            dragStartY: 0, dragStartX: 0, hasMovedPastThreshold: false,
+            suppressClick: false, navigatingAnchor: null, navigatingTimer: null
+          };
           const currentRailLabel = () => window.paperRssSelectionOptions?.labels?.tocRailLabel || "文章章节导航";
           state.setRailLabel = label => {
             state.rail?.setAttribute("aria-label", label || currentRailLabel());
@@ -1958,12 +1965,36 @@ enum PaperReaderBridge {
             state.preview = null;
           };
 
+          const clearHoverPeak = () => {
+            state.buttons.forEach(button => {
+              const line = button.children?.[0];
+              if (line?.style) line.style.width = "";
+            });
+          };
+
+          const setHoverPeak = index => {
+            state.buttons.forEach((button, buttonIndex) => {
+              const line = button.children?.[0];
+              if (!line?.style) return;
+              const distance = Math.abs(buttonIndex - index);
+              line.style.width = distance === 0
+                ? "22px"
+                : distance === 1
+                  ? "16px"
+                  : distance === 2
+                    ? "11px"
+                    : "8px";
+            });
+          };
+
           const dismissPreview = () => {
             state.hoveredElement = null;
+            clearHoverPeak();
             closePreview();
           };
 
           const schedulePreviewClose = () => {
+            clearHoverPeak();
             if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
             state.closeTimer = window.setTimeout(() => {
               state.closeTimer = null;
@@ -2130,12 +2161,18 @@ enum PaperReaderBridge {
 
           const clearRail = () => {
             closePreview();
+            if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+            state.navigatingTimer = null;
+            state.navigatingAnchor = null;
             if (state.dragging && state.dragPointerId !== null) {
               state.buttons.forEach(button => button.releasePointerCapture?.(state.dragPointerId));
+              state.dragTarget?.releasePointerCapture?.(state.dragPointerId);
             }
             state.dragging = false;
             state.dragged = false;
+            state.hasMovedPastThreshold = false;
             state.dragPointerId = null;
+            state.dragTarget = null;
             state.suppressClick = false;
             state.rail?.remove();
             state.rail = null;
@@ -2144,9 +2181,25 @@ enum PaperReaderBridge {
             root.classList.remove("paper-toc-rail-active");
           };
 
+          const visualFocusOffset = () => Math.round(
+            Math.min(160, Math.max(64, viewportHeight() * 0.2))
+          );
+
           const updateActive = () => {
             if (!state.anchors.length) return;
-            const threshold = currentScrollTop() + 24;
+            if (state.navigatingAnchor) {
+              const lockedIndex = state.anchors.indexOf(state.navigatingAnchor);
+              if (lockedIndex >= 0) {
+                state.buttons.forEach((button, index) => {
+                  const active = index === lockedIndex;
+                  button.classList.toggle("is-current", active);
+                  button.setAttribute("aria-current", active ? "true" : "false");
+                });
+                return;
+              }
+            }
+            const offset = visualFocusOffset();
+            const threshold = currentScrollTop() + offset + 8;
             let activeIndex = 0;
             state.anchors.forEach((anchor, index) => {
               const absoluteTop = anchor.element.getBoundingClientRect().top + currentScrollTop();
@@ -2160,13 +2213,34 @@ enum PaperReaderBridge {
           };
 
           const navigateTo = anchor => {
+            const isFirst = state.anchors[0] === anchor;
+            const offset = isFirst ? 0 : visualFocusOffset();
             const target = Math.max(
               0,
-              anchor.element.getBoundingClientRect().top + currentScrollTop() - 24
+              isFirst ? 0 : anchor.element.getBoundingClientRect().top + currentScrollTop() - offset
             );
             const reducedMotion = typeof window.matchMedia === "function" &&
               window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             window.scrollTo({ top: target, behavior: reducedMotion ? "auto" : "smooth" });
+          };
+
+          const activateAnchor = (anchor, isInstantJump) => {
+            const index = state.anchors.indexOf(anchor);
+            if (index >= 0) {
+              state.buttons.forEach((button, i) => {
+                const active = i === index;
+                button.classList.toggle("is-current", active);
+                button.setAttribute("aria-current", active ? "true" : "false");
+              });
+            }
+            state.navigatingAnchor = anchor;
+            if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+            state.navigatingTimer = window.setTimeout(() => {
+              state.navigatingAnchor = null;
+              state.navigatingTimer = null;
+              updateActive();
+            }, isInstantJump ? 60 : 700);
+            navigateTo(anchor);
           };
 
           const dragScrollTo = event => {
@@ -2180,33 +2254,50 @@ enum PaperReaderBridge {
             updateActive();
           };
 
-          const startDrag = (button, event) => {
-            if (!button.classList.contains("is-current")) return;
+          const dragTargetForEvent = event =>
+            event.target?.closest?.("[data-paper-toc-button]") || state.rail;
+
+          const startDrag = event => {
+            if (state.dragging) return;
             if (event.button !== undefined && event.button !== 0) return;
+            const target = dragTargetForEvent(event);
+            if (!target) return;
             state.dragging = true;
             state.dragged = false;
+            state.hasMovedPastThreshold = false;
+            state.dragStartY = event.clientY;
+            state.dragStartX = event.clientX;
             state.dragPointerId = event.pointerId;
+            state.dragTarget = target;
             state.suppressClick = false;
             dismissPreview();
-            button.setPointerCapture?.(event.pointerId);
+            target.setPointerCapture?.(event.pointerId);
           };
 
-          const moveDrag = (button, event) => {
+          const moveDrag = event => {
             if (!state.dragging || state.dragPointerId !== event.pointerId) return;
             state.dragged = true;
+            if (state.navigatingAnchor) {
+              state.navigatingAnchor = null;
+              if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+              state.navigatingTimer = null;
+            }
             dragScrollTo(event);
             event.preventDefault?.();
           };
 
-          const endDrag = (button, event) => {
+          const endDrag = event => {
             if (!state.dragging || state.dragPointerId !== event.pointerId) return;
+            const target = state.dragTarget;
             if (state.dragged && event.type === "pointerup") {
               state.suppressClick = true;
-              window.setTimeout(() => { state.suppressClick = false; }, 0);
+              window.setTimeout(() => { state.suppressClick = false; }, 50);
             }
             state.dragging = false;
+            state.hasMovedPastThreshold = false;
             state.dragPointerId = null;
-            button.releasePointerCapture?.(event.pointerId);
+            target?.releasePointerCapture?.(event.pointerId);
+            state.dragTarget = null;
             updateActive();
           };
 
@@ -2219,23 +2310,24 @@ enum PaperReaderBridge {
               html.paper-toc-rail-active::-webkit-scrollbar { width: 0; height: 0; }
               #paper-rss-toc-rail {
                 position: fixed; z-index: 10000; right: 8px; top: 50%;
-                transform: translateY(-50%); width: 34px; min-height: 120px;
-                max-height: 55vh; display: flex; flex-direction: column;
-                justify-content: space-between; align-items: center;
-                pointer-events: none; user-select: none;
+                transform: translateY(-50%); width: 34px; min-height: 42px;
+                max-height: min(45vh, 280px); display: flex; flex-direction: column;
+                justify-content: stretch; align-items: stretch;
+                pointer-events: auto; user-select: none; box-sizing: border-box;
               }
               #paper-rss-toc-rail .paper-toc-rail-button {
                 appearance: none; border: 0; padding: 0; margin: 0;
-                width: 34px; height: 28px; display: grid; place-items: center;
+                width: 100%; flex: 1 1 0; min-height: 0; height: auto;
+                display: grid; place-items: center;
                 background: transparent; cursor: pointer; pointer-events: auto;
               }
               #paper-rss-toc-rail .paper-toc-rail-line {
-                display: block; width: 12px; height: 3px; border-radius: 2px;
+                display: block; width: 8px; height: 3px; border-radius: 2px;
                 background: rgba(80, 80, 80, .24);
                 transition: width .14s ease, background-color .14s ease;
               }
               #paper-rss-toc-rail .paper-toc-rail-button.is-current .paper-toc-rail-line {
-                width: 26px; background: rgba(45, 45, 45, .78);
+                width: 8px; background: rgba(45, 45, 45, .78);
               }
               #paper-rss-toc-preview {
                 position: fixed; z-index: 10001; top: 50%; transform: translateY(-50%);
@@ -2301,7 +2393,11 @@ enum PaperReaderBridge {
               }
             }
 
-            if (documentHeight() <= viewportHeight() * 2 || anchors.length < 3) {
+            const height = documentHeight();
+            const viewport = viewportHeight();
+            const candidateCount = anchors.length;
+            const enabled = height > viewport * 2 && candidateCount >= 3;
+            if (!enabled) {
               state.hoveredElement = null;
               return;
             }
@@ -2311,7 +2407,7 @@ enum PaperReaderBridge {
             rail.id = "paper-rss-toc-rail";
             rail.setAttribute("aria-label", currentRailLabel());
             rail.setAttribute("data-paper-toc-rail", "true");
-            rail.style.height = Math.min(Math.max(120, state.anchors.length * 18), Math.min(viewportHeight() * .55, 360)) + "px";
+            rail.style.height = Math.min(Math.max(42, state.anchors.length * 14), Math.min(viewportHeight() * .45, 280)) + "px";
 
             state.anchors.forEach((anchor, index) => {
               const button = document.createElement("button");
@@ -2333,33 +2429,43 @@ enum PaperReaderBridge {
                   state.suppressClick = false;
                   return;
                 }
-                navigateTo(anchor);
+                const reducedMotion = typeof window.matchMedia === "function" &&
+                  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+                activateAnchor(anchor, reducedMotion);
               });
               button.addEventListener("keydown", event => {
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
                 event.stopPropagation();
                 dismissPreview();
-                navigateTo(anchor);
+                const reducedMotion = typeof window.matchMedia === "function" &&
+                  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+                activateAnchor(anchor, reducedMotion);
               });
-              button.addEventListener("mouseenter", () => schedulePreview(anchor));
+              button.addEventListener("mouseenter", () => {
+                setHoverPeak(index);
+                schedulePreview(anchor);
+              });
               button.addEventListener("mouseleave", schedulePreviewClose);
-              button.addEventListener("pointerdown", dismissPreview);
-              button.addEventListener("pointerdown", event => startDrag(button, event));
-              button.addEventListener("pointermove", event => moveDrag(button, event));
-              button.addEventListener("pointerup", event => endDrag(button, event));
-              button.addEventListener("pointercancel", event => endDrag(button, event));
               rail.appendChild(button);
               state.buttons.push(button);
             });
             rail.addEventListener("mouseleave", schedulePreviewClose);
             rail.addEventListener("pointerdown", dismissPreview);
+            rail.addEventListener("pointerdown", startDrag);
+            rail.addEventListener("pointermove", moveDrag);
+            rail.addEventListener("pointerup", endDrag);
+            rail.addEventListener("pointercancel", endDrag);
             root.appendChild(rail);
             state.rail = rail;
             root.classList.add("paper-toc-rail-active");
             updateActive();
             const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
-            if (preservedAnchor) showPreview(preservedAnchor);
+            if (preservedAnchor) {
+              const preservedIndex = state.anchors.indexOf(preservedAnchor);
+              setHoverPeak(preservedIndex);
+              showPreview(preservedAnchor);
+            }
           };
 
           const refresh = () => {
@@ -2372,16 +2478,26 @@ enum PaperReaderBridge {
           };
           const onScroll = () => window.requestAnimationFrame(updateActive);
           const onResize = refresh;
+          const onWheel = () => {
+            if (state.navigatingAnchor) {
+              state.navigatingAnchor = null;
+              if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+              state.navigatingTimer = null;
+              updateActive();
+            }
+          };
           const onKeyDown = event => {
             if (event.key === "Escape") dismissPreview();
           };
           state.refresh = refresh;
           state.destroy = () => {
+            if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
             state.observer?.disconnect();
             state.resizeObserver?.disconnect();
             document.removeEventListener("scroll", onScroll, { capture: true });
             document.removeEventListener("keydown", onKeyDown, { capture: true });
             window.removeEventListener("resize", onResize);
+            window.removeEventListener("wheel", onWheel, { capture: true });
             clearRail();
             state.style?.remove();
             if (window.paperRssTOCRail === state) delete window.paperRssTOCRail;
@@ -2390,6 +2506,7 @@ enum PaperReaderBridge {
           document.addEventListener("scroll", onScroll, { passive: true, capture: true });
           document.addEventListener("keydown", onKeyDown, { capture: true });
           window.addEventListener("resize", onResize, { passive: true });
+          window.addEventListener("wheel", onWheel, { passive: true, capture: true });
           if (typeof MutationObserver !== "undefined") {
             state.observer = new MutationObserver(refresh);
             state.observer.observe(document.body, { childList: true, subtree: true, characterData: true });

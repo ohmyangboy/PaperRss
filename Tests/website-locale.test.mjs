@@ -67,9 +67,9 @@ test('title scramble animation is shared by both locales and respects reduced mo
   assert.match(script, /prefers-reduced-motion: reduce/);
   assert.match(script, /this\.weights = \[/);
   assert.match(script, /this\.fontFamilies = \[/);
-  assert.match(script, /scrambleEndTime/);
-  assert.match(script, /settleEndTime/);
-  assert.match(script, /scramble-char-node/);
+  assert.match(script, /scrambleEnd/);
+  assert.match(script, /settleEnd/);
+  assert.match(script, /scramble-char/);
   assert.match(script, /\.scramble-title/);
   assert.match(script, /\.scramble-target/);
   assert.match(script, /document\.fonts\?\.ready/);

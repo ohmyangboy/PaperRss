@@ -328,7 +328,36 @@ test('long articles expose synthetic title and ordered heading anchors without a
   ]);
 });
 
-test('scrolling updates the current anchor and clicking navigates with a 24px safe offset', () => {
+test('rail lines stay short by default, current only changes color, and hover creates a local peak', () => {
+  const fixture = makeFixture();
+  for (const [label, top] of [['Fourth Section', 2400], ['Fifth Section', 3000]]) {
+    const heading = new FakeElement('h2', label);
+    heading.absoluteTop = top;
+    fixture.document.body.appendChild(heading);
+  }
+  const rail = runRail(fixture);
+  const style = fixture.document.querySelector('#paper-rss-toc-rail-style');
+  assert.ok(style, 'active rail should install its style sheet');
+  assert.match(style.textContent, /\.paper-toc-rail-line\s*\{[^}]*width:\s*8px/);
+  assert.match(style.textContent, /\.is-current \.paper-toc-rail-line\s*\{[^}]*width:\s*8px/);
+  assert.doesNotMatch(style.textContent, /\.paper-toc-rail-button:hover \.paper-toc-rail-line/);
+  assert.equal(rail.style.height, '70px');
+
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  const lines = buttons.map((button) => button.children[0]);
+  assert.equal(lines.every((line) => !line.style.width), true);
+  assert.equal(buttons[0].getAttribute('aria-current'), 'true');
+
+  buttons[2].dispatchEvent({ type: 'mouseenter', relatedTarget: null });
+  assert.deepEqual(lines.map((line) => line.style.width), ['11px', '16px', '22px', '16px', '11px']);
+  rail.dispatchEvent({ type: 'pointerdown', target: buttons[2], pointerId: 3, button: 0, clientY: 200 });
+  assert.equal(lines.every((line) => !line.style.width), true);
+  rail.dispatchEvent({ type: 'pointerup', target: buttons[2], pointerId: 3, clientY: 200 });
+  buttons[2].dispatchEvent({ type: 'mouseleave', relatedTarget: null });
+  assert.equal(lines.every((line) => !line.style.width), true);
+});
+
+test('scrolling updates the current anchor and clicking navigates to the visual reading focus offset', () => {
   const fixture = makeFixture();
   const rail = runRail(fixture);
   const buttons = rail.querySelectorAll('[data-paper-toc-button]');
@@ -337,8 +366,44 @@ test('scrolling updates the current anchor and clicking navigates with a 24px sa
   fixture.document.dispatchEvent({ type: 'scroll' });
   assert.equal(buttons[1].getAttribute('aria-current'), 'true');
   buttons[2].dispatchEvent({ type: 'click', preventDefault() {} });
-  assert.equal(fixture.window.scrollCalls.at(-1).top, 2026);
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 1890);
   assert.equal(fixture.window.scrollCalls.at(-1).behavior, 'smooth');
+
+  fixture.window.scrollY = 1890;
+  fixture.document.dispatchEvent({ type: 'scroll' });
+  assert.equal(buttons[2].getAttribute('aria-current'), 'true');
+
+  buttons[0].dispatchEvent({ type: 'click', preventDefault() {} });
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 0, 'first anchor click must return to document top 0');
+});
+
+test('navigating to an anchor with subpixel floating-point offsets highlights the clicked anchor without off-by-one errors', () => {
+  const fixture = makeFixture();
+  fixture.final.absoluteTop = 2050.4;
+  const rail = runRail(fixture);
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  buttons[2].dispatchEvent({ type: 'click', preventDefault() {} });
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 1890.4);
+  fixture.window.scrollY = 1890;
+  fixture.document.dispatchEvent({ type: 'scroll' });
+  assert.equal(buttons[2].getAttribute('aria-current'), 'true', 'clicked anchor must be marked as current even with fractional layout metrics');
+});
+
+test('a button pointer press without movement still delivers the native click to that button', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const targetButton = rail.querySelectorAll('[data-paper-toc-button]')[2];
+  const pointerId = 9;
+
+  rail.dispatchEvent({ type: 'pointerdown', target: targetButton, pointerId, button: 0, clientY: 200 });
+  const captureTarget = targetButton.capturedPointerId === pointerId ? targetButton : rail;
+  rail.dispatchEvent({ type: 'pointerup', target: targetButton, pointerId, clientY: 200 });
+  assert.equal(captureTarget, targetButton, 'button-originated press must capture the button so click is not retargeted to rail');
+
+  const clickTarget = captureTarget === rail ? rail : targetButton;
+  clickTarget.dispatchEvent({ type: 'click', preventDefault() {} });
+  assert.equal(fixture.window.scrollCalls.length, 1);
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 1890);
 });
 
 test('short articles restore native scrolling and repeated installation leaves one rail', () => {
@@ -403,7 +468,7 @@ test('more than 18 anchors use deterministic position buckets while retaining fi
   const firstRail = runRail(fixture);
   const firstLabels = firstRail.querySelectorAll('[data-paper-toc-button]').map((button) => button.dataset.paperTocLabel);
   assert.equal(firstLabels.length, 18);
-  assert.equal(firstRail.style.height, '324px');
+  assert.equal(firstRail.style.height, '252px');
   assert.equal(firstLabels[0], 'A Title!');
   assert.equal(firstLabels.at(-1), 'Section 24');
   fixture.window.paperRssTOCRail.refresh();
@@ -597,7 +662,7 @@ test('keyboard activation honors Enter and Space and reduced motion uses an imme
   });
   assert.equal(prevented, true);
   assert.equal(stopped, true);
-  assert.equal(fixture.window.scrollCalls.at(-1).top, 1076);
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 940);
   assert.equal(fixture.window.scrollCalls.at(-1).behavior, 'auto');
 
   button.dispatchEvent({
@@ -607,7 +672,7 @@ test('keyboard activation honors Enter and Space and reduced motion uses an imme
     stopPropagation() { stopped = true; },
   });
   assert.equal(stopped, true);
-  assert.equal(fixture.window.scrollCalls.at(-1).top, 1076);
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 940);
   assert.equal(fixture.window.scrollCalls.at(-1).behavior, 'auto');
 
   let bodyStopped = false;
@@ -619,44 +684,55 @@ test('keyboard activation honors Enter and Space and reduced motion uses an imme
   assert.equal(bodyStopped, false, '正文 Space remains available to the existing reader shortcut');
 });
 
-test('only the current indicator captures drag, maps rail position continuously, and suppresses the follow-up click', () => {
+test('any rail hit target captures drag, maps rail position continuously, and suppresses the follow-up click', () => {
   const fixture = makeFixture();
   const rail = runRail(fixture);
   rail.getBoundingClientRect = () => ({ top: 100, bottom: 500, height: 400 });
   const buttons = rail.querySelectorAll('[data-paper-toc-button]');
-  const current = buttons[0];
-  const other = buttons[1];
-  other.dispatchEvent({ type: 'pointerdown', pointerId: 2, button: 0, clientY: 200 });
-  assert.equal(other.capturedPointerId, null);
+  const hitTarget = buttons[1];
 
   let prevented = false;
-  current.dispatchEvent({
+  hitTarget.dispatchEvent({
     type: 'mouseenter',
     relatedTarget: null,
   });
   fixture.window.advanceTime(150);
   assert.ok(fixture.document.querySelector('#paper-rss-toc-preview'));
-  current.dispatchEvent({
+  rail.dispatchEvent({
     type: 'pointerdown',
+    target: hitTarget,
     pointerId: 7,
     button: 0,
     clientY: 100,
     preventDefault() { prevented = true; },
   });
   assert.equal(prevented, false);
-  assert.equal(current.capturedPointerId, 7);
+  assert.equal(hitTarget.capturedPointerId, 7);
   assert.equal(fixture.document.querySelector('#paper-rss-toc-preview'), null);
 
-  current.dispatchEvent({ type: 'pointermove', pointerId: 7, clientY: 100 });
+  const callsBeforeButtonMove = fixture.window.scrollCalls.length;
+  rail.dispatchEvent({ type: 'pointermove', target: hitTarget, pointerId: 7, clientY: 100 });
+  assert.equal(fixture.window.scrollCalls.length, callsBeforeButtonMove + 1);
   assert.equal(fixture.window.scrollCalls.at(-1).top, 0);
-  current.dispatchEvent({ type: 'pointermove', pointerId: 7, clientY: 500 });
+  const callsBeforeSecondButtonMove = fixture.window.scrollCalls.length;
+  rail.dispatchEvent({ type: 'pointermove', target: hitTarget, pointerId: 7, clientY: 500 });
+  assert.equal(fixture.window.scrollCalls.length, callsBeforeSecondButtonMove + 1);
   assert.equal(fixture.window.scrollCalls.at(-1).top, 1600);
   assert.equal(buttons[1].getAttribute('aria-current'), 'true');
-  current.dispatchEvent({ type: 'pointerup', pointerId: 7, clientY: 500 });
-  assert.equal(current.capturedPointerId, null);
+  rail.dispatchEvent({ type: 'pointerup', target: hitTarget, pointerId: 7, clientY: 500 });
+  assert.equal(hitTarget.capturedPointerId, null);
   const callsAfterDrag = fixture.window.scrollCalls.length;
-  current.dispatchEvent({ type: 'click', preventDefault() {} });
+  hitTarget.dispatchEvent({ type: 'click', preventDefault() {} });
   assert.equal(fixture.window.scrollCalls.length, callsAfterDrag);
+
+  rail.dispatchEvent({ type: 'pointerdown', pointerId: 8, button: 0, clientY: 200 });
+  assert.equal(rail.capturedPointerId, 8);
+  const callsBeforeGapMove = fixture.window.scrollCalls.length;
+  rail.dispatchEvent({ type: 'pointermove', pointerId: 8, clientY: 300 });
+  assert.equal(fixture.window.scrollCalls.length, callsBeforeGapMove + 1);
+  assert.equal(fixture.window.scrollCalls.at(-1).top, 800);
+  rail.dispatchEvent({ type: 'pointerup', pointerId: 8, clientY: 300 });
+  assert.equal(rail.capturedPointerId, null);
 });
 
 test('TOC rail navigation label follows the current localized WebView options', () => {
