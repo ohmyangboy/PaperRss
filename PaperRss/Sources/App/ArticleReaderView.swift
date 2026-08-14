@@ -1875,6 +1875,535 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
+    #if os(macOS)
+    /// A compact, local-only chapter rail for long article documents.  It is
+    /// intentionally a macOS-only user script: iOS keeps its native reader
+    /// scrolling surface and does not receive this overlay.
+    static let tocRailScript = WKUserScript(
+        source: """
+        (() => {
+          if (window.paperRssTOCRail?.destroy) window.paperRssTOCRail.destroy();
+
+          const root = document.documentElement;
+          const state = { anchors: [], buttons: [], rail: null, preview: null, style: null, observer: null, resizeObserver: null, scheduled: false, hoverTimer: null, closeTimer: null, hoveredElement: null, dragging: false, dragged: false, dragPointerId: null, suppressClick: false };
+          const textOf = node => (node?.textContent || "").replace(/\\s+/g, " ").trim();
+          const normalized = value => textOf({ textContent: value })
+            .toLocaleLowerCase()
+            .replace(/[^\\p{L}\\p{N}]+/gu, "");
+          const currentScrollTop = () => Math.max(
+            0,
+            window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0
+          );
+          const viewportHeight = () => Math.max(
+            1,
+            window.innerHeight || document.documentElement.clientHeight || 0
+          );
+          const documentHeight = () => Math.max(
+            document.documentElement.scrollHeight || 0,
+            document.body.scrollHeight || 0
+          );
+
+          const absoluteTopOf = element => {
+            const rect = element?.getBoundingClientRect?.();
+            const top = Number(rect?.top);
+            return Number.isFinite(top) ? top + currentScrollTop() : 0;
+          };
+
+          const documentOrder = element => {
+            const path = [];
+            let node = element;
+            while (node?.parentNode) {
+              path.unshift(Array.from(node.parentNode.children || []).indexOf(node));
+              node = node.parentNode;
+            }
+            return path;
+          };
+
+          const compareDocumentOrder = (lhs, rhs) => {
+            const left = documentOrder(lhs.element);
+            const right = documentOrder(rhs.element);
+            const length = Math.min(left.length, right.length);
+            for (let index = 0; index < length; index += 1) {
+              if (left[index] !== right[index]) return left[index] - right[index];
+            }
+            return left.length - right.length;
+          };
+
+          const splitExcerpt = text => {
+            const match = text.match(/^[\\s\\S]*?[.!?。！？]/);
+            if (!match) return { label: text, excerpt: "" };
+            const label = match[0].trim();
+            return { label, excerpt: text.slice(match[0].length).trim() };
+          };
+
+          const clearPreviewTimers = () => {
+            if (state.hoverTimer !== null) window.clearTimeout(state.hoverTimer);
+            if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
+            state.hoverTimer = null;
+            state.closeTimer = null;
+          };
+
+          const closePreview = () => {
+            clearPreviewTimers();
+            state.preview?.remove();
+            state.preview = null;
+          };
+
+          const dismissPreview = () => {
+            state.hoveredElement = null;
+            closePreview();
+          };
+
+          const schedulePreviewClose = () => {
+            if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
+            state.closeTimer = window.setTimeout(() => {
+              state.closeTimer = null;
+              state.hoveredElement = null;
+              closePreview();
+            }, 80);
+          };
+
+          const previewContent = anchor => {
+            const title = textOf(anchor.element);
+            if (anchor.kind === "fallback") {
+              const current = splitExcerpt(textOf(anchor.element));
+              return { title: current.label, excerpt: current.excerpt };
+            }
+            const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
+              .filter(node => !node.classList.contains("paper-header-title"));
+            const nextHeading = headings[headings.indexOf(anchor.element) + 1];
+            const start = absoluteTopOf(anchor.element);
+            const end = nextHeading ? absoluteTopOf(nextHeading) : Number.POSITIVE_INFINITY;
+            const blocks = Array.from(document.querySelectorAll("p,li,blockquote,pre,div"))
+              .filter(node => {
+                if (!textOf(node) || node === anchor.element) return false;
+                if (node.closest?.(".paper-header-container, .paper-summary-card, #paper-rss-toc-rail, #paper-rss-toc-preview")) return false;
+                const blockChildren = Array.from(node.children || []).some(child =>
+                  /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
+                );
+                if (blockChildren) return false;
+                const position = absoluteTopOf(node);
+                return position > start + 1 && position < end;
+              })
+              .sort((lhs, rhs) => absoluteTopOf(lhs) - absoluteTopOf(rhs));
+            return { title, excerpt: blocks[0] ? textOf(blocks[0]) : anchor.excerpt || "" };
+          };
+
+          const showPreview = anchor => {
+            closePreview();
+            const content = previewContent(anchor);
+            const card = document.createElement("aside");
+            card.id = "paper-rss-toc-preview";
+            card.classList.add("paper-toc-preview");
+            card.style.width = Math.min(360, Math.max(0, (window.innerWidth || 0) - 64)) + "px";
+            card.style.right = "48px";
+            card.setAttribute("data-paper-toc-preview", "true");
+            const title = document.createElement("div");
+            title.classList.add("paper-toc-preview-title");
+            title.textContent = content.title;
+            const excerpt = document.createElement("div");
+            excerpt.classList.add("paper-toc-preview-excerpt");
+            excerpt.textContent = content.excerpt;
+            card.appendChild(title);
+            if (content.excerpt) card.appendChild(excerpt);
+            card.addEventListener("mouseenter", () => {
+              if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
+              state.closeTimer = null;
+            });
+            card.addEventListener("mouseleave", () => {
+              state.hoveredElement = null;
+              schedulePreviewClose();
+            });
+            card.addEventListener("pointerdown", dismissPreview);
+            root.appendChild(card);
+            state.preview = card;
+          };
+
+          const schedulePreview = anchor => {
+            if (state.hoverTimer !== null) window.clearTimeout(state.hoverTimer);
+            if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
+            state.closeTimer = null;
+            state.hoveredElement = anchor.element;
+            state.hoverTimer = window.setTimeout(() => {
+              state.hoverTimer = null;
+              if (state.hoveredElement === anchor.element) showPreview(anchor);
+            }, 150);
+          };
+
+          const isLongLeaf = node => {
+            if (!node || node.matches?.("h1,h2,h3,h4,h5,h6")) return false;
+            if (node.closest?.(".paper-header-container, .paper-summary-card, #paper-rss-toc-rail")) return false;
+            const text = textOf(node);
+            if (text.length < 80) return false;
+            const blockChildren = Array.from(node.children || []).filter(child =>
+              /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
+            );
+            if (blockChildren.length) return false;
+            const style = typeof getComputedStyle === "function" ? getComputedStyle(node) : null;
+            if (style?.display === "none" || style?.visibility === "hidden") return false;
+            const rect = node.getBoundingClientRect?.() || { height: 0 };
+            const lineHeight = Number.parseFloat(style?.lineHeight || "") || 27;
+            const estimatedLines = Math.max(1, Math.ceil(text.length / 32));
+            const lineCount = rect.height > 0 ? Math.ceil(rect.height / lineHeight) : estimatedLines;
+            return lineCount >= 6;
+          };
+
+          const fallbackCandidates = () => {
+            const selectors = "p,li,blockquote,pre,figure,section,article,div";
+            return Array.from(document.querySelectorAll(selectors))
+              .filter(isLongLeaf)
+              .map(element => {
+                const text = textOf(element);
+                const excerpt = splitExcerpt(text);
+                return {
+                  element,
+                  label: excerpt.label,
+                  excerpt: excerpt.excerpt,
+                  kind: "fallback",
+                  level: 7,
+                  position: absoluteTopOf(element)
+                };
+              });
+          };
+
+          const sampleUniformly = (items, count) => {
+            if (count <= 0 || !items.length) return [];
+            if (count >= items.length) return items.slice();
+            const ordered = items.slice().sort((lhs, rhs) => lhs.position - rhs.position || compareDocumentOrder(lhs, rhs));
+            const firstPosition = ordered[0].position;
+            const lastPosition = ordered[ordered.length - 1].position;
+            const targets = count === 1
+              ? [(firstPosition + lastPosition) / 2]
+              : Array.from({ length: count }, (_, index) =>
+                firstPosition + (lastPosition - firstPosition) * index / (count - 1)
+              );
+            const available = ordered.slice();
+            return targets.map(target => {
+              const atOrAfter = available
+                .map((item, index) => ({ item, index }))
+                .filter(candidate => candidate.item.position >= target)
+                .sort((lhs, rhs) => lhs.item.position - rhs.item.position)[0];
+              const bestIndex = atOrAfter?.index ?? available.length - 1;
+              return available.splice(bestIndex, 1)[0];
+            });
+          };
+
+          const compressAnchors = anchors => {
+            if (anchors.length <= 18) return anchors;
+            const first = anchors[0];
+            const last = anchors[anchors.length - 1];
+            const middle = anchors.slice(1, -1);
+            const picks = [];
+            const bucketCount = 16;
+            const positions = anchors.map(anchor => anchor.position).filter(Number.isFinite);
+            const firstPosition = Math.min(...positions);
+            const lastPosition = Math.max(...positions);
+            const span = Math.max(1, lastPosition - firstPosition);
+            const available = middle.slice();
+            for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex += 1) {
+              const start = firstPosition + span * bucketIndex / bucketCount;
+              const end = firstPosition + span * (bucketIndex + 1) / bucketCount;
+              const target = (start + end) / 2;
+              const bucket = available.filter(anchor =>
+                anchor.position >= start && (bucketIndex === bucketCount - 1 ? anchor.position <= end : anchor.position < end)
+              );
+              const pool = bucket.length ? bucket : available;
+              if (!pool.length) continue;
+              const semantic = pool
+                .filter(anchor => anchor.kind === "heading")
+                .sort((lhs, rhs) => lhs.level - rhs.level || Math.abs(lhs.position - target) - Math.abs(rhs.position - target) || compareDocumentOrder(lhs, rhs));
+              const ranked = semantic.length ? semantic : pool.slice().sort((lhs, rhs) => {
+                const lhsAfter = lhs.position >= target;
+                const rhsAfter = rhs.position >= target;
+                if (lhsAfter !== rhsAfter) return lhsAfter ? -1 : 1;
+                return Math.abs(lhs.position - target) - Math.abs(rhs.position - target) || compareDocumentOrder(lhs, rhs);
+              });
+              const selected = ranked[0];
+              picks.push(selected);
+              available.splice(available.indexOf(selected), 1);
+            }
+            return [first, ...picks.sort(compareDocumentOrder), last];
+          };
+
+          const clearRail = () => {
+            closePreview();
+            if (state.dragging && state.dragPointerId !== null) {
+              state.buttons.forEach(button => button.releasePointerCapture?.(state.dragPointerId));
+            }
+            state.dragging = false;
+            state.dragged = false;
+            state.dragPointerId = null;
+            state.suppressClick = false;
+            state.rail?.remove();
+            state.rail = null;
+            state.buttons = [];
+            state.anchors = [];
+            root.classList.remove("paper-toc-rail-active");
+          };
+
+          const updateActive = () => {
+            if (!state.anchors.length) return;
+            const threshold = currentScrollTop() + 24;
+            let activeIndex = 0;
+            state.anchors.forEach((anchor, index) => {
+              const absoluteTop = anchor.element.getBoundingClientRect().top + currentScrollTop();
+              if (absoluteTop <= threshold) activeIndex = index;
+            });
+            state.buttons.forEach((button, index) => {
+              const active = index === activeIndex;
+              button.classList.toggle("is-current", active);
+              button.setAttribute("aria-current", active ? "true" : "false");
+            });
+          };
+
+          const navigateTo = anchor => {
+            const target = Math.max(
+              0,
+              anchor.element.getBoundingClientRect().top + currentScrollTop() - 24
+            );
+            const reducedMotion = typeof window.matchMedia === "function" &&
+              window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            window.scrollTo({ top: target, behavior: reducedMotion ? "auto" : "smooth" });
+          };
+
+          const dragScrollTo = event => {
+            const rail = state.rail;
+            const rect = rail?.getBoundingClientRect?.();
+            const clientY = Number(event.clientY);
+            if (!rect || !Number.isFinite(clientY) || !rect.height) return;
+            const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+            const range = Math.max(0, documentHeight() - viewportHeight());
+            window.scrollTo({ top: range * ratio, behavior: "auto" });
+            updateActive();
+          };
+
+          const startDrag = (button, event) => {
+            if (!button.classList.contains("is-current")) return;
+            if (event.button !== undefined && event.button !== 0) return;
+            state.dragging = true;
+            state.dragged = false;
+            state.dragPointerId = event.pointerId;
+            state.suppressClick = false;
+            dismissPreview();
+            button.setPointerCapture?.(event.pointerId);
+          };
+
+          const moveDrag = (button, event) => {
+            if (!state.dragging || state.dragPointerId !== event.pointerId) return;
+            state.dragged = true;
+            dragScrollTo(event);
+            event.preventDefault?.();
+          };
+
+          const endDrag = (button, event) => {
+            if (!state.dragging || state.dragPointerId !== event.pointerId) return;
+            if (state.dragged && event.type === "pointerup") {
+              state.suppressClick = true;
+              window.setTimeout(() => { state.suppressClick = false; }, 0);
+            }
+            state.dragging = false;
+            state.dragPointerId = null;
+            button.releasePointerCapture?.(event.pointerId);
+            updateActive();
+          };
+
+          const ensureStyle = () => {
+            if (document.getElementById("paper-rss-toc-rail-style")) return;
+            const style = document.createElement("style");
+            style.id = "paper-rss-toc-rail-style";
+            style.textContent = `
+              html.paper-toc-rail-active { scrollbar-width: none; }
+              html.paper-toc-rail-active::-webkit-scrollbar { width: 0; height: 0; }
+              #paper-rss-toc-rail {
+                position: fixed; z-index: 10000; right: 8px; top: 50%;
+                transform: translateY(-50%); width: 34px; min-height: 120px;
+                max-height: 55vh; display: flex; flex-direction: column;
+                justify-content: space-between; align-items: center;
+                pointer-events: none; user-select: none;
+              }
+              #paper-rss-toc-rail .paper-toc-rail-button {
+                appearance: none; border: 0; padding: 0; margin: 0;
+                width: 34px; height: 28px; display: grid; place-items: center;
+                background: transparent; cursor: pointer; pointer-events: auto;
+              }
+              #paper-rss-toc-rail .paper-toc-rail-line {
+                display: block; width: 12px; height: 3px; border-radius: 2px;
+                background: rgba(80, 80, 80, .24);
+                transition: width .14s ease, background-color .14s ease;
+              }
+              #paper-rss-toc-rail .paper-toc-rail-button.is-current .paper-toc-rail-line {
+                width: 26px; background: rgba(45, 45, 45, .78);
+              }
+              #paper-rss-toc-preview {
+                position: fixed; z-index: 10001; top: 50%; transform: translateY(-50%);
+                box-sizing: border-box; max-width: calc(100vw - 64px);
+                max-height: min(280px, calc(100vh - 24px)); overflow: hidden;
+                padding: 12px 14px; border: .5px solid var(--paper-rule);
+                border-radius: 12px; color: var(--paper-ink);
+                background: var(--paper-card); box-shadow: 0 10px 26px rgba(35, 31, 25, .16);
+                pointer-events: auto; user-select: text; font: 13px/1.48 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+              }
+              #paper-rss-toc-preview .paper-toc-preview-title {
+                display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                overflow: hidden; margin: 0 0 6px; font-weight: 680;
+              }
+              #paper-rss-toc-preview .paper-toc-preview-excerpt {
+                display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+                overflow: hidden; color: var(--paper-muted); white-space: pre-wrap;
+              }
+              @media (prefers-color-scheme: dark) {
+                #paper-rss-toc-rail .paper-toc-rail-line { background: rgba(220, 220, 220, .28); }
+                #paper-rss-toc-rail .paper-toc-rail-button.is-current .paper-toc-rail-line { background: rgba(245, 245, 245, .86); }
+              }
+            `;
+            document.head.appendChild(style);
+            state.style = style;
+          };
+
+          const buildRail = () => {
+            const previousHoverElement = state.hoveredElement;
+            clearRail();
+            const title = document.querySelector(".paper-header-title");
+            const titleText = textOf(title);
+            const bodyHeadings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
+              .filter(node => !node.classList.contains("paper-header-title"));
+            const anchors = [];
+            const titleAnchor = title && titleText
+              ? { element: title, label: titleText, excerpt: "", kind: "heading", level: 1, position: absoluteTopOf(title) }
+              : null;
+            if (titleAnchor) anchors.push(titleAnchor);
+            const titleKey = normalized(titleText);
+            bodyHeadings.forEach((element, index) => {
+              const label = textOf(element);
+              if (!label) return;
+              if (index === 0 && titleKey && normalized(label) === titleKey) return;
+              anchors.push({
+                element,
+                label,
+                excerpt: "",
+                kind: "heading",
+                level: Number(element.tagName.slice(1)) || 6,
+                position: absoluteTopOf(element)
+              });
+            });
+
+            if (anchors.length < 3) {
+              const candidates = fallbackCandidates();
+              const supplemental = sampleUniformly(candidates, 3 - anchors.length);
+              anchors.push(...supplemental);
+              anchors.sort(compareDocumentOrder);
+              if (titleAnchor) {
+                anchors.splice(anchors.indexOf(titleAnchor), 1);
+                anchors.unshift(titleAnchor);
+              }
+            }
+
+            if (documentHeight() <= viewportHeight() * 2 || anchors.length < 3) {
+              state.hoveredElement = null;
+              return;
+            }
+            state.anchors = compressAnchors(anchors);
+            ensureStyle();
+            const rail = document.createElement("nav");
+            rail.id = "paper-rss-toc-rail";
+            rail.setAttribute("aria-label", "文章章节导航");
+            rail.setAttribute("data-paper-toc-rail", "true");
+            rail.style.height = Math.min(Math.max(120, state.anchors.length * 18), Math.min(viewportHeight() * .55, 360)) + "px";
+
+            state.anchors.forEach((anchor, index) => {
+              const button = document.createElement("button");
+              button.className = "paper-toc-rail-button";
+              button.dataset.paperTocButton = "true";
+              button.dataset.paperTocLabel = anchor.label;
+              button.dataset.paperTocExcerpt = anchor.excerpt || "";
+              button.type = "button";
+              button.title = anchor.label;
+              button.setAttribute("aria-label", anchor.label);
+              button.setAttribute("aria-current", "false");
+              const line = document.createElement("span");
+              line.className = "paper-toc-rail-line";
+              line.setAttribute("aria-hidden", "true");
+              button.appendChild(line);
+              button.addEventListener("click", event => {
+                event.preventDefault();
+                if (state.suppressClick) {
+                  state.suppressClick = false;
+                  return;
+                }
+                navigateTo(anchor);
+              });
+              button.addEventListener("keydown", event => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                dismissPreview();
+                navigateTo(anchor);
+              });
+              button.addEventListener("mouseenter", () => schedulePreview(anchor));
+              button.addEventListener("mouseleave", schedulePreviewClose);
+              button.addEventListener("pointerdown", dismissPreview);
+              button.addEventListener("pointerdown", event => startDrag(button, event));
+              button.addEventListener("pointermove", event => moveDrag(button, event));
+              button.addEventListener("pointerup", event => endDrag(button, event));
+              button.addEventListener("pointercancel", event => endDrag(button, event));
+              rail.appendChild(button);
+              state.buttons.push(button);
+            });
+            rail.addEventListener("mouseleave", schedulePreviewClose);
+            rail.addEventListener("pointerdown", dismissPreview);
+            root.appendChild(rail);
+            state.rail = rail;
+            root.classList.add("paper-toc-rail-active");
+            updateActive();
+            const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
+            if (preservedAnchor) showPreview(preservedAnchor);
+          };
+
+          const refresh = () => {
+            if (state.scheduled) return;
+            state.scheduled = true;
+            window.requestAnimationFrame(() => {
+              state.scheduled = false;
+              buildRail();
+            });
+          };
+          const onScroll = () => window.requestAnimationFrame(updateActive);
+          const onResize = refresh;
+          const onKeyDown = event => {
+            if (event.key === "Escape") dismissPreview();
+          };
+          state.refresh = refresh;
+          state.destroy = () => {
+            state.observer?.disconnect();
+            state.resizeObserver?.disconnect();
+            document.removeEventListener("scroll", onScroll, { capture: true });
+            document.removeEventListener("keydown", onKeyDown, { capture: true });
+            window.removeEventListener("resize", onResize);
+            clearRail();
+            state.style?.remove();
+            if (window.paperRssTOCRail === state) delete window.paperRssTOCRail;
+          };
+          window.paperRssTOCRail = state;
+          document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+          document.addEventListener("keydown", onKeyDown, { capture: true });
+          window.addEventListener("resize", onResize, { passive: true });
+          if (typeof MutationObserver !== "undefined") {
+            state.observer = new MutationObserver(refresh);
+            state.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+          }
+          if (typeof ResizeObserver !== "undefined") {
+            state.resizeObserver = new ResizeObserver(refresh);
+            state.resizeObserver.observe(document.body);
+          }
+          refresh();
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+    #endif
+
     static let selectionScript = WKUserScript(
         source: """
         (() => {
@@ -2936,6 +3465,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             name: "paperRssToggleSummary"
         )
         configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
+        configuration.userContentController.addUserScript(PaperReaderBridge.tocRailScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.readerShortcutScript)
