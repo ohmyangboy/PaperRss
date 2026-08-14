@@ -1892,7 +1892,8 @@ enum PaperReaderBridge {
             hoverTimer: null, closeTimer: null, hoveredElement: null,
             dragging: false, dragged: false, dragPointerId: null, dragTarget: null,
             dragStartY: 0, dragStartX: 0, hasMovedPastThreshold: false,
-            suppressClick: false, navigatingAnchor: null, navigatingTimer: null
+            suppressClick: false, navigatingAnchor: null, navigatingTimer: null,
+            hideTimer: null, mouseNear: false, railHovered: false
           };
           const currentRailLabel = () => window.paperRssSelectionOptions?.labels?.tocRailLabel || "文章章节导航";
           state.setRailLabel = label => {
@@ -1951,6 +1952,35 @@ enum PaperReaderBridge {
           const hasBlockChildren = node => Array.from(node?.children || []).some(child =>
             /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
           );
+
+          const showRail = () => {
+            if (!state.rail) return;
+            state.rail.classList.add("is-visible");
+          };
+
+          const scheduleHide = (delay = 1400) => {
+            if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
+            state.hideTimer = window.setTimeout(() => {
+              state.hideTimer = null;
+              if (
+                !state.rail ||
+                state.dragging ||
+                state.mouseNear ||
+                state.railHovered ||
+                state.preview ||
+                state.navigatingAnchor ||
+                state.rail.matches?.(":focus-within")
+              ) {
+                return;
+              }
+              state.rail.classList.remove("is-visible");
+            }, delay);
+          };
+
+          const wakeRail = (delay = 1400) => {
+            showRail();
+            scheduleHide(delay);
+          };
 
           const clearPreviewTimers = () => {
             if (state.hoverTimer !== null) window.clearTimeout(state.hoverTimer);
@@ -2028,6 +2058,7 @@ enum PaperReaderBridge {
 
           const showPreview = anchor => {
             closePreview();
+            showRail();
             const content = previewContent(anchor);
             const card = document.createElement("aside");
             card.id = "paper-rss-toc-preview";
@@ -2046,10 +2077,12 @@ enum PaperReaderBridge {
             card.addEventListener("mouseenter", () => {
               if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
               state.closeTimer = null;
+              showRail();
             });
             card.addEventListener("mouseleave", () => {
               state.hoveredElement = null;
               schedulePreviewClose();
+              if (!state.railHovered && !state.mouseNear) scheduleHide(600);
             });
             card.addEventListener("pointerdown", dismissPreview);
             root.appendChild(card);
@@ -2161,6 +2194,10 @@ enum PaperReaderBridge {
 
           const clearRail = () => {
             closePreview();
+            if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
+            state.hideTimer = null;
+            state.mouseNear = false;
+            state.railHovered = false;
             if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
             state.navigatingTimer = null;
             state.navigatingAnchor = null;
@@ -2225,6 +2262,7 @@ enum PaperReaderBridge {
           };
 
           const activateAnchor = (anchor, isInstantJump) => {
+            wakeRail(1600);
             const index = state.anchors.indexOf(anchor);
             if (index >= 0) {
               state.buttons.forEach((button, i) => {
@@ -2262,6 +2300,7 @@ enum PaperReaderBridge {
             if (event.button !== undefined && event.button !== 0) return;
             const target = dragTargetForEvent(event);
             if (!target) return;
+            showRail();
             state.dragging = true;
             state.dragged = false;
             state.hasMovedPastThreshold = false;
@@ -2276,6 +2315,7 @@ enum PaperReaderBridge {
 
           const moveDrag = event => {
             if (!state.dragging || state.dragPointerId !== event.pointerId) return;
+            showRail();
             state.dragged = true;
             if (state.navigatingAnchor) {
               state.navigatingAnchor = null;
@@ -2299,6 +2339,7 @@ enum PaperReaderBridge {
             target?.releasePointerCapture?.(event.pointerId);
             state.dragTarget = null;
             updateActive();
+            scheduleHide(1000);
           };
 
           const ensureStyle = () => {
@@ -2313,7 +2354,13 @@ enum PaperReaderBridge {
                 transform: translateY(-50%); width: 34px; min-height: 42px;
                 max-height: min(45vh, 280px); display: flex; flex-direction: column;
                 justify-content: stretch; align-items: stretch;
-                pointer-events: auto; user-select: none; box-sizing: border-box;
+                opacity: 0; pointer-events: auto; user-select: none; box-sizing: border-box;
+                transition: opacity .28s cubic-bezier(.16, 1, .3, 1);
+              }
+              #paper-rss-toc-rail.is-visible,
+              #paper-rss-toc-rail:hover,
+              #paper-rss-toc-rail:focus-within {
+                opacity: 1;
               }
               #paper-rss-toc-rail .paper-toc-rail-button {
                 appearance: none; border: 0; padding: 0; margin: 0;
@@ -2349,6 +2396,9 @@ enum PaperReaderBridge {
               @media (prefers-color-scheme: dark) {
                 #paper-rss-toc-rail .paper-toc-rail-line { background: rgba(220, 220, 220, .28); }
                 #paper-rss-toc-rail .paper-toc-rail-button.is-current .paper-toc-rail-line { background: rgba(245, 245, 245, .86); }
+              }
+              @media (prefers-reduced-motion: reduce) {
+                #paper-rss-toc-rail { transition: none; }
               }
             `;
             document.head.appendChild(style);
@@ -2442,6 +2492,8 @@ enum PaperReaderBridge {
                   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
                 activateAnchor(anchor, reducedMotion);
               });
+              button.addEventListener("focus", showRail);
+              button.addEventListener("blur", () => scheduleHide(600));
               button.addEventListener("mouseenter", () => {
                 setHoverPeak(index);
                 schedulePreview(anchor);
@@ -2450,7 +2502,19 @@ enum PaperReaderBridge {
               rail.appendChild(button);
               state.buttons.push(button);
             });
-            rail.addEventListener("mouseleave", schedulePreviewClose);
+            rail.addEventListener("mouseenter", () => {
+              state.railHovered = true;
+              if (state.hideTimer !== null) {
+                window.clearTimeout(state.hideTimer);
+                state.hideTimer = null;
+              }
+              showRail();
+            });
+            rail.addEventListener("mouseleave", () => {
+              state.railHovered = false;
+              schedulePreviewClose();
+              scheduleHide(600);
+            });
             rail.addEventListener("pointerdown", dismissPreview);
             rail.addEventListener("pointerdown", startDrag);
             rail.addEventListener("pointermove", moveDrag);
@@ -2476,9 +2540,13 @@ enum PaperReaderBridge {
               buildRail();
             });
           };
-          const onScroll = () => window.requestAnimationFrame(updateActive);
+          const onScroll = () => {
+            wakeRail(1400);
+            window.requestAnimationFrame(updateActive);
+          };
           const onResize = refresh;
           const onWheel = () => {
+            wakeRail(1400);
             if (state.navigatingAnchor) {
               state.navigatingAnchor = null;
               if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
@@ -2486,16 +2554,35 @@ enum PaperReaderBridge {
               updateActive();
             }
           };
+          const onPointerMove = event => {
+            const clientX = Number(event?.clientX);
+            if (!Number.isFinite(clientX)) return;
+            const windowWidth = Number(window.innerWidth || document.documentElement.clientWidth || 0);
+            const nearEdge = windowWidth > 0 && clientX >= windowWidth - 64;
+            if (nearEdge) {
+              state.mouseNear = true;
+              if (state.hideTimer !== null) {
+                window.clearTimeout(state.hideTimer);
+                state.hideTimer = null;
+              }
+              showRail();
+            } else if (state.mouseNear) {
+              state.mouseNear = false;
+              scheduleHide(600);
+            }
+          };
           const onKeyDown = event => {
             if (event.key === "Escape") dismissPreview();
           };
           state.refresh = refresh;
           state.destroy = () => {
+            if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
             if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
             state.observer?.disconnect();
             state.resizeObserver?.disconnect();
             document.removeEventListener("scroll", onScroll, { capture: true });
             document.removeEventListener("keydown", onKeyDown, { capture: true });
+            document.removeEventListener("pointermove", onPointerMove);
             window.removeEventListener("resize", onResize);
             window.removeEventListener("wheel", onWheel, { capture: true });
             clearRail();
@@ -2505,6 +2592,7 @@ enum PaperReaderBridge {
           window.paperRssTOCRail = state;
           document.addEventListener("scroll", onScroll, { passive: true, capture: true });
           document.addEventListener("keydown", onKeyDown, { capture: true });
+          document.addEventListener("pointermove", onPointerMove, { passive: true });
           window.addEventListener("resize", onResize, { passive: true });
           window.addEventListener("wheel", onWheel, { passive: true, capture: true });
           if (typeof MutationObserver !== "undefined") {

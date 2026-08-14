@@ -748,3 +748,51 @@ test('TOC rail navigation label follows the current localized WebView options', 
   assert.equal(refreshedRail.getAttribute('aria-label'), 'Article Navigation');
   assert.equal(fixture.document.querySelectorAll('#paper-rss-toc-rail').length, 1);
 });
+
+test('TOC rail floats in on scroll or right edge hover and automatically fades out on idle', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const style = fixture.document.querySelector('#paper-rss-toc-rail-style');
+  assert.ok(style);
+  assert.match(style.textContent, /#paper-rss-toc-rail\s*\{[^}]*opacity:\s*0/);
+  assert.match(style.textContent, /#paper-rss-toc-rail\.is-visible/);
+
+  assert.equal(rail.classList.contains('is-visible'), false, 'rail should be idle/hidden initially');
+
+  // 1. Scrolling reveals the rail
+  fixture.document.dispatchEvent({ type: 'scroll' });
+  assert.equal(rail.classList.contains('is-visible'), true, 'scrolling makes the rail visible');
+
+  // Advancing time past idle delay fades it out
+  fixture.window.advanceTime(1400);
+  assert.equal(rail.classList.contains('is-visible'), false, 'idle timeout fades the rail out');
+
+  // 2. Pointer moving near the right edge (within 64px) reveals the rail
+  fixture.document.dispatchEvent({ type: 'pointermove', clientX: 850 }); // innerWidth is 900
+  assert.equal(rail.classList.contains('is-visible'), true, 'pointer near right edge reveals rail');
+
+  // Pointer moving away from the edge fades it out after delay
+  fixture.document.dispatchEvent({ type: 'pointermove', clientX: 400 });
+  fixture.window.advanceTime(300);
+  assert.equal(rail.classList.contains('is-visible'), true, 'rail stays visible during fade-out delay');
+  fixture.window.advanceTime(350);
+  assert.equal(rail.classList.contains('is-visible'), false, 'rail fades out after pointer moves away');
+
+  // 3. Hovering directly on the rail keeps it visible
+  rail.dispatchEvent({ type: 'mouseenter' });
+  assert.equal(rail.classList.contains('is-visible'), true, 'hovering rail reveals it');
+  fixture.window.advanceTime(2000);
+  assert.equal(rail.classList.contains('is-visible'), true, 'hovering rail prevents idle fade-out');
+
+  rail.dispatchEvent({ type: 'mouseleave' });
+  fixture.window.advanceTime(600);
+  assert.equal(rail.classList.contains('is-visible'), false, 'leaving rail fades it out');
+
+  // 4. Keyboard focus on rail buttons keeps rail visible
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  buttons[0].dispatchEvent({ type: 'focus' });
+  assert.equal(rail.classList.contains('is-visible'), true, 'focused button makes rail visible');
+  buttons[0].dispatchEvent({ type: 'blur' });
+  fixture.window.advanceTime(600);
+  assert.equal(rail.classList.contains('is-visible'), false, 'blurring button allows rail to fade out');
+});
