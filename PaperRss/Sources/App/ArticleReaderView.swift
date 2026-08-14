@@ -1746,7 +1746,8 @@ enum PaperReaderBridge {
             "completedExplanation": I18N.localized("已完成解释，点击重新查看"),
             "closeImage": I18N.localized("关闭（Esc）"),
             "translationLabel": I18N.localized("译文"),
-            "generatingTranslation": I18N.localized("正在生成译文")
+            "generatingTranslation": I18N.localized("正在生成译文"),
+            "tocRailLabel": I18N.localized("文章章节导航", englishFallback: "Article Navigation")
         ]
     }
     static let observerScript = WKUserScript(
@@ -1886,6 +1887,10 @@ enum PaperReaderBridge {
 
           const root = document.documentElement;
           const state = { anchors: [], buttons: [], rail: null, preview: null, style: null, observer: null, resizeObserver: null, scheduled: false, hoverTimer: null, closeTimer: null, hoveredElement: null, dragging: false, dragged: false, dragPointerId: null, suppressClick: false };
+          const currentRailLabel = () => window.paperRssSelectionOptions?.labels?.tocRailLabel || "文章章节导航";
+          state.setRailLabel = label => {
+            state.rail?.setAttribute("aria-label", label || currentRailLabel());
+          };
           const textOf = node => (node?.textContent || "").replace(/\\s+/g, " ").trim();
           const normalized = value => textOf({ textContent: value })
             .toLocaleLowerCase()
@@ -1936,6 +1941,10 @@ enum PaperReaderBridge {
             return { label, excerpt: text.slice(match[0].length).trim() };
           };
 
+          const hasBlockChildren = node => Array.from(node?.children || []).some(child =>
+            /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
+          );
+
           const clearPreviewTimers = () => {
             if (state.hoverTimer !== null) window.clearTimeout(state.hoverTimer);
             if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
@@ -1978,10 +1987,7 @@ enum PaperReaderBridge {
               .filter(node => {
                 if (!textOf(node) || node === anchor.element) return false;
                 if (node.closest?.(".paper-header-container, .paper-summary-card, #paper-rss-toc-rail, #paper-rss-toc-preview")) return false;
-                const blockChildren = Array.from(node.children || []).some(child =>
-                  /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
-                );
-                if (blockChildren) return false;
+                if (hasBlockChildren(node)) return false;
                 const position = absoluteTopOf(node);
                 return position > start + 1 && position < end;
               })
@@ -2035,10 +2041,7 @@ enum PaperReaderBridge {
             if (node.closest?.(".paper-header-container, .paper-summary-card, #paper-rss-toc-rail")) return false;
             const text = textOf(node);
             if (text.length < 80) return false;
-            const blockChildren = Array.from(node.children || []).filter(child =>
-              /^(P|LI|BLOCKQUOTE|PRE|FIGURE|SECTION|ARTICLE|DIV|UL|OL|DL|TABLE)$/i.test(child.tagName || "")
-            );
-            if (blockChildren.length) return false;
+            if (hasBlockChildren(node)) return false;
             const style = typeof getComputedStyle === "function" ? getComputedStyle(node) : null;
             if (style?.display === "none" || style?.visibility === "hidden") return false;
             const rect = node.getBoundingClientRect?.() || { height: 0 };
@@ -2306,7 +2309,7 @@ enum PaperReaderBridge {
             ensureStyle();
             const rail = document.createElement("nav");
             rail.id = "paper-rss-toc-rail";
-            rail.setAttribute("aria-label", "文章章节导航");
+            rail.setAttribute("aria-label", currentRailLabel());
             rail.setAttribute("data-paper-toc-rail", "true");
             rail.style.height = Math.min(Math.max(120, state.anchors.length * 18), Math.min(viewportHeight() * .55, 360)) + "px";
 
@@ -3670,6 +3673,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
               } else {
                 window.paperRssSelectionOptions = options;
               }
+              window.paperRssTOCRail?.setRailLabel(options.labels?.tocRailLabel);
             })();
             """
             webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { _ in }

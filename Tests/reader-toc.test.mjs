@@ -659,3 +659,19 @@ test('only the current indicator captures drag, maps rail position continuously,
   current.dispatchEvent({ type: 'click', preventDefault() {} });
   assert.equal(fixture.window.scrollCalls.length, callsAfterDrag);
 });
+
+test('TOC rail navigation label follows the current localized WebView options', () => {
+  assert.match(source, /"tocRailLabel": I18N\.localized\("文章章节导航", englishFallback: "Article Navigation"\)/);
+  assert.match(source, /paperRssTOCRail\?\.setRailLabel\(options\.labels\?\.tocRailLabel\)/);
+  const fixture = makeFixture();
+  fixture.window.paperRssSelectionOptions = {
+    labels: { tocRailLabel: '章节导航' },
+  };
+  const rail = runRail(fixture);
+  assert.equal(rail.getAttribute('aria-label'), '章节导航');
+
+  fixture.window.paperRssSelectionOptions.labels.tocRailLabel = 'Article Navigation';
+  fixture.window.paperRssTOCRail.setRailLabel('Article Navigation');
+  assert.equal(rail.getAttribute('aria-label'), 'Article Navigation');
+  assert.equal((tocScript().match(/const hasBlockChildren =/g) ?? []).length, 1);
+});
