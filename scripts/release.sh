@@ -176,11 +176,12 @@ CHANGELOG=$(git log -n 10 --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
 RELEASE_NOTES=$(cat <<EOF
 🎉 PaperRss ${TAG_NAME} 正式发布！
 
-### 🌟 核心特性
+### 🌟 核心特性与本次更新
+- 📑 **新增长文章章节导航轨道（TOC Rail，#3）**：右侧极简刻度短线，支持抛物线波峰悬停、150ms 章节卡片预览、阅读黄金视线重心锚定与连续拖拽快速翻页。
 - 📰 原生 macOS 三栏布局 RSS 阅读器，提供暖白纸张般的沉浸式阅读体验。
 - 🤖 集成 DeepSeek / OpenAI 兼容 API，支持全自动/手动 AI 摘要。
 - ✦ 智能划词 AI 解释与选区翻译：无痛流式 Popover 显示，支持按位置恢复内联批注。
-- ⚡️ 高效内存与本地 JSON 持久化索引，长文章滑动流畅不卡顿。
+- ⚡️ 修复文章图片 URL 包含空格加载问题，优化阅读器核心渲染与交互性能。
 
 ### 📝 最近更新明细
 $CHANGELOG
@@ -190,10 +191,11 @@ $CHANGELOG
 🎉 PaperRss ${TAG_NAME} is now available!
 
 ### 🌟 Highlights
+- 📑 **New Article TOC Rail (#3)**: Compact right-hand chapter rail for long articles with wave hover preview cards, visual reading focus anchoring, and continuous drag mapping.
 - 📰 A native three-column RSS reader for macOS with a calm, paper-inspired reading experience.
 - 🤖 DeepSeek and OpenAI-compatible APIs, with manual or automatic AI summaries.
 - ✦ Context-aware selection tools for explanation and translation, delivered in a lightweight popover.
-- ⚡️ Local JSON persistence and responsive scrolling for long-form articles.
+- ⚡️ Fixed image loading for URLs containing spaces, along with stability and rendering enhancements.
 
 ### 📝 Recent Changes
 $CHANGELOG
