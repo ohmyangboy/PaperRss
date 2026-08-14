@@ -151,3 +151,28 @@ test('agent assets do not contain absolute user-directory symlinks', async () =>
     }
   }
 });
+
+test('release script generates version-focused notes without repetitive marketing copy', async () => {
+  const releaseScript = await readRepoFile('scripts/release.sh');
+
+  assert.doesNotMatch(
+    releaseScript,
+    /原生 macOS 三栏布局 RSS 阅读器/,
+    'scripts/release.sh must not contain hardcoded marketing slogans',
+  );
+  assert.doesNotMatch(
+    releaseScript,
+    /集成 DeepSeek \/ OpenAI 兼容 API/,
+    'scripts/release.sh must not contain hardcoded marketing slogans',
+  );
+  assert.match(
+    releaseScript,
+    /--notes-file|--notes/,
+    'scripts/release.sh must support custom notes flags',
+  );
+  assert.match(
+    releaseScript,
+    /COMMITS_RANGE=/,
+    'scripts/release.sh must dynamically scope changelog to relevant commits',
+  );
+});

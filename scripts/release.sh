@@ -7,16 +7,28 @@ CDPATH= cd "$(dirname "$0")/.."
 # 1. 参数解析
 LOCAL_ONLY=false
 VERSION=""
+NOTES_TEXT=""
+NOTES_FILE=""
 
-for arg in "$@"; do
-    case $arg in
+while [[ $# -gt 0 ]]; do
+    case $1 in
         --local|--dmg-only)
             LOCAL_ONLY=true
+            shift
+            ;;
+        --notes)
+            NOTES_TEXT="$2"
+            shift 2
+            ;;
+        --notes-file)
+            NOTES_FILE="$2"
+            shift 2
             ;;
         *)
             if [ -z "$VERSION" ]; then
-                VERSION="$arg"
+                VERSION="$1"
             fi
+            shift
             ;;
     esac
 done
@@ -170,37 +182,51 @@ fi
 # 7. GitHub Release 发布
 echo "🚀 5/5 正在发布 Release 到 GitHub..."
 
-# 生成 Release 说明文案
-CHANGELOG=$(git log -n 10 --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
+if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
+    RELEASE_NOTES=$(cat "$NOTES_FILE")
+elif [ -n "$NOTES_TEXT" ]; then
+    RELEASE_NOTES="$NOTES_TEXT"
+else
+    # 动态获取上一个 tag 到当前 HEAD 之间的提交与更新说明
+    PREV_TAG=$(git tag --sort=-creatordate 2>/dev/null | grep -v "^${TAG_NAME}$" | head -n1 || echo "")
+    if [ -n "$PREV_TAG" ]; then
+        COMMITS_RANGE="${PREV_TAG}..HEAD"
+    else
+        COMMITS_RANGE="HEAD~10..HEAD"
+    fi
 
-RELEASE_NOTES=$(cat <<EOF
-🎉 PaperRss ${TAG_NAME} 正式发布！
+    CHANGELOG=$(git log "$COMMITS_RANGE" --oneline --no-merges 2>/dev/null | sed 's/^[a-f0-9]* /- /')
+    if [ -z "$CHANGELOG" ]; then
+        CHANGELOG=$(git log -n 5 --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
+    fi
 
-### 🌟 核心特性与本次更新
-- 📑 **新增长文章章节导航轨道（TOC Rail，#3）**：右侧极简刻度短线，支持抛物线波峰悬停、150ms 章节卡片预览、阅读黄金视线重心锚定与连续拖拽快速翻页。
-- 📰 原生 macOS 三栏布局 RSS 阅读器，提供暖白纸张般的沉浸式阅读体验。
-- 🤖 集成 DeepSeek / OpenAI 兼容 API，支持全自动/手动 AI 摘要。
-- ✦ 智能划词 AI 解释与选区翻译：无痛流式 Popover 显示，支持按位置恢复内联批注。
-- ⚡️ 修复文章图片 URL 包含空格加载问题，优化阅读器核心渲染与交互性能。
+    # 提取本次版本发布提交（release commit）中的要点说明
+    RELEASE_BODY=$(git log "$COMMITS_RANGE" --grep="^release:" -n 1 --format=%b 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
+    if [ -z "$RELEASE_BODY" ]; then
+        RELEASE_BODY=$(git log -n 1 --format=%b 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
+    fi
 
-### 📝 最近更新明细
-$CHANGELOG
+    if [ -n "$RELEASE_BODY" ]; then
+        RELEASE_NOTES=$(cat <<EOF
+🎉 PaperRss ${TAG_NAME}
 
----
+### 🌟 本次更新要点
+${RELEASE_BODY}
 
-🎉 PaperRss ${TAG_NAME} is now available!
-
-### 🌟 Highlights
-- 📑 **New Article TOC Rail (#3)**: Compact right-hand chapter rail for long articles with wave hover preview cards, visual reading focus anchoring, and continuous drag mapping.
-- 📰 A native three-column RSS reader for macOS with a calm, paper-inspired reading experience.
-- 🤖 DeepSeek and OpenAI-compatible APIs, with manual or automatic AI summaries.
-- ✦ Context-aware selection tools for explanation and translation, delivered in a lightweight popover.
-- ⚡️ Fixed image loading for URLs containing spaces, along with stability and rendering enhancements.
-
-### 📝 Recent Changes
-$CHANGELOG
+### 📝 变更明细
+${CHANGELOG}
 EOF
 )
+    else
+        RELEASE_NOTES=$(cat <<EOF
+🎉 PaperRss ${TAG_NAME}
+
+### 📝 本次变更明细
+${CHANGELOG}
+EOF
+)
+    fi
+fi
 
 if gh release view "$TAG_NAME" >/dev/null 2>&1; then
     echo "ℹ️ Release ${TAG_NAME} 已存在，正在更新附件与说明..."
