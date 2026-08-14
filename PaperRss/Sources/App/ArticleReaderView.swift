@@ -1530,12 +1530,11 @@ th, td {
   line-height: 1.6;
 }
 .paper-rss-translation {
-  margin: -.64em 0 1.32em;
-  padding: .72em .95em .76em;
-  border-left: 2px solid var(--paper-accent);
-  border-radius: 0 6px 6px 0;
-  background: var(--paper-wash);
+  margin: -.5em 0 1.25em;
+  padding: 0;
   color: var(--paper-muted);
+  font-size: 0.96em;
+  line-height: 1.68;
 }
 .paper-rss-translation-label {
   position: relative;
