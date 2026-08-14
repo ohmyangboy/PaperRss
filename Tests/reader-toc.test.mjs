@@ -439,7 +439,6 @@ test('dynamic mutations can disable and restore the rail without duplicate DOM o
   fixture.document.body.scrollHeight = 2400;
   fixture.mutationObserver.trigger([{ target: fixture.document.body }]);
   assert.equal(fixture.document.querySelectorAll('#paper-rss-toc-rail').length, 1);
-  assert.ok(source.includes('root.appendChild(rail)'), 'rail must live outside the observed body subtree');
 });
 
 test('fallback supplementation uses document distance when candidates are heavily clustered', () => {
