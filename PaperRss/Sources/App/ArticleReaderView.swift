@@ -156,13 +156,8 @@ struct ArticleReaderView: View {
     private var savedSelectionAnnotations: [ReaderSelectionAnnotation] {
         guard !text.isEmpty else { return [] }
         let articleHash = text.stableDigest
-        return store.database.artifacts.compactMap { artifact in
-            guard artifact.entryID == entry.id,
-                  artifact.kind == .selectionExplanation,
-                  artifact.isComplete,
-                  !artifact.isDeleted,
-                  artifact.selectionArticleHash == articleHash,
-                  let selection = artifact.selectionText,
+        return store.selectionArtifacts(for: entry, articleHash: articleHash).compactMap { artifact in
+            guard let selection = artifact.selectionText,
                   let anchor = artifact.selectionAnchor,
                   !artifact.content.isEmpty else { return nil }
             return ReaderSelectionAnnotation(
@@ -268,8 +263,8 @@ struct ArticleReaderView: View {
             articleBaseURL = store.articleSourceURL(for: requestedEntry)
             isLoading = false
             requestVisibleTranslationsIfPossible()
-            if store.database.llmConfiguration.showsAISummary,
-               store.database.llmConfiguration.automaticallyGenerateSummary,
+            if store.llmConfiguration.showsAISummary,
+               store.llmConfiguration.automaticallyGenerateSummary,
                store.artifact(for: requestedEntry, kind: .summary) == nil,
                !text.isEmpty {
                 isSummaryExpanded = true
@@ -317,10 +312,10 @@ struct ArticleReaderView: View {
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
                 errorMessage: store.lastError,
-                showsAISummary: store.database.llmConfiguration.showsAISummary,
-                showsSelectionExplanation: store.database.llmConfiguration.showsSelectionExplanation,
-                showsSelectionAsk: store.database.llmConfiguration.showsSelectionAsk,
-                showsSelectionTranslation: store.database.llmConfiguration.showsSelectionTranslation,
+                showsAISummary: store.llmConfiguration.showsAISummary,
+                showsSelectionExplanation: store.llmConfiguration.showsSelectionExplanation,
+                showsSelectionAsk: store.llmConfiguration.showsSelectionAsk,
+                showsSelectionTranslation: store.llmConfiguration.showsSelectionTranslation,
                 onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
@@ -368,10 +363,10 @@ struct ArticleReaderView: View {
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
                 errorMessage: store.lastError,
-                showsAISummary: store.database.llmConfiguration.showsAISummary,
-                showsSelectionExplanation: store.database.llmConfiguration.showsSelectionExplanation,
-                showsSelectionAsk: store.database.llmConfiguration.showsSelectionAsk,
-                showsSelectionTranslation: store.database.llmConfiguration.showsSelectionTranslation,
+                showsAISummary: store.llmConfiguration.showsAISummary,
+                showsSelectionExplanation: store.llmConfiguration.showsSelectionExplanation,
+                showsSelectionAsk: store.llmConfiguration.showsSelectionAsk,
+                showsSelectionTranslation: store.llmConfiguration.showsSelectionTranslation,
                 onVisibleParagraphIDsChange: handleVisibleParagraphIDs,
                 onScrollOffsetChange: { _ in },
                 onSelectionRequest: performSelectionRequest,
@@ -483,7 +478,7 @@ struct ArticleReaderView: View {
 
     @ViewBuilder
     private var summaryCard: some View {
-        if store.database.llmConfiguration.showsAISummary {
+        if store.llmConfiguration.showsAISummary {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
                     Label(I18N.localized("AI 摘要"), systemImage: "sparkles")
@@ -680,7 +675,7 @@ struct ArticleReaderView: View {
             toggleBilingualTranslation()
         case .showSummary:
             switch ReaderShortcutPolicy.summaryDecision(
-                showsAISummary: store.database.llmConfiguration.showsAISummary,
+                showsAISummary: store.llmConfiguration.showsAISummary,
                 hasCachedSummary: store.summaryArtifact(for: entry) != nil,
                 isAIRequestActive: store.activeSummaryRequest != nil
             ) {

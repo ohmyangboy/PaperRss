@@ -54,13 +54,6 @@ public final class LocalAccountProvider: Sendable {
                     updatedAt: now
                 )
                 try account.save(db)
-
-                let syncState = AccountSyncStateRecord(
-                    accountID: self.accountID,
-                    initialSyncCompleted: true,
-                    lastSyncCompletedAt: now
-                )
-                try syncState.save(db)
             }
         }
     }
@@ -308,6 +301,12 @@ public final class LocalAccountProvider: Sendable {
     public func fetchGlobalTranslationMemory(key: String) throws -> AIArtifact? {
         try database.read { db in
             try self.artifactRepository.fetchGlobalTranslationMemory(key: key, in: db)
+        }
+    }
+
+    public func fetchSelectionArtifacts(entryID: String, articleHash: String) throws -> [AIArtifact] {
+        try database.read { db in
+            try self.artifactRepository.fetchSelectionArtifacts(entryID: entryID, articleHash: articleHash, in: db)
         }
     }
 

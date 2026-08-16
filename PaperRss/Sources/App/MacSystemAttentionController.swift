@@ -91,7 +91,6 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     private let preferences: UserDefaults
     private let notificationCenter: UNUserNotificationCenter
     private var cancellables: Set<AnyCancellable> = []
-    private var latestDatabase: AppDatabase
     private var dockBadgeView: DockUnreadBadgeView?
 
     init(
@@ -104,7 +103,6 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         self.navigation = navigation
         self.preferences = preferences
         self.notificationCenter = notificationCenter
-        latestDatabase = store.database
         dockBadgeEnabled = preferences.bool(forKey: PreferenceKey.dockBadgeEnabled)
         feedNotificationsEnabled = false
         preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)

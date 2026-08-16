@@ -167,18 +167,23 @@ public final class AppStore: ObservableObject {
         static let llmConfiguration = "PaperRss.llmConfiguration"
     }
 
+    @Published public private(set) var startupError: Error?
+    public static let defaultTimelineLimit: Int = 100
+    private var cachedEntryLookup: [String: Entry] = [:]
+
     // MARK: - Initializer
 
     public init(
         fileManager: FileManager = .default,
-        databaseURL: URL? = nil
+        databaseURL: URL? = nil,
+        persistenceURL: URL? = nil
     ) {
         self.feedFetcher = { try await FeedService.fetch($0) }
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        self.persistenceURL = directory.appendingPathComponent("library.json")
+        self.persistenceURL = persistenceURL ?? directory.appendingPathComponent("library.json")
         let sqliteURL = databaseURL ?? directory.appendingPathComponent("library.sqlite")
 
         do {
@@ -193,38 +198,27 @@ public final class AppStore: ObservableObject {
             feedFetcher: feedFetcher
         )
 
-        // 1. Startup Migration Sequence: legacy library.json exists -> Migration detection FIRST
-        if fileManager.fileExists(atPath: persistenceURL.path) {
-            let migrator = LegacyJSONMigrator(database: libraryDatabase)
-            if let result = try? migrator.migrate(from: persistenceURL), case .success(let report) = result {
-                let legacyLLM = report.llmConfiguration
-                let currentData = UserDefaults.standard.data(forKey: PreferenceKey.llmConfiguration)
-                if currentData == nil {
-                    let config = LLMConfiguration(
-                        providerName: legacyLLM.providerName,
-                        providerDescription: legacyLLM.providerDescription,
-                        baseURL: legacyLLM.baseURL,
-                        model: legacyLLM.model,
-                        reasoningMode: legacyLLM.reasoningMode,
-                        temperature: legacyLLM.temperature,
-                        targetLanguage: legacyLLM.targetLanguage,
-                        allowInsecureLocalEndpoint: legacyLLM.allowInsecureLocalEndpoint,
-                        showsAISummary: legacyLLM.showsAISummary,
-                        automaticallyGenerateSummary: legacyLLM.automaticallyGenerateSummary,
-                        showsSelectionExplanation: legacyLLM.showsSelectionExplanation,
-                        showsSelectionAsk: legacyLLM.showsSelectionAsk,
-                        showsSelectionTranslation: legacyLLM.showsSelectionTranslation,
-                        customPrompt: legacyLLM.customPrompt
-                    )
-                    if let data = try? JSONEncoder().encode(config) {
-                        UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
-                    }
-                }
-            }
+        // 1. Recover LLM Configuration from legacy JSON if needed (Independent of SQLite migration state)
+        if let recovered = LegacyPreferenceMigrator.recoverLLMConfigurationIfNeeded(from: self.persistenceURL, fileManager: fileManager) {
+            self.llmConfiguration = recovered
         }
 
-        // 2. Ensure Bootstrap
-        try? localProvider.ensureAccountExists()
+        // 2. Startup Migration Sequence:
+        var migrationSucceededOrNotNeeded = true
+        if fileManager.fileExists(atPath: self.persistenceURL.path) {
+            let migrator = LegacyJSONMigrator(database: libraryDatabase)
+            do {
+                let result = try migrator.migrate(from: self.persistenceURL)
+                switch result {
+                case .success, .alreadyCompleted, .noLegacySource:
+                    migrationSucceededOrNotNeeded = true
+                }
+            } catch {
+                migrationSucceededOrNotNeeded = false
+                self.startupError = error
+                self.lastError = I18N.localizedFormat("迁移历史数据失败：%@", arguments: [error.localizedDescription])
+            }
+        }
 
         // 3. Load Preferences
         let preferences = UserDefaults.standard
@@ -253,8 +247,11 @@ public final class AppStore: ObservableObject {
             iCloudSyncState = isICloudSyncEnabled ? .waiting : .disabled
         }
 
-        // 4. Reload State from SQLite
-        reloadState()
+        // 4. Reload State from SQLite ONLY IF migration succeeded or not needed
+        if migrationSucceededOrNotNeeded {
+            try? localProvider.ensureAccountExists()
+            reloadState()
+        }
 
         Task { [weak self] in
             await self?.checkForUpdates(isUserInitiated: false)
@@ -285,14 +282,23 @@ public final class AppStore: ObservableObject {
             feedFetcher: feedFetcher
         )
 
+        var migrationSucceededOrNotNeeded = true
         // 写入测试 JSON 并执行迁移
         if let data = try? JSONEncoder.paperRss.encode(testDatabase) {
             try? data.write(to: persistenceURL)
             let migrator = LegacyJSONMigrator(database: libraryDatabase)
-            _ = try? migrator.migrate(from: persistenceURL)
+            do {
+                _ = try migrator.migrate(from: persistenceURL)
+            } catch {
+                migrationSucceededOrNotNeeded = false
+                self.startupError = error
+                self.lastError = error.localizedDescription
+            }
         }
 
-        try? localProvider.ensureAccountExists()
+        if migrationSucceededOrNotNeeded {
+            try? localProvider.ensureAccountExists()
+        }
 
         let preferences = UserDefaults.standard
         refreshInterval = FeedRefreshInterval(rawValue: preferences.string(forKey: PreferenceKey.refreshInterval) ?? "") ?? .twoHours
@@ -304,7 +310,9 @@ public final class AppStore: ObservableObject {
         ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
         llmConfiguration = testDatabase.llmConfiguration
 
-        reloadState()
+        if migrationSucceededOrNotNeeded {
+            reloadState()
+        }
     }
 
     // MARK: - State Reload & Querying
@@ -312,15 +320,17 @@ public final class AppStore: ObservableObject {
     public func reloadState() {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        let limit = Self.defaultTimelineLimit
 
         self.feeds = (try? localProvider.fetchFeeds()) ?? []
         self.customFolders = (try? localProvider.fetchFolderNames()) ?? []
         self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? SidebarCounts()
 
-        self.entryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .all)) ?? []
-        self.todayEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .today(startOfDayTimestamp: startOfDay))) ?? []
-        self.unreadEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .unread)) ?? []
-        self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred)) ?? []
+        self.entryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .all, limit: limit)) ?? []
+        self.todayEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .today(startOfDayTimestamp: startOfDay), limit: limit)) ?? []
+        self.unreadEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, limit: limit)) ?? []
+        self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, limit: limit)) ?? []
+        self.cachedEntryLookup.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Computed Public Accessors
@@ -394,7 +404,15 @@ public final class AppStore: ObservableObject {
     }
 
     public func entry(id: String) -> Entry? {
-        try? localProvider.fetchEntry(id: id)
+        if let cached = cachedEntryLookup[id] {
+            return cached
+        }
+        guard let fetched = try? localProvider.fetchEntry(id: id) else { return nil }
+        if cachedEntryLookup.count >= 100 {
+            cachedEntryLookup.removeAll(keepingCapacity: true)
+        }
+        cachedEntryLookup[id] = fetched
+        return fetched
     }
 
     public func feed(for entry: Entry) -> Feed? {
@@ -657,13 +675,42 @@ public final class AppStore: ObservableObject {
 
     // MARK: - State Management
 
+    private func updateLocalEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
+        func updateList(_ list: inout [EntryListItem]) {
+            guard let index = list.firstIndex(where: { $0.id == entryID }) else { return }
+            var item = list[index]
+            if let isRead { item.isRead = isRead }
+            if let isStarred { item.isStarred = isStarred }
+            list[index] = item
+        }
+
+        updateList(&self.entryListItems)
+        updateList(&self.todayEntryListItems)
+        updateList(&self.unreadEntryListItems)
+        updateList(&self.starredEntryListItems)
+
+        // 仅重新统计 Sidebar Counts（纯 SQL 聚合，极快）
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? self.sidebarCounts
+
+        // 更新 Entry 单篇缓存（若存在）
+        if var cached = cachedEntryLookup[entryID] {
+            if let isRead { cached.isRead = isRead }
+            if let isStarred { cached.isStarred = isStarred }
+            cachedEntryLookup[entryID] = cached
+        }
+
+        objectWillChange.send()
+    }
+
     public func markRead(_ entry: Entry, read: Bool = true) {
         markRead(entryID: entry.id, read: read)
     }
 
     public func markRead(entryID: String, read: Bool = true) {
         try? localProvider.markRead(entryID: entryID, read: read)
-        reloadState()
+        updateLocalEntryState(entryID: entryID, isRead: read)
     }
 
     public func markRead(entryIDs: [String], read: Bool = true) {
@@ -678,7 +725,7 @@ public final class AppStore: ObservableObject {
 
     public func markStarred(entryID: String, starred: Bool = true) {
         try? localProvider.markStarred(entryID: entryID, starred: starred)
-        reloadState()
+        updateLocalEntryState(entryID: entryID, isStarred: starred)
     }
 
     public func toggleStar(_ entry: Entry) {
@@ -809,6 +856,10 @@ public final class AppStore: ObservableObject {
     public func bilingualArtifact(for entry: Entry, text: String) -> AIArtifact? {
         let hash = text.stableDigest
         return try? localProvider.fetchBilingualArtifact(entryID: entry.id, contentHash: hash, model: llmConfiguration.model)
+    }
+
+    public func selectionArtifacts(for entry: Entry, articleHash: String) -> [AIArtifact] {
+        (try? localProvider.fetchSelectionArtifacts(entryID: entry.id, articleHash: articleHash)) ?? []
     }
 
     public func isGeneratingAI(for entry: Entry, kind: AIArtifactKind) -> Bool {
@@ -1357,6 +1408,7 @@ public final class AppStore: ObservableObject {
 
     // MARK: - Compatibility Property for Tests
 
+    @available(*, deprecated, message: "Use Repository / LocalAccountProvider APIs instead of AppDatabase")
     public var database: AppDatabase {
         AppDatabase(
             feeds: feeds,

@@ -39,9 +39,7 @@ final class LocalAccountProviderTests: XCTestCase {
             XCTAssertEqual(accounts.first?.displayName, "本地订阅")
 
             let syncStates = try AccountSyncStateRecord.fetchAll(db)
-            XCTAssertEqual(syncStates.count, 1)
-            XCTAssertEqual(syncStates.first?.accountID, "local-default")
-            XCTAssertTrue(syncStates.first?.initialSyncCompleted == true)
+            XCTAssertEqual(syncStates.count, 0, "Local account must not create account_sync_state")
         }
     }
 

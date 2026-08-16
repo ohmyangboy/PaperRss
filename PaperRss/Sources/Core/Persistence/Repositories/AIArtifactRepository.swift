@@ -110,6 +110,24 @@ public final class AIArtifactRepository: Sendable {
         return record.flatMap { domainArtifactFromRecord($0) }
     }
 
+    public func fetchSelectionArtifacts(
+        entryID: String,
+        articleHash: String,
+        in db: Database
+    ) throws -> [AIArtifact] {
+        let records = try AIArtifactRecord
+            .filter(
+                (Column("item_id") == entryID || Column("subject_key") == entryID) &&
+                Column("kind") == AIArtifactKind.selectionExplanation.rawValue &&
+                Column("selection_article_hash") == articleHash &&
+                Column("is_complete") == true &&
+                Column("is_deleted") == false
+            )
+            .order(Column("created_at").asc)
+            .fetchAll(db)
+        return records.compactMap { domainArtifactFromRecord($0) }
+    }
+
     public func saveArtifactModel(_ artifact: AIArtifact, accountID: String? = "local-default", in db: Database) throws {
         let segmentsJSON = (try? LegacyMigrationJSONEncoder.encodeString(artifact.segments)) ?? "[]"
         let anchorJSON: String? = try artifact.selectionAnchor.flatMap { try LegacyMigrationJSONEncoder.encodeString($0) }
@@ -133,6 +151,8 @@ public final class AIArtifactRepository: Sendable {
             promptVersion: artifact.promptVersion,
             content: artifact.content,
             segmentsJSON: segmentsJSON,
+            selectionText: artifact.selectionText,
+            selectionArticleHash: artifact.selectionArticleHash,
             selectionAnchorJSON: anchorJSON,
             isComplete: artifact.isComplete,
             isDeleted: artifact.isDeleted,
@@ -163,6 +183,8 @@ public final class AIArtifactRepository: Sendable {
             promptVersion: record.promptVersion,
             content: record.content,
             segments: segments,
+            selectionText: record.selectionText,
+            selectionArticleHash: record.selectionArticleHash,
             selectionAnchor: anchor,
             isComplete: record.isComplete,
             isDeleted: record.isDeleted,
@@ -196,6 +218,15 @@ public final class AIArtifactRepository: Sendable {
     public func fetchGlobalTranslationMemory(key: String) async throws -> AIArtifact? {
         try database.read { db in
             try fetchGlobalTranslationMemory(key: key, in: db)
+        }
+    }
+
+    public func fetchSelectionArtifacts(
+        entryID: String,
+        articleHash: String
+    ) async throws -> [AIArtifact] {
+        try database.read { db in
+            try fetchSelectionArtifacts(entryID: entryID, articleHash: articleHash, in: db)
         }
     }
 

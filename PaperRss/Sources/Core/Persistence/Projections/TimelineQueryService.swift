@@ -181,15 +181,23 @@ public final class TimelineQueryService: Sendable {
             if retainingIDs.isEmpty {
                 whereClauses.append("s.is_read = 0")
             } else {
-                let idList = retainingIDs.map { "'\($0)'" }.joined(separator: ",")
-                whereClauses.append("(s.is_read = 0 OR i.id IN (\(idList)))")
+                let placeholders = retainingIDs.enumerated().map { idx, id -> String in
+                    let param = "ret_unread_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("(s.is_read = 0 OR i.id IN (\(placeholders)))")
             }
         case .starred:
             if retainingIDs.isEmpty {
                 whereClauses.append("s.is_starred = 1")
             } else {
-                let idList = retainingIDs.map { "'\($0)'" }.joined(separator: ",")
-                whereClauses.append("(s.is_starred = 1 OR i.id IN (\(idList)))")
+                let placeholders = retainingIDs.enumerated().map { idx, id -> String in
+                    let param = "ret_starred_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("(s.is_starred = 1 OR i.id IN (\(placeholders)))")
             }
         case .feed(let feedID):
             whereClauses.append("i.feed_id = :feed_id")
@@ -200,7 +208,7 @@ public final class TimelineQueryService: Sendable {
                 SELECT ff.feed_id
                 FROM feed_folders ff
                 INNER JOIN folders fo ON fo.id = ff.folder_id
-                WHERE fo.name = :folder_name AND fo.is_deleted = 0
+                WHERE fo.account_id = :account_id AND fo.name = :folder_name AND fo.is_deleted = 0
             )
             """)
             arguments["folder_name"] = folderName

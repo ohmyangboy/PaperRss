@@ -194,8 +194,8 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let sourceTitle: String
     public let feedIconURL: URL?
     public let publishedAt: Date?
-    public let isRead: Bool
-    public let isStarred: Bool
+    public var isRead: Bool
+    public var isStarred: Bool
 
     public init(
         id: String,

@@ -17,12 +17,14 @@ let package = Package(
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
-            path: "PaperRss/Sources/Core"
+            path: "PaperRss/Sources/Core",
+            resources: [.process("../../Resources/Localization/Localizable.xcstrings")]
         ),
         .executableTarget(
             name: "PaperRssDesktop",
             dependencies: ["PaperRssCore"],
-            path: "PaperRss/Sources/App"
+            path: "PaperRss/Sources/App",
+            resources: [.process("../../Resources")]
         ),
         .testTarget(
             name: "PaperRssCoreTests",
