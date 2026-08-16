@@ -292,6 +292,17 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v3-normalize-local-item-external-identity") { db in
+            guard try db.tableExists("items") else { return }
+            try db.execute(sql: """
+            UPDATE items
+            SET external_id = id
+            WHERE account_id IN (
+                SELECT id FROM accounts WHERE type = 'local'
+            );
+            """)
+        }
+
         return migrator
     }
 }

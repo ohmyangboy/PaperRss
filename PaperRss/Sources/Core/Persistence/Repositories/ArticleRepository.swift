@@ -122,7 +122,7 @@ public final class ArticleRepository: Sendable {
                 let item = ItemRecord(
                     id: itemID,
                     accountID: accountID,
-                    externalID: parsed.id,
+                    externalID: itemID,
                     feedID: feedID,
                     createdAt: now,
                     updatedAt: now

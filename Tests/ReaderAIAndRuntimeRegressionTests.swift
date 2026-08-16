@@ -494,4 +494,267 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
             XCTAssertEqual(count, 0, "local-default must have no account_sync_state row after v2 migration")
         }
     }
+
+    // MARK: - Test J: Delete and re-add Feed restores same UUID and preserves all history
+    @MainActor
+    func testJ_DeleteAndReAddFeedRestoresSameUUIDAndPreservesHistory() async throws {
+        let feedURL = URL(string: "https://react.dev/rss.xml")!
+        let parsedEntries = [
+            ParsedFeedEntry(
+                id: "react-19-release",
+                title: "React 19",
+                author: "React Team",
+                url: URL(string: "https://react.dev/blog/react-19"),
+                publishedAt: Date(),
+                summary: "React 19 release notes",
+                contentHTML: "<p>React 19 content</p>"
+            )
+        ]
+
+        let fetcher: @Sendable (Feed) async throws -> FeedFetchResult = { _ in
+            .updated(
+                ParsedFeed(
+                    title: "React Blog",
+                    siteURL: URL(string: "https://react.dev"),
+                    iconURL: nil,
+                    entries: parsedEntries
+                ),
+                etag: "etag-1",
+                lastModified: "last-mod-1"
+            )
+        }
+
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: fetcher)
+
+        // 1. 添加订阅
+        await store.addFeed(urlText: feedURL.absoluteString, folder: "Frontend")
+        XCTAssertEqual(store.feeds.count, 1)
+        let originalFeed = try XCTUnwrap(store.feeds.first)
+        let originalFeedID = originalFeed.id
+
+        // 2. 刷新文章并验证文章入库
+        let itemsBeforeDelete = store.entryListItems(feedID: originalFeedID)
+        XCTAssertEqual(itemsBeforeDelete.count, 1)
+        let entryID = itemsBeforeDelete[0].id
+
+        // 3. 标已读、标收藏
+        store.markRead(entryID: entryID, read: true)
+        store.toggleStar(entryID: entryID)
+
+        // 4. 保存 ArticleCache 和 AIArtifact
+        let cache = ArticleCache(
+            entryID: entryID,
+            text: "React 19 content",
+            html: "<p>React 19 content</p>",
+            imageURLs: [],
+            fetchedAt: Date(),
+            sourceURL: URL(string: "https://react.dev/blog/react-19")!,
+            isSanitized: true
+        )
+        try store.localProvider.saveCache(cache)
+
+        let artifact = AIArtifact(
+            entryID: entryID,
+            kind: .summary,
+            contentHash: "hash-123",
+            model: "deepseek-chat",
+            targetLanguage: "zh-Hans",
+            promptVersion: 1,
+            content: "React 19 摘要",
+            isComplete: true
+        )
+        try store.localProvider.saveArtifact(artifact)
+
+        // 5. 删除 Feed (Soft Delete)
+        store.deleteFeed(originalFeed)
+        XCTAssertEqual(store.feeds.count, 0)
+        XCTAssertEqual(store.entryListItems(feedID: originalFeedID).count, 0)
+
+        // 6. 重新添加同一个 URL
+        await store.addFeed(urlText: feedURL.absoluteString, folder: "Tech")
+
+        // 7. 验证：
+        // a. 恢复同一个 Feed UUID，分类目录更新为 Tech
+        XCTAssertEqual(store.feeds.count, 1)
+        let restoredFeed = try XCTUnwrap(store.feeds.first)
+        XCTAssertEqual(restoredFeed.id, originalFeedID, "Must restore the EXACT same Feed UUID")
+        XCTAssertEqual(restoredFeed.folder, "Tech")
+
+        // b. 历史文章立即恢复可见，已读和星标状态完好保留
+        let restoredItems = store.entryListItems(feedID: originalFeedID)
+        XCTAssertEqual(restoredItems.count, 1)
+        XCTAssertEqual(restoredItems[0].id, entryID)
+        XCTAssertTrue(restoredItems[0].isRead, "Read state must be preserved")
+        XCTAssertTrue(restoredItems[0].isStarred, "Starred state must be preserved")
+
+        // c. ArticleCache 和 AIArtifact 完好保留
+        let restoredCache = try store.localProvider.fetchCache(entryID: entryID)
+        XCTAssertNotNil(restoredCache)
+        XCTAssertEqual(restoredCache?.text, "React 19 content")
+
+        let restoredArtifact = try store.localProvider.fetchArtifact(entryID: entryID, kind: .summary, isCompleteOnly: true)
+        XCTAssertNotNil(restoredArtifact)
+        XCTAssertEqual(restoredArtifact?.content, "React 19 摘要")
+
+        // d. 再次刷新能够正常成功，且没有生成重复文章
+        await store.refresh(feedIDs: [originalFeedID], origin: .manual)
+        let itemsAfterRefresh = store.entryListItems(feedID: originalFeedID)
+        XCTAssertEqual(itemsAfterRefresh.count, 1, "Must not duplicate items on refresh")
+    }
+
+    // MARK: - Test K: Cross-feed same parsed.id coexists in local account without UNIQUE violation
+    @MainActor
+    func testK_CrossFeedSameParsedIDCoexistsWithoutUniqueViolation() async throws {
+        let feedA = Feed(id: UUID(), title: "Feed A", feedURL: URL(string: "https://a.com/rss")!)
+        let feedB = Feed(id: UUID(), title: "Feed B", feedURL: URL(string: "https://b.com/rss")!)
+
+        // 两个源有完全相同的 parsed.id = "common-123"
+        let parsedA = ParsedFeedEntry(
+            id: "common-123",
+            title: "Article A",
+            author: "Author A",
+            url: URL(string: "https://a.com/1"),
+            publishedAt: Date(),
+            summary: "Summary A",
+            contentHTML: "<p>A</p>"
+        )
+        let parsedB = ParsedFeedEntry(
+            id: "common-123",
+            title: "Article B",
+            author: "Author B",
+            url: URL(string: "https://b.com/1"),
+            publishedAt: Date(),
+            summary: "Summary B",
+            contentHTML: "<p>B</p>"
+        )
+
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { feed in
+            if feed.id == feedA.id {
+                return .updated(ParsedFeed(title: "Feed A", siteURL: nil, iconURL: nil, entries: [parsedA]), etag: nil, lastModified: nil)
+            } else {
+                return .updated(ParsedFeed(title: "Feed B", siteURL: nil, iconURL: nil, entries: [parsedB]), etag: nil, lastModified: nil)
+            }
+        })
+
+        // 添加 Feed A
+        await store.addFeed(urlText: feedA.feedURL.absoluteString)
+        // 添加 Feed B (不应触发 UNIQUE(account_id, external_id) 冲突)
+        await store.addFeed(urlText: feedB.feedURL.absoluteString)
+
+        XCTAssertEqual(store.feeds.count, 2)
+        let allItems = store.fetchTimelinePage(scope: .all, limit: 100, offset: 0)
+        XCTAssertEqual(allItems.count, 2, "Both items with same parsed.id from different feeds must coexist")
+
+        // 验证 item.id 互不相同
+        XCTAssertNotEqual(allItems[0].id, allItems[1].id)
+    }
+
+    // MARK: - Test L: True timeline pagination with 350+ items
+    @MainActor
+    func testL_TrueTimelinePagingWith350Items() throws {
+        let feed = Feed(id: UUID(), title: "Huge Feed", feedURL: URL(string: "https://huge.com/rss")!)
+        let count = 360
+        var entries: [Entry] = []
+        let now = Date()
+        for i in 1...count {
+            entries.append(Entry(
+                id: "huge-item-\(i)",
+                feedID: feed.id,
+                title: "Huge Item \(i)",
+                url: URL(string: "https://huge.com/\(i)"),
+                publishedAt: now.addingTimeInterval(-Double(i * 10)),
+                summary: "Summary \(i)",
+                contentHTML: "<p>Very long content \(i)</p>"
+            ))
+        }
+        let legacyDB = AppDatabase(
+            feeds: [feed],
+            entries: entries,
+            articleCaches: [:],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: .default,
+            customFolders: []
+        )
+        let store = AppStore(testDatabase: legacyDB, feedFetcher: { _ in
+            FeedFetchResult.notModified(etag: nil, lastModified: nil)
+        })
+
+        // 真实分页：offset 0, 100, 200, 300
+        let page1 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 0)
+        XCTAssertEqual(page1.count, 100)
+
+        let page2 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 100)
+        XCTAssertEqual(page2.count, 100)
+
+        let page3 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 200)
+        XCTAssertEqual(page3.count, 100)
+
+        let page4 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 300)
+        XCTAssertEqual(page4.count, 60)
+
+        let allFetched = page1 + page2 + page3 + page4
+        let allFetchedIDs = Set(allFetched.map(\.id))
+        XCTAssertEqual(allFetchedIDs.count, 360, "All 360 items must be reachable without duplicate or missing rows")
+
+        // 验证更改状态反映在投影
+        store.markRead(entryID: "huge-item-1", read: true)
+        store.toggleStar(entryID: "huge-item-1")
+        let updatedPage1 = store.fetchTimelinePage(scope: .all, limit: 1, offset: 0)
+        XCTAssertTrue(updatedPage1[0].isRead)
+        XCTAssertTrue(updatedPage1[0].isStarred)
+    }
+
+    // MARK: - Test M: v3 migration normalizes local item external_id
+    func testM_V3MigrationNormalizesLocalItemExternalID() throws {
+        let dbURL = tempDir.appendingPathComponent("v3_migration_test.sqlite")
+        var migrator = DatabaseMigrator()
+        migrator.registerMigration("v1-create-library-schema") { db in
+            try db.execute(sql: """
+            CREATE TABLE accounts (
+                id TEXT PRIMARY KEY NOT NULL,
+                type TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE feeds (
+                id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                feed_url TEXT NOT NULL,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE items (
+                id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT NOT NULL,
+                external_id TEXT,
+                feed_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE UNIQUE INDEX idx_items_remote_identity ON items (account_id, external_id) WHERE external_id IS NOT NULL;
+            INSERT INTO accounts (id, type, display_name, created_at, updated_at)
+            VALUES ('local-default', 'local', 'Local', 0, 0);
+            INSERT INTO feeds (id, account_id, title, feed_url, updated_at)
+            VALUES ('f1', 'local-default', 'Feed 1', 'https://f1.com', 0);
+            INSERT INTO items (id, account_id, external_id, feed_id, created_at, updated_at)
+            VALUES ('digest-1', 'local-default', 'raw-id-1', 'f1', 0, 0);
+            """)
+        }
+        migrator.registerMigration("v2-clean-local-account-sync-state") { _ in }
+
+        let pool = try DatabasePool(path: dbURL.path)
+        try migrator.migrate(pool)
+
+        // 运行全局 DatabaseMigrations (包含 v3)
+        try DatabaseMigrations.migrator.migrate(pool)
+
+        try pool.read { db in
+            let externalID = try String.fetchOne(db, sql: "SELECT external_id FROM items WHERE id = 'digest-1'")
+            XCTAssertEqual(externalID, "digest-1", "v3 migration must set external_id = id for local account items")
+        }
+    }
 }

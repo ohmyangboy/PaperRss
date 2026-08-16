@@ -31,6 +31,14 @@ public final class FeedRepository: Sendable {
             .fetchOne(db)
     }
 
+    public func fetchFeedByURL(accountID: String = "local-default", feedURL: String, includeDeleted: Bool = true, in db: Database) throws -> FeedRecord? {
+        var query = FeedRecord.filter(Column("account_id") == accountID && Column("feed_url") == feedURL)
+        if !includeDeleted {
+            query = query.filter(Column("is_deleted") == false)
+        }
+        return try query.fetchOne(db)
+    }
+
     public func saveFeed(_ record: FeedRecord, in db: Database) throws {
         try record.save(db)
     }

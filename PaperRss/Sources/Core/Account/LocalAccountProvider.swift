@@ -1,6 +1,20 @@
 import Foundation
 import GRDB
 
+public enum LocalAccountError: LocalizedError, Equatable, Sendable {
+    case alreadySubscribed
+    case feedNotFound
+
+    public var errorDescription: String? {
+        switch self {
+        case .alreadySubscribed:
+            return I18N.localized("这个订阅已经存在。")
+        case .feedNotFound:
+            return I18N.localized("未找到订阅源。")
+        }
+    }
+}
+
 /// Local 账号提供者。
 ///
 /// 负责本地订阅账号在 SQLite 底层架构上的全部业务操作：
@@ -73,11 +87,46 @@ public final class LocalAccountProvider: Sendable {
     }
 
     public func addFeed(title: String, feedURL: URL, siteURL: URL? = nil, folder: String? = nil) throws -> Feed {
-        let feedUUID = UUID()
+        let feedURLString = feedURL.absoluteString
         let now = Date().timeIntervalSince1970
-        let feedID = feedUUID.uuidString
 
-        try database.write { db in
+        return try database.write { db in
+            if let existing = try self.feedRepository.fetchFeedByURL(accountID: self.accountID, feedURL: feedURLString, includeDeleted: true, in: db) {
+                if !existing.isDeleted {
+                    throw LocalAccountError.alreadySubscribed
+                }
+
+                // 恢复同一个 Feed 记录（保留 feeds.id / items / states / cache / artifacts）
+                var restored = existing
+                restored.isDeleted = false
+                restored.updatedAt = now
+                if !title.isEmpty && (title != existing.title) {
+                    restored.title = title
+                }
+                if let siteURL {
+                    restored.siteURL = siteURL.absoluteString
+                }
+                try self.feedRepository.saveFeed(restored, in: db)
+
+                // 应用新的分类目录
+                try self.feedRepository.setFeedFolder(feedID: restored.id, folderName: folder, accountID: self.accountID, in: db)
+
+                guard let feedUUID = UUID(uuidString: restored.id) else {
+                    fatalError("Invalid UUID in database: \(restored.id)")
+                }
+                return Feed(
+                    id: feedUUID,
+                    title: restored.title,
+                    siteURL: restored.siteURL.flatMap { URL(string: $0) },
+                    feedURL: feedURL,
+                    folder: folder,
+                    updatedAt: Date(timeIntervalSince1970: now)
+                )
+            }
+
+            // 全新添加 Feed
+            let feedUUID = UUID()
+            let feedID = feedUUID.uuidString
             let maxSort = (try Int.fetchOne(db, sql: "SELECT MAX(sort_order) FROM feeds WHERE account_id = ?;", arguments: [self.accountID])) ?? 0
             let record = FeedRecord(
                 id: feedID,
@@ -85,7 +134,7 @@ public final class LocalAccountProvider: Sendable {
                 externalID: nil,
                 title: title,
                 siteURL: siteURL?.absoluteString,
-                feedURL: feedURL.absoluteString,
+                feedURL: feedURLString,
                 etag: nil,
                 lastModified: nil,
                 lastRefreshedAt: nil,
@@ -99,16 +148,16 @@ public final class LocalAccountProvider: Sendable {
             if let folder = folder?.trimmingCharacters(in: .whitespacesAndNewlines), !folder.isEmpty {
                 try self.feedRepository.setFeedFolder(feedID: feedID, folderName: folder, accountID: self.accountID, in: db)
             }
-        }
 
-        return Feed(
-            id: feedUUID,
-            title: title,
-            siteURL: siteURL,
-            feedURL: feedURL,
-            folder: folder,
-            updatedAt: Date(timeIntervalSince1970: now)
-        )
+            return Feed(
+                id: feedUUID,
+                title: title,
+                siteURL: siteURL,
+                feedURL: feedURL,
+                folder: folder,
+                updatedAt: Date(timeIntervalSince1970: now)
+            )
+        }
     }
 
     public func deleteFeed(feedID: UUID) throws {

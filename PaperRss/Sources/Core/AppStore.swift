@@ -471,11 +471,23 @@ public final class AppStore: ObservableObject {
     }
 
     public func addFeed(urlText: String, folder: String? = nil) async {
-        guard let url = normalizedURL(urlText) else { lastError = I18N.localized("请输入有效的 Feed URL。"); return }
-        guard !feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) else { lastError = I18N.localized("这个订阅已经存在。"); return }
+        guard let url = normalizedURL(urlText) else {
+            lastError = I18N.localized("请输入有效的 Feed URL。")
+            return
+        }
 
         let title = url.host ?? url.absoluteString
-        guard let feed = try? localProvider.addFeed(title: title, feedURL: url, folder: folder) else { return }
+        let feed: Feed
+        do {
+            feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
+        } catch let error as LocalAccountError {
+            lastError = error.errorDescription
+            return
+        } catch {
+            lastError = error.localizedDescription
+            return
+        }
+
         reloadState()
         await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
     }

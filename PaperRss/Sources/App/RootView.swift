@@ -219,24 +219,40 @@ struct RootView: View {
         return currentSelection.title
     }
 
-    private var currentDisplayEntries: [EntryListItem] {
+    private var currentHasUnread: Bool {
         switch currentSelection {
-        case .today: return store.todayEntryListItems
-        case .unread: return store.unreadEntryListItems
-        case .starred: return store.starredEntryListItems
-        case let .folder(folder): return store.entryListItems(folder: folder)
-        case let .feed(id): return store.entryListItems(feedID: id)
-        case let .feeds(ids): return store.entryListItems(feedIDs: ids)
+        case .today:
+            return store.sidebarCounts.todayUnread > 0
+        case .unread:
+            return store.sidebarCounts.allUnread > 0
+        case .starred:
+            return false
+        case let .feed(id):
+            return (store.sidebarCounts.unreadByFeed[id] ?? 0) > 0
+        case let .feeds(ids):
+            return ids.contains { (store.sidebarCounts.unreadByFeed[$0] ?? 0) > 0 }
+        case let .folder(folder):
+            let feedIDs = store.feeds.filter { $0.folder == folder }.map(\.id)
+            return feedIDs.contains { (store.sidebarCounts.unreadByFeed[$0] ?? 0) > 0 }
         }
     }
 
-    private var currentHasUnread: Bool {
-        currentDisplayEntries.contains { !$0.isRead }
-    }
-
     private func markCurrentAllRead() {
-        let unreadIDs = Array(currentDisplayEntries.lazy.filter { !$0.isRead }.map(\.id))
-        store.markRead(entryIDs: unreadIDs, read: true)
+        switch currentSelection {
+        case .today:
+            let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+            store.markAllRead(scope: .today(startOfDayTimestamp: startOfDay))
+        case .unread:
+            store.markAllRead()
+        case .starred:
+            store.markAllRead(scope: .starred)
+        case let .folder(folder):
+            store.markAllRead(folder: folder)
+        case let .feed(id):
+            store.markAllRead(feedID: id)
+        case let .feeds(ids):
+            store.markAllRead(feedIDs: ids)
+        }
     }
 
     private func showToast(
@@ -447,9 +463,27 @@ struct RootView: View {
         }
     }
 
+    private var currentTimelineScope: TimelineScope {
+        switch currentSelection {
+        case .today:
+            let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+            return .today(startOfDayTimestamp: startOfDay)
+        case .unread:
+            return .unread
+        case .starred:
+            return .starred
+        case let .folder(folder):
+            return .folder(folderName: folder)
+        case let .feed(id):
+            return .feed(feedID: id.uuidString)
+        case let .feeds(ids):
+            return .feeds(feedIDs: Set(ids.map(\.uuidString)))
+        }
+    }
+
     private func focusAndScrollArticle() {
         if selectedEntryID == nil {
-            selectedEntryID = currentDisplayEntries.first?.id
+            selectedEntryID = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first?.id
         }
 
         #if os(macOS)
@@ -499,7 +533,7 @@ struct RootView: View {
     }
 
     private func selectFirstEntryIfNeeded() {
-        if selectedEntryID == nil, let first = currentDisplayEntries.first {
+        if selectedEntryID == nil, let first = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first {
             selectedEntryID = first.id
         }
     }
@@ -1238,7 +1272,10 @@ private struct EntryListView: View {
     var autoScrollTrigger: UUID
 
     @State private var isScrolled = false
-    @State private var loadedLimit = 100
+    @State private var loadedEntries: [EntryListItem] = []
+    @State private var nextOffset: Int = 0
+    @State private var hasMore: Bool = true
+    @State private var isLoadingPage: Bool = false
     private let pageSize = 100
 
     private var timelineScope: TimelineScope {
@@ -1259,17 +1296,53 @@ private struct EntryListView: View {
         }
     }
 
-    private var displayEntries: [EntryListItem] {
-        store.fetchTimelinePage(
-            scope: timelineScope,
-            retainingIDs: retainedUnreadIDs,
-            limit: loadedLimit,
-            offset: 0
-        )
+    private var hasUnread: Bool {
+        loadedEntries.contains { !$0.isRead }
     }
 
-    private var hasUnread: Bool {
-        displayEntries.contains { !$0.isRead }
+    private func loadInitialPage() {
+        guard !isLoadingPage else { return }
+        isLoadingPage = true
+        let firstPage = store.fetchTimelinePage(
+            scope: timelineScope,
+            retainingIDs: retainedUnreadIDs,
+            limit: pageSize,
+            offset: 0
+        )
+        loadedEntries = firstPage
+        nextOffset = firstPage.count
+        hasMore = (firstPage.count == pageSize)
+        isLoadingPage = false
+    }
+
+    private func loadNextPage() {
+        guard !isLoadingPage, hasMore else { return }
+        isLoadingPage = true
+        let page = store.fetchTimelinePage(
+            scope: timelineScope,
+            retainingIDs: retainedUnreadIDs,
+            limit: pageSize,
+            offset: nextOffset
+        )
+        let existingIDs = Set(loadedEntries.map(\.id))
+        let freshItems = page.filter { !existingIDs.contains($0.id) }
+        loadedEntries.append(contentsOf: freshItems)
+        nextOffset += page.count
+        hasMore = (page.count == pageSize)
+        isLoadingPage = false
+    }
+
+    private func reloadCurrentPages() {
+        let totalCount = max(pageSize, loadedEntries.count)
+        let refreshed = store.fetchTimelinePage(
+            scope: timelineScope,
+            retainingIDs: retainedUnreadIDs,
+            limit: totalCount,
+            offset: 0
+        )
+        loadedEntries = refreshed
+        nextOffset = refreshed.count
+        hasMore = (refreshed.count >= totalCount)
     }
 
     /// 将当前选择范围在数据库中的全部未读文章标记为已读。
@@ -1290,12 +1363,13 @@ private struct EntryListView: View {
             store.markAllRead(feedIDs: ids)
         }
         retainedUnreadIDs = selectedEntryID.map { [$0] } ?? []
+        reloadCurrentPages()
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             List(selection: $selectedEntryID) {
-                ForEach(displayEntries) { entry in
+                ForEach(loadedEntries) { entry in
                     EntryRow(entry: entry)
                         .tag(entry.id)
                         .contentShape(Rectangle())
@@ -1303,14 +1377,16 @@ private struct EntryListView: View {
                         .contextMenu {
                             Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
                                 store.markRead(entryID: entry.id, read: !entry.isRead)
+                                reloadCurrentPages()
                             }
                             Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
                                 store.toggleStar(entryID: entry.id)
+                                reloadCurrentPages()
                             }
                         }
                         .onAppear {
-                            if entry.id == displayEntries.last?.id && displayEntries.count >= loadedLimit {
-                                loadedLimit += pageSize
+                            if entry.id == loadedEntries.last?.id {
+                                loadNextPage()
                             }
                         }
                 }
@@ -1329,6 +1405,11 @@ private struct EntryListView: View {
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
+            .onAppear {
+                if loadedEntries.isEmpty {
+                    loadInitialPage()
+                }
+            }
             .onChange(of: selectedEntryID) { _, newID in
                 if let newID {
                     retainedUnreadIDs.insert(newID)
@@ -1336,7 +1417,10 @@ private struct EntryListView: View {
             }
             .onChange(of: selection) { _, _ in
                 retainedUnreadIDs.removeAll()
-                loadedLimit = pageSize
+                loadInitialPage()
+            }
+            .onReceive(store.objectWillChange) { _ in
+                reloadCurrentPages()
             }
             .onChange(of: autoScrollTrigger) { _, _ in
                 if let newID = selectedEntryID {
@@ -1385,7 +1469,7 @@ private struct EntryListView: View {
             }
             #endif
             .overlay {
-                if displayEntries.isEmpty {
+                if loadedEntries.isEmpty && !isLoadingPage {
                     ContentUnavailableView(
                         "没有文章",
                         systemImage: "text.line.first.and.arrowtriangle.forward",
