@@ -4,35 +4,34 @@ trigger: always_on
 
 # PaperRss 构建原则
 
-本文档是 Agent 构建 PaperRss 时唯一的规则来源。只在这里保存无法从代码或配置直接推导、违反后代价较高的项目约束。
+本文档是 Agent 构建 PaperRss 时唯一的规则来源
 
-## 1. 产品信任边界
+## 对话风格
+
+- 避免空话，保持回答清晰、明了，优先采用具体行为和小的示例说明，而不是抽象概述、密集术语
+- 在回应用户反馈或分析时，先明确表示你同意或不同意，然后再说明你所做的更改。
+- 解释非平凡的设计和问题时，请按以下结构说明：问题、具体示例或简短跟踪，然后解决方案。说明解决方案为何必要，并将其与可选的复杂性区分开来。
+
+## 编码原则
+
+- 除非必要，勿增实体
+- 人机协作工作流：调用或接续 `triage`、`research`、`to-spec`、`to-tickets`、`implement` 时，修改文档或代码前完整读取并遵循 [Matt 开发工作流](../docs/development-workflow.md)。
+- 调试流程：按改动影响范围在对应层级完成针对性验证（Core 逻辑、App 编译构建、Web/Bridge 交互、仓库治理），视觉与交互变更必须有真实运行验证，不以推测替代验证，每项变更必须具备直接的验证证据，未经验证不得宣称完成。使用`./script/dev.sh` 来启动进程调试应用视图、日志用来辅助验证。
+- 发布全链路：遵守SemVer版本规范(`vX.Y.Z-beta.N`）；发布需涵盖测试、构建、产物、ChangeLog、官网和README状态同步、Tag/Release 及线上验证全链路闭环。
+- PaperRss对标业界最佳实践，参考netnewsware、freshRSS等优秀的开源实践
+
+## 工程边界
 
 - 扩大平台、改变产品或隐私行为、引入依赖以及执行发布前，必须有明确授权。
-- PaperRss 本地优先：阅读数据、模型配置和诊断默认留在本地，不静默加入遥测、设备标识、附件或后台上传。
+- 持久化变更兼容旧数据：保护PaperRss 本地数据（JSON或者数据库文件），阅读数据、模型配置等持久化默认留在本地，启动开发前需要授权并备份，并且保证本轮开发不影响数据完整性。
 - API 密钥只经现有凭据入口读写，不注入 Prompt，不进入日志、导出或同步数据；仓库不保存秘密、PII 或私有基础设施信息。
-
-## 2. 架构与数据不变量
-
 - `PaperRss/Sources/Core/` 承担模型、解析、持久化、网络、同步、AI 和纯策略，不依赖 SwiftUI、AppKit 或 UIKit。
 - `PaperRss/Sources/App/` 承担 SwiftUI、应用生命周期和系统桥接，依赖方向固定为 App → Core。
-- 持久化变更兼容旧数据；标识符、排序、去重和缓存键保持稳定。
 - 修改 `ArticleReaderView` 的 JavaScript Bridge 时，同步核对 macOS/iOS Coordinator、消息协议与行为测试。
+- 官网保持原生；`website/` 是唯一发布源码，i18n页面同步维护
+- UI 文案进入 String Catalog 或现有本地化入口；i18n结构同步，语言切换即时且不改变 AI 输出设置。
+- cloudKit等需要apple 开发者付费账户的功能暂未支持
 
-## 3. 产品表面
+## 业务边界
 
 - macOS 是主要体验；未开启ios计划时，不考虑ios功能范围
-- UI 文案进入 String Catalog 或现有本地化入口；i18n结构同步，语言切换即时且不改变 AI 输出设置。
-- 官网保持原生；`website/` 是唯一发布源码，i18n页面同步维护
-
-## 4. 开发工作流
-
-- 调用或接续 `triage`、`research`、`to-spec`、`to-tickets`、`implement` 时，修改文档或代码前完整读取并遵循 [Matt 开发工作流](../docs/development-workflow.md)。
-
-## 5. 证据与完成
-
-- Swift Core 改动运行 `swift test`；App 改动再运行 `swift build --product PaperRssDesktop`。
-- WebView Bridge 或网站改动运行 `node --test Tests/*.test.mjs`；视觉和交互变化还需要真实运行验证。
-- Agent 或文档结构改动运行 `node --test Tests/repository-policy.test.mjs` 与 `git diff --check`。
-- 版本规范：正式发布采用 SemVer `vX.Y.Z`；Beta/测试发布必须使用预发布位 `vX.Y.Z-beta.N` 并递增 Beta 位（如 `v1.3.0-beta.1`），严禁使用正式 Patch 位替代 Beta 位；Beta 发布自动标记 GitHub Prerelease。
-- “发布”只有在测试、构建、版本传播、产物、Tag/Release、官网部署和公开访问验证全部完成后才能宣称成功。

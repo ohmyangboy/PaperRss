@@ -22,7 +22,13 @@ if pgrep -x "PaperRss" >/dev/null 2>&1; then
     sleep 0.5
 fi
 
-echo "🚀 启动最新 PaperRss..."
-open ./build/Build/Products/Debug/PaperRss.app
-echo "✅ 已成功启动！"
+APP_BIN="./build/Build/Products/Debug/PaperRss.app/Contents/MacOS/PaperRss"
+
+if [ ! -f "$APP_BIN" ]; then
+    echo "❌ 未找到编译产物: $APP_BIN"
+    exit 1
+fi
+
+echo "🚀 启动最新 PaperRss (控制台输出已连接，按 Ctrl+C 退出)..."
+exec "$APP_BIN"
 
