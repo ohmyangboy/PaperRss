@@ -341,13 +341,48 @@ public final class AppStore: ObservableObject {
 
     // MARK: - State Reload & Querying
 
+    @Published public var feedsByAccount: [String: [Feed]] = [:]
+    @Published public var foldersByAccount: [String: [String]] = [:]
+
     public func reloadState() {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
         let limit = Self.defaultTimelineLimit
 
-        self.feeds = (try? localProvider.fetchFeeds()) ?? []
-        self.customFolders = (try? localProvider.fetchFolderNames()) ?? []
+        // 1. 读取所有启用账号
+        let fetchedAccounts = (try? libraryDatabase.read { db in
+            try AccountRecord.filter(Column("is_enabled") == true).order(Column("created_at").asc).fetchAll(db)
+        }) ?? []
+        self.accounts = fetchedAccounts
+
+        // 2. 加载全库/多账号 Feeds 与 Folders 投影
+        var newFeedsByAccount: [String: [Feed]] = [:]
+        var newFoldersByAccount: [String: [String]] = [:]
+
+        if let allFeeds = try? libraryDatabase.read({ db in
+            try self.localProvider.feedRepository.fetchAllFeedModels(accountID: nil, in: db)
+        }) {
+            for feed in allFeeds {
+                // 通过 DB 查询所属 account_id
+                let accID = (try? libraryDatabase.read { db in
+                    try FeedRecord.filter(Column("id") == feed.id.uuidString).fetchOne(db)?.accountID
+                }) ?? "local-default"
+                newFeedsByAccount[accID, default: []].append(feed)
+            }
+        }
+
+        if let allFolders = try? libraryDatabase.read({ db in
+            try self.localProvider.feedRepository.fetchAllFolders(accountID: nil, in: db)
+        }) {
+            for folder in allFolders {
+                newFoldersByAccount[folder.accountID, default: []].append(folder.name)
+            }
+        }
+
+        self.feedsByAccount = newFeedsByAccount
+        self.foldersByAccount = newFoldersByAccount
+        self.feeds = newFeedsByAccount["local-default"] ?? []
+        self.customFolders = newFoldersByAccount["local-default"] ?? []
         self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? SidebarCounts()
 
         self.entryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .all, limit: limit)) ?? []
@@ -356,12 +391,7 @@ public final class AppStore: ObservableObject {
         self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, limit: limit)) ?? []
         self.cachedEntryLookup.removeAll(keepingCapacity: true)
 
-        // 读取多账号信息并注册 FreshRSS Providers
-        let fetchedAccounts = (try? libraryDatabase.read { db in
-            try AccountRecord.order(Column("created_at").asc).fetchAll(db)
-        }) ?? []
-        self.accounts = fetchedAccounts
-
+        // 3. 读取 SyncState 并注册 FreshRSS Providers
         var syncStates: [String: AccountSyncStateRecord] = [:]
         for account in fetchedAccounts {
             if let state = try? libraryDatabase.read({ db in
@@ -386,6 +416,34 @@ public final class AppStore: ObservableObject {
     }
 
     // MARK: - Computed Public Accessors
+
+    public func feeds(for accountID: String) -> [Feed] {
+        feedsByAccount[accountID] ?? []
+    }
+
+    public func rootFeeds(for accountID: String) -> [Feed] {
+        (feedsByAccount[accountID] ?? []).filter { $0.folder == nil }
+    }
+
+    public func folders(for accountID: String) -> [String] {
+        var names: [String] = []
+        var seen: Set<String> = []
+        for folder in foldersByAccount[accountID] ?? [] where !seen.contains(folder) {
+            names.append(folder)
+            seen.insert(folder)
+        }
+        for feed in feedsByAccount[accountID] ?? [] {
+            if let folder = feed.folder, !seen.contains(folder) {
+                names.append(folder)
+                seen.insert(folder)
+            }
+        }
+        return names
+    }
+
+    public func feeds(in folder: String, for accountID: String) -> [Feed] {
+        (feedsByAccount[accountID] ?? []).filter { $0.folder == folder }
+    }
 
     public var rootFeeds: [Feed] { feeds.filter { $0.folder == nil } }
     public var folders: [String] {
@@ -428,7 +486,9 @@ public final class AppStore: ObservableObject {
     public var starredEntries: [Entry] { entries.filter { $0.isStarred } }
 
     public func unreadCount(feedID: UUID) -> Int { sidebarCounts.unreadByFeed[feedID, default: 0] }
-    public func unreadCount(folder: String) -> Int { sidebarCounts.unreadByFolder[folder, default: 0] }
+    public func unreadCount(folder: String, accountID: String = "local-default") -> Int {
+        sidebarCounts.unreadCount(folder: folder, accountID: accountID)
+    }
 
     public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, retainingIDs: retainingIDs)) ?? unreadEntryListItems
@@ -446,6 +506,10 @@ public final class AppStore: ObservableObject {
         guard !feedIDs.isEmpty else { return [] }
         let ids = Set(feedIDs.map(\.uuidString))
         return (try? localProvider.timelineQueryService.fetchListItems(scope: .feeds(feedIDs: ids))) ?? []
+    }
+
+    public func entryListItems(folder: String, accountID: String = "local-default") -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(scope: .folder(accountID: accountID, folderName: folder))) ?? []
     }
 
     public func fetchTimelinePage(
@@ -721,6 +785,11 @@ public final class AppStore: ObservableObject {
             }
         }
 
+        // 若为全局刷新，同时协调驱动所有注册的远端账号进行同步与 Outbox 推送
+        if feedIDs == nil {
+            await syncCoordinator.refreshAll(reason: .manual)
+        }
+
         reloadState()
 
         let finishedAt = Date.now
@@ -837,6 +906,7 @@ public final class AppStore: ObservableObject {
     }
 
     public func markAllRead(
+        accountID: String? = nil,
         feedID: UUID? = nil,
         feedIDs: Set<UUID>? = nil,
         folder: String? = nil,
@@ -847,12 +917,27 @@ public final class AppStore: ObservableObject {
                 if case .today(let ts) = scope { return ts }
                 return nil
             }()
-            try localProvider.markAllRead(
-                feedID: feedID,
-                feedIDs: feedIDs,
-                folderName: folder,
-                startOfDayTimestamp: actualStartOfDay
-            )
+            let targetAccountID: String? = {
+                if let accountID { return accountID }
+                if case .folder(let acc, _) = scope { return acc }
+                return nil
+            }()
+            let targetFolder: String? = {
+                if let folder { return folder }
+                if case .folder(_, let fName) = scope { return fName }
+                return nil
+            }()
+
+            try libraryDatabase.write { db in
+                try self.localProvider.stateRepository.markAllRead(
+                    accountID: targetAccountID,
+                    feedID: feedID?.uuidString,
+                    feedIDs: feedIDs.map { Set($0.map(\.uuidString)) },
+                    folderName: targetFolder,
+                    startOfDayTimestamp: actualStartOfDay,
+                    in: db
+                )
+            }
             reloadState()
             Task { [weak self] in
                 await self?.syncCoordinator.pushAllPendingArticleStates()
@@ -886,6 +971,21 @@ public final class AppStore: ObservableObject {
             throw ReaderAPIError.invalidCredentials
         }
 
+        // 1. 原子检查是否存在相同 endpoint + username 的启用账号
+        let isDuplicate = try libraryDatabase.read { db in
+            let accounts = try AccountRecord
+                .filter(Column("type") == AccountType.freshRSS.rawValue && Column("is_enabled") == true)
+                .fetchAll(db)
+            return accounts.contains { acc in
+                guard let ep = acc.endpointURL, let un = acc.username else { return false }
+                let canonicalExisting = (URL(string: ep).map { ReaderAPIClient.canonicalBaseURL(for: $0).absoluteString }) ?? ep
+                return canonicalExisting == canonicalURL.absoluteString && un == trimmedUsername
+            }
+        }
+        if isDuplicate {
+            throw ReaderAPIError.accountAlreadyExists("\(trimmedUsername) @ \(canonicalURL.host ?? "")")
+        }
+
         let tempAccountID = "freshRSS-\(UUID().uuidString)"
         let tempCredentialStore = InMemoryCredentialStore(initialCredentials: [tempAccountID: password])
         let validatorClient = ReaderAPIClient(
@@ -896,10 +996,10 @@ public final class AppStore: ObservableObject {
             session: customSession
         )
 
-        // 1. 验证登录凭据
+        // 2. 验证登录凭据
         try await validatorClient.validateCredentials()
 
-        // 2. 插入数据库
+        // 3. 插入数据库
         let accountID = "freshRSS-\(UUID().uuidString)"
         let now = Date().timeIntervalSince1970
         let accountTitle: String
@@ -922,7 +1022,7 @@ public final class AppStore: ObservableObject {
 
         try await accountRepository.saveAccount(accountRecord)
 
-        // 3. 将密码写入真实 Keychain
+        // 4. 将密码写入真实 Keychain
         do {
             try credentialStore.saveFreshRSSPassword(password, accountID: accountID)
         } catch {
@@ -931,7 +1031,7 @@ public final class AppStore: ObservableObject {
             throw error
         }
 
-        // 4. 注册 Provider 到 SyncCoordinator
+        // 5. 注册 Provider 到 SyncCoordinator
         let provider = FreshRSSAccountProvider(
             accountID: accountID,
             endpointURL: canonicalURL,
@@ -942,12 +1042,18 @@ public final class AppStore: ObservableObject {
         )
         await syncCoordinator.registerProvider(provider)
 
-        // 5. 刷新界面状态并触发首次同步
+        // 6. 执行初始同步（明确暴露同步结果，禁止静默吞错）
+        var initialSyncError: (any Error)? = nil
+        do {
+            _ = try await provider.refresh(reason: .manual)
+        } catch {
+            initialSyncError = error
+        }
+
         reloadState()
 
-        Task {
-            _ = try? await provider.refresh(reason: .manual)
-            self.reloadState()
+        if let initialSyncError {
+            throw initialSyncError
         }
 
         return accountRecord

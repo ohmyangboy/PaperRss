@@ -24,7 +24,7 @@ public struct ArticleRecord: Codable, FetchableRecord, PersistableRecord, TableR
         publishedAt: Double? = nil,
         summary: String = "",
         contentHTML: String? = nil,
-        contentUpdatedAt: Double
+        contentUpdatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.itemID = itemID
         self.title = title

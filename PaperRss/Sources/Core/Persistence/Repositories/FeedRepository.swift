@@ -78,7 +78,13 @@ public final class FeedRepository: Sendable {
 
     // MARK: - Feed Model Projection (FeedRecord + Folder -> Domain Feed)
 
-    public func fetchAllFeedModels(accountID: String = "local-default", in db: Database) throws -> [Feed] {
+    public func fetchAllFeedModels(accountID: String? = nil, in db: Database) throws -> [Feed] {
+        let accountClause = accountID != nil ? "AND f.account_id = :account_id" : ""
+        var arguments: [String: (any DatabaseValueConvertible)?] = [:]
+        if let accountID {
+            arguments["account_id"] = accountID
+        }
+
         let sql = """
         SELECT
             f.id AS id,
@@ -95,10 +101,10 @@ public final class FeedRepository: Sendable {
         FROM feeds f
         LEFT JOIN feed_folders ff ON ff.feed_id = f.id
         LEFT JOIN folders fo ON fo.id = ff.folder_id AND fo.is_deleted = 0
-        WHERE f.account_id = ? AND f.is_deleted = 0
+        WHERE f.is_deleted = 0 \(accountClause)
         ORDER BY f.sort_order ASC, f.title ASC;
         """
-        let rows = try Row.fetchAll(db, sql: sql, arguments: [accountID])
+        let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
 
         return rows.compactMap { row in
             guard let idString: String = row["id"],
@@ -138,15 +144,18 @@ public final class FeedRepository: Sendable {
 
     // MARK: - Folders & Management
 
-    public func fetchAllFolders(accountID: String = "local-default", includeDeleted: Bool = false, in db: Database) throws -> [FolderRecord] {
-        var query = FolderRecord.filter(Column("account_id") == accountID)
+    public func fetchAllFolders(accountID: String? = nil, includeDeleted: Bool = false, in db: Database) throws -> [FolderRecord] {
+        var query = FolderRecord.all()
+        if let accountID {
+            query = query.filter(Column("account_id") == accountID)
+        }
         if !includeDeleted {
             query = query.filter(Column("is_deleted") == false)
         }
         return try query.order(Column("sort_order").asc, Column("name").asc).fetchAll(db)
     }
 
-    public func fetchFolderNames(accountID: String = "local-default", in db: Database) throws -> [String] {
+    public func fetchFolderNames(accountID: String? = nil, in db: Database) throws -> [String] {
         let folders = try fetchAllFolders(accountID: accountID, includeDeleted: false, in: db)
         return folders.map(\.name)
     }

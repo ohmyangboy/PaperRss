@@ -17,8 +17,8 @@ public struct ArticleStateRecord: Codable, FetchableRecord, PersistableRecord, T
         itemID: String,
         isRead: Bool = false,
         isStarred: Bool = false,
-        dateArrived: Double,
-        updatedAt: Double
+        dateArrived: Double = Date().timeIntervalSince1970,
+        updatedAt: Double = Date().timeIntervalSince1970
     ) {
         self.itemID = itemID
         self.isRead = isRead

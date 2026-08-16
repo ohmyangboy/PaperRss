@@ -133,9 +133,9 @@ public final class ArticleStateRepository: Sendable {
         }
     }
 
-    /// 将特定 Feed、多 Feed、Folder、Today 或全库的未读文章全部标记为已读
+    /// 将特定 Feed、多 Feed、Folder、Today 或全库的未读文章全部标记为已读（支持多账号与 FreshRSS Outbox 原子生成）
     public func markAllRead(
-        accountID: String = "local-default",
+        accountID: String? = nil,
         feedID: String? = nil,
         feedIDs: Set<String>? = nil,
         folderName: String? = nil,
@@ -143,11 +143,16 @@ public final class ArticleStateRepository: Sendable {
         in db: Database
     ) throws {
         let now = Date().timeIntervalSince1970
-        var whereSql = "i.account_id = :account_id AND s.is_read = 0"
-        var arguments: [String: (any DatabaseValueConvertible)?] = ["account_id": accountID]
+        var whereClauses = ["s.is_read = 0"]
+        var arguments: [String: (any DatabaseValueConvertible)?] = [:]
+
+        if let accountID {
+            whereClauses.append("i.account_id = :account_id")
+            arguments["account_id"] = accountID
+        }
 
         if let feedID {
-            whereSql += " AND i.feed_id = :feed_id"
+            whereClauses.append("i.feed_id = :feed_id")
             arguments["feed_id"] = feedID
         } else if let feedIDs {
             if feedIDs.isEmpty {
@@ -158,54 +163,60 @@ public final class ArticleStateRepository: Sendable {
                 arguments[param] = id
                 return ":\(param)"
             }.joined(separator: ", ")
-            whereSql += " AND i.feed_id IN (\(placeholders))"
+            whereClauses.append("i.feed_id IN (\(placeholders))")
         } else if let folderName {
-            whereSql += """
-             AND i.feed_id IN (
+            let folderAccClause = accountID != nil ? "fo.account_id = :account_id AND" : ""
+            whereClauses.append("""
+            i.feed_id IN (
                 SELECT ff.feed_id
                 FROM feed_folders ff
                 INNER JOIN folders fo ON fo.id = ff.folder_id
-                WHERE fo.account_id = :account_id AND fo.name = :folder_name AND fo.is_deleted = 0
+                WHERE \(folderAccClause) fo.name = :folder_name AND fo.is_deleted = 0
             )
-            """
+            """)
             arguments["folder_name"] = folderName
         }
 
         if let startOfDayTimestamp {
-            whereSql += " AND (a.published_at >= :start_of_day OR (a.published_at IS NULL AND i.created_at >= :start_of_day))"
+            whereClauses.append("(art.published_at >= :start_of_day OR (art.published_at IS NULL AND i.created_at >= :start_of_day))")
             arguments["start_of_day"] = startOfDayTimestamp
         }
 
-        let selectItemIDsSql = """
-        SELECT i.id
+        let whereSql = whereClauses.joined(separator: " AND ")
+
+        let selectSql = """
+        SELECT i.id AS item_id, a.id AS account_id, a.type AS account_type
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
-        LEFT JOIN articles a ON a.item_id = i.id
+        INNER JOIN accounts a ON a.id = i.account_id
+        LEFT JOIN articles art ON art.item_id = i.id
         WHERE \(whereSql);
         """
-        let unreadItemIDs = try String.fetchAll(db, sql: selectItemIDsSql, arguments: StatementArguments(arguments))
-        guard !unreadItemIDs.isEmpty else { return }
+        let affectedRows = try Row.fetchAll(db, sql: selectSql, arguments: StatementArguments(arguments))
+        guard !affectedRows.isEmpty else { return }
 
-        var updateArguments = arguments
-        updateArguments["now_ts"] = now
+        let itemIDs = affectedRows.map { (row: Row) -> String in row["item_id"] }
+        let placeholders = itemIDs.indices.map { ":item_\($0)" }.joined(separator: ", ")
+        var updateArgs: [String: (any DatabaseValueConvertible)?] = ["now_ts": now]
+        for (idx, id) in itemIDs.enumerated() {
+            updateArgs["item_\(idx)"] = id
+        }
 
         let updateSql = """
         UPDATE article_states
         SET is_read = 1, updated_at = :now_ts
-        WHERE item_id IN (
-            SELECT i.id
-            FROM items i
-            INNER JOIN article_states s ON s.item_id = i.id
-            LEFT JOIN articles a ON a.item_id = i.id
-            WHERE \(whereSql)
-        );
+        WHERE item_id IN (\(placeholders));
         """
-        try db.execute(sql: updateSql, arguments: StatementArguments(updateArguments))
+        try db.execute(sql: updateSql, arguments: StatementArguments(updateArgs))
 
-        let isRemoteAccount: Bool = (try? AccountRecord.filter(Column("id") == accountID).fetchOne(db)?.type == AccountType.freshRSS.rawValue) ?? false
-        if isRemoteAccount {
-            for itemID in unreadItemIDs {
-                if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "read", in: db) {
+        // 为所有属于 freshRSS 的 items 在同一事务中原子写入/更新 Outbox
+        for row in affectedRows {
+            let itemID: String = row["item_id"]
+            let itemAccountID: String = row["account_id"]
+            let accountType: String = row["account_type"]
+
+            if accountType == AccountType.freshRSS.rawValue {
+                if var existingOutbox = try fetchOutboxRecord(accountID: itemAccountID, itemID: itemID, stateKey: "read", in: db) {
                     existingOutbox.desiredValue = true
                     existingOutbox.revision += 1
                     existingOutbox.updatedAt = now
@@ -215,7 +226,7 @@ public final class ArticleStateRepository: Sendable {
                     try existingOutbox.save(db)
                 } else {
                     let outbox = ArticleStateOutboxRecord(
-                        accountID: accountID,
+                        accountID: itemAccountID,
                         itemID: itemID,
                         stateKey: "read",
                         desiredValue: true,

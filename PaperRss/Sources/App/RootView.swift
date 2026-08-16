@@ -14,7 +14,7 @@ enum SidebarSelection: Hashable {
     case today
     case unread
     case starred
-    case folder(String)
+    case folder(accountID: String, folderName: String)
     case feed(UUID)
     case feeds(Set<UUID>)
 
@@ -24,7 +24,7 @@ enum SidebarSelection: Hashable {
         case .today: I18N.shared.localized("今天")
         case .unread: I18N.shared.localized("未读")
         case .starred: I18N.shared.localized("收藏")
-        case let .folder(name): name
+        case let .folder(_, name): name
         case .feed: I18N.shared.localized("订阅")
         case let .feeds(ids): I18N.shared.localizedFormat("%lld 个订阅", ids.count)
         }
@@ -98,8 +98,8 @@ struct RootView: View {
                 RenameFolderSheet(store: store, oldName: folder.name) { newName in
                     // 重命名当前选中的文件夹后，侧栏选择与中间栏内容应跟随，
                     // 否则高亮消失、文章列表显示"没有文章"。
-                    if case let .folder(current) = selection, current == folder.name {
-                        selection = .folder(newName)
+                    if case let .folder(acc, current) = selection, acc == "local-default" && current == folder.name {
+                        selection = .folder(accountID: "local-default", folderName: newName)
                     }
                 }
             }
@@ -231,9 +231,8 @@ struct RootView: View {
             return (store.sidebarCounts.unreadByFeed[id] ?? 0) > 0
         case let .feeds(ids):
             return ids.contains { (store.sidebarCounts.unreadByFeed[$0] ?? 0) > 0 }
-        case let .folder(folder):
-            let feedIDs = store.feeds.filter { $0.folder == folder }.map(\.id)
-            return feedIDs.contains { (store.sidebarCounts.unreadByFeed[$0] ?? 0) > 0 }
+        case let .folder(acc, folder):
+            return store.unreadCount(folder: folder, accountID: acc) > 0
         }
     }
 
@@ -246,8 +245,8 @@ struct RootView: View {
             store.markAllRead()
         case .starred:
             store.markAllRead(scope: .starred)
-        case let .folder(folder):
-            store.markAllRead(folder: folder)
+        case let .folder(acc, folder):
+            store.markAllRead(accountID: acc, folder: folder)
         case let .feed(id):
             store.markAllRead(feedID: id)
         case let .feeds(ids):
@@ -353,9 +352,9 @@ struct RootView: View {
             entries = store.unreadEntryListItems(retainingIDs: selectedEntryID.map { [$0] } ?? [])
         case .starred:
             entries = store.starredEntryListItems
-        case let .folder(folder):
+        case let .folder(acc, folder):
             let retained = selectedEntryID.map { [$0] } ?? []
-            entries = store.entryListItems(folder: folder).filter { !$0.isRead || retained.contains($0.id) }
+            entries = store.entryListItems(folder: folder, accountID: acc).filter { !$0.isRead || retained.contains($0.id) }
         case let .feed(id):
             entries = store.entryListItems(feedID: id)
         case let .feeds(ids):
@@ -405,8 +404,8 @@ struct RootView: View {
             return store.unreadEntryListItems(retainingIDs: retainedIDs)
         case .starred:
             return store.starredEntryListItems(retainingIDs: retainedIDs)
-        case let .folder(folder):
-            return store.entryListItems(folder: folder).filter { !$0.isRead || retainedIDs.contains($0.id) }
+        case let .folder(acc, folder):
+            return store.entryListItems(folder: folder, accountID: acc).filter { !$0.isRead || retainedIDs.contains($0.id) }
         case let .feed(id):
             return store.entryListItems(feedID: id)
         case let .feeds(ids):
@@ -472,8 +471,8 @@ struct RootView: View {
             return .unread
         case .starred:
             return .starred
-        case let .folder(folder):
-            return .folder(folderName: folder)
+        case let .folder(acc, folder):
+            return .folder(accountID: acc, folderName: folder)
         case let .feed(id):
             return .feed(feedID: id.uuidString)
         case let .feeds(ids):
@@ -694,10 +693,17 @@ private struct SidebarView: View {
         )
     }
 
+    private var freshRSSAccounts: [AccountRecord] {
+        store.accounts.filter { $0.type == AccountType.freshRSS.rawValue }
+    }
+
     var body: some View {
         List(selection: selectedSidebarSelections) {
             readingSection
-            subscriptionsSection
+            localSubscriptionsSection
+            ForEach(freshRSSAccounts) { account in
+                freshRSSAccountSection(account)
+            }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
@@ -836,25 +842,31 @@ private struct SidebarView: View {
     }
 
     @ViewBuilder
-    private var subscriptionsSection: some View {
+    private var localSubscriptionsSection: some View {
         Section {
-            ForEach(store.rootFeeds) { feed in
+            ForEach(store.rootFeeds(for: "local-default")) { feed in
                 feedRow(feed)
             }
             .onMove { fromOffsets, toOffset in
                 store.reorderRootFeeds(fromOffsets: fromOffsets, toOffset: toOffset)
             }
 
-            ForEach(store.folders, id: \.self) { folder in
+            ForEach(store.folders(for: "local-default"), id: \.self) { folder in
                 DisclosureGroup(
                     isExpanded: Binding(
-                        get: { expandedFolders.contains(folder) },
+                        get: { expandedFolders.contains("local-default::\(folder)") || expandedFolders.contains(folder) },
                         set: { isExpanded in
-                            if isExpanded { expandedFolders.insert(folder) } else { expandedFolders.remove(folder) }
+                            if isExpanded {
+                                expandedFolders.insert("local-default::\(folder)")
+                                expandedFolders.insert(folder)
+                            } else {
+                                expandedFolders.remove("local-default::\(folder)")
+                                expandedFolders.remove(folder)
+                            }
                         }
                     ),
                     content: {
-                        ForEach(store.feeds(in: folder)) { feed in
+                        ForEach(store.feeds(in: folder, for: "local-default")) { feed in
                             feedRow(feed, inFolder: true)
                         }
                         .onMove { fromOffsets, toOffset in
@@ -862,7 +874,7 @@ private struct SidebarView: View {
                         }
                     },
                     label: {
-                        folderRow(folder)
+                        folderRow(folder, accountID: "local-default")
                     }
                 )
             }
@@ -870,10 +882,103 @@ private struct SidebarView: View {
                 store.reorderFolders(fromOffsets: fromOffsets, toOffset: toOffset)
             }
         } header: {
-            SubscriptionsHeaderView { feedIDs in
-                store.setFeedFolder(feedIDs: feedIDs, folder: nil)
+            HStack {
+                Text(I18N.localized("我的 Mac"))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
             }
         }
+    }
+
+    @ViewBuilder
+    private func freshRSSAccountSection(_ account: AccountRecord) -> some View {
+        Section {
+            ForEach(store.rootFeeds(for: account.id)) { feed in
+                remoteFeedRow(feed, accountID: account.id)
+            }
+
+            ForEach(store.folders(for: account.id), id: \.self) { folder in
+                let key = "\(account.id)::\(folder)"
+                DisclosureGroup(
+                    isExpanded: Binding(
+                        get: { expandedFolders.contains(key) },
+                        set: { isExpanded in
+                            if isExpanded { expandedFolders.insert(key) } else { expandedFolders.remove(key) }
+                        }
+                    ),
+                    content: {
+                        ForEach(store.feeds(in: folder, for: account.id)) { feed in
+                            remoteFeedRow(feed, accountID: account.id, inFolder: true)
+                        }
+                    },
+                    label: {
+                        remoteFolderRow(folder, accountID: account.id)
+                    }
+                )
+            }
+        } header: {
+            HStack {
+                Text(account.displayName)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func remoteFolderRow(_ folder: String, accountID: String) -> some View {
+        let count = store.unreadCount(folder: folder, accountID: accountID)
+        SidebarRow(folder, systemImage: "folder", count: count)
+            .contentShape(Rectangle())
+            .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
+            .onTapGesture {
+                let key = "\(accountID)::\(folder)"
+                if selection == .folder(accountID: accountID, folderName: folder) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if expandedFolders.contains(key) {
+                            expandedFolders.remove(key)
+                        } else {
+                            expandedFolders.insert(key)
+                        }
+                    }
+                } else {
+                    selection = .folder(accountID: accountID, folderName: folder)
+                    _ = withAnimation(.easeInOut(duration: 0.2)) {
+                        expandedFolders.insert(key)
+                    }
+                }
+            }
+            .contextMenu {
+                Button {
+                    store.markAllRead(accountID: accountID, folder: folder)
+                } label: {
+                    Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func remoteFeedRow(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
+        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id))
+            .padding(.leading, inFolder ? -12 : 0)
+            .tag(SidebarSelection.feed(feed.id))
+            .contextMenu {
+                Button {
+                    store.markAllRead(feedID: feed.id)
+                } label: {
+                    Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
+                }
+
+                Button {
+                    copyToClipboard(feed.feedURL.absoluteString)
+                } label: {
+                    Label(I18N.localized("复制订阅"), systemImage: "doc.on.doc")
+                }
+            }
     }
 
     @ViewBuilder
@@ -916,15 +1021,15 @@ private struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func folderRow(_ folder: String) -> some View {
-        FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder)) { feedIDs in
+    private func folderRow(_ folder: String, accountID: String = "local-default") -> some View {
+        FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder, accountID: accountID)) { feedIDs in
             store.setFeedFolder(feedIDs: feedIDs, folder: folder)
             expandedFolders.insert(folder)
         }
         .contentShape(Rectangle())
-        .tag(SidebarSelection.folder(folder))
+        .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
         .onTapGesture {
-            if selection == .folder(folder) {
+            if selection == .folder(accountID: accountID, folderName: folder) {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if expandedFolders.contains(folder) {
                         expandedFolders.remove(folder)
@@ -933,7 +1038,7 @@ private struct SidebarView: View {
                     }
                 }
             } else {
-                selection = .folder(folder)
+                selection = .folder(accountID: accountID, folderName: folder)
                 _ = withAnimation(.easeInOut(duration: 0.2)) {
                     expandedFolders.insert(folder)
                 }
@@ -941,7 +1046,7 @@ private struct SidebarView: View {
         }
             .contextMenu {
                 Button {
-                    let unreadIDs = store.entryListItems(folder: folder).filter { !$0.isRead }.map { $0.id }
+                    let unreadIDs = store.entryListItems(folder: folder, accountID: accountID).filter { !$0.isRead }.map { $0.id }
                     store.markRead(entryIDs: unreadIDs)
                 } label: {
                     Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
@@ -957,7 +1062,7 @@ private struct SidebarView: View {
 
                 Button(role: .destructive) {
                     store.deleteFolder(folder)
-                    if case let .folder(f) = selection, f == folder {
+                    if case let .folder(acc, f) = selection, acc == accountID && f == folder {
                         selection = .today
                     }
                     onDeleteSelection()
@@ -1287,8 +1392,8 @@ private struct EntryListView: View {
             return .unread
         case .starred:
             return .starred
-        case let .folder(folder):
-            return .folder(folderName: folder)
+        case let .folder(acc, folder):
+            return .folder(accountID: acc, folderName: folder)
         case let .feed(id):
             return .feed(feedID: id.uuidString)
         case let .feeds(ids):
@@ -1355,8 +1460,8 @@ private struct EntryListView: View {
             store.markAllRead()
         case .starred:
             store.markAllRead(scope: .starred)
-        case let .folder(folder):
-            store.markAllRead(folder: folder)
+        case let .folder(acc, folder):
+            store.markAllRead(accountID: acc, folder: folder)
         case let .feed(id):
             store.markAllRead(feedID: id)
         case let .feeds(ids):

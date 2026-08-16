@@ -78,6 +78,15 @@ public struct ReaderAPIItemRef: Codable, Sendable, Equatable {
         self.timestampUsec = timestampUsec
         self.directStreamIds = directStreamIds
     }
+
+    /// 从 id（例如 "tag:google.com,2005:reader/item/0000000000001234" 或 "foo/a/123"）中提取规范的外部标识
+    public var canonicalItemRefID: String {
+        let prefix = "tag:google.com,2005:reader/item/"
+        if id.hasPrefix(prefix) {
+            return String(id.dropFirst(prefix.count))
+        }
+        return id
+    }
 }
 
 public struct ReaderAPIStreamItemIDsResponse: Codable, Sendable {
@@ -156,10 +165,11 @@ public struct ReaderAPIStreamItem: Codable, Sendable, Equatable {
         self.author = author
     }
 
-    /// 从 id（例如 "tag:google.com,2005:reader/item/0000000000001234" 或 "1234"）中提取规范的外部标识
+    /// 从 id（例如 "tag:google.com,2005:reader/item/0000000000001234" 或 "foo/a/123"）中提取规范的外部标识
     public var canonicalItemRefID: String {
-        if let lastComponent = id.split(separator: "/").last {
-            return String(lastComponent)
+        let prefix = "tag:google.com,2005:reader/item/"
+        if id.hasPrefix(prefix) {
+            return String(id.dropFirst(prefix.count))
         }
         return id
     }

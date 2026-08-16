@@ -4,7 +4,7 @@ import GRDB
 /// `accounts` 表的持久化映射模型。
 ///
 /// 遵循 Architecture Contract (Section 8.1 / INV-01, INV-02)。
-public struct AccountRecord: Codable, FetchableRecord, PersistableRecord, TableRecord, Sendable, Equatable {
+public struct AccountRecord: Codable, FetchableRecord, PersistableRecord, TableRecord, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "accounts"
 
     public var id: String

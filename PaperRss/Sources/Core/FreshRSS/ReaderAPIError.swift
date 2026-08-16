@@ -14,6 +14,7 @@ public enum ReaderAPIError: LocalizedError, Sendable {
     case serverError(String)
     case networkError(String)
     case requestCancelled
+    case accountAlreadyExists(String)
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +39,8 @@ public enum ReaderAPIError: LocalizedError, Sendable {
             return I18N.localized("网络连接失败：\(message)")
         case .requestCancelled:
             return I18N.localized("请求已取消。")
+        case let .accountAlreadyExists(detail):
+            return I18N.localized("该 FreshRSS 账号已存在：\(detail)")
         }
     }
 }

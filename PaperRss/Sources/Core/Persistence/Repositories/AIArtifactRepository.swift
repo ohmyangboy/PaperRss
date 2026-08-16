@@ -133,11 +133,19 @@ public final class AIArtifactRepository: Sendable {
         let anchorJSON: String? = try artifact.selectionAnchor.flatMap { try LegacyMigrationJSONEncoder.encodeString($0) }
 
         let isGlobalTM = artifact.entryID.hasPrefix("translation-memory-v2:")
-        let effectiveAccountID = isGlobalTM ? nil : accountID
+        var effectiveAccountID: String? = nil
+        var effectiveItemID: String? = nil
 
-        // 检查 itemID 是否存在于 items 表中（外键满足性）
-        let itemExists = try ItemRecord.filter(Column("id") == artifact.entryID).fetchOne(db) != nil
-        let effectiveItemID = (!isGlobalTM && itemExists) ? artifact.entryID : nil
+        if isGlobalTM {
+            effectiveAccountID = nil
+            effectiveItemID = nil
+        } else if let item = try ItemRecord.filter(Column("id") == artifact.entryID).fetchOne(db) {
+            effectiveAccountID = item.accountID
+            effectiveItemID = item.id
+        } else {
+            effectiveAccountID = accountID
+            effectiveItemID = nil
+        }
 
         let record = AIArtifactRecord(
             id: artifact.id.uuidString,

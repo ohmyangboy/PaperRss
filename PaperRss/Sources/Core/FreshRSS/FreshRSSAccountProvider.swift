@@ -95,70 +95,78 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let now = Date().timeIntervalSince1970
 
         try database.write { db in
-            // 1. 整理全部有效分类目录
-            var categoryNames = Set<String>()
+            // 1. 整理全部有效分类目录 (Tag / Category DTO)
+            var categoryByExternalID: [String: String] = [:] // externalID -> label/name
+
             for tag in tags {
                 let name = Self.extractFolderName(from: tag.id)
                 if !name.isEmpty {
-                    categoryNames.insert(name)
+                    categoryByExternalID[tag.id] = name
                 }
             }
             for sub in subscriptions {
                 for cat in sub.categories {
                     let name = cat.label ?? Self.extractFolderName(from: cat.id)
                     if !name.isEmpty {
-                        categoryNames.insert(name)
+                        categoryByExternalID[cat.id] = name
                     }
                 }
             }
 
-            // 同步保存 folders 表
+            // 同步 folders 表：按 (account_id, external_id) 匹配与更新
+            var folderIDByExternalID: [String: String] = [:]
             var folderIDByName: [String: String] = [:]
-            for name in categoryNames {
-                if let existing = try FolderRecord.filter(Column("account_id") == self.accountID && Column("name") == name).fetchOne(db) {
+            var activeFolderExternalIDs = Set<String>()
+
+            for (extID, name) in categoryByExternalID {
+                activeFolderExternalIDs.insert(extID)
+                if var existing = try FolderRecord.filter(Column("account_id") == self.accountID && Column("external_id") == extID).fetchOne(db) {
+                    existing.name = name
+                    existing.isDeleted = false
+                    existing.updatedAt = now
+                    try existing.save(db)
+                    folderIDByExternalID[extID] = existing.id
                     folderIDByName[name] = existing.id
-                    if existing.isDeleted {
-                        var updated = existing
-                        updated.isDeleted = false
-                        updated.updatedAt = now
-                        try updated.save(db)
-                    }
+                } else if var existingByName = try FolderRecord.filter(Column("account_id") == self.accountID && Column("name") == name && Column("external_id") == nil).fetchOne(db) {
+                    existingByName.externalID = extID
+                    existingByName.isDeleted = false
+                    existingByName.updatedAt = now
+                    try existingByName.save(db)
+                    folderIDByExternalID[extID] = existingByName.id
+                    folderIDByName[name] = existingByName.id
                 } else {
                     let folderID = UUID().uuidString
                     let record = FolderRecord(
                         id: folderID,
                         accountID: self.accountID,
+                        externalID: extID,
                         name: name,
+                        sortOrder: 0,
                         isDeleted: false,
                         updatedAt: now
                     )
                     try record.save(db)
+                    folderIDByExternalID[extID] = folderID
                     folderIDByName[name] = folderID
                 }
             }
 
-            // 2. 同步 feeds 表
+            // 2. 同步 feeds 表及多对多 feed_folders 关联
             var activeRemoteFeedIDs = Set<String>()
 
             for sub in subscriptions {
                 activeRemoteFeedIDs.insert(sub.id)
                 let feedURL = sub.url ?? sub.htmlUrl ?? sub.id
 
-                let folderName = sub.categories.first.map { $0.label ?? Self.extractFolderName(from: $0.id) }
-
+                let internalFeedID: String
                 if var existing = try FeedRecord.filter(Column("account_id") == self.accountID && Column("external_id") == sub.id).fetchOne(db) {
                     existing.title = sub.title
                     existing.feedURL = feedURL
+                    existing.siteURL = sub.htmlUrl
                     existing.isDeleted = false
                     existing.updatedAt = now
                     try existing.save(db)
-
-                    // 更新 feed_folders 关联
-                    _ = try FeedFolderRecord.filter(Column("feed_id") == existing.id).deleteAll(db)
-                    if let folderName, let folderID = folderIDByName[folderName] {
-                        let ff = FeedFolderRecord(feedID: existing.id, folderID: folderID)
-                        try ff.save(db)
-                    }
+                    internalFeedID = existing.id
                 } else {
                     let feedID = UUID().uuidString
                     let newFeed = FeedRecord(
@@ -176,15 +184,23 @@ public actor FreshRSSAccountProvider: AccountProvider {
                         sortOrder: 0
                     )
                     try newFeed.save(db)
+                    internalFeedID = feedID
+                }
 
-                    if let folderName, let folderID = folderIDByName[folderName] {
-                        let ff = FeedFolderRecord(feedID: feedID, folderID: folderID)
+                // 重建该 feed 的所有 feed_folders 关联 (多对多)
+                _ = try FeedFolderRecord.filter(Column("feed_id") == internalFeedID).deleteAll(db)
+                for cat in sub.categories {
+                    let catExtID = cat.id
+                    let catName = cat.label ?? Self.extractFolderName(from: cat.id)
+                    let matchedFolderID = folderIDByExternalID[catExtID] ?? folderIDByName[catName]
+                    if let matchedFolderID {
+                        let ff = FeedFolderRecord(feedID: internalFeedID, folderID: matchedFolderID)
                         try ff.save(db)
                     }
                 }
             }
 
-            // 3. 处理软删除：如果本地存在的远端订阅已在 FreshRSS 端被删除，将其标为 is_deleted = 1
+            // 3. 处理软删除：如果本地存在的远端订阅或文件夹已在 FreshRSS 端被删除，将其标为 is_deleted = 1
             let localFeeds = try FeedRecord
                 .filter(Column("account_id") == self.accountID && Column("is_deleted") == false)
                 .fetchAll(db)
@@ -196,18 +212,41 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     try updated.save(db)
                 }
             }
+
+            let localFolders = try FolderRecord
+                .filter(Column("account_id") == self.accountID && Column("is_deleted") == false && Column("external_id") != nil)
+                .fetchAll(db)
+            for localFolder in localFolders {
+                if let ext = localFolder.externalID, !activeFolderExternalIDs.contains(ext) {
+                    var updated = localFolder
+                    updated.isDeleted = true
+                    updated.updatedAt = now
+                    try updated.save(db)
+                }
+            }
         }
     }
 
     // MARK: - Articles & States Sync
 
     public func syncArticlesAndStates() async throws {
-        // 1. 拉取远端未读与星标 ID 集合
-        let unreadIDsArray = (try? await apiClient.fetchUnreadItemIDs(limit: 10000)) ?? []
-        let starredIDsArray = (try? await apiClient.fetchStarredItemIDs(limit: 10000)) ?? []
+        // 1. 安全拉取远端未读与星标 ID 集合（严禁将失败请求当作空集合，严格保留权威性标志）
+        var remoteUnreadIDs: Set<String>? = nil
+        var remoteStarredIDs: Set<String>? = nil
 
-        let remoteUnreadIDs = Set(unreadIDsArray.map { Self.canonicalRemoteItemID($0) })
-        let remoteStarredIDs = Set(starredIDsArray.map { Self.canonicalRemoteItemID($0) })
+        do {
+            let unreadIDsArray = try await apiClient.fetchAllUnreadItemIDs()
+            remoteUnreadIDs = Set(unreadIDsArray.map { Self.canonicalRemoteItemID($0) })
+        } catch {
+            // 未读状态拉取失败：保留 nil，严禁使用 [] 抹去本地未读状态
+        }
+
+        do {
+            let starredIDsArray = try await apiClient.fetchAllStarredItemIDs()
+            remoteStarredIDs = Set(starredIDsArray.map { Self.canonicalRemoteItemID($0) })
+        } catch {
+            // 星标状态拉取失败：保留 nil，严禁使用 [] 抹去本地星标状态
+        }
 
         // 2. 获取本地 Pending Outbox 集合 (PU 和 PS)
         let pendingRows: [ArticleStateOutboxRecord] = try database.read { db in
@@ -223,6 +262,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let isInitialSync: Bool = try database.read { db in
             let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
             return !(syncState?.initialSyncCompleted ?? false)
+        }
+
+        if isInitialSync && remoteUnreadIDs == nil && remoteStarredIDs == nil {
+            throw ReaderAPIError.networkError("Initial synchronization state fetch failed")
         }
 
         // 4. 拉取文章内容
@@ -280,14 +323,14 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     targetFeedID = mapped
                 }
 
-                // 查找或创建 ItemRecord
-                let itemID: String
+                // 查找或新建 item
+                let internalItemID: String
                 if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == remoteID).fetchOne(db) {
-                    itemID = existingItem.id
+                    internalItemID = existingItem.id
                 } else {
-                    itemID = UUID().uuidString
+                    let newID = "\(self.accountID)|\(remoteID)".stableDigest
                     let newItem = ItemRecord(
-                        id: itemID,
+                        id: newID,
                         accountID: self.accountID,
                         externalID: remoteID,
                         feedID: targetFeedID,
@@ -295,57 +338,87 @@ public actor FreshRSSAccountProvider: AccountProvider {
                         updatedAt: item.updated ?? now
                     )
                     try newItem.save(db)
+                    internalItemID = newID
                 }
 
-                // 插入或更新 ArticleRecord
-                let articleTitle = item.title ?? "无标题"
+                // 保存/更新 articles 表内容
+                let articleTitle = item.title ?? ""
                 let articleAuthor = item.author
                 let articleURL = item.alternate?.first?.href
-                let publishedAt = item.published ?? now
+                let articlePublished = item.published
                 let contentHTML = item.content?.content ?? item.summary?.content
-                let plainSummary = Self.stripHTML(contentHTML ?? "")
+                let articleSummary = contentHTML.flatMap { Self.stripHTML($0) } ?? ""
 
-                let articleRecord = ArticleRecord(
-                    itemID: itemID,
-                    title: articleTitle,
-                    author: articleAuthor,
-                    url: articleURL,
-                    publishedAt: publishedAt,
-                    summary: plainSummary,
-                    contentHTML: contentHTML,
-                    contentUpdatedAt: item.updated ?? now
-                )
-                try articleRecord.save(db)
+                if var existingArticle = try ArticleRecord.filter(Column("item_id") == internalItemID).fetchOne(db) {
+                    existingArticle.title = articleTitle
+                    existingArticle.author = articleAuthor
+                    existingArticle.url = articleURL
+                    existingArticle.publishedAt = articlePublished
+                    existingArticle.summary = articleSummary
+                    existingArticle.contentHTML = contentHTML
+                    existingArticle.contentUpdatedAt = now
+                    try existingArticle.save(db)
+                } else {
+                    let newArticle = ArticleRecord(
+                        itemID: internalItemID,
+                        title: articleTitle,
+                        author: articleAuthor,
+                        url: articleURL,
+                        publishedAt: articlePublished,
+                        summary: articleSummary,
+                        contentHTML: contentHTML,
+                        contentUpdatedAt: now
+                    )
+                    try newArticle.save(db)
+                }
 
-                // 字段级状态调和 (Reconciliation)
-                // 1. 判断远端真实状态
+                // 状态计算：结合 Categories 标签与 remoteUnreadIDs/remoteStarredIDs
                 let itemCategories = item.categories ?? []
                 let isRemoteReadFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/read") })
-                let isRemoteRead = isRemoteReadFromCategories || !remoteUnreadIDs.contains(remoteID)
+                let isRemoteUnreadFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/reading-list") })
+
+                let finalRemoteRead: Bool? = {
+                    if let remoteUnreadIDs {
+                        return !remoteUnreadIDs.contains(remoteID)
+                    }
+                    if isRemoteReadFromCategories { return true }
+                    if isRemoteUnreadFromCategories { return false }
+                    return nil
+                }()
 
                 let isRemoteStarredFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/starred") })
-                let isRemoteStarred = isRemoteStarredFromCategories || remoteStarredIDs.contains(remoteID)
-
-                var finalIsRead = isRemoteRead
-                var finalIsStarred = isRemoteStarred
-
-                // 2. 存在 pending local mutation 时，pending local mutation 优先于 remote
-                if var existingState = try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db) {
-                    if pendingReadItemIDs.contains(itemID) {
-                        finalIsRead = existingState.isRead
+                let finalRemoteStarred: Bool? = {
+                    if let remoteStarredIDs {
+                        return remoteStarredIDs.contains(remoteID)
                     }
-                    if pendingStarredItemIDs.contains(itemID) {
-                        finalIsStarred = existingState.isStarred
+                    if isRemoteStarredFromCategories { return true }
+                    return nil
+                }()
+
+                // 持久化 article_states（字段级调和）
+                if var existingState = try ArticleStateRecord.filter(Column("item_id") == internalItemID).fetchOne(db) {
+                    var modified = false
+                    if let finalRemoteRead, !pendingReadItemIDs.contains(internalItemID) {
+                        if existingState.isRead != finalRemoteRead {
+                            existingState.isRead = finalRemoteRead
+                            modified = true
+                        }
                     }
-                    existingState.isRead = finalIsRead
-                    existingState.isStarred = finalIsStarred
-                    existingState.updatedAt = now
-                    try existingState.save(db)
+                    if let finalRemoteStarred, !pendingStarredItemIDs.contains(internalItemID) {
+                        if existingState.isStarred != finalRemoteStarred {
+                            existingState.isStarred = finalRemoteStarred
+                            modified = true
+                        }
+                    }
+                    if modified {
+                        existingState.updatedAt = now
+                        try existingState.save(db)
+                    }
                 } else {
                     let newState = ArticleStateRecord(
-                        itemID: itemID,
-                        isRead: finalIsRead,
-                        isStarred: finalIsStarred,
+                        itemID: internalItemID,
+                        isRead: finalRemoteRead ?? false,
+                        isStarred: finalRemoteStarred ?? false,
                         dateArrived: now,
                         updatedAt: now
                     )
@@ -353,7 +426,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            // 6. 对未在本次 streamItems 中出现但已在本地库中的 items 进行批量远端状态校准（排除 pending mutations）
+            // 6. 对未在本次 streamItems 中出现但已在本地库中的 items 进行全库远端状态校准（仅在远端状态集完整时，且严格排除 pending mutations）
             let allLocalItems = try ItemRecord
                 .filter(Column("account_id") == self.accountID)
                 .fetchAll(db)
@@ -367,7 +440,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
                 var stateChanged = false
 
-                if !pendingReadItemIDs.contains(localItem.id) {
+                // 仅当 remoteUnreadIDs 成功权威获取时才进行负向推断
+                if let remoteUnreadIDs, !pendingReadItemIDs.contains(localItem.id) {
                     let remoteUnread = remoteUnreadIDs.contains(canonicalExt)
                     let shouldBeRead = !remoteUnread
                     if state.isRead != shouldBeRead {
@@ -376,7 +450,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     }
                 }
 
-                if !pendingStarredItemIDs.contains(localItem.id) {
+                // 仅当 remoteStarredIDs 成功权威获取时才进行负向推断
+                if let remoteStarredIDs, !pendingStarredItemIDs.contains(localItem.id) {
                     let shouldBeStarred = remoteStarredIDs.contains(canonicalExt)
                     if state.isStarred != shouldBeStarred {
                         state.isStarred = shouldBeStarred
@@ -395,9 +470,15 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - Helpers
 
     public static func extractFolderName(from categoryID: String) -> String {
-        if let last = categoryID.split(separator: "/").last {
+        let labelPrefix = "user/-/label/"
+        if let range = categoryID.range(of: labelPrefix) {
+            let label = String(categoryID[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty { return label }
+        }
+        let components = categoryID.split(separator: "/")
+        if let last = components.last {
             let name = String(last).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty && !name.hasPrefix("com.google") {
+            if !name.isEmpty && !name.hasPrefix("com.google") && !name.hasPrefix("state") {
                 return name
             }
         }

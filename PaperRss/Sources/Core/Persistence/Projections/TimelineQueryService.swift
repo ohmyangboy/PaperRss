@@ -9,7 +9,12 @@ public enum TimelineScope: Sendable, Equatable, Hashable {
     case starred
     case feed(feedID: String)
     case feeds(feedIDs: Set<String>)
-    case folder(folderName: String)
+    case folder(accountID: String, folderName: String)
+
+    /// 兼容便捷初始化
+    public static func folder(folderName: String) -> TimelineScope {
+        .folder(accountID: "local-default", folderName: folderName)
+    }
 }
 
 /// Sidebar 计数聚合 DTO。
@@ -34,6 +39,13 @@ public struct SidebarCounts: Sendable, Equatable {
         self.starred = starred
         self.unreadByFeed = unreadByFeed
         self.unreadByFolder = unreadByFolder
+    }
+
+    public func unreadCount(folder: String, accountID: String = "local-default") -> Int {
+        if let count = unreadByFolder["\(accountID)::\(folder)"] {
+            return count
+        }
+        return unreadByFolder[folder] ?? 0
     }
 }
 
@@ -127,22 +139,24 @@ public final class TimelineQueryService: Sendable {
             }
         }
 
-        // 5. 按 Folder 统计未读数
+        // 5. 按 Folder 统计未读数 (支持多账号隔离统计)
         let folderUnreadSql = """
-        SELECT fo.name AS folder_name, COUNT(DISTINCT i.id) AS unread_count
+        SELECT fo.account_id AS account_id, fo.name AS folder_name, COUNT(DISTINCT i.id) AS unread_count
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
         INNER JOIN feeds f ON f.id = i.feed_id
         INNER JOIN feed_folders ff ON ff.feed_id = f.id
         INNER JOIN folders fo ON fo.id = ff.folder_id
         WHERE f.is_deleted = 0 AND fo.is_deleted = 0 AND s.is_read = 0 \(accountWhere)
-        GROUP BY fo.name;
+        GROUP BY fo.account_id, fo.name;
         """
         let folderRows = try Row.fetchAll(db, sql: folderUnreadSql, arguments: StatementArguments(arguments))
         var unreadByFolder: [String: Int] = [:]
         for row in folderRows {
+            let accID: String = row["account_id"]
             let folderName: String = row["folder_name"]
             let count: Int = row["unread_count"]
+            unreadByFolder["\(accID)::\(folderName)"] = count
             unreadByFolder[folderName] = count
         }
 
@@ -226,15 +240,17 @@ public final class TimelineQueryService: Sendable {
                 }.joined(separator: ", ")
                 whereClauses.append("i.feed_id IN (\(placeholders))")
             }
-        case .folder(let folderName):
+        case .folder(let folderAccID, let folderName):
+            whereClauses.append("i.account_id = :folder_acc_id")
             whereClauses.append("""
             i.feed_id IN (
                 SELECT ff.feed_id
                 FROM feed_folders ff
                 INNER JOIN folders fo ON fo.id = ff.folder_id
-                WHERE fo.account_id = :account_id AND fo.name = :folder_name AND fo.is_deleted = 0
+                WHERE fo.account_id = :folder_acc_id AND fo.name = :folder_name AND fo.is_deleted = 0
             )
             """)
+            arguments["folder_acc_id"] = folderAccID
             arguments["folder_name"] = folderName
         }
 
