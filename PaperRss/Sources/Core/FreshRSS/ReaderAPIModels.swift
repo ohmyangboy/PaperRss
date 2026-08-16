@@ -68,6 +68,25 @@ public struct ReaderAPITagListResponse: Codable, Sendable {
     }
 }
 
+/// 远端拉取的条目 ID 集合（显式标记完整性）。
+public struct ReaderItemIDSet: Sendable, Equatable, Sequence {
+    public let ids: Set<String>
+    public let isComplete: Bool
+
+    public init(ids: Set<String>, isComplete: Bool) {
+        self.ids = ids
+        self.isComplete = isComplete
+    }
+
+    public func contains(_ member: String) -> Bool {
+        ids.contains(member)
+    }
+
+    public func makeIterator() -> Set<String>.Iterator {
+        ids.makeIterator()
+    }
+}
+
 public struct ReaderAPIItemRef: Codable, Sendable, Equatable {
     public let id: String
     public let timestampUsec: String?
@@ -79,13 +98,35 @@ public struct ReaderAPIItemRef: Codable, Sendable, Equatable {
         self.directStreamIds = directStreamIds
     }
 
-    /// 从 id（例如 "tag:google.com,2005:reader/item/0000000000001234" 或 "foo/a/123"）中提取规范的外部标识
-    public var canonicalItemRefID: String {
-        let prefix = "tag:google.com,2005:reader/item/"
-        if id.hasPrefix(prefix) {
-            return String(id.dropFirst(prefix.count))
+    enum CodingKeys: String, CodingKey {
+        case id
+        case timestampUsec
+        case directStreamIds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // 兼容支持 FreshRSS 当前与历史版本的 String / Int64 / Double 格式数字 ID
+        if let str = try? container.decode(String.self, forKey: .id) {
+            self.id = str
+        } else if let intVal = try? container.decode(Int64.self, forKey: .id) {
+            self.id = String(intVal)
+        } else if let doubleVal = try? container.decode(Double.self, forKey: .id) {
+            self.id = String(Int64(doubleVal))
+        } else {
+            self.id = try container.decode(String.self, forKey: .id)
         }
-        return id
+
+        self.timestampUsec = try container.decodeIfPresent(String.self, forKey: .timestampUsec)
+        self.directStreamIds = try container.decodeIfPresent([String].self, forKey: .directStreamIds)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(timestampUsec, forKey: .timestampUsec)
+        try container.encodeIfPresent(directStreamIds, forKey: .directStreamIds)
     }
 }
 
@@ -165,13 +206,16 @@ public struct ReaderAPIStreamItem: Codable, Sendable, Equatable {
         self.author = author
     }
 
-    /// 从 id（例如 "tag:google.com,2005:reader/item/0000000000001234" 或 "foo/a/123"）中提取规范的外部标识
-    public var canonicalItemRefID: String {
-        let prefix = "tag:google.com,2005:reader/item/"
-        if id.hasPrefix(prefix) {
-            return String(id.dropFirst(prefix.count))
-        }
-        return id
+    /// 直接根据当前条目自带的 categories 判定是否为已读
+    public var isMarkedReadByCategories: Bool {
+        guard let categories else { return false }
+        return categories.contains(where: { $0.hasSuffix("/state/com.google/read") })
+    }
+
+    /// 直接根据当前条目自带的 categories 判定是否为星标
+    public var isMarkedStarredByCategories: Bool {
+        guard let categories else { return false }
+        return categories.contains(where: { $0.hasSuffix("/state/com.google/starred") })
     }
 }
 

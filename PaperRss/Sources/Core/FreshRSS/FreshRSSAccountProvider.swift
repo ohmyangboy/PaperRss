@@ -230,25 +230,39 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - Articles & States Sync
 
     public func syncArticlesAndStates() async throws {
-        // 1. 安全拉取远端未读与星标 ID 集合（严禁将失败请求当作空集合，严格保留权威性标志）
-        var remoteUnreadIDs: Set<String>? = nil
-        var remoteStarredIDs: Set<String>? = nil
+        // 1. 检查是否为初次同步
+        let isInitialSync: Bool = try database.read { db in
+            let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
+            return !(syncState?.initialSyncCompleted ?? false)
+        }
+
+        // 2. 拉取远端未读与星标 ID 集合（支持 continuation 翻页，显式标记完整性）
+        var remoteUnreadSet: ReaderItemIDSet? = nil
+        var remoteStarredSet: ReaderItemIDSet? = nil
+        var canonicalUnreadKeys: Set<String>? = nil
+        var canonicalStarredKeys: Set<String>? = nil
 
         do {
-            let unreadIDsArray = try await apiClient.fetchAllUnreadItemIDs()
-            remoteUnreadIDs = Set(unreadIDsArray.map { Self.canonicalRemoteItemID($0) })
+            let unreadResult = try await apiClient.fetchAllUnreadItemIDs()
+            remoteUnreadSet = unreadResult
+            canonicalUnreadKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: unreadResult.ids)
         } catch {
-            // 未读状态拉取失败：保留 nil，严禁使用 [] 抹去本地未读状态
+            remoteUnreadSet = nil
+            canonicalUnreadKeys = nil
+            if isInitialSync { throw error }
         }
 
         do {
-            let starredIDsArray = try await apiClient.fetchAllStarredItemIDs()
-            remoteStarredIDs = Set(starredIDsArray.map { Self.canonicalRemoteItemID($0) })
+            let starredResult = try await apiClient.fetchAllStarredItemIDs()
+            remoteStarredSet = starredResult
+            canonicalStarredKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: starredResult.ids)
         } catch {
-            // 星标状态拉取失败：保留 nil，严禁使用 [] 抹去本地星标状态
+            remoteStarredSet = nil
+            canonicalStarredKeys = nil
+            if isInitialSync { throw error }
         }
 
-        // 2. 获取本地 Pending Outbox 集合 (PU 和 PS)
+        // 3. 获取本地 Pending Outbox 集合 (PU 和 PS)
         let pendingRows: [ArticleStateOutboxRecord] = try database.read { db in
             try ArticleStateOutboxRecord
                 .filter(Column("account_id") == self.accountID)
@@ -258,28 +272,18 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let pendingReadItemIDs = Set(pendingRows.filter { $0.stateKey == "read" }.map(\.itemID))
         let pendingStarredItemIDs = Set(pendingRows.filter { $0.stateKey == "starred" }.map(\.itemID))
 
-        // 3. 检查是否为初次同步
-        let isInitialSync: Bool = try database.read { db in
-            let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
-            return !(syncState?.initialSyncCompleted ?? false)
-        }
-
-        if isInitialSync && remoteUnreadIDs == nil && remoteStarredIDs == nil {
-            throw ReaderAPIError.networkError("Initial synchronization state fetch failed")
-        }
-
-        // 4. 拉取文章内容
+        // 4. 拉取文章内容（严禁吞掉必须的失败）
         var streamItems: [ReaderAPIStreamItem] = []
 
         if isInitialSync {
             // 首次同步：有界拉取最近 200 篇文章内容
-            streamItems = (try? await apiClient.fetchRecentStreamContents(limit: 200)) ?? []
+            streamItems = try await apiClient.fetchRecentStreamContents(limit: 200)
         } else {
-            // 增量同步：先拉取最近流数据，或者按缺失内容补齐
-            let recentStream = (try? await apiClient.fetchRecentStreamContents(limit: 100)) ?? []
+            // 增量同步：拉取最近流数据（mandatory，失败抛出）
+            let recentStream = try await apiClient.fetchRecentStreamContents(limit: 100)
             streamItems.append(contentsOf: recentStream)
 
-            // 查找本地存在 item 但缺少 article 内容的条目
+            // 查找本地存在 item 但缺少 article 内容的条目（独立补齐与重试）
             let missingContentExternalIDs: [String] = try database.read { db in
                 let sql = """
                 SELECT i.external_id
@@ -292,8 +296,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
             }
 
             if !missingContentExternalIDs.isEmpty {
-                let fetchedMissing = (try? await apiClient.fetchItemContents(itemIDs: missingContentExternalIDs)) ?? []
-                streamItems.append(contentsOf: fetchedMissing)
+                if let fetchedMissing = try? await apiClient.fetchItemContents(itemIDs: missingContentExternalIDs) {
+                    streamItems.append(contentsOf: fetchedMissing)
+                }
             }
         }
 
@@ -302,20 +307,46 @@ public actor FreshRSSAccountProvider: AccountProvider {
         // 5. 在单一事务中持久化文章、条目与状态，严格遵守字段级调和 (Reconciliation)
         try database.write { db in
             // 建立 feed_id 映射 (external_id -> internal UUID)
-            let feedRecords = try FeedRecord
+            let activeFeedRecords = try FeedRecord
                 .filter(Column("account_id") == self.accountID && Column("is_deleted") == false)
                 .fetchAll(db)
+            let allAccountFeeds = try FeedRecord
+                .filter(Column("account_id") == self.accountID)
+                .fetchAll(db)
+
+            let defaultFeedID: String
+            if let activeFirst = activeFeedRecords.first?.id {
+                defaultFeedID = activeFirst
+            } else if let anyFirst = allAccountFeeds.first?.id {
+                defaultFeedID = anyFirst
+            } else {
+                let fallbackFeedID = UUID().uuidString
+                let fallbackFeed = FeedRecord(
+                    id: fallbackFeedID,
+                    accountID: self.accountID,
+                    externalID: "default",
+                    title: "General",
+                    feedURL: "https://freshrss.local/feed",
+                    isDeleted: false,
+                    updatedAt: now
+                )
+                try fallbackFeed.save(db)
+                defaultFeedID = fallbackFeedID
+            }
+
             let feedIDByExternalID: [String: String] = Dictionary(
-                uniqueKeysWithValues: feedRecords.compactMap { feed in
+                uniqueKeysWithValues: allAccountFeeds.compactMap { feed in
                     guard let ext = feed.externalID else { return nil }
                     return (ext, feed.id)
                 }
             )
-            let defaultFeedID = feedRecords.first?.id ?? UUID().uuidString
 
+            var processedItemIDs = Set<String>()
+
+            // A. 处理当前流返回的 streamItems（权威 categories 优先判定）
             for item in streamItems {
-                let remoteID = Self.canonicalRemoteItemID(item.id)
-                guard !remoteID.isEmpty else { continue }
+                let rawRemoteID = item.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !rawRemoteID.isEmpty else { continue }
 
                 // 关联 Feed ID
                 var targetFeedID = defaultFeedID
@@ -323,16 +354,16 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     targetFeedID = mapped
                 }
 
-                // 查找或新建 item
+                // 查找或新建 item（持久化 raw remote identity）
                 let internalItemID: String
-                if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == remoteID).fetchOne(db) {
+                if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == rawRemoteID).fetchOne(db) {
                     internalItemID = existingItem.id
                 } else {
-                    let newID = "\(self.accountID)|\(remoteID)".stableDigest
+                    let newID = "\(self.accountID)::\(rawRemoteID)"
                     let newItem = ItemRecord(
                         id: newID,
                         accountID: self.accountID,
-                        externalID: remoteID,
+                        externalID: rawRemoteID,
                         feedID: targetFeedID,
                         createdAt: item.published ?? now,
                         updatedAt: item.updated ?? now
@@ -340,6 +371,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     try newItem.save(db)
                     internalItemID = newID
                 }
+
+                processedItemIDs.insert(internalItemID)
 
                 // 保存/更新 articles 表内容
                 let articleTitle = item.title ?? ""
@@ -372,41 +405,22 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     try newArticle.save(db)
                 }
 
-                // 状态计算：结合 Categories 标签与 remoteUnreadIDs/remoteStarredIDs
-                let itemCategories = item.categories ?? []
-                let isRemoteReadFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/read") })
-                let isRemoteUnreadFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/reading-list") })
+                // 状态计算：当前 stream item 自身自带权威 categories
+                let remoteItemRead = item.isMarkedReadByCategories
+                let remoteItemStarred = item.isMarkedStarredByCategories
 
-                let finalRemoteRead: Bool? = {
-                    if let remoteUnreadIDs {
-                        return !remoteUnreadIDs.contains(remoteID)
-                    }
-                    if isRemoteReadFromCategories { return true }
-                    if isRemoteUnreadFromCategories { return false }
-                    return nil
-                }()
-
-                let isRemoteStarredFromCategories = itemCategories.contains(where: { $0.contains("state/com.google/starred") })
-                let finalRemoteStarred: Bool? = {
-                    if let remoteStarredIDs {
-                        return remoteStarredIDs.contains(remoteID)
-                    }
-                    if isRemoteStarredFromCategories { return true }
-                    return nil
-                }()
-
-                // 持久化 article_states（字段级调和）
+                // 持久化 article_states（字段级调和 + pending local mutation 保护）
                 if var existingState = try ArticleStateRecord.filter(Column("item_id") == internalItemID).fetchOne(db) {
                     var modified = false
-                    if let finalRemoteRead, !pendingReadItemIDs.contains(internalItemID) {
-                        if existingState.isRead != finalRemoteRead {
-                            existingState.isRead = finalRemoteRead
+                    if !pendingReadItemIDs.contains(internalItemID) {
+                        if existingState.isRead != remoteItemRead {
+                            existingState.isRead = remoteItemRead
                             modified = true
                         }
                     }
-                    if let finalRemoteStarred, !pendingStarredItemIDs.contains(internalItemID) {
-                        if existingState.isStarred != finalRemoteStarred {
-                            existingState.isStarred = finalRemoteStarred
+                    if !pendingStarredItemIDs.contains(internalItemID) {
+                        if existingState.isStarred != remoteItemStarred {
+                            existingState.isStarred = remoteItemStarred
                             modified = true
                         }
                     }
@@ -417,8 +431,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 } else {
                     let newState = ArticleStateRecord(
                         itemID: internalItemID,
-                        isRead: finalRemoteRead ?? false,
-                        isStarred: finalRemoteStarred ?? false,
+                        isRead: pendingReadItemIDs.contains(internalItemID) ? false : remoteItemRead,
+                        isStarred: pendingStarredItemIDs.contains(internalItemID) ? false : remoteItemStarred,
                         dateArrived: now,
                         updatedAt: now
                     )
@@ -426,37 +440,63 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            // 6. 对未在本次 streamItems 中出现但已在本地库中的 items 进行全库远端状态校准（仅在远端状态集完整时，且严格排除 pending mutations）
+            // B. 对未在本次 streamItems 中出现但在本地库中的 items 进行全库远端状态校准
             let allLocalItems = try ItemRecord
                 .filter(Column("account_id") == self.accountID)
                 .fetchAll(db)
 
             for localItem in allLocalItems {
-                let canonicalExt = Self.canonicalRemoteItemID(localItem.externalID)
+                if processedItemIDs.contains(localItem.id) {
+                    continue
+                }
 
                 guard var state = try ArticleStateRecord.filter(Column("item_id") == localItem.id).fetchOne(db) else {
                     continue
                 }
 
+                let itemKey = ReaderItemIDCodec.canonicalComparisonKey(for: localItem.externalID)
                 var stateChanged = false
 
-                // 仅当 remoteUnreadIDs 成功权威获取时才进行负向推断
-                if let remoteUnreadIDs, !pendingReadItemIDs.contains(localItem.id) {
-                    let remoteUnread = remoteUnreadIDs.contains(canonicalExt)
-                    let shouldBeRead = !remoteUnread
-                    if state.isRead != shouldBeRead {
-                        state.isRead = shouldBeRead
-                        stateChanged = true
+                // 1. 未读状态调和
+                if !pendingReadItemIDs.contains(localItem.id),
+                   let unreadSet = remoteUnreadSet,
+                   let unreadKeys = canonicalUnreadKeys {
+                    let isUnread = unreadKeys.contains(itemKey)
+                    if isUnread {
+                        // 在未读集合中 -> 未读 (isRead = false)
+                        if state.isRead != false {
+                            state.isRead = false
+                            stateChanged = true
+                        }
+                    } else if unreadSet.isComplete {
+                        // 不在未读集合中 且 未读集合完整权威 -> 负向推断为已读 (isRead = true)
+                        if state.isRead != true {
+                            state.isRead = true
+                            stateChanged = true
+                        }
                     }
+                    // 若不在未读集合中但未读集合不完整，严禁负向推断，保持本地 state.isRead 原值
                 }
 
-                // 仅当 remoteStarredIDs 成功权威获取时才进行负向推断
-                if let remoteStarredIDs, !pendingStarredItemIDs.contains(localItem.id) {
-                    let shouldBeStarred = remoteStarredIDs.contains(canonicalExt)
-                    if state.isStarred != shouldBeStarred {
-                        state.isStarred = shouldBeStarred
-                        stateChanged = true
+                // 2. 星标状态调和
+                if !pendingStarredItemIDs.contains(localItem.id),
+                   let starredSet = remoteStarredSet,
+                   let starredKeys = canonicalStarredKeys {
+                    let isStarred = starredKeys.contains(itemKey)
+                    if isStarred {
+                        // 在星标集合中 -> 星标 (isStarred = true)
+                        if state.isStarred != true {
+                            state.isStarred = true
+                            stateChanged = true
+                        }
+                    } else if starredSet.isComplete {
+                        // 不在星标集合中 且 星标集合完整权威 -> 负向推断为未星标 (isStarred = false)
+                        if state.isStarred != false {
+                            state.isStarred = false
+                            stateChanged = true
+                        }
                     }
+                    // 若不在星标集合中但星标集合不完整，严禁负向推断，保持本地 state.isStarred 原值
                 }
 
                 if stateChanged {
@@ -483,13 +523,6 @@ public actor FreshRSSAccountProvider: AccountProvider {
             }
         }
         return ""
-    }
-
-    public static func canonicalRemoteItemID(_ rawID: String) -> String {
-        if let last = rawID.split(separator: "/").last {
-            return String(last)
-        }
-        return rawID
     }
 
     private static func stripHTML(_ html: String) -> String {

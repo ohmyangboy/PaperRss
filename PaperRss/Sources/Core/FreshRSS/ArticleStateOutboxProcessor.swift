@@ -64,17 +64,30 @@ public actor ArticleStateOutboxProcessor {
         var result = ProcessResult(processedCount: readyRows.count)
 
         for row in readyRows {
-            guard let externalID = externalIDMap[row.itemID] else {
-                // 如果找不到对应的远端 ID，无法同步，删除该孤立 outbox 记录
-                try database.write { db in
-                    _ = try ArticleStateOutboxRecord
+            guard let externalID = externalIDMap[row.itemID], !externalID.isEmpty else {
+                // 严禁静默删除用户持久突变：保留记录，递增失败计数并记录错误
+                result.failureCount += 1
+                let attempt = row.attemptCount + 1
+                let backoffSeconds = min(pow(2.0, Double(min(attempt, 6))), 60.0)
+                let nextAttempt = Date().timeIntervalSince1970 + backoffSeconds
+                let errorMessage = "Missing item or external_id for itemID: \(row.itemID)"
+
+                try? database.write { db in
+                    if var current = try ArticleStateOutboxRecord
                         .filter(
                             Column("account_id") == self.accountID &&
                             Column("item_id") == row.itemID &&
-                            Column("state_key") == row.stateKey &&
-                            Column("revision") == row.revision
+                            Column("state_key") == row.stateKey
                         )
-                        .deleteAll(db)
+                        .fetchOne(db) {
+                        if current.revision == row.revision {
+                            current.attemptCount = attempt
+                            current.nextAttemptAt = nextAttempt
+                            current.lastError = errorMessage
+                            current.updatedAt = Date().timeIntervalSince1970
+                            try current.save(db)
+                        }
+                    }
                 }
                 continue
             }

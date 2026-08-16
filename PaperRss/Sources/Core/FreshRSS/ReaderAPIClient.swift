@@ -227,34 +227,44 @@ public actor ReaderAPIClient {
 
         do {
             let decoded = try JSONDecoder().decode(ReaderAPIStreamItemIDsResponse.self, from: data)
-            let ids = decoded.itemRefs?.map(\.canonicalItemRefID) ?? []
+            let ids = decoded.itemRefs?.map(\.id) ?? []
             return (ids, decoded.continuation)
         } catch {
             throw ReaderAPIError.decodingError("unread stream/items/ids: \(error.localizedDescription)")
         }
     }
 
-    /// 完整拉取未读文章 ID 集合（支持 continuation 多页翻页，遇错直接向外抛出）
-    public func fetchAllUnreadItemIDs(maxTotal: Int = 50000) async throws -> [String] {
+    /// 完整拉取未读文章 ID 集合（支持 continuation 多页翻页，显式标记完整性）
+    public func fetchAllUnreadItemIDs(maxTotal: Int = 50000) async throws -> ReaderItemIDSet {
         var allIDs: [String] = []
         var nextContinuation: String? = nil
+        var isExhausted = false
 
         repeat {
             let (pageIDs, continuation) = try await fetchUnreadItemIDsPage(continuation: nextContinuation, limit: 10000)
             allIDs.append(contentsOf: pageIDs)
-            if let continuation, !continuation.isEmpty, continuation != nextContinuation, allIDs.count < maxTotal {
-                nextContinuation = continuation
+
+            if let continuation, !continuation.isEmpty, continuation != nextContinuation {
+                if allIDs.count < maxTotal {
+                    nextContinuation = continuation
+                } else {
+                    // 达到了最大上限但仍有后续数据，标记为不完整
+                    nextContinuation = nil
+                    isExhausted = false
+                }
             } else {
                 nextContinuation = nil
+                isExhausted = true
             }
         } while nextContinuation != nil
 
-        return allIDs
+        return ReaderItemIDSet(ids: Set(allIDs), isComplete: isExhausted)
     }
 
     /// 兼容旧接口：拉取未读文章 ID
     public func fetchUnreadItemIDs(limit: Int = 10000) async throws -> [String] {
-        try await fetchAllUnreadItemIDs(maxTotal: limit)
+        let set = try await fetchAllUnreadItemIDs(maxTotal: limit)
+        return Array(set.ids)
     }
 
     /// 单页拉取星标/收藏文章 ID 集合及 continuation token
@@ -289,34 +299,44 @@ public actor ReaderAPIClient {
 
         do {
             let decoded = try JSONDecoder().decode(ReaderAPIStreamItemIDsResponse.self, from: data)
-            let ids = decoded.itemRefs?.map(\.canonicalItemRefID) ?? []
+            let ids = decoded.itemRefs?.map(\.id) ?? []
             return (ids, decoded.continuation)
         } catch {
             throw ReaderAPIError.decodingError("starred stream/items/ids: \(error.localizedDescription)")
         }
     }
 
-    /// 完整拉取星标文章 ID 集合（支持 continuation 多页翻页，遇错直接向外抛出）
-    public func fetchAllStarredItemIDs(maxTotal: Int = 50000) async throws -> [String] {
+    /// 完整拉取星标文章 ID 集合（支持 continuation 多页翻页，显式标记完整性）
+    public func fetchAllStarredItemIDs(maxTotal: Int = 50000) async throws -> ReaderItemIDSet {
         var allIDs: [String] = []
         var nextContinuation: String? = nil
+        var isExhausted = false
 
         repeat {
             let (pageIDs, continuation) = try await fetchStarredItemIDsPage(continuation: nextContinuation, limit: 10000)
             allIDs.append(contentsOf: pageIDs)
-            if let continuation, !continuation.isEmpty, continuation != nextContinuation, allIDs.count < maxTotal {
-                nextContinuation = continuation
+
+            if let continuation, !continuation.isEmpty, continuation != nextContinuation {
+                if allIDs.count < maxTotal {
+                    nextContinuation = continuation
+                } else {
+                    // 达到了最大上限但仍有后续数据，标记为不完整
+                    nextContinuation = nil
+                    isExhausted = false
+                }
             } else {
                 nextContinuation = nil
+                isExhausted = true
             }
         } while nextContinuation != nil
 
-        return allIDs
+        return ReaderItemIDSet(ids: Set(allIDs), isComplete: isExhausted)
     }
 
     /// 兼容旧接口：拉取星标文章 ID
     public func fetchStarredItemIDs(limit: Int = 10000) async throws -> [String] {
-        try await fetchAllStarredItemIDs(maxTotal: limit)
+        let set = try await fetchAllStarredItemIDs(maxTotal: limit)
+        return Array(set.ids)
     }
 
     // MARK: - Stream Item Contents
@@ -343,23 +363,13 @@ public actor ReaderAPIClient {
                 throw ReaderAPIError.invalidEndpointURL(url.absoluteString)
             }
 
-            let password = try getPassword()
-            let writeToken = try await authenticator.ensureWriteToken(
-                endpointURL: endpointURL,
-                username: username,
-                password: password,
-                session: session
-            )
-
             let (data, _) = try await performRequest { authToken in
                 var request = URLRequest(url: requestURL)
                 request.httpMethod = "POST"
                 request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-                var queryItems: [URLQueryItem] = chunk.map { URLQueryItem(name: "i", value: $0) }
-                queryItems.append(URLQueryItem(name: "T", value: writeToken))
-
+                let queryItems: [URLQueryItem] = chunk.map { URLQueryItem(name: "i", value: $0) }
                 var bodyComponents = URLComponents()
                 bodyComponents.queryItems = queryItems
                 request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)

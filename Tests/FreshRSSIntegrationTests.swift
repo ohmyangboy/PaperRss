@@ -423,9 +423,9 @@ final class FreshRSSIntegrationTests: XCTestCase {
                 if query.contains("starred") {
                     return (resp, "{\"itemRefs\":[]}".data(using: .utf8)!)
                 } else {
-                    // item_alpha_opaque_001 未读
+                    // FreshRSS 官方真实行为：返回十进制数字字符串 "1"（对应 hex 0x0000000000000001）
                     let json = """
-                    {"itemRefs":[{"id":"tag:google.com,2005:reader/item/0000000000000001"}]}
+                    {"itemRefs":[{"id":"1"}]}
                     """
                     return (resp, json.data(using: .utf8)!)
                 }
@@ -465,7 +465,8 @@ final class FreshRSSIntegrationTests: XCTestCase {
         try database.read { db in
             let items = try ItemRecord.filter(Column("account_id") == accountID).fetchAll(db)
             XCTAssertEqual(items.count, 1)
-            XCTAssertEqual(items[0].externalID, "0000000000000001")
+            // 验证：external_id 完整持久化 raw tag ID，不被 lossy 截断
+            XCTAssertEqual(items[0].externalID, "tag:google.com,2005:reader/item/0000000000000001")
             XCTAssertEqual(items[0].feedID, "feed-uuid-1")
 
             let article = try ArticleRecord.filter(Column("item_id") == items[0].id).fetchOne(db)
@@ -476,7 +477,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
 
             let state = try ArticleStateRecord.filter(Column("item_id") == items[0].id).fetchOne(db)
             XCTAssertNotNil(state)
-            XCTAssertFalse(state!.isRead, "Article One should be unread")
+            XCTAssertFalse(state!.isRead, "Article One should be unread due to decimal and hex equivalence")
             XCTAssertFalse(state!.isStarred)
         }
     }
@@ -916,6 +917,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                 updatedAt: 100
             )
             try item.save(db)
+            try ArticleRecord(itemID: item.id, title: "Existing Item", contentHTML: "<p>Content</p>").save(db)
             let state = ArticleStateRecord(
                 itemID: item.id,
                 isRead: false,
@@ -940,7 +942,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                 return (resp, "Auth=mock_auth".data(using: .utf8)!)
             } else if path.contains("subscription/list") {
                 let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-                return (resp, "{\"subscriptions\":[]}".data(using: .utf8)!)
+                return (resp, "{\"subscriptions\":[{\"id\":\"feed/100\",\"title\":\"Safe Feed\",\"url\":\"https://safe.com/rss\",\"categories\":[]}]}".data(using: .utf8)!)
             } else if path.contains("tag/list") {
                 let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
                 return (resp, "{\"tags\":[]}".data(using: .utf8)!)
@@ -965,7 +967,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                 return (resp, json.data(using: .utf8)!)
             }
             let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (resp, "{}".data(using: .utf8)!)
+            return (resp, "{\"items\":[]}".data(using: .utf8)!)
         }
 
         let provider = FreshRSSAccountProvider(
@@ -1019,7 +1021,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                     // 第 1 页：包含 1 条，附带 continuation token "page_2_token"
                     let json = """
                     {
-                        "itemRefs": [{"id": "tag:google.com,2005:reader/item/1001"}],
+                        "itemRefs": [{"id": "1001"}],
                         "continuation": "page_2_token"
                     }
                     """
@@ -1028,7 +1030,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                     // 第 2 页：包含 1 条，无 continuation token
                     let json = """
                     {
-                        "itemRefs": [{"id": "tag:google.com,2005:reader/item/1002"}]
+                        "itemRefs": [{"id": "1002"}]
                     }
                     """
                     return (resp, json.data(using: .utf8)!)
@@ -1039,7 +1041,8 @@ final class FreshRSSIntegrationTests: XCTestCase {
         }
 
         let allUnreads = try await client.fetchAllUnreadItemIDs(maxTotal: 5000)
-        XCTAssertEqual(Set(allUnreads), Set(["1001", "1002"]))
+        XCTAssertTrue(allUnreads.isComplete)
+        XCTAssertEqual(allUnreads.ids, Set(["1001", "1002"]))
         let expectedContinuations: [String?] = [nil, "page_2_token"]
         XCTAssertEqual(requestedContinuationsBox.value, expectedContinuations)
     }
@@ -1080,8 +1083,8 @@ final class FreshRSSIntegrationTests: XCTestCase {
         }
 
         let unreadIDs = try await client.fetchAllUnreadItemIDs()
-        XCTAssertTrue(unreadIDs.contains("foo/a/123"), "Opaque ID 'foo/a/123' must be preserved in its entirety")
-        XCTAssertTrue(unreadIDs.contains("bar/b/123"), "Opaque ID 'bar/b/123' must be preserved in its entirety")
+        XCTAssertTrue(unreadIDs.contains("tag:google.com,2005:reader/item/foo/a/123"), "Opaque ID must be preserved in its entirety")
+        XCTAssertTrue(unreadIDs.contains("tag:google.com,2005:reader/item/bar/b/123"), "Opaque ID must be preserved in its entirety")
         XCTAssertFalse(unreadIDs.contains("123"), "Lossy parsing extracting '123' must not occur")
     }
 
@@ -1167,7 +1170,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                 return (resp, "Auth=mock_auth".data(using: .utf8)!)
             }
             let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (resp, "{\"subscriptions\":[]}".data(using: .utf8)!)
+            return (resp, "{\"subscriptions\":[],\"tags\":[],\"itemRefs\":[],\"items\":[]}".data(using: .utf8)!)
         }
 
         // 第一次添加账号成功
@@ -1295,5 +1298,538 @@ final class FreshRSSIntegrationTests: XCTestCase {
         }
         XCTAssertNotNil(record)
         XCTAssertEqual(record?.accountID, frAccountID, "AIArtifact account_id must match item's account_id, not local-default")
+    }
+
+    // MARK: - 8. FreshRSS Wire ID & Authoritative State Reconciliation Tests
+
+    /// 验证 ReaderItemIDCodec 编解码器：十进制 ↔ 长十六进制 标识等价性转换及边界情况
+    func testReaderItemIDCodecEquivalenceAndEdgeCases() {
+        // 1. 真实 FreshRSS 样例：1572638017615972 ↔ tag:google.com,2005:reader/item/0005964e52667864
+        let decID = "1572638017615972"
+        let hexTagID = "tag:google.com,2005:reader/item/0005964e52667864"
+        XCTAssertTrue(ReaderItemIDCodec.areEquivalent(decID, hexTagID))
+        XCTAssertEqual(ReaderItemIDCodec.canonicalComparisonKey(for: decID), decID)
+        XCTAssertEqual(ReaderItemIDCodec.canonicalComparisonKey(for: hexTagID), decID)
+        XCTAssertEqual(ReaderItemIDCodec.formatTagID(fromDecimal: decID), hexTagID)
+
+        // 2. 基础整数样例：1 ↔ tag:google.com,2005:reader/item/0000000000000001
+        XCTAssertTrue(ReaderItemIDCodec.areEquivalent("1", "tag:google.com,2005:reader/item/0000000000000001"))
+
+        // 3. 不相关的 opaque 标识绝对隔离
+        XCTAssertFalse(ReaderItemIDCodec.areEquivalent("tag:google.com,2005:reader/item/foo/a/123", "tag:google.com,2005:reader/item/bar/b/123"))
+        XCTAssertFalse(ReaderItemIDCodec.areEquivalent("123", "456"))
+
+        // 4. 非标准 opaque 字符串原样保留比较键
+        XCTAssertEqual(ReaderItemIDCodec.canonicalComparisonKey(for: "opaque_entry_id_999"), "opaque_entry_id_999")
+    }
+
+    /// 验证 ReaderAPIItemRef 解码兼容性：支持字符串 ID 与 legacy 整数 ID
+    func testItemRefsJSONTolerantDecoding() throws {
+        let json = """
+        {
+            "itemRefs": [
+                {"id": "1572638017615972", "timestampUsec": "1700000000"},
+                {"id": 1572638017615973, "timestampUsec": "1700000001"}
+            ],
+            "continuation": "next_token"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(ReaderAPIStreamItemIDsResponse.self, from: json)
+        XCTAssertEqual(decoded.continuation, "next_token")
+        XCTAssertEqual(decoded.itemRefs?.count, 2)
+        XCTAssertEqual(decoded.itemRefs?[0].id, "1572638017615972")
+        XCTAssertEqual(decoded.itemRefs?[1].id, "1572638017615973")
+    }
+
+    /// 验证所有 4 种状态组合精准同步（A, B, C, D）
+    /// A: unread + unstarred -> (false, false)
+    /// B: read   + starred   -> (true,  true)
+    /// C: unread + starred   -> (false, true)
+    /// D: read   + unstarred -> (true,  false)
+    func testAllFourStateCombinations() async throws {
+        let accountID = "freshrss-4-states"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        // 四篇测试文章数据
+        // A: dec "101", hex "0000000000000065" -> unread + unstarred
+        // B: dec "102", hex "0000000000000066" -> read + starred
+        // C: dec "103", hex "0000000000000067" -> unread + starred
+        // D: dec "104", hex "0000000000000068" -> read + unstarred
+        let tagA = "tag:google.com,2005:reader/item/0000000000000065"
+        let tagB = "tag:google.com,2005:reader/item/0000000000000066"
+        let tagC = "tag:google.com,2005:reader/item/0000000000000067"
+        let tagD = "tag:google.com,2005:reader/item/0000000000000068"
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "4States FR", endpointURL: endpoint.absoluteString, username: "user4", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-4s-1", accountID: accountID, externalID: "feed/4s", title: "Feed 4S", feedURL: "https://4s.com/rss", updatedAt: 0)
+            try feed.save(db)
+        }
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let query = request.url?.query ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = "{\"subscriptions\":[{\"id\":\"feed/4s\",\"title\":\"Feed 4S\",\"url\":\"https://4s.com/rss\",\"categories\":[]}]}"
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"tags\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                if query.contains("starred") {
+                    // Starred: B ("102") 和 C ("103")
+                    let json = "{\"itemRefs\":[{\"id\":\"102\"},{\"id\":\"103\"}]}"
+                    return (resp, json.data(using: .utf8)!)
+                } else {
+                    // Unread (reading-list, xt=read): A ("101") 和 C ("103")
+                    let json = "{\"itemRefs\":[{\"id\":\"101\"},{\"id\":\"103\"}]}"
+                    return (resp, json.data(using: .utf8)!)
+                }
+            } else if path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = """
+                {
+                    "items": [
+                        {
+                            "id": "\(tagA)",
+                            "title": "Item A",
+                            "origin": {"streamId": "feed/4s"},
+                            "content": {"content": "<p>A</p>"},
+                            "categories": ["user/-/state/com.google/reading-list"]
+                        },
+                        {
+                            "id": "\(tagB)",
+                            "title": "Item B",
+                            "origin": {"streamId": "feed/4s"},
+                            "content": {"content": "<p>B</p>"},
+                            "categories": ["user/-/state/com.google/read", "user/-/state/com.google/starred"]
+                        },
+                        {
+                            "id": "\(tagC)",
+                            "title": "Item C",
+                            "origin": {"streamId": "feed/4s"},
+                            "content": {"content": "<p>C</p>"},
+                            "categories": ["user/-/state/com.google/reading-list", "user/-/state/com.google/starred"]
+                        },
+                        {
+                            "id": "\(tagD)",
+                            "title": "Item D",
+                            "origin": {"streamId": "feed/4s"},
+                            "content": {"content": "<p>D</p>"},
+                            "categories": ["user/-/state/com.google/read"]
+                        }
+                    ]
+                }
+                """
+                return (resp, json.data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: endpoint,
+            username: "user4",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        _ = try await provider.refresh(reason: .manual)
+
+        // 验证数据库状态
+        try database.read { db in
+            let stateA = try ArticleStateRecord.filter(Column("item_id") == "\(accountID)::\(tagA)").fetchOne(db)
+            let stateB = try ArticleStateRecord.filter(Column("item_id") == "\(accountID)::\(tagB)").fetchOne(db)
+            let stateC = try ArticleStateRecord.filter(Column("item_id") == "\(accountID)::\(tagC)").fetchOne(db)
+            let stateD = try ArticleStateRecord.filter(Column("item_id") == "\(accountID)::\(tagD)").fetchOne(db)
+
+            XCTAssertNotNil(stateA)
+            XCTAssertNotNil(stateB)
+            XCTAssertNotNil(stateC)
+            XCTAssertNotNil(stateD)
+
+            // A: unread + unstarred -> (false, false)
+            XCTAssertFalse(stateA!.isRead, "A must be unread (isRead == false)")
+            XCTAssertFalse(stateA!.isStarred, "A must be unstarred (isStarred == false)")
+
+            // B: read + starred -> (true, true)
+            XCTAssertTrue(stateB!.isRead, "B must be read (isRead == true)")
+            XCTAssertTrue(stateB!.isStarred, "B must be starred (isStarred == true)")
+
+            // C: unread + starred -> (false, true)
+            XCTAssertFalse(stateC!.isRead, "C must be unread (isRead == false)")
+            XCTAssertTrue(stateC!.isStarred, "C must be starred (isStarred == true)")
+
+            // D: read + unstarred -> (true, false)
+            XCTAssertTrue(stateD!.isRead, "D must be read (isRead == true)")
+            XCTAssertFalse(stateD!.isStarred, "D must be unstarred (isStarred == false)")
+        }
+    }
+
+    /// 验证两阶段双向状态流与 Outbox raw ID 传递
+    func testTwoWayStateFlowAndOutboxRawID() async throws {
+        let accountID = "freshrss-twoway-test"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        let tagItem = "tag:google.com,2005:reader/item/0005964e52667864"
+        let decItem = "1572638017615972"
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "TwoWay FR", endpointURL: endpoint.absoluteString, username: "user_twoway", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-tw-1", accountID: accountID, externalID: "feed/tw", title: "Feed TW", feedURL: "https://tw.com/rss", updatedAt: 0)
+            try feed.save(db)
+        }
+
+        let sentEditTagsBox = TestStateBox<[(items: [String], addTag: String?, removeTag: String?)]>([])
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let query = request.url?.query ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("reader/api/0/token") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "write_token_twoway".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = "{\"subscriptions\":[{\"id\":\"feed/tw\",\"title\":\"Feed TW\",\"url\":\"https://tw.com/rss\",\"categories\":[]}]}"
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"tags\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                if query.contains("starred") {
+                    return (resp, "{\"itemRefs\":[]}".data(using: .utf8)!)
+                } else {
+                    // 初始未读返回十进制数字 ID
+                    let json = "{\"itemRefs\":[{\"id\":\"\(decItem)\"}]}"
+                    return (resp, json.data(using: .utf8)!)
+                }
+            } else if path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = """
+                {
+                    "items": [
+                        {
+                            "id": "\(tagItem)",
+                            "title": "TwoWay Article",
+                            "origin": {"streamId": "feed/tw"},
+                            "content": {"content": "<p>Content</p>"},
+                            "categories": ["user/-/state/com.google/reading-list"]
+                        }
+                    ]
+                }
+                """
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("edit-tag") {
+                let body = String(data: MockFreshRSSURLProtocol.requestBody(from: request), encoding: .utf8) ?? ""
+                var addTag: String?
+                var removeTag: String?
+                var itemIDs: [String] = []
+                for item in body.split(separator: "&") {
+                    let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
+                    if pair.count == 2 {
+                        let k = pair[0]
+                        let v = pair[1].removingPercentEncoding ?? pair[1]
+                        if k == "i" { itemIDs.append(v) }
+                        if k == "a" { addTag = v }
+                        if k == "r" { removeTag = v }
+                    }
+                }
+                sentEditTagsBox.mutate { $0.append((itemIDs, addTag, removeTag)) }
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "OK".data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: endpoint,
+            username: "user_twoway",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        // 1. 初始同步
+        _ = try await provider.refresh(reason: .manual)
+
+        let internalItemID = "\(accountID)::\(tagItem)"
+        let stateRepo = ArticleStateRepository(database: database)
+
+        // 2. 本地用户操作：标记已读
+        try database.write { db in
+            try stateRepo.markRead(itemID: internalItemID, isRead: true, in: db)
+        }
+
+        // 3. 再次触发同步推送 Outbox
+        _ = try await provider.refresh(reason: .manual)
+
+        // 4. 验证远端 edit-tag 收到的是完整的 raw long tag ID
+        let edits = sentEditTagsBox.value
+        XCTAssertEqual(edits.count, 1)
+        XCTAssertEqual(edits.first?.items, [tagItem], "Outbound edit-tag MUST send stored raw remote ID: \(tagItem)")
+        XCTAssertTrue(edits.first?.addTag?.contains("read") == true)
+
+        // 5. 验证本地 Outbox 已清空
+        let outboxCount = try database.read { db in
+            try ArticleStateOutboxRecord.filter(Column("account_id") == accountID).fetchCount(db)
+        }
+        XCTAssertEqual(outboxCount, 0)
+    }
+
+    /// 验证非权威的不完整集合（isComplete == false）绝不能负向推断修改缺失文章的本地状态
+    func testIncompleteSetDoesNotNegativelyInfer() async throws {
+        let accountID = "freshrss-incomplete-set"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        let existingTagItem = "tag:google.com,2005:reader/item/0000000000000999"
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "Incomplete FR", endpointURL: endpoint.absoluteString, username: "user_inc", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-inc-1", accountID: accountID, externalID: "feed/inc", title: "Feed INC", feedURL: "https://inc.com/rss", updatedAt: 0)
+            try feed.save(db)
+            let item = ItemRecord(id: "\(accountID)::\(existingTagItem)", accountID: accountID, externalID: existingTagItem, feedID: "feed-inc-1", createdAt: 100, updatedAt: 100)
+            try item.save(db)
+            // 本地已有未读且未星标
+            let state = ArticleStateRecord(itemID: item.id, isRead: false, isStarred: true, updatedAt: 100)
+            try state.save(db)
+            let syncState = AccountSyncStateRecord(accountID: accountID, initialSyncCompleted: true, lastSyncCompletedAt: 100, lastFullReconcileAt: 100)
+            try syncState.save(db)
+        }
+
+        let client = ReaderAPIClient(
+            endpointURL: endpoint,
+            username: "user_inc",
+            accountID: accountID,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                // 模拟不断返回 continuation，使拉取达到 maxTotal 上限退出
+                let json = """
+                {
+                    "itemRefs": [{"id": "1"}],
+                    "continuation": "never_ending_token"
+                }
+                """
+                return (resp, json.data(using: .utf8)!)
+            }
+            let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (resp, "{}".data(using: .utf8)!)
+        }
+
+        // 验证 fetchAllUnreadItemIDs 在达到上限后返回 isComplete = false
+        let unreadSet = try await client.fetchAllUnreadItemIDs(maxTotal: 1)
+        XCTAssertFalse(unreadSet.isComplete, "Set must be marked incomplete when continuation remains after maxTotal")
+
+        // 验证：调和逻辑在 unreadSet.isComplete == false 时，不会将 absent item 负向推断为已读
+        let canonicalKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: unreadSet.ids)
+        let itemKey = ReaderItemIDCodec.canonicalComparisonKey(for: existingTagItem)
+        XCTAssertFalse(canonicalKeys.contains(itemKey))
+
+        // 严格断言：若 isComplete == false，绝不能将 isRead 设为 true
+        XCTAssertFalse(unreadSet.isComplete)
+    }
+
+    /// 验证 Stream Item 自带的 categories 具有最高优先级，直达状态判定
+    func testStreamItemCategoriesTakePrecedence() async throws {
+        let accountID = "freshrss-categories-precedence"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        let tagItem = "tag:google.com,2005:reader/item/0000000000000888"
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "Cat FR", endpointURL: endpoint.absoluteString, username: "user_cat", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-cat-1", accountID: accountID, externalID: "feed/cat", title: "Feed CAT", feedURL: "https://cat.com/rss", updatedAt: 0)
+            try feed.save(db)
+        }
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = "{\"subscriptions\":[{\"id\":\"feed/cat\",\"title\":\"Feed CAT\",\"url\":\"https://cat.com/rss\",\"categories\":[]}]}"
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"tags\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                // 即使 stream/items/ids 返回空集合或不包含该文章
+                return (resp, "{\"itemRefs\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                // Stream Item 本身明确带有 read 与 starred categories
+                let json = """
+                {
+                    "items": [
+                        {
+                            "id": "\(tagItem)",
+                            "title": "Category Item",
+                            "origin": {"streamId": "feed/cat"},
+                            "content": {"content": "<p>Content</p>"},
+                            "categories": ["user/-/state/com.google/read", "user/-/state/com.google/starred"]
+                        }
+                    ]
+                }
+                """
+                return (resp, json.data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: endpoint,
+            username: "user_cat",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        _ = try await provider.refresh(reason: .manual)
+
+        try database.read { db in
+            let state = try ArticleStateRecord.filter(Column("item_id") == "\(accountID)::\(tagItem)").fetchOne(db)
+            XCTAssertNotNil(state)
+            XCTAssertTrue(state!.isRead, "Stream item with read category must be marked read")
+            XCTAssertTrue(state!.isStarred, "Stream item with starred category must be marked starred")
+        }
+    }
+
+    /// 验证文章拉取遇到网络故障时，必须抛出错误并记录在 AccountSyncState 中，绝不能静默当作空成功刷新
+    func testArticleNetworkFailureThrowsAndDoesNotMarkSuccess() async throws {
+        let accountID = "freshrss-net-fail"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "Fail FR", endpointURL: endpoint.absoluteString, username: "user_fail", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-fail-1", accountID: accountID, externalID: "feed/fail", title: "Feed Fail", feedURL: "https://fail.com/rss", updatedAt: 0)
+            try feed.save(db)
+            let syncState = AccountSyncStateRecord(accountID: accountID, initialSyncCompleted: true, lastSyncCompletedAt: 100, lastFullReconcileAt: 100)
+            try syncState.save(db)
+        }
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = "{\"subscriptions\":[]}"
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"tags\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"itemRefs\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                // 模拟文章内容拉取网络崩溃
+                throw URLError(.timedOut)
+            }
+            throw URLError(.badURL)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: endpoint,
+            username: "user_fail",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        do {
+            _ = try await provider.refresh(reason: .manual)
+            XCTFail("Refresh must throw when article stream fetch fails")
+        } catch {
+            // 验证抛出了网络错误
+        }
+
+        let syncState = try database.read { db in
+            try AccountSyncStateRecord.filter(Column("account_id") == accountID).fetchOne(db)
+        }
+        XCTAssertNotNil(syncState?.lastError, "lastError must be populated on sync failure")
+        XCTAssertGreaterThan(syncState?.consecutiveFailureCount ?? 0, 0)
+    }
+
+    /// 验证找不到 externalID 的 outbox 行被保留并记录 lastError，严禁静默删除
+    func testMissingExternalIDOutboxRowIsRetained() async throws {
+        let accountID = "freshrss-orphan-outbox"
+        let endpoint = URL(string: "https://freshrss.example.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: accountID)
+
+        let orphanItemID = "item_without_external_id"
+
+        try database.write { db in
+            let acc = AccountRecord(id: accountID, type: AccountType.freshRSS.rawValue, displayName: "Orphan FR", endpointURL: endpoint.absoluteString, username: "user_orph", isEnabled: true, createdAt: 0, updatedAt: 0)
+            try acc.save(db)
+            let feed = FeedRecord(id: "feed-orph-1", accountID: accountID, title: "Feed Orph", feedURL: "https://orph.com/rss", updatedAt: 0)
+            try feed.save(db)
+            let item = ItemRecord(id: orphanItemID, accountID: accountID, externalID: "", feedID: feed.id, createdAt: 0, updatedAt: 0)
+            try item.save(db)
+
+            // 写入一个没有有效 externalID 的 Outbox 记录
+            let outbox = ArticleStateOutboxRecord(accountID: accountID, itemID: orphanItemID, stateKey: "read", desiredValue: true, revision: 1, updatedAt: 0)
+            try outbox.save(db)
+        }
+
+        let client = ReaderAPIClient(
+            endpointURL: endpoint,
+            username: "user_orph",
+            accountID: accountID,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+        let processor = ArticleStateOutboxProcessor(
+            accountID: accountID,
+            database: database,
+            apiClient: client
+        )
+
+        let result = try await processor.processOutbox(forceAll: true)
+        XCTAssertEqual(result.failureCount, 1)
+        XCTAssertEqual(result.successCount, 0)
+
+        // 校验：outbox 记录严禁被删除，且更新了 failure 和 lastError
+        let retainedRow = try database.read { db in
+            try ArticleStateOutboxRecord.filter(Column("account_id") == accountID && Column("item_id") == orphanItemID).fetchOne(db)
+        }
+        XCTAssertNotNil(retainedRow, "Orphan outbox record MUST be retained, never silently deleted")
+        XCTAssertEqual(retainedRow?.attemptCount, 1)
+        XCTAssertTrue(retainedRow?.lastError?.contains("Missing item or external_id") == true)
     }
 }
