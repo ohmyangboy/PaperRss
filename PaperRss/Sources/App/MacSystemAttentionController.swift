@@ -143,10 +143,9 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     private func observeStore() {
-        store.$database
-            .sink { [weak self] database in
+        store.$sidebarCounts
+            .sink { [weak self] _ in
                 guard let self else { return }
-                self.latestDatabase = database
                 self.updateDockBadge()
             }
             .store(in: &cancellables)
@@ -171,10 +170,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     private func updateDockBadge() {
-        let activeFeedIDs = Set(latestDatabase.feeds.lazy.filter { !$0.isDeleted }.map(\.id))
-        let unreadCount = latestDatabase.entries.lazy.filter {
-            activeFeedIDs.contains($0.feedID) && !$0.isRead
-        }.count
+        let unreadCount = store.sidebarCounts.allUnread
         let label = FeedAttentionPolicy.dockBadgeLabel(
             unreadCount: unreadCount,
             enabled: dockBadgeEnabled

@@ -197,6 +197,30 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let isRead: Bool
     public let isStarred: Bool
 
+    public init(
+        id: String,
+        feedID: UUID,
+        title: String,
+        url: URL? = nil,
+        summaryPreview: String = "",
+        sourceTitle: String,
+        feedIconURL: URL? = nil,
+        publishedAt: Date? = nil,
+        isRead: Bool = false,
+        isStarred: Bool = false
+    ) {
+        self.id = id
+        self.feedID = feedID
+        self.title = title
+        self.url = url
+        self.summaryPreview = summaryPreview
+        self.sourceTitle = sourceTitle
+        self.feedIconURL = feedIconURL
+        self.publishedAt = publishedAt
+        self.isRead = isRead
+        self.isStarred = isStarred
+    }
+
     public init(entry: Entry, sourceTitle: String, feedIconURL: URL? = nil, previewCharacterLimit: Int = 240) {
         id = entry.id
         feedID = entry.feedID

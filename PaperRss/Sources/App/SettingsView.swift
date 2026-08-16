@@ -1240,7 +1240,7 @@ struct SettingsView: View {
 
     private func loadConfiguration() {
         selectedSection = .appearance
-        configuration = store.database.llmConfiguration
+        configuration = store.llmConfiguration
         apiKey = store.loadAPIKey()
         usesCustomModel = !["deepseek-v4-flash", "deepseek-v4-pro"].contains(configuration.model)
     }

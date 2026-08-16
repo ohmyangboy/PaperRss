@@ -8,21 +8,28 @@ let package = Package(
         .library(name: "PaperRssCore", targets: ["PaperRssCore"]),
         .executable(name: "PaperRssDesktop", targets: ["PaperRssDesktop"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1")
+    ],
     targets: [
         .target(
             name: "PaperRssCore",
-            path: "PaperRss/Sources/Core",
-            resources: [.process("../../Resources/Localization/Localizable.xcstrings")]
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
+            path: "PaperRss/Sources/Core"
         ),
         .executableTarget(
             name: "PaperRssDesktop",
             dependencies: ["PaperRssCore"],
-            path: "PaperRss/Sources/App",
-            resources: [.process("../../Resources")]
+            path: "PaperRss/Sources/App"
         ),
         .testTarget(
             name: "PaperRssCoreTests",
-            dependencies: ["PaperRssCore"],
+            dependencies: [
+                "PaperRssCore",
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: "Tests",
             exclude: [
                 "reader-shortcuts.test.mjs",
