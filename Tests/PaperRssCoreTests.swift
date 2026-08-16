@@ -40,7 +40,8 @@ final class PaperRssCoreTests: XCTestCase {
         let database = AppDatabase(
             feeds: [updatedFeed, failingFeed],
             entries: [
-                Entry(id: existingID, feedID: updatedFeed.id, title: "Existing", isRead: false)
+                Entry(id: existingID, feedID: updatedFeed.id, title: "Existing", isRead: false),
+                Entry(id: syncedReadID, feedID: updatedFeed.id, title: "Already read elsewhere", isRead: true)
             ],
             articleCaches: [:],
             readingStates: [
@@ -255,69 +256,6 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(entry.contentHTML, "<p>Full article body with real content.</p>")
         XCTAssertEqual(entry.author, "张三")
         XCTAssertEqual(entry.summary, "Short summary")
-    }
-
-    func testLibraryIndexSortsAndGroupsWithoutRepeatedQueries() throws {
-        let technology = Feed(
-            id: UUID(),
-            title: "Technology",
-            feedURL: URL(string: "https://example.com/technology.xml")!,
-            folder: "Reading"
-        )
-        let news = Feed(
-            id: UUID(),
-            title: "News",
-            feedURL: URL(string: "https://example.com/news.xml")!
-        )
-        let morning = Date(timeIntervalSince1970: 1_785_430_800)
-        let evening = morning.addingTimeInterval(3_600)
-        let entries = [
-            Entry(id: "older", feedID: technology.id, title: "Older", publishedAt: morning, summary: "One", isRead: false),
-            Entry(id: "newer", feedID: news.id, title: "Newer", publishedAt: evening, summary: "Two", isRead: true, isStarred: true)
-        ]
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-
-        let index = EntryLibraryIndex(entries: entries, feeds: [technology, news], now: evening, calendar: calendar)
-
-        XCTAssertEqual(index.all.map(\.id), ["newer", "older"])
-        XCTAssertEqual(index.byFeed[technology.id]?.map(\.id), ["older"])
-        XCTAssertEqual(index.byFolder["Reading"]?.map(\.id), ["older"])
-        XCTAssertEqual(index.unreadByFeed[technology.id], 1)
-        XCTAssertEqual(index.unreadByFolder["Reading"], 1)
-        XCTAssertEqual(index.todayUnreadCount, 1)
-        XCTAssertEqual(index.starred.map(\.id), ["newer"])
-        XCTAssertEqual(index.byID["newer"]?.title, "Newer")
-        XCTAssertEqual(index.listItemsByFeed[technology.id]?.first?.summaryPreview, "One")
-        XCTAssertEqual(index.allListItems.first?.sourceTitle, "News")
-    }
-
-    func testLibraryIndexExcludesDeletedAndMissingFeedArticles() {
-        let activeFeed = Feed(
-            id: UUID(),
-            title: "Active",
-            feedURL: URL(string: "https://example.com/active.xml")!
-        )
-        let deletedFeed = Feed(
-            id: UUID(),
-            title: "Deleted",
-            feedURL: URL(string: "https://example.com/deleted.xml")!,
-            isDeleted: true
-        )
-        let entries = [
-            Entry(id: "active-entry", feedID: activeFeed.id, title: "保留"),
-            Entry(id: "deleted-entry", feedID: deletedFeed.id, title: "删除"),
-            Entry(id: "missing-entry", feedID: UUID(), title: "孤儿")
-        ]
-
-        XCTAssertTrue(deletedFeed.isDeleted)
-
-        let index = EntryLibraryIndex(entries: entries, feeds: [activeFeed, deletedFeed])
-
-        XCTAssertEqual(index.all.map(\.id), ["active-entry"])
-        XCTAssertNil(index.byID["deleted-entry"])
-        XCTAssertNil(index.byID["missing-entry"])
-        XCTAssertNil(index.listItemsByFeed[deletedFeed.id])
     }
 
     func testEntryListItemDoesNotCarryFullArticleContent() {
@@ -877,46 +815,6 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertTrue(artifact.content.isEmpty)
     }
 
-    func testUnreadListItemsRetainsReadEntriesInSession() {
-        let feedID = UUID()
-        let feed = Feed(id: feedID, title: "Test", feedURL: URL(string: "https://example.com")!)
-        var entry1 = Entry(id: "item-1", feedID: feedID, title: "Unread 1", isRead: false)
-        let entry2 = Entry(id: "item-2", feedID: feedID, title: "Unread 2", isRead: false)
-
-        var index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
-        XCTAssertEqual(index.unreadListItems.count, 2)
-
-        // Simulate marking item1 as read
-        entry1.isRead = true
-        index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
-
-        // Without retainingIDs, marked read item vanishes
-        XCTAssertEqual(index.unreadListItems.map(\.id), ["item-2"])
-
-        // With retainingIDs set from current session, item1 is retained
-        let retained = index.unreadListItems(retainingIDs: ["item-1", "item-2"])
-        XCTAssertEqual(retained.map(\.id), ["item-1", "item-2"])
-        XCTAssertTrue(retained.first(where: { $0.id == "item-1" })?.isRead == true)
-    }
-
-    func testStarredListItemsRetainsAnUnstarredCurrentEntryForNavigation() {
-        let feedID = UUID()
-        let feed = Feed(id: feedID, title: "Test", feedURL: URL(string: "https://example.com")!)
-        var entry1 = Entry(id: "item-1", feedID: feedID, title: "Starred 1", isStarred: true)
-        let entry2 = Entry(id: "item-2", feedID: feedID, title: "Starred 2", isStarred: true)
-
-        var index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
-        XCTAssertEqual(index.starredListItems.map(\.id), ["item-1", "item-2"])
-
-        entry1.isStarred = false
-        index = EntryLibraryIndex(entries: [entry1, entry2], feeds: [feed])
-        XCTAssertEqual(index.starredListItems.map(\.id), ["item-2"])
-
-        let retained = index.starredListItems(retainingIDs: ["item-1"])
-        XCTAssertEqual(retained.map(\.id), ["item-1", "item-2"])
-        XCTAssertFalse(retained[0].isStarred)
-    }
-
     @MainActor
     func testSummaryForceRegenerationAndMissingKeyError() async throws {
         let defaults = UserDefaults.standard
@@ -931,16 +829,15 @@ final class PaperRssCoreTests: XCTestCase {
         }
 
         let store = AppStore()
-        var config = store.database.llmConfiguration
-        config.baseURL = "https://api.deepseek.com"
+        let config = LLMConfiguration.deepSeek
         _ = store.saveLLMConfiguration(config, apiKey: "")
 
         let entry = Entry(id: "test-entry-1", feedID: UUID(), title: "Test Title", summary: "Test Content")
         
-        // When DeepSeek API Key is empty, generateSummary reports lastError
+        // When API Key is empty, generateSummary reports lastError
         await store.generateSummary(entry: entry, text: "Test Content", force: true)
         XCTAssertNotNil(store.lastError)
-        XCTAssertTrue(store.lastError?.contains("DeepSeek API Key") == true)
+        XCTAssertTrue(store.lastError?.contains("API Key") == true)
     }
 
     func testUnentitledBuildsAreRejectedBeforeAnyCloudKitCall() async {

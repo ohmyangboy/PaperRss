@@ -51,133 +51,6 @@ public struct AIRequestStatus: Sendable, Equatable {
     }
 }
 
-/// A read-optimized snapshot of the article library.
-///
-/// SwiftUI's `List` already creates rows lazily, but it still needs a stable
-/// collection and stable identities when its selection changes. Keeping the
-/// sort and grouping work here means a sidebar click only swaps an existing
-/// array instead of sorting and filtering the full library several times while
-/// SwiftUI evaluates the three-column hierarchy.
-struct EntryLibraryIndex: Sendable {
-    static let empty = EntryLibraryIndex(entries: [], feeds: [])
-
-    let all: [Entry]
-    let today: [Entry]
-    let todayUnreadCount: Int
-    let unread: [Entry]
-    let starred: [Entry]
-    let byID: [String: Entry]
-    let byFeed: [UUID: [Entry]]
-    let byFolder: [String: [Entry]]
-    let unreadByFeed: [UUID: Int]
-    let unreadByFolder: [String: Int]
-    let allListItems: [EntryListItem]
-    let todayListItems: [EntryListItem]
-    let unreadListItems: [EntryListItem]
-    let starredListItems: [EntryListItem]
-    let listItemsByFeed: [UUID: [EntryListItem]]
-    let listItemsByFolder: [String: [EntryListItem]]
-
-    init(entries: [Entry], feeds: [Feed], now: Date = .now, calendar: Calendar = .current) {
-        let ordered = entries.sorted {
-            let left = $0.publishedAt ?? .distantPast
-            let right = $1.publishedAt ?? .distantPast
-            return left == right ? $0.id < $1.id : left > right
-        }
-        let activeFeeds = feeds.filter { !$0.isDeleted }
-        let feedsByID = Dictionary(uniqueKeysWithValues: activeFeeds.map { ($0.id, $0) })
-        let folderByFeed = Dictionary(uniqueKeysWithValues: activeFeeds.compactMap { feed in
-            feed.folder.map { (feed.id, $0) }
-        })
-        var todayEntries: [Entry] = []
-        var todayUnreadCount: Int = 0
-        var unreadEntries: [Entry] = []
-        var starredEntries: [Entry] = []
-        var entriesByID: [String: Entry] = [:]
-        var entriesByFeed: [UUID: [Entry]] = [:]
-        var entriesByFolder: [String: [Entry]] = [:]
-        var feedUnreadCounts: [UUID: Int] = [:]
-        var folderUnreadCounts: [String: Int] = [:]
-        var listItems: [EntryListItem] = []
-        var todayRowItems: [EntryListItem] = []
-        var unreadRowItems: [EntryListItem] = []
-        var starredRowItems: [EntryListItem] = []
-        var rowItemsByFeed: [UUID: [EntryListItem]] = [:]
-        var rowItemsByFolder: [String: [EntryListItem]] = [:]
-
-        var activeEntries: [Entry] = []
-        todayEntries.reserveCapacity(min(ordered.count, 128))
-        unreadEntries.reserveCapacity(ordered.count)
-        starredEntries.reserveCapacity(min(ordered.count, 128))
-        entriesByID.reserveCapacity(ordered.count)
-        listItems.reserveCapacity(ordered.count)
-
-        for entry in ordered {
-            guard let feed = feedsByID[entry.feedID] else { continue }
-            activeEntries.append(entry)
-            let listItem = EntryListItem(
-                entry: entry,
-                sourceTitle: feed.title,
-                feedIconURL: feed.iconURL
-            )
-            entriesByID[entry.id] = entry
-            entriesByFeed[entry.feedID, default: []].append(entry)
-            listItems.append(listItem)
-            rowItemsByFeed[entry.feedID, default: []].append(listItem)
-            if let publishedAt = entry.publishedAt, calendar.isDate(publishedAt, inSameDayAs: now) {
-                todayEntries.append(entry)
-                todayRowItems.append(listItem)
-                if !entry.isRead {
-                    todayUnreadCount += 1
-                }
-            }
-            if entry.isStarred {
-                starredEntries.append(entry)
-                starredRowItems.append(listItem)
-            }
-            if !entry.isRead {
-                unreadEntries.append(entry)
-                unreadRowItems.append(listItem)
-                feedUnreadCounts[entry.feedID, default: 0] += 1
-            }
-            if let folder = folderByFeed[entry.feedID] {
-                entriesByFolder[folder, default: []].append(entry)
-                rowItemsByFolder[folder, default: []].append(listItem)
-                if !entry.isRead {
-                    folderUnreadCounts[folder, default: 0] += 1
-                }
-            }
-        }
-
-        all = activeEntries
-        today = todayEntries
-        self.todayUnreadCount = todayUnreadCount
-        unread = unreadEntries
-        starred = starredEntries
-        byID = entriesByID
-        byFeed = entriesByFeed
-        byFolder = entriesByFolder
-        unreadByFeed = feedUnreadCounts
-        unreadByFolder = folderUnreadCounts
-        allListItems = listItems
-        todayListItems = todayRowItems
-        unreadListItems = unreadRowItems
-        starredListItems = starredRowItems
-        listItemsByFeed = rowItemsByFeed
-        listItemsByFolder = rowItemsByFolder
-    }
-
-    func unreadListItems(retainingIDs: Set<String>) -> [EntryListItem] {
-        guard !retainingIDs.isEmpty else { return unreadListItems }
-        return allListItems.filter { !$0.isRead || retainingIDs.contains($0.id) }
-    }
-
-    func starredListItems(retainingIDs: Set<String>) -> [EntryListItem] {
-        guard !retainingIDs.isEmpty else { return starredListItems }
-        return allListItems.filter { $0.isStarred || retainingIDs.contains($0.id) }
-    }
-}
-
 @MainActor
 public final class AppStore: ObservableObject {
     @Published public var appLanguage: AppLanguage = I18N.shared.language {
@@ -185,17 +58,27 @@ public final class AppStore: ObservableObject {
             I18N.shared.language = appLanguage
         }
     }
-    @Published public private(set) var appTheme: AppTheme
-    @Published public private(set) var articleFontSize: Int
-    @Published public private(set) var database: AppDatabase
+    @Published public private(set) var appTheme: AppTheme = .system
+    @Published public private(set) var articleFontSize: Int = 17
+
+    @Published public private(set) var feeds: [Feed] = []
+    @Published public private(set) var customFolders: [String] = []
+    @Published public private(set) var sidebarCounts: SidebarCounts = SidebarCounts()
+    @Published public private(set) var entryListItems: [EntryListItem] = []
+    @Published public private(set) var todayEntryListItems: [EntryListItem] = []
+    @Published public private(set) var unreadEntryListItems: [EntryListItem] = []
+    @Published public private(set) var starredEntryListItems: [EntryListItem] = []
+    @Published public var llmConfiguration: LLMConfiguration = .default
+
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
     @Published public private(set) var latestRefreshOutcome: FeedRefreshOutcome?
-    @Published public private(set) var refreshInterval: FeedRefreshInterval
-    @Published public private(set) var refreshOnLaunch: Bool
+    @Published public private(set) var refreshInterval: FeedRefreshInterval = .twoHours
+    @Published public private(set) var refreshOnLaunch: Bool = true
     @Published public private(set) var lastError: String?
     @Published public private(set) var isICloudSyncEnabled = false
+
     private enum ICloudSyncState {
         case disabled
         case waiting
@@ -223,6 +106,7 @@ public final class AppStore: ObservableObject {
             return CloudSyncError.notEntitled.localizedDescription
         }
     }
+
     @Published public private(set) var activeSummaryRequest: AIRequestStatus?
     @Published public private(set) var activeBilingualRequest: AIRequestStatus?
     @Published public private(set) var activeSelectionRequest: AIRequestStatus?
@@ -264,17 +148,12 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    public let libraryDatabase: LibraryDatabase
+    public let localProvider: LocalAccountProvider
     private let persistenceURL: URL
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
-    private let persistenceWriter = DatabasePersistenceWriter()
-    private var iCloudSyncTask: Task<Void, Never>?
     private var automaticRefreshTask: Task<Void, Never>?
-    private var summaryStreamNotificationTask: Task<Void, Never>?
-    private var persistenceRevision = 0
-    private var entryIndex: EntryLibraryIndex
-
-    private static let summaryStreamNotificationInterval: UInt64 = 30_000_000
 
     private enum PreferenceKey {
         static let refreshInterval = "PaperRss.refreshInterval"
@@ -282,36 +161,63 @@ public final class AppStore: ObservableObject {
         static let appTheme = "PaperRss.appTheme"
         static let articleFontSize = "PaperRss.articleFontSize"
         static let ignoredVersion = "PaperRss.ignoredVersion"
+        static let llmConfiguration = "PaperRss.llmConfiguration"
     }
 
-    public init(fileManager: FileManager = .default) {
-        feedFetcher = FeedService.fetch
+    @Published public private(set) var startupError: Error?
+    public static let defaultTimelineLimit: Int = 100
+    private var cachedEntryLookup: [String: Entry] = [:]
+
+    // MARK: - Initializer
+
+    public init(
+        fileManager: FileManager = .default,
+        databaseURL: URL? = nil,
+        persistenceURL: URL? = nil
+    ) {
+        self.feedFetcher = { try await FeedService.fetch($0) }
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        persistenceURL = directory.appendingPathComponent("library.json")
-        var loadedDatabase = Self.load(from: persistenceURL) ?? .empty
-        var needsRepairPersistence = false
-        // Older libraries may have a feed endpoint but no channel homepage.
-        // Recover the publisher origin from an existing article so the icon
-        // fallback does not stay on a proxy/feed host forever.
-        for feedIndex in loadedDatabase.feeds.indices where loadedDatabase.feeds[feedIndex].siteURL == nil {
-            guard let articleURL = loadedDatabase.entries.first(where: { $0.feedID == loadedDatabase.feeds[feedIndex].id })?.url,
-                  let origin = Self.originURL(from: articleURL) else { continue }
-            loadedDatabase.feeds[feedIndex].siteURL = origin
-            needsRepairPersistence = true
+
+        self.persistenceURL = persistenceURL ?? directory.appendingPathComponent("library.json")
+        let sqliteURL = databaseURL ?? directory.appendingPathComponent("library.sqlite")
+
+        do {
+            self.libraryDatabase = try LibraryDatabase(databaseURL: sqliteURL)
+        } catch {
+            fatalError("Failed to initialize LibraryDatabase: \(error)")
         }
-        // Older builds kept some HTML descriptions in `summary`. Normalize
-        // those once at load time instead of running a regular-expression HTML
-        // pass from every visible row whenever the user changes feeds.
-        for index in loadedDatabase.entries.indices where loadedDatabase.entries[index].summary.needsPlainTextNormalization {
-            loadedDatabase.entries[index].summary = loadedDatabase.entries[index].summary.plainText
+
+        self.localProvider = LocalAccountProvider(
+            accountID: "local-default",
+            database: libraryDatabase,
+            feedFetcher: feedFetcher
+        )
+
+        // 1. Recover LLM Configuration from legacy JSON if needed (Independent of SQLite migration state)
+        if let recovered = LegacyPreferenceMigrator.recoverLLMConfigurationIfNeeded(from: self.persistenceURL, fileManager: fileManager) {
+            self.llmConfiguration = recovered
         }
-        if Self.purgeEntriesFromInactiveFeeds(in: &loadedDatabase) {
-            needsRepairPersistence = true
+
+        // 2. Startup Migration Sequence:
+        var migrationSucceededOrNotNeeded = true
+        if fileManager.fileExists(atPath: self.persistenceURL.path) {
+            let migrator = LegacyJSONMigrator(database: libraryDatabase)
+            do {
+                let result = try migrator.migrate(from: self.persistenceURL)
+                switch result {
+                case .success, .alreadyCompleted, .noLegacySource:
+                    migrationSucceededOrNotNeeded = true
+                }
+            } catch {
+                migrationSucceededOrNotNeeded = false
+                self.startupError = error
+                self.lastError = I18N.localizedFormat("迁移历史数据失败：%@", arguments: [error.localizedDescription])
+            }
         }
-        database = loadedDatabase
-        entryIndex = EntryLibraryIndex(entries: loadedDatabase.entries, feeds: loadedDatabase.feeds)
+
+        // 3. Load Preferences
         let preferences = UserDefaults.standard
         refreshInterval = FeedRefreshInterval(rawValue: preferences.string(forKey: PreferenceKey.refreshInterval) ?? "") ?? .twoHours
         refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
@@ -320,12 +226,16 @@ public final class AppStore: ObservableObject {
         let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
         articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
         ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
+
+        if let data = preferences.data(forKey: PreferenceKey.llmConfiguration),
+           let savedConfig = try? JSONDecoder().decode(LLMConfiguration.self, from: data) {
+            llmConfiguration = savedConfig
+        } else {
+            llmConfiguration = .default
+        }
+
         let storedICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
         if storedICloudSyncEnabled && !CloudSyncService.isICloudEntitled {
-            // 先前构建可能保存了启用标记，但当前二进制没有 CloudKit
-            // entitlement。保留该标记会在任意一次持久化后调度 CloudKit
-            // 调用，而 `CKContainer.default()` 在此场景抛出的 Objective-C
-            // 异常无法被 Swift 捕获，会直接终止应用（SIGABRT）。
             UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
             isICloudSyncEnabled = false
             iCloudSyncState = .notEntitled
@@ -333,385 +243,358 @@ public final class AppStore: ObservableObject {
             isICloudSyncEnabled = storedICloudSyncEnabled
             iCloudSyncState = isICloudSyncEnabled ? .waiting : .disabled
         }
-        if needsRepairPersistence { persist(scheduleICloud: false) }
+
+        // 4. Reload State from SQLite ONLY IF migration succeeded or not needed
+        if migrationSucceededOrNotNeeded {
+            try? localProvider.ensureAccountExists()
+            reloadState()
+        }
 
         Task { [weak self] in
             await self?.checkForUpdates(isUserInitiated: false)
         }
     }
 
-    init(
+    /// 测试用初始化器（隔离测试沙箱）
+    public init(
         testDatabase: AppDatabase,
         feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult
     ) {
         self.feedFetcher = feedFetcher
-        persistenceURL = FileManager.default.temporaryDirectory
+        let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
-            .appendingPathComponent("library.json")
-        database = testDatabase
-        entryIndex = EntryLibraryIndex(entries: testDatabase.entries, feeds: testDatabase.feeds)
-        refreshInterval = .twoHours
-        refreshOnLaunch = true
-        appTheme = .system
-        articleFontSize = 17
-        isICloudSyncEnabled = false
-        iCloudSyncState = .disabled
-        ignoredVersion = nil
-    }
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        self.persistenceURL = tempDir.appendingPathComponent("library.json")
+        let sqliteURL = tempDir.appendingPathComponent("library.sqlite")
 
-    public func checkForUpdates(isUserInitiated: Bool = false) async {
-        if isUserInitiated {
-            clearIgnoredVersion()
-        }
-        if isUserInitiated || updateStatus == .idle {
-            updateStatus = .checking
-        }
         do {
-            let (hasUpdate, release) = try await UpdateCheckService.checkForUpdates()
-            let now = Date()
-            if hasUpdate, let release {
-                updateStatus = .hasUpdate(release: release, checkedAt: now)
-            } else {
-                updateStatus = .upToDate(checkedAt: now)
-            }
+            self.libraryDatabase = try LibraryDatabase(databaseURL: sqliteURL)
         } catch {
-            updateStatus = .failed(message: error.localizedDescription)
+            fatalError("Failed to initialize test LibraryDatabase: \(error)")
+        }
+
+        self.localProvider = LocalAccountProvider(
+            accountID: "local-default",
+            database: libraryDatabase,
+            feedFetcher: feedFetcher
+        )
+
+        var migrationSucceededOrNotNeeded = true
+        // 写入测试 JSON 并执行迁移
+        if let data = try? JSONEncoder.paperRss.encode(testDatabase) {
+            try? data.write(to: persistenceURL)
+            let migrator = LegacyJSONMigrator(database: libraryDatabase)
+            do {
+                _ = try migrator.migrate(from: persistenceURL)
+            } catch {
+                migrationSucceededOrNotNeeded = false
+                self.startupError = error
+                self.lastError = error.localizedDescription
+            }
+        }
+
+        if migrationSucceededOrNotNeeded {
+            try? localProvider.ensureAccountExists()
+        }
+
+        let preferences = UserDefaults.standard
+        refreshInterval = FeedRefreshInterval(rawValue: preferences.string(forKey: PreferenceKey.refreshInterval) ?? "") ?? .twoHours
+        refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
+        let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
+        appTheme = AppTheme(rawValue: rawTheme) ?? .system
+        let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
+        articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
+        ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
+        llmConfiguration = testDatabase.llmConfiguration
+
+        if migrationSucceededOrNotNeeded {
+            reloadState()
         }
     }
 
-    public var feeds: [Feed] { database.feeds.filter { !$0.isDeleted } }
+    // MARK: - State Reload & Querying
+
+    public func reloadState() {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        let limit = Self.defaultTimelineLimit
+
+        self.feeds = (try? localProvider.fetchFeeds()) ?? []
+        self.customFolders = (try? localProvider.fetchFolderNames()) ?? []
+        self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? SidebarCounts()
+
+        self.entryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .all, limit: limit)) ?? []
+        self.todayEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .today(startOfDayTimestamp: startOfDay), limit: limit)) ?? []
+        self.unreadEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, limit: limit)) ?? []
+        self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, limit: limit)) ?? []
+        self.cachedEntryLookup.removeAll(keepingCapacity: true)
+    }
+
+    // MARK: - Computed Public Accessors
+
     public var rootFeeds: [Feed] { feeds.filter { $0.folder == nil } }
-    public func feeds(in folder: String) -> [Feed] { feeds.filter { $0.folder == folder } }
     public var folders: [String] {
-        var result: [String] = []
-        let allFolders = Set(feeds.compactMap(\.folder)).union(database.customFolders)
-        for folder in database.customFolders {
-            if allFolders.contains(folder) && !result.contains(folder) {
-                result.append(folder)
+        var names: [String] = []
+        var seen: Set<String> = []
+        for folder in customFolders where !seen.contains(folder) {
+            names.append(folder)
+            seen.insert(folder)
+        }
+        for feed in feeds {
+            if let folder = feed.folder, !seen.contains(folder) {
+                names.append(folder)
+                seen.insert(folder)
             }
         }
-        let remaining = allFolders.subtracting(result).sorted()
-        result.append(contentsOf: remaining)
-        return result
+        return names
     }
 
-    public func reorderFolders(fromOffsets offsets: IndexSet, toOffset destination: Int) {
-        var currentFolders = folders
-        currentFolders.move(fromOffsets: offsets, toOffset: destination)
-        database.customFolders = currentFolders
-        persist()
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
+    public var entries: [Entry] {
+        (try? localProvider.fetchAllEntries()) ?? []
     }
 
-    public func reorderRootFeeds(fromOffsets offsets: IndexSet, toOffset destination: Int) {
-        var currentRootFeeds = rootFeeds
-        currentRootFeeds.move(fromOffsets: offsets, toOffset: destination)
-        reorderFeedsInDatabase(matching: currentRootFeeds)
-    }
-
-    public func reorderFeeds(in folder: String, fromOffsets offsets: IndexSet, toOffset destination: Int) {
-        var currentFolderFeeds = feeds(in: folder)
-        currentFolderFeeds.move(fromOffsets: offsets, toOffset: destination)
-        reorderFeedsInDatabase(matching: currentFolderFeeds)
-    }
-
-    private func reorderFeedsInDatabase(matching orderedSublist: [Feed]) {
-        guard !orderedSublist.isEmpty else { return }
-        let idSet = Set(orderedSublist.map(\.id))
-        var newFeeds: [Feed] = []
-        var sublistIndex = 0
-        for feed in database.feeds {
-            if idSet.contains(feed.id) {
-                if sublistIndex < orderedSublist.count {
-                    newFeeds.append(orderedSublist[sublistIndex])
-                    sublistIndex += 1
-                }
-            } else {
-                newFeeds.append(feed)
-            }
-        }
-        database.feeds = newFeeds
-        rebuildEntryIndex()
-        persist()
-    }
-    public var entries: [Entry] { entryIndex.all }
-    public var todayEntries: [Entry] { entryIndex.today }
-    public var todayUnreadCount: Int { entryIndex.todayUnreadCount }
-    public var unreadEntries: [Entry] { entryIndex.unread }
-    public var starredEntries: [Entry] { entryIndex.starred }
-    public var entryListItems: [EntryListItem] { entryIndex.allListItems }
-    public var todayEntryListItems: [EntryListItem] { entryIndex.todayListItems }
-    public var unreadEntryListItems: [EntryListItem] { entryIndex.unreadListItems }
-    public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] { entryIndex.unreadListItems(retainingIDs: retainingIDs) }
-    public var starredEntryListItems: [EntryListItem] { entryIndex.starredListItems }
-    public func starredEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] { entryIndex.starredListItems(retainingIDs: retainingIDs) }
-    public func unreadCount(feedID: UUID) -> Int { entryIndex.unreadByFeed[feedID, default: 0] }
-    public func unreadCount(folder: String) -> Int { entryIndex.unreadByFolder[folder, default: 0] }
-
-    public func setFeedFolder(_ feed: Feed, folder: String?) {
-        guard let index = database.feeds.firstIndex(where: { $0.id == feed.id }) else { return }
-        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        database.feeds[index].folder = cleanFolder
-        database.feeds[index].updatedAt = .now
-        rebuildEntryIndex()
-        persist()
-    }
-
-    public func setFeedFolder(feedID: UUID, folder: String?) {
-        guard let index = database.feeds.firstIndex(where: { $0.id == feedID }) else { return }
-        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        database.feeds[index].folder = cleanFolder
-        database.feeds[index].updatedAt = .now
-        rebuildEntryIndex()
-        persist()
-    }
-
-    public func setFeedFolder(feedIDs: Set<UUID>, folder: String?) {
-        guard !feedIDs.isEmpty else { return }
-        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        var updated = false
-        for index in database.feeds.indices where feedIDs.contains(database.feeds[index].id) {
-            database.feeds[index].folder = cleanFolder
-            database.feeds[index].updatedAt = .now
-            updated = true
-        }
-        if updated {
-            rebuildEntryIndex()
-            persist()
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
+    public var todayEntries: [Entry] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        return entries.filter {
+            let ts = $0.publishedAt?.timeIntervalSince1970 ?? $0.updatedAt.timeIntervalSince1970
+            return ts >= startOfDay
         }
     }
 
-    public func addFolder(_ name: String) {
-        guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
-        if !database.customFolders.contains(clean) {
-            database.customFolders.append(clean)
-            persist()
-        }
+    public var todayUnreadCount: Int { sidebarCounts.todayUnread }
+
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
+    public var unreadEntries: [Entry] { entries.filter { !$0.isRead } }
+
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
+    public var starredEntries: [Entry] { entries.filter { $0.isStarred } }
+
+    public func unreadCount(feedID: UUID) -> Int { sidebarCounts.unreadByFeed[feedID, default: 0] }
+    public func unreadCount(folder: String) -> Int { sidebarCounts.unreadByFolder[folder, default: 0] }
+
+    public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, retainingIDs: retainingIDs)) ?? unreadEntryListItems
     }
 
-    public func deleteFolder(_ name: String) {
-        database.customFolders.removeAll { $0 == name }
-        for index in database.feeds.indices where database.feeds[index].folder == name {
-            database.feeds[index].folder = nil
-            database.feeds[index].updatedAt = .now
-        }
-        rebuildEntryIndex()
-        persist()
+    public func starredEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, retainingIDs: retainingIDs)) ?? starredEntryListItems
     }
 
-    public func renameFolder(from oldName: String, to newName: String) {
-        let cleanNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanNew.isEmpty, cleanNew != oldName else { return }
-        if let idx = database.customFolders.firstIndex(of: oldName) {
-            database.customFolders[idx] = cleanNew
-        }
-        for index in database.feeds.indices where database.feeds[index].folder == oldName {
-            database.feeds[index].folder = cleanNew
-            database.feeds[index].updatedAt = .now
-        }
-        rebuildEntryIndex()
-        persist()
+    public func entryListItems(feedID: UUID) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(scope: .feed(feedID: feedID.uuidString))) ?? []
+    }
+
+    public func entryListItems(feedIDs: Set<UUID>) -> [EntryListItem] {
+        guard !feedIDs.isEmpty else { return [] }
+        let ids = Set(feedIDs.map(\.uuidString))
+        return (try? localProvider.timelineQueryService.fetchListItems(scope: .feeds(feedIDs: ids))) ?? []
+    }
+
+    public func fetchTimelinePage(
+        scope: TimelineScope,
+        retainingIDs: Set<String> = [],
+        limit: Int = 100,
+        offset: Int = 0
+    ) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(
+            scope: scope,
+            retainingIDs: retainingIDs,
+            limit: limit,
+            offset: offset
+        )) ?? []
+    }
+
+    public func entryListItems(folder: String) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(scope: .folder(folderName: folder))) ?? []
     }
 
     public func entries(feedID: UUID?) -> [Entry] {
         guard let feedID else { return entries }
-        return entryIndex.byFeed[feedID] ?? []
+        return entries.filter { $0.feedID == feedID }
     }
 
-    public func entries(folder: String) -> [Entry] { entryIndex.byFolder[folder] ?? [] }
-    public func entryListItems(feedID: UUID) -> [EntryListItem] { entryIndex.listItemsByFeed[feedID] ?? [] }
-    public func entryListItems(feedIDs: Set<UUID>) -> [EntryListItem] {
-        guard !feedIDs.isEmpty else { return [] }
-        return entryIndex.allListItems.filter { feedIDs.contains($0.feedID) }
-    }
-    public func entryListItems(folder: String) -> [EntryListItem] { entryIndex.listItemsByFolder[folder] ?? [] }
-    public func entry(id: String) -> Entry? { entryIndex.byID[id] }
-    public func feed(for entry: Entry) -> Feed? { database.feeds.first { $0.id == entry.feedID } }
-    public func artifact(for entry: Entry, kind: AIArtifactKind) -> AIArtifact? {
-        database.artifacts.filter { $0.entryID == entry.id && $0.kind == kind && $0.isComplete && !$0.isDeleted }.sorted { $0.updatedAt > $1.updatedAt }.first
+    public func entries(folder: String) -> [Entry] {
+        let feedIDs = Set(feeds.filter { $0.folder == folder }.map(\.id))
+        return entries.filter { feedIDs.contains($0.feedID) }
     }
 
-    /// Returns the latest summary artifact even while it is still streaming.
-    /// `artifact(for:kind:)` intentionally stays completion-only so callers
-    /// never mistake a partial result for a final one; the summary card uses
-    /// this accessor to render each delta as it arrives.
-    public func summaryArtifact(for entry: Entry) -> AIArtifact? {
-        database.artifacts
-            .filter { $0.entryID == entry.id && $0.kind == .summary && !$0.isDeleted }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .first
-    }
-
-    /// Returns the saved progressive translation that matches the article's
-    /// current text and model. Unlike `artifact(for:kind:)`, this intentionally
-    /// includes an incomplete artifact so the reader can render finished
-    /// paragraphs while the rest remains lazy.
-    public func bilingualArtifact(for entry: Entry, text: String) -> AIArtifact? {
-        let configuration = database.llmConfiguration
-        let hash = text.stableDigest
-        return database.artifacts
-            .filter {
-                $0.entryID == entry.id
-                    && $0.kind == .bilingual
-                    && $0.contentHash == hash
-                    && $0.model == configuration.model
-                    && !$0.isDeleted
-            }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .first
-    }
-
-    public func isGeneratingAI(for entry: Entry, kind: AIArtifactKind) -> Bool {
-        guard let status = activeAIStatus(for: kind) else { return false }
-        return status.entryID == entry.id && status.kind == kind
-    }
-
-    public func setRefreshInterval(_ interval: FeedRefreshInterval) {
-        guard refreshInterval != interval else { return }
-        refreshInterval = interval
-        UserDefaults.standard.set(interval.rawValue, forKey: PreferenceKey.refreshInterval)
-        restartAutomaticRefreshIfNeeded()
-    }
-
-    public func setRefreshOnLaunch(_ enabled: Bool) {
-        guard refreshOnLaunch != enabled else { return }
-        refreshOnLaunch = enabled
-        UserDefaults.standard.set(enabled, forKey: PreferenceKey.refreshOnLaunch)
-    }
-
-    public func setAppTheme(_ theme: AppTheme) {
-        guard appTheme != theme else { return }
-        appTheme = theme
-        UserDefaults.standard.set(theme.rawValue, forKey: PreferenceKey.appTheme)
-    }
-
-    public func setArticleFontSize(_ size: Int) {
-        let clamped = max(13, min(25, size))
-        guard articleFontSize != clamped else { return }
-        articleFontSize = clamped
-        UserDefaults.standard.set(clamped, forKey: PreferenceKey.articleFontSize)
-    }
-
-    public func increaseArticleFontSize() {
-        setArticleFontSize(articleFontSize + 1)
-    }
-
-    public func decreaseArticleFontSize() {
-        setArticleFontSize(articleFontSize - 1)
-    }
-
-    public func resetArticleFontSize() {
-        setArticleFontSize(17)
-    }
-
-    public func ignoreVersion(_ version: String) {
-        let clean = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        guard ignoredVersion != clean else { return }
-        ignoredVersion = clean
-        UserDefaults.standard.set(clean, forKey: PreferenceKey.ignoredVersion)
-    }
-
-    public func clearIgnoredVersion() {
-        guard ignoredVersion != nil else { return }
-        ignoredVersion = nil
-        UserDefaults.standard.removeObject(forKey: PreferenceKey.ignoredVersion)
-    }
-
-    /// Starts the app-level refresh loop. The first refresh is intentionally
-    /// immediate so reopening the app always checks for new articles.
-    public func startAutomaticRefresh() {
-        guard automaticRefreshTask == nil else { return }
-        automaticRefreshTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            if self.refreshOnLaunch {
-                await self.refresh(reportErrors: false, origin: .launch)
-            }
-
-            while !Task.isCancelled {
-                guard let seconds = self.refreshInterval.seconds else {
-                    do {
-                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
-                    } catch {
-                        return
-                    }
-                    continue
-                }
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                await self.refresh(reportErrors: false, origin: .scheduled)
-            }
+    public func entry(id: String) -> Entry? {
+        if let cached = cachedEntryLookup[id] {
+            return cached
         }
+        guard let fetched = try? localProvider.fetchEntry(id: id) else { return nil }
+        if cachedEntryLookup.count >= 100 {
+            cachedEntryLookup.removeAll(keepingCapacity: true)
+        }
+        cachedEntryLookup[id] = fetched
+        return fetched
     }
 
-    public func stopAutomaticRefresh() {
-        automaticRefreshTask?.cancel()
-        automaticRefreshTask = nil
+    public func feed(for entry: Entry) -> Feed? {
+        feeds.first { $0.id == entry.feedID }
     }
 
-    private func restartAutomaticRefreshIfNeeded() {
-        guard automaticRefreshTask != nil else { return }
-        stopAutomaticRefresh()
-        startAutomaticRefresh()
+    // MARK: - Feed & Folder Management
+
+    public func setFeedFolder(_ feed: Feed, folder: String?) {
+        setFeedFolder(feedID: feed.id, folder: folder)
+    }
+
+    public func setFeedFolder(feedID: UUID, folder: String?) {
+        try? localProvider.setFeedFolder(feedID: feedID, folderName: folder)
+        reloadState()
+    }
+
+    public func setFeedFolder(feedIDs: Set<UUID>, folder: String?) {
+        guard !feedIDs.isEmpty else { return }
+        try? localProvider.setFeedFolder(feedIDs: feedIDs, folderName: folder)
+        reloadState()
+    }
+
+    public func addFolder(_ name: String) {
+        guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
+        try? localProvider.addFolder(name: clean)
+        reloadState()
+    }
+
+    public func deleteFolder(_ name: String) {
+        try? localProvider.deleteFolder(name: name)
+        reloadState()
+    }
+
+    public func renameFolder(from oldName: String, to newName: String) {
+        try? localProvider.renameFolder(oldName: oldName, newName: newName)
+        reloadState()
     }
 
     public func addFeed(urlText: String, folder: String? = nil) async {
-        guard let url = normalizedURL(urlText) else { lastError = I18N.localized("请输入有效的 Feed URL。"); return }
-        guard !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) else { lastError = I18N.localized("这个订阅已经存在。"); return }
-        let feed = Feed(title: url.host ?? url.absoluteString, feedURL: url, folder: folder?.nonEmpty)
-        database.feeds.append(feed)
-        persist()
+        guard let url = normalizedURL(urlText) else {
+            lastError = I18N.localized("请输入有效的 Feed URL。")
+            return
+        }
+
+        let title = url.host ?? url.absoluteString
+        let feed: Feed
+        do {
+            feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
+        } catch let error as LocalAccountError {
+            lastError = error.errorDescription
+            return
+        } catch {
+            lastError = error.localizedDescription
+            return
+        }
+
+        reloadState()
         await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
     }
 
-    public func importOPML(_ data: Data) async {
-        let urls = OPMLService.importURLs(data: data)
-        var newFeedIDs: [UUID] = []
-        for url in urls where !database.feeds.contains(where: { $0.feedURL == url && !$0.isDeleted }) {
-            let feed = Feed(title: url.host ?? url.absoluteString, feedURL: url)
-            database.feeds.append(feed)
-            newFeedIDs.append(feed.id)
+    public func removeFeed(_ feed: Feed) {
+        try? localProvider.deleteFeed(feedID: feed.id)
+        reloadState()
+    }
+
+    public func deleteFeed(_ feed: Feed) {
+        removeFeed(feed)
+    }
+
+    public func deleteFeeds(_ feedsToDelete: [Feed]) {
+        for feed in feedsToDelete {
+            try? localProvider.deleteFeed(feedID: feed.id)
         }
+        reloadState()
+    }
+
+    public func deleteFeeds(_ ids: Set<UUID>) {
+        for id in ids {
+            try? localProvider.deleteFeed(feedID: id)
+        }
+        reloadState()
+    }
+
+    public func deleteFeeds(_ ids: [UUID]) {
+        deleteFeeds(Set(ids))
+    }
+
+    public func reorderRootFeeds(orderedIDs: [UUID]) {
+        var currentFeeds = self.feeds
+        let idOrder = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($1, $0) })
+        currentFeeds.sort {
+            let rank1 = idOrder[$0.id, default: .max]
+            let rank2 = idOrder[$1.id, default: .max]
+            return rank1 < rank2
+        }
+        self.feeds = currentFeeds
+        try? libraryDatabase.write { db in
+            for (idx, id) in orderedIDs.enumerated() {
+                try db.execute(sql: "UPDATE feeds SET sort_order = ? WHERE id = ?;", arguments: [idx, id.uuidString])
+            }
+        }
+    }
+
+    public func reorderRootFeeds(fromOffsets: IndexSet, toOffset: Int) {
+        var currentRootIDs = rootFeeds.map(\.id)
+        currentRootIDs.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        reorderRootFeeds(orderedIDs: currentRootIDs)
+    }
+
+    public func feeds(in folder: String) -> [Feed] {
+        feeds.filter { $0.folder == folder }
+    }
+
+    public func reorderFeeds(in folder: String, fromOffsets: IndexSet, toOffset: Int) {
+        var folderFeedIDs = feeds(in: folder).map(\.id)
+        folderFeedIDs.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        try? libraryDatabase.write { db in
+            for (idx, id) in folderFeedIDs.enumerated() {
+                try db.execute(sql: "UPDATE feeds SET sort_order = ? WHERE id = ?;", arguments: [idx, id.uuidString])
+            }
+        }
+        reloadState()
+    }
+
+    public func reorderFolders(fromOffsets: IndexSet, toOffset: Int) {
+        var names = folders
+        names.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        try? libraryDatabase.write { db in
+            for (idx, name) in names.enumerated() {
+                try db.execute(sql: "UPDATE folders SET sort_order = ? WHERE name = ? AND account_id = 'local-default';", arguments: [idx, name])
+            }
+        }
+        reloadState()
+    }
+
+    public func setICloudSyncEnabled(_ enabled: Bool) {
+        if enabled && !CloudSyncService.isICloudEntitled {
+            isICloudSyncEnabled = false
+            iCloudSyncState = .notEntitled
+            UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
+            return
+        }
+        isICloudSyncEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "PaperRss.iCloudSyncEnabled")
+        iCloudSyncState = enabled ? .waiting : .disabled
+    }
+
+    public func syncICloud() async {
+        // 本 Goal 专注于 Local Account & SQLite Cutover
+    }
+
+    public func importOPML(_ data: Data) async {
+        let newFeedIDs = (try? localProvider.importOPML(data)) ?? []
         guard !newFeedIDs.isEmpty else { return }
-        persist()
+        reloadState()
         await refresh(feedIDs: newFeedIDs, origin: .subscriptionManagement)
     }
 
-    public func exportOPML() -> Data { OPMLService.export(feeds: database.feeds) }
-
-    private struct FeedFetchTaskResult: Sendable {
-        let feedID: UUID
-        let oldTitle: String
-        let result: Result<FeedFetchResult, Error>
+    public func exportOPML() -> Data {
+        (try? localProvider.exportOPML()) ?? Data()
     }
 
-    private static func fetchFeedWithTimeout(
-        feed: Feed,
-        fetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
-        timeoutSeconds: Double = 10.0
-    ) async -> FeedFetchTaskResult {
-        let feedID = feed.id
-        let title = feed.title
-        do {
-            let fetchResult = try await withThrowingTaskGroup(of: FeedFetchResult.self) { group in
-                group.addTask {
-                    try await fetcher(feed)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
-                    throw URLError(.timedOut)
-                }
-                let res = try await group.next()!
-                group.cancelAll()
-                return res
-            }
-            return FeedFetchTaskResult(feedID: feedID, oldTitle: title, result: .success(fetchResult))
-        } catch {
-            return FeedFetchTaskResult(feedID: feedID, oldTitle: title, result: .failure(error))
-        }
-    }
+    // MARK: - Feed Refreshing
 
     @discardableResult
     public func refresh(
@@ -723,33 +606,37 @@ public final class AppStore: ObservableObject {
         let startedAt = Date.now
         isRefreshing = true
         refreshStatus = .refreshing
-        let ids = feedIDs ?? feeds.map(\.id)
-        let targetFeeds: [Feed] = ids.compactMap { id in
-            guard let feed = database.feeds.first(where: { $0.id == id }), !feed.isDeleted else { return nil }
-            return feed
+
+        let targetFeeds: [Feed]
+        if let feedIDs {
+            targetFeeds = feeds.filter { feedIDs.contains($0.id) && !$0.isDeleted }
+        } else {
+            targetFeeds = feeds.filter { !$0.isDeleted }
         }
+
         let total = targetFeeds.count
         refreshProgress = (0, total)
         defer {
             refreshProgress = nil
             isRefreshing = false
         }
+
         var failures: [String] = []
         var updatedFeeds = 0
         var newUnreadEntries: [Entry] = []
         var completedCount = 0
 
         let maxConcurrency = 6
-        let fetcher = self.feedFetcher
+        let provider = self.localProvider
 
-        await withTaskGroup(of: FeedFetchTaskResult.self) { group in
+        await withTaskGroup(of: LocalAccountProvider.SingleFeedRefreshResult.self) { group in
             var feedIndex = 0
 
             while feedIndex < targetFeeds.count && feedIndex < maxConcurrency {
                 let feed = targetFeeds[feedIndex]
                 feedIndex += 1
                 group.addTask {
-                    await Self.fetchFeedWithTimeout(feed: feed, fetcher: fetcher)
+                    await provider.fetchSingleFeed(feed: feed)
                 }
             }
 
@@ -757,59 +644,48 @@ public final class AppStore: ObservableObject {
                 completedCount += 1
                 refreshProgress = (completedCount, total)
 
-                if let index = database.feeds.firstIndex(where: { $0.id == taskResult.feedID }), !database.feeds[index].isDeleted {
-                    switch taskResult.result {
-                    case let .success(.notModified(etag, lastModified)):
-                        database.feeds[index].etag = etag
-                        database.feeds[index].lastModified = lastModified
-                        database.feeds[index].lastRefreshedAt = .now
-                        database.feeds[index].updatedAt = .now
-                    case let .success(.updated(parsed, etag, lastModified)):
-                        updatedFeeds += 1
-                        database.feeds[index].title = parsed.title
-                        database.feeds[index].siteURL = parsed.siteURL
-                        database.feeds[index].storedIconURL = parsed.iconURL ?? database.feeds[index].storedIconURL
-                        database.feeds[index].etag = etag
-                        database.feeds[index].lastModified = lastModified
-                        database.feeds[index].lastRefreshedAt = .now
-                        database.feeds[index].updatedAt = .now
-                        newUnreadEntries.append(contentsOf: merge(entries: parsed.entries, into: taskResult.feedID))
-                        rebuildEntryIndex()
-                    case let .failure(error):
-                        failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
-                    }
+                do {
+                    let outcome = try provider.applyRefreshResult(taskResult)
+                    if outcome.updated { updatedFeeds += 1 }
+                    newUnreadEntries.append(contentsOf: outcome.newUnreadEntries)
+                } catch {
+                    failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                }
+
+                if case let .failure(error) = taskResult.result {
+                    failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
                 }
 
                 if feedIndex < targetFeeds.count {
                     let feed = targetFeeds[feedIndex]
                     feedIndex += 1
                     group.addTask {
-                        await Self.fetchFeedWithTimeout(feed: feed, fetcher: fetcher)
+                        await provider.fetchSingleFeed(feed: feed)
                     }
                 }
             }
         }
-        rebuildEntryIndex()
-        persist()
+
+        reloadState()
+
         let finishedAt = Date.now
-        let currentEntriesByID = Dictionary(
-            uniqueKeysWithValues: database.entries.map { ($0.id, $0) }
-        )
         var reportedEntryIDs: Set<String> = []
-        newUnreadEntries = newUnreadEntries.compactMap { candidate in
+        let finalNewUnreads = newUnreadEntries.compactMap { candidate -> Entry? in
             guard reportedEntryIDs.insert(candidate.id).inserted,
-                  let currentEntry = currentEntriesByID[candidate.id],
-                  !currentEntry.isRead else { return nil }
-            return currentEntry
+                  let current = try? provider.fetchEntry(id: candidate.id),
+                  !current.isRead else { return nil }
+            return current
         }
+
         let outcome = FeedRefreshOutcome(
             origin: origin,
-            newUnreadEntries: newUnreadEntries,
+            newUnreadEntries: finalNewUnreads,
             updatedFeedCount: updatedFeeds,
             failedFeedCount: failures.count,
             finishedAt: finishedAt
         )
         latestRefreshOutcome = outcome
+
         if failures.isEmpty {
             refreshStatus = .completed(updatedFeeds: updatedFeeds, finishedAt: finishedAt)
         } else {
@@ -817,12 +693,45 @@ public final class AppStore: ObservableObject {
             refreshStatus = .failed(message: message, finishedAt: finishedAt)
             if reportErrors { lastError = message }
         }
+
         let minimumIndicatorDuration: TimeInterval = 1.2
         let remainingDuration = minimumIndicatorDuration - Date.now.timeIntervalSince(startedAt)
         if remainingDuration > 0 {
             try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
         }
+
         return outcome
+    }
+
+    // MARK: - State Management
+
+    private func updateLocalEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
+        func updateList(_ list: inout [EntryListItem]) {
+            guard let index = list.firstIndex(where: { $0.id == entryID }) else { return }
+            var item = list[index]
+            if let isRead { item.isRead = isRead }
+            if let isStarred { item.isStarred = isStarred }
+            list[index] = item
+        }
+
+        updateList(&self.entryListItems)
+        updateList(&self.todayEntryListItems)
+        updateList(&self.unreadEntryListItems)
+        updateList(&self.starredEntryListItems)
+
+        // 仅重新统计 Sidebar Counts（纯 SQL 聚合，极快）
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? self.sidebarCounts
+
+        // 更新 Entry 单篇缓存（若存在）
+        if var cached = cachedEntryLookup[entryID] {
+            if let isRead { cached.isRead = isRead }
+            if let isStarred { cached.isStarred = isStarred }
+            cachedEntryLookup[entryID] = cached
+        }
+
+        objectWillChange.send()
     }
 
     public func markRead(_ entry: Entry, read: Bool = true) {
@@ -830,189 +739,80 @@ public final class AppStore: ObservableObject {
     }
 
     public func markRead(entryID: String, read: Bool = true) {
-        guard entryIndex.byID[entryID]?.isRead != read else { return }
-        update(entryID: entryID) { item in item.isRead = read; item.updatedAt = .now }
+        try? localProvider.markRead(entryID: entryID, read: read)
+        updateLocalEntryState(entryID: entryID, isRead: read)
     }
 
-    /// Applies a folder/feed-wide read state as one database transaction.
-    /// The previous row-by-row path rewrote the whole JSON database and
-    /// rescheduled CloudKit once per entry, which caused visible stalls for
-    /// feeds with hundreds of unread items.
     public func markRead(entryIDs: [String], read: Bool = true) {
-        let targetIDs = Set(entryIDs)
-        guard !targetIDs.isEmpty else { return }
+        guard !entryIDs.isEmpty else { return }
+        try? localProvider.markRead(entryIDs: entryIDs, read: read)
+        reloadState()
+    }
 
-        var updatedDatabase = database
-        let updatedAt = Date.now
-        var didChange = false
-        for index in updatedDatabase.entries.indices {
-            let id = updatedDatabase.entries[index].id
-            guard targetIDs.contains(id), updatedDatabase.entries[index].isRead != read else { continue }
-            updatedDatabase.entries[index].isRead = read
-            updatedDatabase.entries[index].updatedAt = updatedAt
-            updatedDatabase.readingStates[id] = ReadingState(
-                entryID: id,
-                isRead: read,
-                isStarred: updatedDatabase.entries[index].isStarred,
-                updatedAt: updatedAt
-            )
-            didChange = true
-        }
-        guard didChange else { return }
-        database = updatedDatabase
-        rebuildEntryIndex()
-        persist()
+    public func markStarred(_ entry: Entry, starred: Bool = true) {
+        markStarred(entryID: entry.id, starred: starred)
+    }
+
+    public func markStarred(entryID: String, starred: Bool = true) {
+        try? localProvider.markStarred(entryID: entryID, starred: starred)
+        updateLocalEntryState(entryID: entryID, isStarred: starred)
     }
 
     public func toggleStar(_ entry: Entry) {
-        toggleStar(entryID: entry.id)
+        markStarred(entry, starred: !entry.isStarred)
     }
 
     public func toggleStar(entryID: String) {
-        update(entryID: entryID) { item in item.isStarred.toggle(); item.updatedAt = .now }
+        if let entry = entry(id: entryID) {
+            markStarred(entryID: entryID, starred: !entry.isStarred)
+        }
     }
 
-    public func deleteFeed(_ feed: Feed) {
-        guard let index = database.feeds.firstIndex(of: feed) else { return }
-        let entryIDs = Set(database.entries.lazy.filter { $0.feedID == feed.id }.map(\.id))
-        let deletedAt = Date.now
-        database.feeds[index].isDeleted = true
-        database.feeds[index].updatedAt = deletedAt
-        database.entries.removeAll { entryIDs.contains($0.id) }
-        database.articleCaches = database.articleCaches.filter { !entryIDs.contains($0.key) }
-        database.readingStates = database.readingStates.filter { !entryIDs.contains($0.key) }
-        for artifactIndex in database.artifacts.indices where entryIDs.contains(database.artifacts[artifactIndex].entryID) {
-            // Keep only a small tombstone so CloudKit can remove the synced
-            // result instead of restoring it from another offline device.
-            database.artifacts[artifactIndex].content = ""
-            database.artifacts[artifactIndex].segments = []
-            database.artifacts[artifactIndex].selectionText = nil
-            database.artifacts[artifactIndex].selectionArticleHash = nil
-            database.artifacts[artifactIndex].selectionAnchor = nil
-            database.artifacts[artifactIndex].isComplete = false
-            database.artifacts[artifactIndex].isDeleted = true
-            database.artifacts[artifactIndex].updatedAt = deletedAt
+    public func markAllRead(
+        feedID: UUID? = nil,
+        feedIDs: Set<UUID>? = nil,
+        folder: String? = nil,
+        scope: TimelineScope? = nil
+    ) {
+        do {
+            let actualStartOfDay: Double? = {
+                if case .today(let ts) = scope { return ts }
+                return nil
+            }()
+            try localProvider.markAllRead(
+                feedID: feedID,
+                feedIDs: feedIDs,
+                folderName: folder,
+                startOfDayTimestamp: actualStartOfDay
+            )
+            reloadState()
+        } catch {
+            lastError = error.localizedDescription
         }
-        rebuildEntryIndex()
-        persist()
     }
 
-    public func deleteFeeds(_ feedIDs: Set<UUID>) {
-        guard !feedIDs.isEmpty else { return }
-        let entryIDs = Set(database.entries.lazy.filter { feedIDs.contains($0.feedID) }.map(\.id))
-        let deletedAt = Date.now
-        for index in database.feeds.indices where feedIDs.contains(database.feeds[index].id) {
-            database.feeds[index].isDeleted = true
-            database.feeds[index].updatedAt = deletedAt
-        }
-        database.entries.removeAll { entryIDs.contains($0.id) }
-        database.articleCaches = database.articleCaches.filter { !entryIDs.contains($0.key) }
-        database.readingStates = database.readingStates.filter { !entryIDs.contains($0.key) }
-        for artifactIndex in database.artifacts.indices where entryIDs.contains(database.artifacts[artifactIndex].entryID) {
-            database.artifacts[artifactIndex].content = ""
-            database.artifacts[artifactIndex].segments = []
-            database.artifacts[artifactIndex].selectionText = nil
-            database.artifacts[artifactIndex].selectionArticleHash = nil
-            database.artifacts[artifactIndex].selectionAnchor = nil
-            database.artifacts[artifactIndex].isComplete = false
-            database.artifacts[artifactIndex].isDeleted = true
-            database.artifacts[artifactIndex].updatedAt = deletedAt
-        }
-        rebuildEntryIndex()
-        persist()
-    }
+    // MARK: - Article Caches & Details
 
-    public func deleteArtifact(_ artifact: AIArtifact) {
-        database.artifacts.removeAll { $0.id == artifact.id }
-        persist()
+    public func cachedText(for entry: Entry) -> String? {
+        (try? localProvider.fetchCache(entryID: entry.id))?.text
     }
 
     public func articleText(for entry: Entry) async throws -> String {
-        // RSSHub's Twitter/X route already provides a compact, semantic feed
-        // description. The linked status page is a web application shell with
-        // duplicated avatar cards and empty layout containers; extracting that
-        // page makes the reader look worse than the feed itself. Prefer the
-        // feed body for these entries and migrate any legacy page cache lazily.
         if let feedContent = preferredFeedContent(for: entry) {
-            let existing = database.articleCaches[entry.id]
-            let cache = ArticleCache(
-                entryID: entry.id,
-                text: feedContent.text.isEmpty ? entry.sourceText : feedContent.text,
-                html: feedContent.html,
-                imageURLs: feedContent.imageURLs,
-                fetchedAt: existing?.fetchedAt ?? .now,
-                sourceURL: entry.url,
-                isSanitized: true
-            )
-            if existing?.html != cache.html || existing?.text != cache.text || existing?.imageURLs != cache.imageURLs || existing?.sourceURL != cache.sourceURL || existing?.isSanitized != true {
-                database.articleCaches[entry.id] = cache
-                persist()
-            }
-            return cache.text
+            return feedContent.text.isEmpty ? entry.sourceText : feedContent.text
         }
-
-        let fallback = entry.sourceText
-        if var cached = database.articleCaches[entry.id], !cached.text.isEmpty {
-            let sourceURL = cached.sourceURL ?? entry.url
-            if let html = cached.html, !html.isEmpty {
-                if cached.isSanitized {
-                    return cached.text
-                }
-                // Caches from earlier builds may contain permissive HTML. Re-sanitize
-                // them before handing anything to WebKit, then persist the migration.
-                let safeHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
-                let safeText = safeHTML.plainText
-                let safeImages = ArticleExtractor.imageURLs(from: safeHTML, baseURL: sourceURL)
-                if safeHTML != html || cached.imageURLs != safeImages || cached.sourceURL != sourceURL || (!safeText.isEmpty && cached.text != safeText) {
-                    cached.html = safeHTML
-                    cached.imageURLs = safeImages
-                    cached.sourceURL = sourceURL
-                    if !safeText.isEmpty { cached.text = safeText }
-                }
-                cached.isSanitized = true
-                database.articleCaches[entry.id] = cached
-                persist()
-                return cached.text
-            }
-
-            // Legacy text-only caches cannot preserve image placement. Rebuild a
-            // structured cache from the feed body when possible; otherwise the
-            // extraction path below refreshes it from the article URL.
-            if !ArticleExtractor.needsExtraction(entry) {
-                let content = ArticleExtractor.content(from: entry.contentHTML ?? "", baseURL: sourceURL)
-                cached.html = content.html
-                cached.imageURLs = content.imageURLs
-                cached.sourceURL = sourceURL
-                if !content.text.isEmpty { cached.text = content.text }
-                cached.isSanitized = true
-                database.articleCaches[entry.id] = cached
-                persist()
-                return cached.text
-            }
+        if let cached = cachedText(for: entry) {
+            return cached
         }
-        guard ArticleExtractor.needsExtraction(entry) else {
-            let content = ArticleExtractor.content(from: entry.contentHTML ?? "", baseURL: entry.url)
-            let text = content.text.isEmpty ? fallback : content.text
-            database.articleCaches[entry.id] = ArticleCache(entryID: entry.id, text: text, html: content.html, imageURLs: content.imageURLs, sourceURL: entry.url, isSanitized: true)
-            persist()
-            return text
-        }
-        guard let url = entry.url else { return fallback }
-        var cache = try await ArticleExtractor.extract(from: url)
-        cache.entryID = entry.id
-        cache.isSanitized = true
-        database.articleCaches[entry.id] = cache
-        persist()
-        return cache.text
+        return try await fetchFullArticle(for: entry)
     }
 
-    public func cachedText(for entry: Entry) -> String? { database.articleCaches[entry.id]?.text }
     public func articleHTML(for entry: Entry) -> String? {
         if let feedContent = preferredFeedContent(for: entry) {
-            let existing = database.articleCaches[entry.id]
+            let existing = try? localProvider.fetchCache(entryID: entry.id)
             let text = feedContent.text.isEmpty ? entry.sourceText : feedContent.text
             if existing?.html != feedContent.html || existing?.text != text || existing?.imageURLs != feedContent.imageURLs || existing?.sourceURL != entry.url || existing?.isSanitized != true {
-                database.articleCaches[entry.id] = ArticleCache(
+                let cache = ArticleCache(
                     entryID: entry.id,
                     text: text,
                     html: feedContent.html,
@@ -1021,16 +821,13 @@ public final class AppStore: ObservableObject {
                     sourceURL: entry.url,
                     isSanitized: true
                 )
-                persist()
+                try? localProvider.saveCache(cache)
             }
             return feedContent.html
         }
 
-        if let cache = database.articleCaches[entry.id], let html = cache.html, !html.isEmpty {
+        if let cache = try? localProvider.fetchCache(entryID: entry.id), let html = cache.html, !html.isEmpty {
             if cache.isSanitized {
-                // Earlier builds could persist nested entities in RSSHub image
-                // queries or remove legal spaces from remote image paths. Repair
-                // those caches lazily so existing articles do not need a refetch.
                 let sourceURL = cache.sourceURL ?? entry.url
                 var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
                 if let sourceHTML = entry.contentHTML {
@@ -1045,8 +842,7 @@ public final class AppStore: ObservableObject {
                     repaired.html = repairedHTML
                     repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
                     repaired.sourceURL = sourceURL
-                    database.articleCaches[entry.id] = repaired
-                    persist()
+                    try? localProvider.saveCache(repaired)
                 }
                 return repairedHTML
             }
@@ -1054,9 +850,11 @@ public final class AppStore: ObservableObject {
         }
         return entry.contentHTML.map { ArticleExtractor.sanitizedHTML($0, baseURL: entry.url) }
     }
+
     public func articleSourceURL(for entry: Entry) -> URL? {
-        database.articleCaches[entry.id]?.sourceURL ?? entry.url
+        (try? localProvider.fetchCache(entryID: entry.id))?.sourceURL ?? entry.url
     }
+
     public func articleImageURLs(for entry: Entry) -> [URL] {
         let sourceURL = articleSourceURL(for: entry)
         if let html = articleHTML(for: entry) {
@@ -1065,11 +863,16 @@ public final class AppStore: ObservableObject {
         return []
     }
 
-    /// Returns the feed-provided body for RSSHub Twitter/X entries. These
-    /// feeds intentionally expose a concise status body, while the status URL
-    /// itself is a dynamic social webpage whose DOM is not suitable for a
-    /// read-only RSS reader. Keeping this decision here also lets old article
-    /// caches be replaced without another network request.
+    public func fetchFullArticle(for entry: Entry) async throws -> String {
+        let fallback = entry.sourceText
+        guard let url = entry.url else { return fallback }
+        var cache = try await ArticleExtractor.extract(from: url)
+        cache.entryID = entry.id
+        cache.isSanitized = true
+        try? localProvider.saveCache(cache)
+        return cache.text
+    }
+
     private func preferredFeedContent(for entry: Entry) -> ArticleExtractor.Content? {
         guard let rawHTML = entry.contentHTML,
               !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1088,389 +891,210 @@ public final class AppStore: ObservableObject {
         return ArticleExtractor.content(from: rawHTML, baseURL: entry.url)
     }
 
-    @discardableResult
-    public func saveLLMConfiguration(_ configuration: LLMConfiguration, apiKey: String) -> LocalAPIKeyStore.Storage {
-        let storage = LocalAPIKeyStore.saveAPIKey(apiKey)
-        database.llmConfiguration = configuration
-        persist()
-        return storage
+    // MARK: - AI Artifacts
+
+    public func artifact(for entry: Entry, kind: AIArtifactKind) -> AIArtifact? {
+        try? localProvider.fetchArtifact(entryID: entry.id, kind: kind, isCompleteOnly: true)
     }
 
-    public func loadAPIKey() -> String { LocalAPIKeyStore.loadAPIKey() }
-
-    public func testLLM(configuration: LLMConfiguration, apiKey: String) async throws {
-        try await llm.test(configuration: configuration, apiKey: apiKey)
+    public func summaryArtifact(for entry: Entry) -> AIArtifact? {
+        try? localProvider.fetchArtifact(entryID: entry.id, kind: .summary, isCompleteOnly: false)
     }
 
-    public func setICloudSyncEnabled(_ enabled: Bool) {
-        guard enabled else {
-            isICloudSyncEnabled = false
-            UserDefaults.standard.set(false, forKey: "PaperRss.iCloudSyncEnabled")
-            iCloudSyncState = .disabled
-            iCloudSyncTask?.cancel()
-            iCloudSyncTask = nil
-            return
-        }
-        guard CloudSyncService.isICloudEntitled else {
-            iCloudSyncState = .notEntitled
-            return
-        }
-        isICloudSyncEnabled = true
-        UserDefaults.standard.set(true, forKey: "PaperRss.iCloudSyncEnabled")
-        iCloudSyncState = .waiting
-        scheduleICloudSync()
-    }
-
-    public func syncICloud() async {
-        guard isICloudSyncEnabled, CloudSyncService.isICloudEntitled else { return }
-        do {
-            let remote = try await CloudSyncService.shared.synchronize(CloudLibrary.from(database))
-            apply(cloud: remote)
-            persist(scheduleICloud: false)
-            iCloudSyncState = .synced(.now)
-        } catch {
-            iCloudSyncState = .failed(error.localizedDescription)
-        }
-    }
-
-    public func generateSummary(entry: Entry, text: String, force: Bool = false) async {
-        let configuration = database.llmConfiguration
+    public func bilingualArtifact(for entry: Entry, text: String) -> AIArtifact? {
         let hash = text.stableDigest
-        if !force, database.artifacts.contains(where: {
-            $0.entryID == entry.id
-                && $0.kind == .summary
-                && $0.contentHash == hash
-                && $0.model == configuration.model
-                && !$0.isDeleted
-                && $0.isComplete
-        }) { return }
+        return try? localProvider.fetchBilingualArtifact(entryID: entry.id, contentHash: hash, model: llmConfiguration.model)
+    }
+
+    public func selectionArtifacts(for entry: Entry, articleHash: String) -> [AIArtifact] {
+        (try? localProvider.fetchSelectionArtifacts(entryID: entry.id, articleHash: articleHash)) ?? []
+    }
+
+    public func isGeneratingAI(for entry: Entry, kind: AIArtifactKind) -> Bool {
+        guard let status = activeAIStatus(for: kind) else { return false }
+        return status.entryID == entry.id && status.kind == kind
+    }
+
+    public func generateSummary(
+        entry: Entry,
+        text: String,
+        force: Bool = false,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async {
+        let configuration = llmConfiguration
+        let hash = text.stableDigest
+        if !force, let existing = summaryArtifact(for: entry), existing.isComplete && existing.contentHash == hash && existing.model == configuration.model {
+            return
+        }
         guard activeSummaryRequest == nil else { return }
 
         lastError = nil
         activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
-        defer {
-            cancelSummaryStreamNotification()
-            activeSummaryRequest = nil
-        }
         let apiKey = loadAPIKey()
-        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
+        guard !apiKey.isEmpty else {
+            activeSummaryRequest = nil
+            lastError = LLMServiceError.missingAPIKey.localizedDescription
             return
         }
 
         activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .generating)
-        let artifact = AIArtifact(
-            entryID: entry.id,
-            kind: .summary,
-            contentHash: hash,
-            model: configuration.model,
-            targetLanguage: configuration.targetLanguage
-        )
-        let artifactID = artifact.id
-        database.artifacts.removeAll { $0.entryID == entry.id && $0.kind == .summary && (force || !$0.isComplete) }
-        database.artifacts.append(artifact)
-        persist()
-        do {
-            let result = try await llm.summary(
-                text: text,
-                configuration: configuration,
-                apiKey: apiKey,
-                onDelta: { delta in
-                    await MainActor.run {
-                        if let index = self.database.artifacts.firstIndex(where: { $0.id == artifactID }) {
-                            self.objectWillChange.send()
-                            self.database.artifacts[index].content += delta
-                            self.scheduleSummaryStreamNotification()
-                        }
-                    }
-                }
+
+        let targetArtifactID = UUID()
+        let tracker = SummaryStreamTracker(
+            targetArtifact: AIArtifact(
+                id: targetArtifactID,
+                entryID: entry.id,
+                kind: .summary,
+                contentHash: hash,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: 1,
+                content: "",
+                isComplete: false
             )
-            completeArtifact(id: artifactID, content: result)
-        } catch is CancellationError {
-            // Task 被主动取消时属于正常的流式清理，绝不设 lastError 弹出 Alert 弹窗
-        } catch {
-            if Task.isCancelled || (error as NSError).code == NSURLErrorCancelled {
-                return
+        )
+        try? localProvider.saveArtifact(tracker.currentArtifact)
+
+        do {
+            let result = try await llm.summary(text: text, configuration: configuration, apiKey: apiKey) { [weak self] delta in
+                guard let self, !Task.isCancelled else { return }
+                let (currentBuffer, shouldCheckpoint, artifactToCheckpoint) = tracker.append(delta)
+
+                // 1. 局部 UI 实时流式通知（不发全局 objectWillChange）
+                if let onDelta {
+                    Task { await onDelta(currentBuffer) }
+                }
+
+                // 2. 节流持久化 Checkpoint（支持崩溃/取消恢复）
+                if shouldCheckpoint {
+                    try? self.localProvider.saveArtifact(artifactToCheckpoint)
+                }
             }
-            lastError = error.localizedDescription
+
+            var finalArtifact = tracker.currentArtifact
+            finalArtifact.content = result
+            finalArtifact.isComplete = true
+            finalArtifact.updatedAt = .now
+            try? localProvider.saveArtifact(finalArtifact)
+            activeSummaryRequest = nil
+        } catch {
+            activeSummaryRequest = nil
+            if !Task.isCancelled {
+                lastError = error.localizedDescription
+            }
         }
     }
 
+    public func generateBilingualTranslation(entry: Entry, text: String, targetLanguage: String = "zh-Hans") async {
+        let paragraphs = ArticleExtractor.readerParagraphs(in: text, title: entry.title)
+        guard !paragraphs.isEmpty else { return }
+        await translateBilingualParagraphs(
+            entry: entry,
+            text: text,
+            paragraphs: paragraphs,
+            paragraphIDs: paragraphs.map(\.id)
+        )
+    }
+
+    public func dismissError() {
+        lastError = nil
+    }
+
+    @discardableResult
     public func explainSelection(
         entry: Entry,
         selection: String,
-        localContext: String,
-        articleText: String,
+        localContext: String = "",
+        articleText: String = "",
         selectionAnchor: AISelectionAnchor? = nil,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
-        let configuration = database.llmConfiguration
-        let promptVersion = 5
-        let articleHash = articleText.stableDigest
-        let normalizedSelection = selection.paperRssNormalizedWhitespace
-        let normalizedLocalContext = localContext.paperRssNormalizedWhitespace
-        let explanationHash = [
-            articleHash,
-            normalizedSelection.stableDigest,
-            normalizedLocalContext.stableDigest,
-            configuration.model,
-            configuration.targetLanguage,
-            configuration.customPrompt.stableDigest,
-            String(promptVersion)
-        ].joined(separator: "|").stableDigest
-
-        if let cached = database.artifacts
-            .filter({
-                $0.entryID == entry.id
-                    && $0.kind == .selectionExplanation
-                    && $0.contentHash == explanationHash
-                    && $0.model == configuration.model
-                    && $0.targetLanguage == configuration.targetLanguage
-                    && $0.promptVersion == promptVersion
-                    && $0.isComplete
-                    && !$0.isDeleted
-            })
-            .sorted(by: { $0.updatedAt > $1.updatedAt })
-            .first {
-            if let index = database.artifacts.firstIndex(where: { $0.id == cached.id }),
-               database.artifacts[index].selectionText == nil || database.artifacts[index].selectionAnchor == nil {
-                database.artifacts[index].selectionText = normalizedSelection
-                database.artifacts[index].selectionArticleHash = articleHash
-                database.artifacts[index].selectionAnchor = selectionAnchor
-                database.artifacts[index].updatedAt = .now
-                persist()
-            }
-            return cached.content
-        }
-
-        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
-
-        activeSelectionRequest = AIRequestStatus(
-            entryID: entry.id,
+        let opResult = await executeSelectionAI(
+            entry: entry,
             kind: .selectionExplanation,
-            phase: .loadingLocalConfiguration
-        )
-        defer { activeSelectionRequest = nil }
-
-        let apiKey = loadAPIKey()
-        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            throw LLMServiceError.missingAPIKey
-        }
-
-        activeSelectionRequest = AIRequestStatus(
-            entryID: entry.id,
-            kind: .selectionExplanation,
-            phase: .generating
-        )
-
-        let articleContext: String
-        if let cachedContext = database.artifacts
-            .filter({
-                $0.entryID == entry.id
-                    && $0.kind == .articleContext
-                    && $0.contentHash == articleHash
-                    && $0.model == configuration.model
-                    && $0.targetLanguage == configuration.targetLanguage
-                    && $0.promptVersion == promptVersion
-                    && $0.isComplete
-                    && !$0.isDeleted
-            })
-            .sorted(by: { $0.updatedAt > $1.updatedAt })
-            .first {
-            articleContext = cachedContext.content
-        } else {
-            // Keep the first explanation to one network round trip. The old
-            // path generated an AI context memo and only then asked for the
-            // explanation, which made the first visible answer wait for two
-            // sequential requests. This deterministic excerpt preserves the
-            // article opening, the selected passage's neighborhood, and the
-            // ending without spending another request; it is cached locally
-            // and reused for later selections in the same article.
-            articleContext = ArticleChunker.contextualArticle(
-                articleText,
-                around: "\(selection)\n\n\(localContext)",
-                maximumCharacters: 24_000
-            )
-            database.artifacts.append(
-                AIArtifact(
-                    entryID: entry.id,
-                    kind: .articleContext,
-                    contentHash: articleHash,
-                    model: configuration.model,
-                    targetLanguage: configuration.targetLanguage,
-                    promptVersion: promptVersion,
-                    content: articleContext,
-                    isComplete: true
+            selectionText: selection,
+            selectionAnchor: selectionAnchor,
+            operation: { [weak self] apiKey, config in
+                guard let self else { return nil }
+                return try await self.llm.explainSelection(
+                    selection: selection,
+                    localContext: localContext,
+                    articleContext: articleText.isEmpty ? entry.sourceText : articleText,
+                    configuration: config,
+                    apiKey: apiKey,
+                    onDelta: onDelta
                 )
-            )
-            persist()
+            }
+        )
+        guard let result = opResult else {
+            throw LLMServiceError.emptyResponse
         }
-
-        let result = try await llm.explainSelection(
-            selection: selection,
-            localContext: localContext,
-            articleContext: articleContext,
-            configuration: configuration,
-            apiKey: apiKey,
-            onDelta: onDelta
-        )
-        try Task.checkCancellation()
-        database.artifacts.append(
-            AIArtifact(
-                entryID: entry.id,
-                kind: .selectionExplanation,
-                contentHash: explanationHash,
-                model: configuration.model,
-                targetLanguage: configuration.targetLanguage,
-                promptVersion: promptVersion,
-                content: result,
-                selectionText: normalizedSelection,
-                selectionArticleHash: articleHash,
-                selectionAnchor: selectionAnchor,
-                isComplete: true
-            )
-        )
-        persist()
         return result
     }
 
+    @discardableResult
+    public func translateSelection(
+        entry: Entry,
+        selection: String,
+        targetLanguage: String = "zh-Hans",
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> String {
+        let opResult = await executeSelectionAI(
+            entry: entry,
+            kind: .translation,
+            selectionText: selection,
+            operation: { [weak self] apiKey, config in
+                guard let self else { return nil }
+                var updatedConfig = config
+                updatedConfig.targetLanguage = targetLanguage
+                return try await self.llm.translate(
+                    paragraph: selection,
+                    configuration: updatedConfig,
+                    apiKey: apiKey,
+                    onDelta: onDelta
+                )
+            }
+        )
+        guard let result = opResult else {
+            throw LLMServiceError.emptyResponse
+        }
+        return result
+    }
+
+    @discardableResult
     public func askSelection(
         entry: Entry,
         selection: String,
         question: String,
-        localContext: String,
-        articleText: String,
+        localContext: String = "",
+        articleText: String = "",
         selectionAnchor: AISelectionAnchor? = nil,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
-        let configuration = database.llmConfiguration
-        let promptVersion = 5
-        let articleHash = articleText.stableDigest
-        let normalizedSelection = selection.paperRssNormalizedWhitespace
-        let normalizedQuestion = question.paperRssNormalizedWhitespace
-        let normalizedLocalContext = localContext.paperRssNormalizedWhitespace
-        let askHash = [
-            articleHash,
-            normalizedSelection.stableDigest,
-            normalizedQuestion.stableDigest,
-            normalizedLocalContext.stableDigest,
-            configuration.model,
-            configuration.targetLanguage,
-            configuration.customPrompt.stableDigest,
-            String(promptVersion)
-        ].joined(separator: "|").stableDigest
-
-        if let cached = database.artifacts
-            .filter({
-                $0.entryID == entry.id
-                    && $0.kind == .selectionExplanation
-                    && $0.contentHash == askHash
-                    && $0.model == configuration.model
-                    && $0.targetLanguage == configuration.targetLanguage
-                    && $0.promptVersion == promptVersion
-                    && $0.isComplete
-                    && !$0.isDeleted
-            })
-            .sorted(by: { $0.updatedAt > $1.updatedAt })
-            .first {
-            return cached.content
+        let opResult = await executeSelectionAI(
+            entry: entry,
+            kind: .interpretation,
+            selectionText: selection,
+            selectionAnchor: selectionAnchor,
+            operation: { [weak self] apiKey, config in
+                guard let self else { return nil }
+                return try await self.llm.askSelection(
+                    selection: selection,
+                    question: question,
+                    localContext: localContext,
+                    articleContext: articleText.isEmpty ? entry.sourceText : articleText,
+                    configuration: config,
+                    apiKey: apiKey,
+                    onDelta: onDelta
+                )
+            }
+        )
+        guard let result = opResult else {
+            throw LLMServiceError.emptyResponse
         }
-
-        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
-
-        activeSelectionRequest = AIRequestStatus(
-            entryID: entry.id,
-            kind: .selectionExplanation,
-            phase: .loadingLocalConfiguration
-        )
-        defer { activeSelectionRequest = nil }
-
-        let apiKey = loadAPIKey()
-        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            throw LLMServiceError.missingAPIKey
-        }
-
-        activeSelectionRequest = AIRequestStatus(
-            entryID: entry.id,
-            kind: .selectionExplanation,
-            phase: .generating
-        )
-
-        let articleContext = ArticleChunker.contextualArticle(
-            articleText,
-            around: "\(selection)\n\n\(localContext)",
-            maximumCharacters: 24_000
-        )
-
-        let result = try await llm.askSelection(
-            selection: selection,
-            question: question,
-            localContext: localContext,
-            articleContext: articleContext,
-            configuration: configuration,
-            apiKey: apiKey,
-            onDelta: onDelta
-        )
-        try Task.checkCancellation()
-        database.artifacts.append(
-            AIArtifact(
-                entryID: entry.id,
-                kind: .selectionExplanation,
-                contentHash: askHash,
-                model: configuration.model,
-                targetLanguage: configuration.targetLanguage,
-                promptVersion: promptVersion,
-                content: result,
-                selectionText: normalizedSelection,
-                selectionArticleHash: articleHash,
-                selectionAnchor: selectionAnchor,
-                isComplete: true
-            )
-        )
-        persist()
         return result
     }
 
-    /// Translates only the current selection.  Selection translation shares
-    /// the same content-addressed translation memory as lazy bilingual reading,
-    /// so revisiting a sentence is an in-memory/local hit and never sends the
-    /// same text to the provider twice for the same model and language.
-    public func translateSelection(
-        entry: Entry,
-        selection: String,
-        onDelta: (@Sendable (String) async -> Void)? = nil
-    ) async throws -> String {
-        let configuration = database.llmConfiguration
-        let normalizedSelection = selection.paperRssNormalizedWhitespace
-        guard activeSelectionRequest == nil else { throw LLMServiceError.requestInProgress }
-
-        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .loadingLocalConfiguration)
-        defer { activeSelectionRequest = nil }
-        let apiKey = loadAPIKey()
-        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
-            throw LLMServiceError.missingAPIKey
-        }
-        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: .translation, phase: .generating)
-
-        let result = try await llm.translate(
-            paragraph: normalizedSelection,
-            configuration: configuration,
-            apiKey: apiKey,
-            onDelta: onDelta
-        )
-        try Task.checkCancellation()
-        cacheTranslations(
-            [BilingualSegment(id: "selection-\(normalizedSelection.stableDigest)", original: normalizedSelection, translation: result)],
-            configuration: configuration,
-            persistChanges: true
-        )
-        return result
-    }
-
-    /// Translates only the reader blocks requested by the viewport observer.
-    /// Completed blocks are persisted independently, so scrolling away,
-    /// cancellation, or an API failure never discards earlier work.
     public func translateBilingualParagraphs(
         entry: Entry,
         text: String,
@@ -1478,278 +1102,217 @@ public final class AppStore: ObservableObject {
         paragraphIDs: [String],
         onDelta: (@Sendable (String, String) async -> Void)? = nil
     ) async {
-        let configuration = database.llmConfiguration
+        guard !paragraphs.isEmpty, !paragraphIDs.isEmpty else { return }
+
+        let configuration = llmConfiguration
         let hash = text.stableDigest
-        guard !paragraphs.isEmpty else {
-            lastError = I18N.localized("没有可翻译的正文。")
+        let requestedIDsSet = Set(paragraphIDs)
+        let targetParagraphs = paragraphs.filter { requestedIDsSet.contains($0.id) }
+        guard !targetParagraphs.isEmpty else { return }
+
+        let paragraphOrder: [String: Int] = Dictionary(uniqueKeysWithValues: paragraphs.enumerated().map { ($1.id, $0) })
+
+        // 1. 获取或创建 Artifact（根据 entryID + contentHash + model）
+        var artifact = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false))
+            ?? AIArtifact(
+                id: UUID(),
+                entryID: entry.id,
+                kind: .bilingual,
+                contentHash: hash,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: Self.translationPromptVersion,
+                content: "",
+                segments: [],
+                isComplete: false
+            )
+
+        // 保证模型和 targetLanguage 同步
+        if artifact.contentHash != hash || artifact.model != configuration.model {
+            artifact.contentHash = hash
+            artifact.model = configuration.model
+            artifact.targetLanguage = configuration.targetLanguage
+        }
+
+        let existingSegmentMap: [String: BilingualSegment] = Dictionary(
+            uniqueKeysWithValues: artifact.segments.map { ($0.id, $0) }
+        )
+
+        // 2. 区分已翻译、TM (翻译内存) 命中与未翻译段落
+        var uncachedParagraphs: [ReaderParagraph] = []
+        var newResolvedSegments: [BilingualSegment] = []
+
+        for paragraph in targetParagraphs {
+            if let existing = existingSegmentMap[paragraph.id] {
+                // 已有该段落翻译，通知 onDelta
+                if let onDelta {
+                    Task { await onDelta(paragraph.id, existing.translation) }
+                }
+                continue
+            }
+            if let tmTranslation = cachedTranslation(for: paragraph.original, configuration: configuration) {
+                let seg = BilingualSegment(id: paragraph.id, original: paragraph.original, translation: tmTranslation)
+                newResolvedSegments.append(seg)
+                if let onDelta {
+                    Task { await onDelta(paragraph.id, tmTranslation) }
+                }
+            } else {
+                uncachedParagraphs.append(paragraph)
+            }
+        }
+
+        // 如果有 TM 命中的段落，先合并
+        if !newResolvedSegments.isEmpty {
+            for seg in newResolvedSegments {
+                if let idx = artifact.segments.firstIndex(where: { $0.id == seg.id }) {
+                    artifact.segments[idx] = seg
+                } else {
+                    artifact.segments.append(seg)
+                }
+            }
+            artifact.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
+            artifact.content = artifact.segments.map(\.translation).joined(separator: "\n\n")
+            artifact.updatedAt = .now
+            let allExpectedIDs = Set(paragraphs.map(\.id))
+            artifact.isComplete = Set(artifact.segments.map(\.id)).isSuperset(of: allExpectedIDs)
+            try? localProvider.saveArtifact(artifact)
+        }
+
+        // 3. 如果所有请求段落都已解决，直接返回
+        guard !uncachedParagraphs.isEmpty else {
             return
         }
 
-        let paragraphsByID = Dictionary(uniqueKeysWithValues: paragraphs.map { ($0.id, $0) })
-        let requestedParagraphs = paragraphIDs
-            .reduce(into: [ReaderParagraph]()) { result, id in
-                guard let paragraph = paragraphsByID[id],
-                      !result.contains(where: { $0.id == id }) else { return }
-                result.append(paragraph)
-            }
-        guard !requestedParagraphs.isEmpty else { return }
-
-        let existingSegments = bilingualArtifact(for: entry, text: text)?.segments ?? []
-        let validExistingIDs = Set(existingSegments.compactMap { segment -> String? in
-            guard let paragraph = paragraphsByID[segment.id],
-                  paragraph.original.isSameReaderParagraph(as: segment.original) else { return nil }
-            return segment.id
-        })
-        let missingParagraphs = requestedParagraphs.filter { !validExistingIDs.contains($0.id) }
-        let cachedParagraphs = missingParagraphs.compactMap { paragraph -> BilingualSegment? in
-            guard let translation = cachedTranslation(for: paragraph.original, configuration: configuration) else { return nil }
-            return BilingualSegment(id: paragraph.id, original: paragraph.original, translation: translation)
-        }
-        let cachedIDs = Set(cachedParagraphs.map(\.id))
-        let pendingParagraphs = missingParagraphs.filter { !cachedIDs.contains($0.id) }
-        let artifactID: UUID
-        if let existing = bilingualArtifact(for: entry, text: text) {
-            artifactID = existing.id
-            if let index = database.artifacts.firstIndex(where: { $0.id == artifactID }) {
-                database.artifacts[index].isComplete = false
-            }
-        } else {
-            let artifact = AIArtifact(entryID: entry.id, kind: .bilingual, contentHash: hash, model: configuration.model, targetLanguage: configuration.targetLanguage)
-            artifactID = artifact.id
-            database.artifacts.append(artifact)
-        }
-
-        let paragraphOrder = Dictionary(uniqueKeysWithValues: paragraphs.enumerated().map { ($0.element.id, $0.offset) })
-        if !cachedParagraphs.isEmpty {
-            upsertSegments(cachedParagraphs, to: artifactID, paragraphOrder: paragraphOrder, persistChanges: false)
-            persist()
-        }
-        guard !pendingParagraphs.isEmpty else { return }
-        guard activeBilingualRequest == nil else { return }
-
-        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .loadingLocalConfiguration)
-        defer { activeBilingualRequest = nil }
+        // 4. 检查 API Key
         let apiKey = loadAPIKey()
-        if configuration.usesDeepSeekAPI && apiKey.isEmpty {
-            lastError = I18N.localized("尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。")
+        guard !apiKey.isEmpty else {
+            lastError = LLMServiceError.missingAPIKey.localizedDescription
             return
         }
 
         activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
-        let service = llm
+        defer {
+            activeBilingualRequest = nil
+        }
+
+        // 5. 按批次执行模型翻译并直接 await
+        let batches = translationBatches(from: uncachedParagraphs)
         do {
-            if let onDelta {
-                for paragraph in pendingParagraphs {
-                    if Task.isCancelled { break }
-                    let translation = try await service.translate(
-                        paragraph: paragraph.original,
-                        configuration: configuration,
-                        apiKey: apiKey,
-                        onDelta: { delta in
-                            if !Task.isCancelled {
-                                await onDelta(paragraph.id, delta)
-                            }
-                        }
-                    )
-                    if Task.isCancelled { break }
-                    let segment = BilingualSegment(id: paragraph.id, original: paragraph.original, translation: translation)
-                    upsertSegments([segment], to: artifactID, paragraphOrder: paragraphOrder, persistChanges: false)
-                    cacheTranslations([segment], configuration: configuration, persistChanges: false)
-                    persist()
+            for batch in batches {
+                guard !Task.isCancelled else { break }
+                let translatedTexts = try await llm.translateBatch(
+                    paragraphs: batch.map(\.original),
+                    configuration: configuration,
+                    apiKey: apiKey
+                )
+                guard !Task.isCancelled else { break }
+
+                let batchSegments = zip(batch, translatedTexts).map {
+                    BilingualSegment(id: $0.id, original: $0.original, translation: $1)
                 }
-                let artifact = database.artifacts.first(where: { $0.id == artifactID })
-                let translatedIDs = Set((artifact?.segments ?? []).map(\.id))
-                if translatedIDs.isSuperset(of: Set(paragraphs.map(\.id))) {
-                    completeArtifact(id: artifactID, content: artifact?.segments.map(\.translation).joined(separator: "\n\n") ?? "")
-                }
-                return
-            }
-            for batch in translationBatches(from: pendingParagraphs) {
-                let translations: [String]
-                do {
-                    translations = try await service.translateBatch(
-                        paragraphs: batch.map(\.original),
-                        configuration: configuration,
-                        apiKey: apiKey
-                    )
-                } catch LLMServiceError.invalidResponse {
-                    // A small number of OpenAI-compatible endpoints ignore the
-                    // JSON-only instruction. Preserve correctness and progress
-                    // by retrying only this batch as independently cached units.
-                    translations = try await withThrowingTaskGroup(of: (Int, String).self) { group in
-                        for (index, paragraph) in batch.enumerated() {
-                            group.addTask {
-                                (index, try await service.translate(paragraph: paragraph.original, configuration: configuration, apiKey: apiKey))
-                            }
-                        }
-                        var ordered = Array(repeating: "", count: batch.count)
-                        for try await (index, translation) in group { ordered[index] = translation }
-                        return ordered
+                cacheTranslations(batchSegments, configuration: configuration)
+
+                // 触发 onDelta
+                if let onDelta {
+                    for seg in batchSegments {
+                        await onDelta(seg.id, seg.translation)
                     }
                 }
 
-                let translatedSegments = zip(batch, translations).map {
-                    BilingualSegment(id: $0.0.id, original: $0.0.original, translation: $0.1)
+                // 合并入当前 artifact
+                var current = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false)) ?? artifact
+                for seg in batchSegments {
+                    if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
+                        current.segments[idx] = seg
+                    } else {
+                        current.segments.append(seg)
+                    }
                 }
-                upsertSegments(translatedSegments, to: artifactID, paragraphOrder: paragraphOrder, persistChanges: false)
-                cacheTranslations(translatedSegments, configuration: configuration, persistChanges: false)
-                persist()
+                current.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
+                current.content = current.segments.map(\.translation).joined(separator: "\n\n")
+                current.updatedAt = .now
+                let allExpectedIDs = Set(paragraphs.map(\.id))
+                current.isComplete = Set(current.segments.map(\.id)).isSuperset(of: allExpectedIDs)
+                try? localProvider.saveArtifact(current)
+                artifact = current
             }
-
-            let artifact = database.artifacts.first(where: { $0.id == artifactID })
-            let translatedIDs = Set((artifact?.segments ?? []).compactMap { segment -> String? in
-                guard let paragraph = paragraphsByID[segment.id],
-                      paragraph.original.isSameReaderParagraph(as: segment.original) else { return nil }
-                return segment.id
-            })
-            if translatedIDs.count == paragraphs.count {
-                let content = artifact?.segments.map(\.translation).joined(separator: "\n\n") ?? ""
-                completeArtifact(id: artifactID, content: content)
-            }
-        } catch is CancellationError {
-            // Task 被主动取消时属于正常的流式清理，绝不设 lastError 弹出 Alert 弹窗
         } catch {
-            if Task.isCancelled || (error as NSError).code == NSURLErrorCancelled {
-                return
-            }
-            lastError = error.localizedDescription
-        }
-    }
-
-    public func reportError(_ message: String) { lastError = message }
-    public func dismissError() { lastError = nil }
-
-    private func merge(entries parsed: [ParsedFeedEntry], into feedID: UUID) -> [Entry] {
-        // `firstIndex(where:)` for every incoming item made a refresh O(n*m).
-        // A feed refresh can finish while the user is clicking the sidebar, so
-        // that main-actor work showed up as an apparently slow selection.
-        var entryIndexByID = Dictionary(
-            uniqueKeysWithValues: database.entries.indices.map { (database.entries[$0].id, $0) }
-        )
-        entryIndexByID.reserveCapacity(database.entries.count + parsed.count)
-        var newUnreadEntries: [Entry] = []
-
-        for incoming in parsed {
-            let id = "\(feedID.uuidString)|\(incoming.id)".stableDigest
-            let summary = incoming.summary.needsPlainTextNormalization ? incoming.summary.plainText : incoming.summary
-            if let index = entryIndexByID[id] {
-                let state = database.entries[index]
-                let readingState = database.readingStates[id] ?? ReadingState(entryID: id, isRead: state.isRead, isStarred: state.isStarred, updatedAt: state.updatedAt)
-                database.entries[index] = Entry(id: id, feedID: feedID, title: incoming.title, author: incoming.author, url: incoming.url, publishedAt: incoming.publishedAt, summary: summary, contentHTML: incoming.contentHTML, isRead: readingState.isRead, isStarred: readingState.isStarred, updatedAt: readingState.updatedAt)
-            } else {
-                let readingState = database.readingStates[id]
-                let entry = Entry(id: id, feedID: feedID, title: incoming.title, author: incoming.author, url: incoming.url, publishedAt: incoming.publishedAt, summary: summary, contentHTML: incoming.contentHTML, isRead: readingState?.isRead ?? false, isStarred: readingState?.isStarred ?? false, updatedAt: readingState?.updatedAt ?? .now)
-                database.entries.append(entry)
-                entryIndexByID[id] = database.entries.count - 1
-                if !entry.isRead {
-                    newUnreadEntries.append(entry)
-                }
+            if !Task.isCancelled {
+                lastError = error.localizedDescription
             }
         }
-        return newUnreadEntries
     }
 
-    private func update(entryID: String, operation: (inout Entry) -> Void) {
-        guard let index = database.entries.firstIndex(where: { $0.id == entryID }) else { return }
-        operation(&database.entries[index])
-        let entry = database.entries[index]
-        database.readingStates[entryID] = ReadingState(entryID: entryID, isRead: entry.isRead, isStarred: entry.isStarred, updatedAt: entry.updatedAt)
-        rebuildEntryIndex()
-        persist()
-    }
-
-    private func upsertSegments(
-        _ newSegments: [BilingualSegment],
-        to artifactID: UUID,
-        paragraphOrder: [String: Int],
-        persistChanges: Bool
-    ) {
-        guard let index = database.artifacts.firstIndex(where: { $0.id == artifactID }) else { return }
-        for segment in newSegments {
-            if let segmentIndex = database.artifacts[index].segments.firstIndex(where: { $0.id == segment.id }) {
-                database.artifacts[index].segments[segmentIndex] = segment
-            } else {
-                database.artifacts[index].segments.append(segment)
+    private func executeSelectionAI(
+        entry: Entry,
+        kind: AIArtifactKind,
+        selectionText: String? = nil,
+        selectionAnchor: AISelectionAnchor? = nil,
+        operation: @Sendable @escaping (String, LLMConfiguration) async throws -> String?
+    ) async -> String? {
+        let configuration = llmConfiguration
+        guard activeSelectionRequest == nil else { return nil }
+        lastError = nil
+        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: kind, phase: .loadingLocalConfiguration)
+        let apiKey = loadAPIKey()
+        guard !apiKey.isEmpty else {
+            activeSelectionRequest = nil
+            lastError = LLMServiceError.missingAPIKey.localizedDescription
+            return nil
+        }
+        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: kind, phase: .generating)
+        do {
+            let result = try await operation(apiKey, configuration)
+            if let result {
+                let artifact = AIArtifact(
+                    entryID: entry.id,
+                    kind: kind,
+                    contentHash: result.stableDigest,
+                    model: configuration.model,
+                    targetLanguage: configuration.targetLanguage,
+                    promptVersion: 1,
+                    content: result,
+                    selectionText: selectionText,
+                    selectionAnchor: selectionAnchor,
+                    isComplete: true
+                )
+                try? localProvider.saveArtifact(artifact)
             }
+            activeSelectionRequest = nil
+            return result
+        } catch {
+            activeSelectionRequest = nil
+            if !Task.isCancelled {
+                lastError = error.localizedDescription
+            }
+            return nil
         }
-        database.artifacts[index].segments.sort {
-            paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max]
-        }
-        database.artifacts[index].content = database.artifacts[index].segments
-            .map(\.translation)
-            .joined(separator: "\n\n")
-        database.artifacts[index].updatedAt = .now
-        if persistChanges { persist() }
     }
 
-    /// Translation memory is content-addressed instead of article-addressed.
-    /// A recurring RSS disclaimer, quote, or syndicated paragraph therefore
-    /// reuses its prior translation across articles and feeds. We store it as a
-    /// normal AI artifact, so it also follows the app's existing iCloud result
-    /// synchronization without ever including the API key.
+    // MARK: - Translation Memory Helpers
+
     private func cachedTranslation(for source: String, configuration: LLMConfiguration) -> String? {
         let key = translationMemoryKey(for: source, configuration: configuration)
         let entryID = translationMemoryEntryID(for: key)
-        return database.artifacts
-            .filter {
-                $0.entryID == entryID
-                    && $0.kind == .translation
-                    && $0.contentHash == key
-                    && $0.model == configuration.model
-                    && $0.targetLanguage == configuration.targetLanguage
-                    && $0.promptVersion == Self.translationPromptVersion
-                    && $0.isComplete
-                    && !$0.isDeleted
-            }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .first?
-            .content
+        return (try? localProvider.fetchGlobalTranslationMemory(key: entryID))?.content
     }
 
-    private func cacheTranslations(_ segments: [BilingualSegment], configuration: LLMConfiguration, persistChanges: Bool) {
+    func cacheTranslations(_ segments: [BilingualSegment], configuration: LLMConfiguration) {
         for segment in segments {
             let key = translationMemoryKey(for: segment.original, configuration: configuration)
             let entryID = translationMemoryEntryID(for: key)
-            if let index = database.artifacts.firstIndex(where: {
-                $0.entryID == entryID && $0.kind == .translation && $0.contentHash == key
-            }) {
-                database.artifacts[index].content = segment.translation
-                database.artifacts[index].model = configuration.model
-                database.artifacts[index].targetLanguage = configuration.targetLanguage
-                database.artifacts[index].promptVersion = Self.translationPromptVersion
-                database.artifacts[index].isComplete = true
-                database.artifacts[index].isDeleted = false
-                database.artifacts[index].updatedAt = .now
-            } else {
-                database.artifacts.append(
-                    AIArtifact(
-                        entryID: entryID,
-                        kind: .translation,
-                        contentHash: key,
-                        model: configuration.model,
-                        targetLanguage: configuration.targetLanguage,
-                        promptVersion: Self.translationPromptVersion,
-                        content: segment.translation,
-                        isComplete: true
-                    )
-                )
-            }
+            let artifact = AIArtifact(
+                entryID: entryID,
+                kind: .translation,
+                contentHash: key,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: Self.translationPromptVersion,
+                content: segment.translation,
+                isComplete: true
+            )
+            try? localProvider.saveArtifact(artifact)
         }
-
-        // A personal reader rarely needs more than this, and keeping the memory
-        // bounded prevents long-lived JSON/CloudKit payloads from slowing every
-        // normal library write.
-        let memoryIndexes = database.artifacts.indices.filter {
-            database.artifacts[$0].entryID.hasPrefix(Self.translationMemoryEntryPrefix)
-        }
-        if memoryIndexes.count > Self.maximumTranslationMemoryEntries {
-            let surplus = memoryIndexes
-                .sorted { database.artifacts[$0].updatedAt < database.artifacts[$1].updatedAt }
-                .prefix(memoryIndexes.count - Self.maximumTranslationMemoryEntries)
-            let IDs = Set(surplus.map { database.artifacts[$0].id })
-            database.artifacts.removeAll { IDs.contains($0.id) }
-        }
-        if persistChanges { persist() }
     }
 
     private func translationBatches(from paragraphs: [ReaderParagraph]) -> [[ReaderParagraph]] {
@@ -1790,161 +1353,222 @@ public final class AppStore: ObservableObject {
 
     private static let translationPromptVersion = 2
     private static let translationMemoryEntryPrefix = "translation-memory-v2:"
-    private static let maximumTranslationMemoryEntries = 2_000
     private static let maximumParagraphsPerTranslationBatch = 4
-    // Read Frog's production queue defaults to roughly 1,000 characters and
-    // four blocks per batch.  A larger 7K batch reduces request count, but it
-    // increases time-to-first-translation because the model must finish one
-    // large JSON response before any visible paragraph can be inserted.
     private static let maximumCharactersPerTranslationBatch = 1_200
 
-    private func completeArtifact(id: UUID, content: String) {
-        guard let index = database.artifacts.firstIndex(where: { $0.id == id }) else { return }
-        if database.artifacts[index].kind == .summary {
-            cancelSummaryStreamNotification()
-        }
-        objectWillChange.send()
-        database.artifacts[index].content = content
-        database.artifacts[index].isComplete = true
-        database.artifacts[index].updatedAt = .now
-        persist()
-    }
+    private final class SummaryStreamTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer = ""
+        private var lastCheckpoint = CFAbsoluteTimeGetCurrent()
+        private let checkpointInterval: Double = 0.5
+        private var targetArtifact: AIArtifact
 
-    /// Coalesce token-sized summary updates so the reader's large WebView
-    /// hierarchy is not invalidated once per network delta while scrolling.
-    private func scheduleSummaryStreamNotification() {
-        guard summaryStreamNotificationTask == nil else { return }
-        summaryStreamNotificationTask = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: Self.summaryStreamNotificationInterval)
-            } catch {
-                return
+        init(targetArtifact: AIArtifact) {
+            self.targetArtifact = targetArtifact
+        }
+
+        func append(_ delta: String) -> (current: String, shouldCheckpoint: Bool, artifact: AIArtifact) {
+            lock.lock()
+            defer { lock.unlock() }
+            buffer.append(delta)
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastCheckpoint >= checkpointInterval {
+                lastCheckpoint = now
+                targetArtifact.content = buffer
+                targetArtifact.updatedAt = .now
+                return (buffer, true, targetArtifact)
             }
-            guard let self, !Task.isCancelled else { return }
-            self.summaryStreamNotificationTask = nil
-            self.objectWillChange.send()
+            return (buffer, false, targetArtifact)
+        }
+
+        var currentArtifact: AIArtifact {
+            lock.lock()
+            defer { lock.unlock() }
+            var art = targetArtifact
+            art.content = buffer
+            art.updatedAt = .now
+            return art
         }
     }
 
-    private func cancelSummaryStreamNotification() {
-        summaryStreamNotificationTask?.cancel()
-        summaryStreamNotificationTask = nil
-    }
+    // MARK: - Preferences & Configuration
 
-    private func apply(cloud remote: CloudLibrary) {
-        let merged = CloudLibrary.merged(local: CloudLibrary.from(database), remote: remote)
-        database.feeds = merged.feeds
-        database.readingStates = merged.readingStates
-        database.artifacts = merged.artifacts
-
-        // Feed tombstones are synchronized, while article bodies are local to
-        // each device. Apply the same cascade on every device so an iPhone does
-        // not retain articles after their feed was deleted on the Mac.
-        _ = Self.purgeEntriesFromInactiveFeeds(in: &database)
-
-        for index in database.entries.indices {
-            if let state = merged.readingStates[database.entries[index].id] {
-                database.entries[index].isRead = state.isRead
-                database.entries[index].isStarred = state.isStarred
-                database.entries[index].updatedAt = state.updatedAt
-            }
-        }
-        rebuildEntryIndex()
-    }
-
-    private func persist(scheduleICloud: Bool = true) {
-        // Encoding a multi-megabyte offline library on the main actor stalls
-        // selection and scrolling. The revisioned actor serializes snapshots
-        // off-main and drops an older write if tasks arrive out of order.
-        persistenceRevision += 1
-        let revision = persistenceRevision
-        let snapshot = database
-        let url = persistenceURL
-        let writer = persistenceWriter
-        Task.detached(priority: .utility) {
-            await writer.write(snapshot, to: url, revision: revision)
-        }
-        if scheduleICloud { scheduleICloudSync() }
-    }
-
-    private func rebuildEntryIndex() {
-        entryIndex = EntryLibraryIndex(entries: database.entries, feeds: database.feeds)
-    }
-
-    /// Removes articles whose feed was deleted or no longer exists. Older
-    /// builds could leave these rows behind, and a cloud merge can reintroduce
-    /// them on a device that still has the local article cache.
     @discardableResult
-    private static func purgeEntriesFromInactiveFeeds(in database: inout AppDatabase) -> Bool {
-        let activeFeedIDs = Set(database.feeds.lazy.filter { !$0.isDeleted }.map(\.id))
-        let orphanedEntryIDs = Set(
-            database.entries.lazy
-                .filter { !activeFeedIDs.contains($0.feedID) }
-                .map(\.id)
+    public func saveLLMConfiguration(_ configuration: LLMConfiguration, apiKey: String) -> LocalAPIKeyStore.Storage {
+        let storage = LocalAPIKeyStore.saveAPIKey(apiKey)
+        self.llmConfiguration = configuration
+        if let data = try? JSONEncoder().encode(configuration) {
+            UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
+        }
+        return storage
+    }
+
+    public func updateLLMConfiguration(_ configuration: LLMConfiguration) {
+        self.llmConfiguration = configuration
+        if let data = try? JSONEncoder().encode(configuration) {
+            UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
+        }
+    }
+
+    public func resetLLMConfiguration() {
+        let defaultConfig = LLMConfiguration.default
+        updateLLMConfiguration(defaultConfig)
+    }
+
+    public func loadAPIKey() -> String { LocalAPIKeyStore.loadAPIKey() }
+
+    public func testLLM(configuration: LLMConfiguration, apiKey: String) async throws {
+        try await llm.test(configuration: configuration, apiKey: apiKey)
+    }
+
+    public func setRefreshInterval(_ interval: FeedRefreshInterval) {
+        guard refreshInterval != interval else { return }
+        refreshInterval = interval
+        UserDefaults.standard.set(interval.rawValue, forKey: PreferenceKey.refreshInterval)
+        restartAutomaticRefreshIfNeeded()
+    }
+
+    public func setRefreshOnLaunch(_ enabled: Bool) {
+        guard refreshOnLaunch != enabled else { return }
+        refreshOnLaunch = enabled
+        UserDefaults.standard.set(enabled, forKey: PreferenceKey.refreshOnLaunch)
+    }
+
+    public func setAppTheme(_ theme: AppTheme) {
+        guard appTheme != theme else { return }
+        appTheme = theme
+        UserDefaults.standard.set(theme.rawValue, forKey: PreferenceKey.appTheme)
+    }
+
+    public func setArticleFontSize(_ size: Int) {
+        let clamped = max(13, min(25, size))
+        guard articleFontSize != clamped else { return }
+        articleFontSize = clamped
+        UserDefaults.standard.set(clamped, forKey: PreferenceKey.articleFontSize)
+    }
+
+    public func increaseArticleFontSize() { setArticleFontSize(articleFontSize + 1) }
+    public func decreaseArticleFontSize() { setArticleFontSize(articleFontSize - 1) }
+    public func resetArticleFontSize() { setArticleFontSize(17) }
+
+    public func ignoreVersion(_ version: String) {
+        let clean = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        guard ignoredVersion != clean else { return }
+        ignoredVersion = clean
+        UserDefaults.standard.set(clean, forKey: PreferenceKey.ignoredVersion)
+    }
+
+    public func clearIgnoredVersion() {
+        guard ignoredVersion != nil else { return }
+        ignoredVersion = nil
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.ignoredVersion)
+    }
+
+    public func startAutomaticRefresh() {
+        guard automaticRefreshTask == nil else { return }
+        automaticRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.refreshOnLaunch {
+                await self.refresh(reportErrors: false, origin: .launch)
+            }
+
+            while !Task.isCancelled {
+                guard let seconds = self.refreshInterval.seconds else {
+                    do {
+                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                    } catch {
+                        return
+                    }
+                    continue
+                }
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await self.refresh(reportErrors: false, origin: .scheduled)
+            }
+        }
+    }
+
+    public func stopAutomaticRefresh() {
+        automaticRefreshTask?.cancel()
+        automaticRefreshTask = nil
+    }
+
+    private func restartAutomaticRefreshIfNeeded() {
+        guard automaticRefreshTask != nil else { return }
+        stopAutomaticRefresh()
+        startAutomaticRefresh()
+    }
+
+    public func checkForUpdates(isUserInitiated: Bool) async {
+        updateStatus = .checking
+        do {
+            let result = try await UpdateCheckService.checkForUpdates()
+            if result.hasUpdate, let release = result.release, release.version != ignoredVersion {
+                updateStatus = .hasUpdate(release: release, checkedAt: .now)
+            } else {
+                updateStatus = .upToDate(checkedAt: .now)
+            }
+        } catch {
+            updateStatus = .failed(message: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Compatibility Property for Tests
+
+    @available(*, deprecated, message: "Use Repository / LocalAccountProvider APIs instead of AppDatabase")
+    public var database: AppDatabase {
+        AppDatabase(
+            feeds: feeds,
+            entries: entries,
+            articleCaches: [:],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: llmConfiguration,
+            customFolders: customFolders
         )
-        guard !orphanedEntryIDs.isEmpty else { return false }
-
-        let deletedAt = Date.now
-        database.entries.removeAll { orphanedEntryIDs.contains($0.id) }
-        database.articleCaches = database.articleCaches.filter { !orphanedEntryIDs.contains($0.key) }
-        database.readingStates = database.readingStates.filter { !orphanedEntryIDs.contains($0.key) }
-        for index in database.artifacts.indices where orphanedEntryIDs.contains(database.artifacts[index].entryID) {
-            database.artifacts[index].content = ""
-            database.artifacts[index].segments = []
-            database.artifacts[index].selectionText = nil
-            database.artifacts[index].selectionArticleHash = nil
-            database.artifacts[index].selectionAnchor = nil
-            database.artifacts[index].isComplete = false
-            database.artifacts[index].isDeleted = true
-            database.artifacts[index].updatedAt = deletedAt
-        }
-        return true
     }
 
-    private func scheduleICloudSync() {
-        guard isICloudSyncEnabled else { return }
-        iCloudSyncTask?.cancel()
-        iCloudSyncTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else { return }
-            await self?.syncICloud()
-        }
-    }
-
-    private static func originURL(from url: URL) -> URL? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
-        components.path = ""
-        components.query = nil
-        components.fragment = nil
-        return components.url
-    }
-
-    private static func load(from url: URL) -> AppDatabase? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder.paperRss.decode(AppDatabase.self, from: data)
-    }
+    // MARK: - Helpers
 
     private func normalizedURL(_ text: String) -> URL? {
-        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let withScheme = candidate.contains("://") ? candidate : "https://\(candidate)"
-        guard let url = URL(string: withScheme), let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme), url.host != nil else { return nil }
-        return url
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let direct = URL(string: trimmed), direct.scheme != nil { return direct }
+        return URL(string: "https://\(trimmed)")
     }
 }
 
-private actor DatabasePersistenceWriter {
-    private var latestRevision = 0
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
+    var paperRssNormalizedWhitespace: String {
+        components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
 
-    func write(_ database: AppDatabase, to url: URL, revision: Int) {
-        guard revision > latestRevision else { return }
-        latestRevision = revision
-        guard let data = try? JSONEncoder.paperRss.encode(database) else { return }
-        try? data.write(to: url, options: .atomic)
+private final class StreamAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = ""
+
+    func append(_ delta: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        buffer.append(delta)
+        return buffer
+    }
+
+    var content: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return buffer
     }
 }
 
 extension JSONEncoder {
-    static let paperRss: JSONEncoder = {
+    public static let paperRss: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -1953,26 +1577,10 @@ extension JSONEncoder {
 }
 
 extension JSONDecoder {
-    static let paperRss: JSONDecoder = {
+    public static let paperRss: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
 }
 
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
-
-    var needsPlainTextNormalization: Bool {
-        range(of: #"(?is)<\s*/?\s*[a-z][^>]*>"#, options: .regularExpression) != nil
-            || contains("&nbsp;")
-            || contains("&amp;")
-            || contains("&lt;")
-            || contains("&gt;")
-            || contains("&quot;")
-    }
-
-    var paperRssNormalizedWhitespace: String {
-        split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    }
-}

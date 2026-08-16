@@ -6,6 +6,11 @@
 	objectVersion = 71;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A10000000000000000000032 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* GRDB */; };
+		A10000000000000000000033 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* GRDB */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		A10000000000000000000003 /* PaperRss.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperRss.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000004 /* PaperRss.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperRss.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -39,6 +44,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000032 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,6 +52,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000033 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +95,9 @@
 				A10000000000000000000001 /* PaperRss */,
 			);
 			name = PaperRss;
+			packageProductDependencies = (
+				A10000000000000000000031 /* GRDB */,
+			);
 			productName = PaperRss;
 			productReference = A10000000000000000000003 /* PaperRss.app */;
 			productType = "com.apple.product-type.application";
@@ -108,6 +118,9 @@
 				A10000000000000000000001 /* PaperRss */,
 			);
 			name = "PaperRss iOS";
+			packageProductDependencies = (
+				A10000000000000000000031 /* GRDB */,
+			);
 			productName = PaperRss;
 			productReference = A10000000000000000000004 /* PaperRss.app */;
 			productType = "com.apple.product-type.application";
@@ -139,6 +152,9 @@
 				"zh-Hans",
 			);
 			mainGroup = A10000000000000000000005;
+			packageReferences = (
+				A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+			);
 			productRefGroup = A10000000000000000000002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -313,6 +329,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.11.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000031 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A1000000000000000000000E /* Project object */;
 }

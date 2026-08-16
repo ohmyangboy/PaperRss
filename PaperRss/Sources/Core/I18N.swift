@@ -76,7 +76,9 @@ public final class I18N: ObservableObject {
             ?? .system
         let localization = language.resolvedLocalization().rawValue
         let baseBundle = resourceBundle
-        let fallback = localization == AppLanguage.en.rawValue ? englishFallback ?? key : key
+        let fallback = localization == AppLanguage.en.rawValue
+            ? (englishFallback ?? builtinEnglishTranslations[key] ?? key)
+            : key
         guard let path = baseBundle.path(forResource: localization, ofType: "lproj"),
               let bundle = Bundle(path: path) else {
             return fallback
@@ -90,8 +92,9 @@ public final class I18N: ObservableObject {
         language explicitLanguage: AppLanguage? = nil
     ) -> String {
         let language = explicitLanguage ?? currentLanguage
+        let formatTemplate = localized(key, language: language)
         return String(
-            format: localized(key, language: language),
+            format: formatTemplate,
             locale: Locale(identifier: language.resolvedLocalization().rawValue),
             arguments: arguments
         )
@@ -103,10 +106,17 @@ public final class I18N: ObservableObject {
     }
 
     private nonisolated static var resourceBundle: Bundle {
-        #if SWIFT_PACKAGE
-        Bundle.module
-        #else
         Bundle.main
-        #endif
     }
+
+    private nonisolated static let builtinEnglishTranslations: [String: String] = [
+        "今天": "Today",
+        "添加订阅": "Add Feed",
+        "未读": "Unread",
+        "收藏": "Starred",
+        "未启用": "Disabled",
+        "等待同步": "Waiting for sync",
+        "%lld 个订阅": "%lld Feeds",
+        "跟随系统": "System"
+    ]
 }

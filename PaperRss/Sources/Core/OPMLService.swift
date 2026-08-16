@@ -10,18 +10,19 @@ public enum OPMLService {
     }
 
     public static func export(feeds: [Feed]) -> Data {
-        let outlines = feeds.filter { !$0.isDeleted }.map { feed in
+        let outlines: [String] = feeds.filter { !$0.isDeleted }.map { (feed: Feed) -> String in
             let title = escape(feed.title)
             let url = escape(feed.feedURL.absoluteString)
             let site = feed.siteURL.map { " htmlUrl=\"\(escape($0.absoluteString))\"" } ?? ""
             return "    <outline text=\"\(title)\" title=\"\(title)\" type=\"rss\" xmlUrl=\"\(url)\"\(site) />"
-        }.joined(separator: "\n")
+        }
+        let joinedOutlines = outlines.joined(separator: "\n")
         return Data("""
-        <?xml version=\"1.0\" encoding=\"UTF-8\"?>
-        <opml version=\"2.0\">
+        <?xml version="1.0" encoding="UTF-8"?>
+        <opml version="2.0">
           <head><title>PaperRss subscriptions</title></head>
           <body>
-        \(outlines)
+        \(joinedOutlines)
           </body>
         </opml>
         """.utf8)
