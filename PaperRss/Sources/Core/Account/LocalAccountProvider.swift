@@ -24,7 +24,7 @@ public enum LocalAccountError: LocalizedError, Equatable, Sendable {
 /// - 网页离线正文缓存 (ArticleCache)
 /// - AI 生成产物与全局翻译记忆 (AIArtifact)
 /// - OPML 导入与导出
-public final class LocalAccountProvider: Sendable {
+public final class LocalAccountProvider: AccountProvider, Sendable {
     public let accountID: String
     private let database: LibraryDatabase
     public let feedRepository: FeedRepository
@@ -391,5 +391,20 @@ public final class LocalAccountProvider: Sendable {
             newFeedIDs.append(feed.id)
         }
         return newFeedIDs
+    }
+
+    // MARK: - AccountProvider
+
+    public func refresh(reason: RefreshReason) async throws -> RefreshResult {
+        let feeds = (try? fetchFeeds()) ?? []
+        for feed in feeds {
+            let singleRes = await fetchSingleFeed(feed: feed)
+            _ = try? applyRefreshResult(singleRes)
+        }
+        return RefreshResult(status: .success)
+    }
+
+    public func pushPendingArticleStates() async throws {
+        // Local 账号由本地 authoritative 维护，无需出站推送
     }
 }

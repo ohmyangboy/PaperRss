@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import GRDB
 import SwiftUI
 
 public enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -150,6 +151,14 @@ public final class AppStore: ObservableObject {
 
     public let libraryDatabase: LibraryDatabase
     public let localProvider: LocalAccountProvider
+    public let credentialStore: CredentialStore
+    public let syncCoordinator: SyncCoordinator
+    public let accountRepository: AccountRepository
+
+    @Published public private(set) var accounts: [AccountRecord] = []
+    @Published public var activeAccountID: String = "local-default"
+    @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
+
     private let persistenceURL: URL
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
@@ -173,7 +182,8 @@ public final class AppStore: ObservableObject {
     public init(
         fileManager: FileManager = .default,
         databaseURL: URL? = nil,
-        persistenceURL: URL? = nil
+        persistenceURL: URL? = nil,
+        credentialStore: CredentialStore? = nil
     ) {
         self.feedFetcher = { try await FeedService.fetch($0) }
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
@@ -189,11 +199,19 @@ public final class AppStore: ObservableObject {
             fatalError("Failed to initialize LibraryDatabase: \(error)")
         }
 
+        self.credentialStore = credentialStore ?? KeychainCredentialStore.shared
+        self.syncCoordinator = SyncCoordinator()
+        self.accountRepository = AccountRepository(database: libraryDatabase)
+
         self.localProvider = LocalAccountProvider(
             accountID: "local-default",
             database: libraryDatabase,
             feedFetcher: feedFetcher
         )
+
+        Task { [syncCoordinator, localProvider] in
+            await syncCoordinator.registerProvider(localProvider)
+        }
 
         // 1. Recover LLM Configuration from legacy JSON if needed (Independent of SQLite migration state)
         if let recovered = LegacyPreferenceMigrator.recoverLLMConfigurationIfNeeded(from: self.persistenceURL, fileManager: fileManager) {
@@ -258,7 +276,8 @@ public final class AppStore: ObservableObject {
     /// 测试用初始化器（隔离测试沙箱）
     public init(
         testDatabase: AppDatabase,
-        feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult
+        feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
+        credentialStore: CredentialStore? = nil
     ) {
         self.feedFetcher = feedFetcher
         let tempDir = FileManager.default.temporaryDirectory
@@ -273,11 +292,19 @@ public final class AppStore: ObservableObject {
             fatalError("Failed to initialize test LibraryDatabase: \(error)")
         }
 
+        self.credentialStore = credentialStore ?? InMemoryCredentialStore()
+        self.syncCoordinator = SyncCoordinator()
+        self.accountRepository = AccountRepository(database: libraryDatabase)
+
         self.localProvider = LocalAccountProvider(
             accountID: "local-default",
             database: libraryDatabase,
             feedFetcher: feedFetcher
         )
+
+        Task { [syncCoordinator, localProvider] in
+            await syncCoordinator.registerProvider(localProvider)
+        }
 
         var migrationSucceededOrNotNeeded = true
         // 写入测试 JSON 并执行迁移
@@ -328,6 +355,34 @@ public final class AppStore: ObservableObject {
         self.unreadEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, limit: limit)) ?? []
         self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, limit: limit)) ?? []
         self.cachedEntryLookup.removeAll(keepingCapacity: true)
+
+        // 读取多账号信息并注册 FreshRSS Providers
+        let fetchedAccounts = (try? libraryDatabase.read { db in
+            try AccountRecord.order(Column("created_at").asc).fetchAll(db)
+        }) ?? []
+        self.accounts = fetchedAccounts
+
+        var syncStates: [String: AccountSyncStateRecord] = [:]
+        for account in fetchedAccounts {
+            if let state = try? libraryDatabase.read({ db in
+                try AccountSyncStateRecord.filter(Column("account_id") == account.id).fetchOne(db)
+            }) {
+                syncStates[account.id] = state
+            }
+            if account.type == AccountType.freshRSS.rawValue, let urlStr = account.endpointURL, let url = URL(string: urlStr), let username = account.username {
+                let provider = FreshRSSAccountProvider(
+                    accountID: account.id,
+                    endpointURL: url,
+                    username: username,
+                    database: libraryDatabase,
+                    credentialStore: credentialStore
+                )
+                Task { [syncCoordinator] in
+                    await syncCoordinator.registerProvider(provider)
+                }
+            }
+        }
+        self.accountSyncStates = syncStates
     }
 
     // MARK: - Computed Public Accessors
@@ -741,12 +796,18 @@ public final class AppStore: ObservableObject {
     public func markRead(entryID: String, read: Bool = true) {
         try? localProvider.markRead(entryID: entryID, read: read)
         updateLocalEntryState(entryID: entryID, isRead: read)
+        Task { [weak self] in
+            await self?.syncCoordinator.pushAllPendingArticleStates()
+        }
     }
 
     public func markRead(entryIDs: [String], read: Bool = true) {
         guard !entryIDs.isEmpty else { return }
         try? localProvider.markRead(entryIDs: entryIDs, read: read)
         reloadState()
+        Task { [weak self] in
+            await self?.syncCoordinator.pushAllPendingArticleStates()
+        }
     }
 
     public func markStarred(_ entry: Entry, starred: Bool = true) {
@@ -756,6 +817,9 @@ public final class AppStore: ObservableObject {
     public func markStarred(entryID: String, starred: Bool = true) {
         try? localProvider.markStarred(entryID: entryID, starred: starred)
         updateLocalEntryState(entryID: entryID, isStarred: starred)
+        Task { [weak self] in
+            await self?.syncCoordinator.pushAllPendingArticleStates()
+        }
     }
 
     public func toggleStar(_ entry: Entry) {
@@ -763,8 +827,12 @@ public final class AppStore: ObservableObject {
     }
 
     public func toggleStar(entryID: String) {
-        if let entry = entry(id: entryID) {
+        if let item = entryListItems.first(where: { $0.id == entryID }) {
+            markStarred(entryID: entryID, starred: !item.isStarred)
+        } else if let entry = entry(id: entryID) {
             markStarred(entryID: entryID, starred: !entry.isStarred)
+        } else {
+            markStarred(entryID: entryID, starred: true)
         }
     }
 
@@ -786,9 +854,128 @@ public final class AppStore: ObservableObject {
                 startOfDayTimestamp: actualStartOfDay
             )
             reloadState()
+            Task { [weak self] in
+                await self?.syncCoordinator.pushAllPendingArticleStates()
+            }
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    // MARK: - FreshRSS Account Management
+
+    @discardableResult
+    public func addFreshRSSAccount(
+        endpointURLText: String,
+        username: String,
+        password: String,
+        displayName: String? = nil,
+        customSession: URLSession = .shared
+    ) async throws -> AccountRecord {
+        guard let rawURL = URL(string: endpointURLText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let host = rawURL.host, !host.isEmpty else {
+            throw ReaderAPIError.invalidEndpointURL(endpointURLText)
+        }
+
+        let canonicalURL = ReaderAPIClient.canonicalBaseURL(for: rawURL)
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUsername.isEmpty else {
+            throw ReaderAPIError.invalidCredentials
+        }
+        guard !password.isEmpty else {
+            throw ReaderAPIError.invalidCredentials
+        }
+
+        let tempAccountID = "freshRSS-\(UUID().uuidString)"
+        let tempCredentialStore = InMemoryCredentialStore(initialCredentials: [tempAccountID: password])
+        let validatorClient = ReaderAPIClient(
+            endpointURL: canonicalURL,
+            username: trimmedUsername,
+            accountID: tempAccountID,
+            credentialStore: tempCredentialStore,
+            session: customSession
+        )
+
+        // 1. 验证登录凭据
+        try await validatorClient.validateCredentials()
+
+        // 2. 插入数据库
+        let accountID = "freshRSS-\(UUID().uuidString)"
+        let now = Date().timeIntervalSince1970
+        let accountTitle: String
+        if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            accountTitle = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            accountTitle = rawURL.host ?? "FreshRSS"
+        }
+
+        let accountRecord = AccountRecord(
+            id: accountID,
+            type: AccountType.freshRSS.rawValue,
+            displayName: accountTitle,
+            endpointURL: canonicalURL.absoluteString,
+            username: trimmedUsername,
+            isEnabled: true,
+            createdAt: now,
+            updatedAt: now
+        )
+
+        try await accountRepository.saveAccount(accountRecord)
+
+        // 3. 将密码写入真实 Keychain
+        do {
+            try credentialStore.saveFreshRSSPassword(password, accountID: accountID)
+        } catch {
+            // 如果 Keychain 写入失败，清理数据库账号记录
+            try? await accountRepository.deleteAccount(id: accountID)
+            throw error
+        }
+
+        // 4. 注册 Provider 到 SyncCoordinator
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: canonicalURL,
+            username: trimmedUsername,
+            database: libraryDatabase,
+            credentialStore: credentialStore,
+            session: customSession
+        )
+        await syncCoordinator.registerProvider(provider)
+
+        // 5. 刷新界面状态并触发首次同步
+        reloadState()
+
+        Task {
+            _ = try? await provider.refresh(reason: .manual)
+            self.reloadState()
+        }
+
+        return accountRecord
+    }
+
+    public func removeAccount(accountID: String) async throws {
+        guard accountID != "local-default" else {
+            throw LocalAccountError.feedNotFound
+        }
+
+        await syncCoordinator.unregisterProvider(accountID: accountID)
+        try? credentialStore.deleteFreshRSSCredentials(accountID: accountID)
+        try await accountRepository.deleteAccount(id: accountID)
+        reloadState()
+    }
+
+    public func syncAccount(accountID: String) async {
+        do {
+            _ = try await syncCoordinator.refreshAccount(accountID: accountID, reason: .manual)
+            reloadState()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    public func syncAllAccounts() async {
+        _ = await syncCoordinator.refreshAll(reason: .manual)
+        reloadState()
     }
 
     // MARK: - Article Caches & Details

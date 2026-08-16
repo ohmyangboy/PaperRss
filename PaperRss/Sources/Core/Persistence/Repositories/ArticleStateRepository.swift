@@ -41,6 +41,38 @@ public final class ArticleStateRepository: Sendable {
             )
             try newState.save(db)
         }
+
+        // 检查所属账号类型，若为 remote (freshRSS) 账号，同事务内写入/更新 Outbox
+        if let row = try Row.fetchOne(db, sql: """
+            SELECT a.id AS account_id, a.type AS account_type
+            FROM items i
+            INNER JOIN accounts a ON a.id = i.account_id
+            WHERE i.id = ?
+        """, arguments: [itemID]) {
+            let accountID: String = row["account_id"]
+            let accountType: String = row["account_type"]
+            if accountType == AccountType.freshRSS.rawValue {
+                if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "read", in: db) {
+                    existingOutbox.desiredValue = isRead
+                    existingOutbox.revision += 1
+                    existingOutbox.updatedAt = now
+                    existingOutbox.attemptCount = 0
+                    existingOutbox.nextAttemptAt = nil
+                    existingOutbox.lastError = nil
+                    try existingOutbox.save(db)
+                } else {
+                    let outbox = ArticleStateOutboxRecord(
+                        accountID: accountID,
+                        itemID: itemID,
+                        stateKey: "read",
+                        desiredValue: isRead,
+                        revision: 1,
+                        updatedAt: now
+                    )
+                    try outbox.save(db)
+                }
+            }
+        }
     }
 
     public func markRead(itemIDs: [String], isRead: Bool, in db: Database) throws {
@@ -66,6 +98,38 @@ public final class ArticleStateRepository: Sendable {
                 updatedAt: now
             )
             try newState.save(db)
+        }
+
+        // 检查所属账号类型，若为 remote (freshRSS) 账号，同事务内写入/更新 Outbox
+        if let row = try Row.fetchOne(db, sql: """
+            SELECT a.id AS account_id, a.type AS account_type
+            FROM items i
+            INNER JOIN accounts a ON a.id = i.account_id
+            WHERE i.id = ?
+        """, arguments: [itemID]) {
+            let accountID: String = row["account_id"]
+            let accountType: String = row["account_type"]
+            if accountType == AccountType.freshRSS.rawValue {
+                if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "starred", in: db) {
+                    existingOutbox.desiredValue = isStarred
+                    existingOutbox.revision += 1
+                    existingOutbox.updatedAt = now
+                    existingOutbox.attemptCount = 0
+                    existingOutbox.nextAttemptAt = nil
+                    existingOutbox.lastError = nil
+                    try existingOutbox.save(db)
+                } else {
+                    let outbox = ArticleStateOutboxRecord(
+                        accountID: accountID,
+                        itemID: itemID,
+                        stateKey: "starred",
+                        desiredValue: isStarred,
+                        revision: 1,
+                        updatedAt: now
+                    )
+                    try outbox.save(db)
+                }
+            }
         }
     }
 
@@ -137,6 +201,31 @@ public final class ArticleStateRepository: Sendable {
         );
         """
         try db.execute(sql: updateSql, arguments: StatementArguments(updateArguments))
+
+        let isRemoteAccount: Bool = (try? AccountRecord.filter(Column("id") == accountID).fetchOne(db)?.type == AccountType.freshRSS.rawValue) ?? false
+        if isRemoteAccount {
+            for itemID in unreadItemIDs {
+                if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "read", in: db) {
+                    existingOutbox.desiredValue = true
+                    existingOutbox.revision += 1
+                    existingOutbox.updatedAt = now
+                    existingOutbox.attemptCount = 0
+                    existingOutbox.nextAttemptAt = nil
+                    existingOutbox.lastError = nil
+                    try existingOutbox.save(db)
+                } else {
+                    let outbox = ArticleStateOutboxRecord(
+                        accountID: accountID,
+                        itemID: itemID,
+                        stateKey: "read",
+                        desiredValue: true,
+                        revision: 1,
+                        updatedAt: now
+                    )
+                    try outbox.save(db)
+                }
+            }
+        }
     }
 
     // MARK: - Database-Scoped Primitives (Article State Outbox)
