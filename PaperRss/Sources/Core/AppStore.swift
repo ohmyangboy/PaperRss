@@ -154,9 +154,6 @@ public final class AppStore: ObservableObject {
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
     private var automaticRefreshTask: Task<Void, Never>?
-    private var summaryStreamNotificationTask: Task<Void, Never>?
-
-    private static let summaryStreamNotificationInterval: UInt64 = 30_000_000
 
     private enum PreferenceKey {
         static let refreshInterval = "PaperRss.refreshInterval"
@@ -352,10 +349,12 @@ public final class AppStore: ObservableObject {
         return names
     }
 
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
     public var entries: [Entry] {
         (try? localProvider.fetchAllEntries()) ?? []
     }
 
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
     public var todayEntries: [Entry] {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
@@ -366,7 +365,11 @@ public final class AppStore: ObservableObject {
     }
 
     public var todayUnreadCount: Int { sidebarCounts.todayUnread }
+
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
     public var unreadEntries: [Entry] { entries.filter { !$0.isRead } }
+
+    @available(*, deprecated, message: "For testing only. Production Views must use entryListItems and sidebarCounts")
     public var starredEntries: [Entry] { entries.filter { $0.isStarred } }
 
     public func unreadCount(feedID: UUID) -> Int { sidebarCounts.unreadByFeed[feedID, default: 0] }
@@ -386,7 +389,22 @@ public final class AppStore: ObservableObject {
 
     public func entryListItems(feedIDs: Set<UUID>) -> [EntryListItem] {
         guard !feedIDs.isEmpty else { return [] }
-        return entryListItems.filter { feedIDs.contains($0.feedID) }
+        let ids = Set(feedIDs.map(\.uuidString))
+        return (try? localProvider.timelineQueryService.fetchListItems(scope: .feeds(feedIDs: ids))) ?? []
+    }
+
+    public func fetchTimelinePage(
+        scope: TimelineScope,
+        retainingIDs: Set<String> = [],
+        limit: Int = 100,
+        offset: Int = 0
+    ) -> [EntryListItem] {
+        (try? localProvider.timelineQueryService.fetchListItems(
+            scope: scope,
+            retainingIDs: retainingIDs,
+            limit: limit,
+            offset: offset
+        )) ?? []
     }
 
     public func entryListItems(folder: String) -> [EntryListItem] {
@@ -738,9 +756,27 @@ public final class AppStore: ObservableObject {
         }
     }
 
-    public func markAllRead(feedID: UUID? = nil, folder: String? = nil) {
-        try? localProvider.markAllRead(feedID: feedID, folderName: folder)
-        reloadState()
+    public func markAllRead(
+        feedID: UUID? = nil,
+        feedIDs: Set<UUID>? = nil,
+        folder: String? = nil,
+        scope: TimelineScope? = nil
+    ) {
+        do {
+            let actualStartOfDay: Double? = {
+                if case .today(let ts) = scope { return ts }
+                return nil
+            }()
+            try localProvider.markAllRead(
+                feedID: feedID,
+                feedIDs: feedIDs,
+                folderName: folder,
+                startOfDayTimestamp: actualStartOfDay
+            )
+            reloadState()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     // MARK: - Article Caches & Details
@@ -867,7 +903,12 @@ public final class AppStore: ObservableObject {
         return status.entryID == entry.id && status.kind == kind
     }
 
-    public func generateSummary(entry: Entry, text: String, force: Bool = false) async {
+    public func generateSummary(
+        entry: Entry,
+        text: String,
+        force: Bool = false,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async {
         let configuration = llmConfiguration
         let hash = text.stableDigest
         if !force, let existing = summaryArtifact(for: entry), existing.isComplete && existing.contentHash == hash && existing.model == configuration.model {
@@ -887,43 +928,44 @@ public final class AppStore: ObservableObject {
         activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .generating)
 
         let targetArtifactID = UUID()
-        let accumulator = StreamAccumulator()
-        let isComplete = false
-
-        let initialArtifact = AIArtifact(
-            id: targetArtifactID,
-            entryID: entry.id,
-            kind: .summary,
-            contentHash: hash,
-            model: configuration.model,
-            targetLanguage: configuration.targetLanguage,
-            promptVersion: 1,
-            content: "",
-            isComplete: isComplete
+        let tracker = SummaryStreamTracker(
+            targetArtifact: AIArtifact(
+                id: targetArtifactID,
+                entryID: entry.id,
+                kind: .summary,
+                contentHash: hash,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: 1,
+                content: "",
+                isComplete: false
+            )
         )
-        try? localProvider.saveArtifact(initialArtifact)
-
-        startSummaryStreamNotifications()
+        try? localProvider.saveArtifact(tracker.currentArtifact)
 
         do {
             let result = try await llm.summary(text: text, configuration: configuration, apiKey: apiKey) { [weak self] delta in
                 guard let self, !Task.isCancelled else { return }
-                let currentBuffer = accumulator.append(delta)
-                var updated = initialArtifact
-                updated.content = currentBuffer
-                updated.updatedAt = .now
-                try? self.localProvider.saveArtifact(updated)
-            }
-            stopSummaryStreamNotifications()
+                let (currentBuffer, shouldCheckpoint, artifactToCheckpoint) = tracker.append(delta)
 
-            var finalArtifact = initialArtifact
+                // 1. 局部 UI 实时流式通知（不发全局 objectWillChange）
+                if let onDelta {
+                    Task { await onDelta(currentBuffer) }
+                }
+
+                // 2. 节流持久化 Checkpoint（支持崩溃/取消恢复）
+                if shouldCheckpoint {
+                    try? self.localProvider.saveArtifact(artifactToCheckpoint)
+                }
+            }
+
+            var finalArtifact = tracker.currentArtifact
             finalArtifact.content = result
             finalArtifact.isComplete = true
             finalArtifact.updatedAt = .now
             try? localProvider.saveArtifact(finalArtifact)
             activeSummaryRequest = nil
         } catch {
-            stopSummaryStreamNotifications()
             activeSummaryRequest = nil
             if !Task.isCancelled {
                 lastError = error.localizedDescription
@@ -932,113 +974,14 @@ public final class AppStore: ObservableObject {
     }
 
     public func generateBilingualTranslation(entry: Entry, text: String, targetLanguage: String = "zh-Hans") async {
-        let configuration = llmConfiguration
-        let hash = text.stableDigest
-        if let existing = bilingualArtifact(for: entry, text: text), existing.isComplete {
-            return
-        }
-        guard activeBilingualRequest == nil else { return }
-
         let paragraphs = ArticleExtractor.readerParagraphs(in: text, title: entry.title)
         guard !paragraphs.isEmpty else { return }
-
-        lastError = nil
-        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .loadingLocalConfiguration)
-        let apiKey = loadAPIKey()
-        guard !apiKey.isEmpty else {
-            activeBilingualRequest = nil
-            lastError = LLMServiceError.missingAPIKey.localizedDescription
-            return
-        }
-
-        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
-
-        let targetArtifactID = UUID()
-        let paragraphOrder: [String: Int] = Dictionary(uniqueKeysWithValues: paragraphs.enumerated().map { ($1.id, $0) })
-
-        var initialArtifact = AIArtifact(
-            id: targetArtifactID,
-            entryID: entry.id,
-            kind: .bilingual,
-            contentHash: hash,
-            model: configuration.model,
-            targetLanguage: configuration.targetLanguage,
-            promptVersion: Self.translationPromptVersion,
-            content: "",
-            segments: [],
-            isComplete: false
+        await translateBilingualParagraphs(
+            entry: entry,
+            text: text,
+            paragraphs: paragraphs,
+            paragraphIDs: paragraphs.map(\.id)
         )
-        try? localProvider.saveArtifact(initialArtifact)
-
-        var uncachedParagraphs: [ReaderParagraph] = []
-        var cachedSegments: [BilingualSegment] = []
-
-        for paragraph in paragraphs {
-            if let cached = cachedTranslation(for: paragraph.original, configuration: configuration) {
-                cachedSegments.append(BilingualSegment(id: paragraph.id, original: paragraph.original, translation: cached))
-            } else {
-                uncachedParagraphs.append(paragraph)
-            }
-        }
-
-        if !cachedSegments.isEmpty {
-            initialArtifact.segments = cachedSegments
-            initialArtifact.content = cachedSegments.map(\.translation).joined(separator: "\n\n")
-            try? localProvider.saveArtifact(initialArtifact)
-        }
-
-        if uncachedParagraphs.isEmpty {
-            initialArtifact.isComplete = true
-            initialArtifact.updatedAt = .now
-            try? localProvider.saveArtifact(initialArtifact)
-            activeBilingualRequest = nil
-            return
-        }
-
-        let batches = translationBatches(from: uncachedParagraphs)
-        activeBilingualTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                for batch in batches {
-                    guard !Task.isCancelled else { break }
-                    let translatedTexts = try await self.llm.translateBatch(
-                        paragraphs: batch.map(\.original),
-                        configuration: configuration,
-                        apiKey: apiKey
-                    )
-                    guard !Task.isCancelled else { break }
-                    let segments = zip(batch, translatedTexts).map {
-                        BilingualSegment(id: $0.id, original: $0.original, translation: $1)
-                    }
-                    self.cacheTranslations(segments, configuration: configuration)
-
-                    var current = (try? self.localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false)) ?? initialArtifact
-                    for seg in segments {
-                        if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
-                            current.segments[idx] = seg
-                        } else {
-                            current.segments.append(seg)
-                        }
-                    }
-                    current.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
-                    current.content = current.segments.map(\.translation).joined(separator: "\n\n")
-                    current.updatedAt = .now
-                    try? self.localProvider.saveArtifact(current)
-                }
-
-                if var finalArt = try? self.localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false) {
-                    finalArt.isComplete = true
-                    finalArt.updatedAt = .now
-                    try? self.localProvider.saveArtifact(finalArt)
-                }
-                self.activeBilingualRequest = nil
-            } catch {
-                self.activeBilingualRequest = nil
-                if !Task.isCancelled {
-                    self.lastError = error.localizedDescription
-                }
-            }
-        }
     }
 
     public func dismissError() {
@@ -1147,7 +1090,145 @@ public final class AppStore: ObservableObject {
         paragraphIDs: [String],
         onDelta: (@Sendable (String, String) async -> Void)? = nil
     ) async {
-        await generateBilingualTranslation(entry: entry, text: text)
+        guard !paragraphs.isEmpty, !paragraphIDs.isEmpty else { return }
+
+        let configuration = llmConfiguration
+        let hash = text.stableDigest
+        let requestedIDsSet = Set(paragraphIDs)
+        let targetParagraphs = paragraphs.filter { requestedIDsSet.contains($0.id) }
+        guard !targetParagraphs.isEmpty else { return }
+
+        let paragraphOrder: [String: Int] = Dictionary(uniqueKeysWithValues: paragraphs.enumerated().map { ($1.id, $0) })
+
+        // 1. 获取或创建 Artifact（根据 entryID + contentHash + model）
+        var artifact = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false))
+            ?? AIArtifact(
+                id: UUID(),
+                entryID: entry.id,
+                kind: .bilingual,
+                contentHash: hash,
+                model: configuration.model,
+                targetLanguage: configuration.targetLanguage,
+                promptVersion: Self.translationPromptVersion,
+                content: "",
+                segments: [],
+                isComplete: false
+            )
+
+        // 保证模型和 targetLanguage 同步
+        if artifact.contentHash != hash || artifact.model != configuration.model {
+            artifact.contentHash = hash
+            artifact.model = configuration.model
+            artifact.targetLanguage = configuration.targetLanguage
+        }
+
+        let existingSegmentMap: [String: BilingualSegment] = Dictionary(
+            uniqueKeysWithValues: artifact.segments.map { ($0.id, $0) }
+        )
+
+        // 2. 区分已翻译、TM (翻译内存) 命中与未翻译段落
+        var uncachedParagraphs: [ReaderParagraph] = []
+        var newResolvedSegments: [BilingualSegment] = []
+
+        for paragraph in targetParagraphs {
+            if let existing = existingSegmentMap[paragraph.id] {
+                // 已有该段落翻译，通知 onDelta
+                if let onDelta {
+                    Task { await onDelta(paragraph.id, existing.translation) }
+                }
+                continue
+            }
+            if let tmTranslation = cachedTranslation(for: paragraph.original, configuration: configuration) {
+                let seg = BilingualSegment(id: paragraph.id, original: paragraph.original, translation: tmTranslation)
+                newResolvedSegments.append(seg)
+                if let onDelta {
+                    Task { await onDelta(paragraph.id, tmTranslation) }
+                }
+            } else {
+                uncachedParagraphs.append(paragraph)
+            }
+        }
+
+        // 如果有 TM 命中的段落，先合并
+        if !newResolvedSegments.isEmpty {
+            for seg in newResolvedSegments {
+                if let idx = artifact.segments.firstIndex(where: { $0.id == seg.id }) {
+                    artifact.segments[idx] = seg
+                } else {
+                    artifact.segments.append(seg)
+                }
+            }
+            artifact.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
+            artifact.content = artifact.segments.map(\.translation).joined(separator: "\n\n")
+            artifact.updatedAt = .now
+            let allExpectedIDs = Set(paragraphs.map(\.id))
+            artifact.isComplete = Set(artifact.segments.map(\.id)).isSuperset(of: allExpectedIDs)
+            try? localProvider.saveArtifact(artifact)
+        }
+
+        // 3. 如果所有请求段落都已解决，直接返回
+        guard !uncachedParagraphs.isEmpty else {
+            return
+        }
+
+        // 4. 检查 API Key
+        let apiKey = loadAPIKey()
+        guard !apiKey.isEmpty else {
+            lastError = LLMServiceError.missingAPIKey.localizedDescription
+            return
+        }
+
+        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
+        defer {
+            activeBilingualRequest = nil
+        }
+
+        // 5. 按批次执行模型翻译并直接 await
+        let batches = translationBatches(from: uncachedParagraphs)
+        do {
+            for batch in batches {
+                guard !Task.isCancelled else { break }
+                let translatedTexts = try await llm.translateBatch(
+                    paragraphs: batch.map(\.original),
+                    configuration: configuration,
+                    apiKey: apiKey
+                )
+                guard !Task.isCancelled else { break }
+
+                let batchSegments = zip(batch, translatedTexts).map {
+                    BilingualSegment(id: $0.id, original: $0.original, translation: $1)
+                }
+                cacheTranslations(batchSegments, configuration: configuration)
+
+                // 触发 onDelta
+                if let onDelta {
+                    for seg in batchSegments {
+                        await onDelta(seg.id, seg.translation)
+                    }
+                }
+
+                // 合并入当前 artifact
+                var current = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false)) ?? artifact
+                for seg in batchSegments {
+                    if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
+                        current.segments[idx] = seg
+                    } else {
+                        current.segments.append(seg)
+                    }
+                }
+                current.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
+                current.content = current.segments.map(\.translation).joined(separator: "\n\n")
+                current.updatedAt = .now
+                let allExpectedIDs = Set(paragraphs.map(\.id))
+                current.isComplete = Set(current.segments.map(\.id)).isSuperset(of: allExpectedIDs)
+                try? localProvider.saveArtifact(current)
+                artifact = current
+            }
+        } catch {
+            if !Task.isCancelled {
+                lastError = error.localizedDescription
+            }
+        }
     }
 
     private func executeSelectionAI(
@@ -1204,7 +1285,7 @@ public final class AppStore: ObservableObject {
         return (try? localProvider.fetchGlobalTranslationMemory(key: entryID))?.content
     }
 
-    private func cacheTranslations(_ segments: [BilingualSegment], configuration: LLMConfiguration) {
+    func cacheTranslations(_ segments: [BilingualSegment], configuration: LLMConfiguration) {
         for segment in segments {
             let key = translationMemoryKey(for: segment.original, configuration: configuration)
             let entryID = translationMemoryEntryID(for: key)
@@ -1263,21 +1344,39 @@ public final class AppStore: ObservableObject {
     private static let maximumParagraphsPerTranslationBatch = 4
     private static let maximumCharactersPerTranslationBatch = 1_200
 
-    private func startSummaryStreamNotifications() {
-        guard summaryStreamNotificationTask == nil else { return }
-        summaryStreamNotificationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.summaryStreamNotificationInterval)
-                guard let self, !Task.isCancelled else { return }
-                self.objectWillChange.send()
-            }
-        }
-    }
+    private final class SummaryStreamTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer = ""
+        private var lastCheckpoint = CFAbsoluteTimeGetCurrent()
+        private let checkpointInterval: Double = 0.5
+        private var targetArtifact: AIArtifact
 
-    private func stopSummaryStreamNotifications() {
-        summaryStreamNotificationTask?.cancel()
-        summaryStreamNotificationTask = nil
-        objectWillChange.send()
+        init(targetArtifact: AIArtifact) {
+            self.targetArtifact = targetArtifact
+        }
+
+        func append(_ delta: String) -> (current: String, shouldCheckpoint: Bool, artifact: AIArtifact) {
+            lock.lock()
+            defer { lock.unlock() }
+            buffer.append(delta)
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastCheckpoint >= checkpointInterval {
+                lastCheckpoint = now
+                targetArtifact.content = buffer
+                targetArtifact.updatedAt = .now
+                return (buffer, true, targetArtifact)
+            }
+            return (buffer, false, targetArtifact)
+        }
+
+        var currentArtifact: AIArtifact {
+            lock.lock()
+            defer { lock.unlock() }
+            var art = targetArtifact
+            art.content = buffer
+            art.updatedAt = .now
+            return art
+        }
     }
 
     // MARK: - Preferences & Configuration

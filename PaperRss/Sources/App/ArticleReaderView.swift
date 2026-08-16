@@ -103,9 +103,29 @@ struct ArticleReaderView: View {
     /// Cleared for failed paragraphs so a truncated result never renders as
     /// a final translation (and never blocks an automatic retry).
     @State private var streamingBilingualTranslations: [String: String] = [:]
+    @State private var streamingSummary: String?
     @State private var activeTranslationTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+
+    private var effectiveSummaryArtifact: AIArtifact? {
+        if let streaming = streamingSummary {
+            var art = store.summaryArtifact(for: entry) ?? AIArtifact(
+                id: UUID(),
+                entryID: entry.id,
+                kind: .summary,
+                contentHash: text.stableDigest,
+                model: store.llmConfiguration.model,
+                targetLanguage: store.llmConfiguration.targetLanguage,
+                content: streaming,
+                isComplete: false
+            )
+            art.content = streaming
+            art.isComplete = false
+            return art
+        }
+        return store.summaryArtifact(for: entry)
+    }
 
     private func cancelBilingualTranslationLocal() {
         activeTranslationTask?.cancel()
@@ -236,6 +256,7 @@ struct ArticleReaderView: View {
             pendingBilingualParagraphIDs = []
             failedBilingualParagraphIDs = [:]
             streamingBilingualTranslations = [:]
+            streamingSummary = nil
             parsedReaderParagraphs = []
             store.markRead(requestedEntry)
 
@@ -268,7 +289,13 @@ struct ArticleReaderView: View {
                store.artifact(for: requestedEntry, kind: .summary) == nil,
                !text.isEmpty {
                 isSummaryExpanded = true
-                await store.generateSummary(entry: requestedEntry, text: text)
+                await store.generateSummary(entry: requestedEntry, text: text) { partial in
+                    await MainActor.run {
+                        guard self.activeLoadEntryID == requestedEntry.id else { return }
+                        self.streamingSummary = partial
+                    }
+                }
+                self.streamingSummary = nil
             }
         }
     }
@@ -307,7 +334,7 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
-                summaryArtifact: store.summaryArtifact(for: entry),
+                summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
@@ -358,7 +385,7 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
-                summaryArtifact: store.summaryArtifact(for: entry),
+                summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
                 aiStatusMessage: activeAIStatus(for: .summary)?.phase.message,
@@ -733,7 +760,20 @@ struct ArticleReaderView: View {
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
             isSummaryExpanded = true
         }
-        Task { await store.generateSummary(entry: entry, text: targetText, force: force) }
+        let requestedEntry = entry
+        Task {
+            await store.generateSummary(entry: requestedEntry, text: targetText, force: force) { partial in
+                await MainActor.run {
+                    guard self.entry.id == requestedEntry.id else { return }
+                    self.streamingSummary = partial
+                }
+            }
+            await MainActor.run {
+                if self.entry.id == requestedEntry.id {
+                    self.streamingSummary = nil
+                }
+            }
+        }
     }
 
     private func generateBilingualTranslation() {
@@ -2591,7 +2631,17 @@ enum PaperReaderBridge {
           window.addEventListener("resize", onResize, { passive: true });
           window.addEventListener("wheel", onWheel, { passive: true, capture: true });
           if (typeof MutationObserver !== "undefined") {
-            state.observer = new MutationObserver(refresh);
+            state.observer = new MutationObserver((mutations) => {
+              const shouldIgnore = mutations.every(m => {
+                const node = m.target;
+                const el = (node && node.nodeType === 1) ? node : (node ? node.parentElement : null);
+                if (!el || typeof el.closest !== "function") return false;
+                return el.closest('#paper-summary-card') || el.closest('.paper-selection-popover');
+              });
+              if (!shouldIgnore) {
+                refresh();
+              }
+            });
             state.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
           }
           if (typeof ResizeObserver !== "undefined") {
@@ -3755,6 +3805,15 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var loadedArticleKey: String?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private struct SummaryRenderSignature: Equatable {
+            let content: String
+            let isExpanded: Bool
+            let isGenerating: Bool
+            let statusMessage: String?
+            let errorMessage: String?
+            let showsAISummary: Bool
+        }
+        private var renderedSummarySignature: SummaryRenderSignature?
         private var selectionExplanationTask: Task<Void, Never>?
         private var activeSelectionExplanationID: String?
         private var pendingSelectionExplanationRequests: [ReaderSelectionRequest] = []
@@ -3773,10 +3832,32 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         func synchronizeSummaryCard(in webView: WKWebView) {
             guard parent.showsAISummary else {
+                let sig = SummaryRenderSignature(
+                    content: "",
+                    isExpanded: false,
+                    isGenerating: false,
+                    statusMessage: nil,
+                    errorMessage: nil,
+                    showsAISummary: false
+                )
+                guard renderedSummarySignature != sig else { return }
+                renderedSummarySignature = sig
                 let script = "(() => { const card = document.getElementById('paper-summary-card'); if (card) card.style.display = 'none'; })();"
                 webView.evaluateJavaScript(script)
                 return
             }
+
+            let sig = SummaryRenderSignature(
+                content: parent.summaryArtifact?.content ?? "",
+                isExpanded: parent.isSummaryExpanded,
+                isGenerating: parent.isGeneratingSummary,
+                statusMessage: parent.aiStatusMessage,
+                errorMessage: parent.errorMessage,
+                showsAISummary: true
+            )
+            guard renderedSummarySignature != sig else { return }
+            renderedSummarySignature = sig
+
             let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
@@ -4015,10 +4096,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
             guard loadedArticleKey != articleKey else {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
-                synchronizeSummaryCard(in: webView)
                 synchronizeSelectionOptions(in: webView)
                 return
             }
+            renderedSummarySignature = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,
@@ -4384,6 +4465,15 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var pendingContentOffset: CGPoint?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private struct SummaryRenderSignature: Equatable {
+            let content: String
+            let isExpanded: Bool
+            let isGenerating: Bool
+            let statusMessage: String?
+            let errorMessage: String?
+            let showsAISummary: Bool
+        }
+        private var renderedSummarySignature: SummaryRenderSignature?
         private var selectionExplanationTask: Task<Void, Never>?
         private var activeSelectionExplanationID: String?
         private var pendingSelectionExplanationRequests: [ReaderSelectionRequest] = []
@@ -4395,10 +4485,31 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         func synchronizeSummaryCard(in webView: WKWebView) {
             guard parent.showsAISummary else {
+                let sig = SummaryRenderSignature(
+                    content: "",
+                    isExpanded: false,
+                    isGenerating: false,
+                    statusMessage: nil,
+                    errorMessage: nil,
+                    showsAISummary: false
+                )
+                guard renderedSummarySignature != sig else { return }
+                renderedSummarySignature = sig
                 let script = "(() => { const card = document.getElementById('paper-summary-card'); if (card) card.style.display = 'none'; })();"
                 webView.evaluateJavaScript(script)
                 return
             }
+
+            let sig = SummaryRenderSignature(
+                content: parent.summaryArtifact?.content ?? "",
+                isExpanded: parent.isSummaryExpanded,
+                isGenerating: parent.isGeneratingSummary,
+                statusMessage: parent.aiStatusMessage,
+                errorMessage: parent.errorMessage,
+                showsAISummary: true
+            )
+            guard renderedSummarySignature != sig else { return }
+            renderedSummarySignature = sig
             let summaryHTML = PaperReaderHeaderBuilder.summaryCardHTML(
                 summaryArtifact: parent.summaryArtifact,
                 isSummaryExpanded: parent.isSummaryExpanded,
@@ -4593,10 +4704,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
             guard loadedArticleKey != articleKey else {
                 synchronizeContentTopInset(in: webView)
                 synchronizeTranslations(in: webView)
-                synchronizeSummaryCard(in: webView)
                 synchronizeSelectionOptions(in: webView)
                 return
             }
+            renderedSummarySignature = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,

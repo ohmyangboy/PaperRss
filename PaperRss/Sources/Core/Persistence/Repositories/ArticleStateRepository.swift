@@ -69,51 +69,74 @@ public final class ArticleStateRepository: Sendable {
         }
     }
 
-    /// 将特定 Feed、Folder 或全库的未读文章全部标记为已读
+    /// 将特定 Feed、多 Feed、Folder、Today 或全库的未读文章全部标记为已读
     public func markAllRead(
         accountID: String = "local-default",
         feedID: String? = nil,
+        feedIDs: Set<String>? = nil,
         folderName: String? = nil,
+        startOfDayTimestamp: Double? = nil,
         in db: Database
     ) throws {
         let now = Date().timeIntervalSince1970
-        var whereSql = "i.account_id = ? AND s.is_read = 0"
-        var args: [DatabaseValueConvertible] = [accountID]
+        var whereSql = "i.account_id = :account_id AND s.is_read = 0"
+        var arguments: [String: (any DatabaseValueConvertible)?] = ["account_id": accountID]
 
         if let feedID {
-            whereSql += " AND i.feed_id = ?"
-            args.append(feedID)
+            whereSql += " AND i.feed_id = :feed_id"
+            arguments["feed_id"] = feedID
+        } else if let feedIDs {
+            if feedIDs.isEmpty {
+                return
+            }
+            let placeholders = feedIDs.enumerated().map { idx, id -> String in
+                let param = "feed_id_\(idx)"
+                arguments[param] = id
+                return ":\(param)"
+            }.joined(separator: ", ")
+            whereSql += " AND i.feed_id IN (\(placeholders))"
         } else if let folderName {
             whereSql += """
              AND i.feed_id IN (
                 SELECT ff.feed_id
                 FROM feed_folders ff
                 INNER JOIN folders fo ON fo.id = ff.folder_id
-                WHERE fo.name = ? AND fo.is_deleted = 0
+                WHERE fo.account_id = :account_id AND fo.name = :folder_name AND fo.is_deleted = 0
             )
             """
-            args.append(folderName)
+            arguments["folder_name"] = folderName
+        }
+
+        if let startOfDayTimestamp {
+            whereSql += " AND (a.published_at >= :start_of_day OR (a.published_at IS NULL AND i.created_at >= :start_of_day))"
+            arguments["start_of_day"] = startOfDayTimestamp
         }
 
         let selectItemIDsSql = """
         SELECT i.id
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
+        LEFT JOIN articles a ON a.item_id = i.id
         WHERE \(whereSql);
         """
-        let unreadItemIDs = try String.fetchAll(db, sql: selectItemIDsSql, arguments: StatementArguments(args))
+        let unreadItemIDs = try String.fetchAll(db, sql: selectItemIDsSql, arguments: StatementArguments(arguments))
         guard !unreadItemIDs.isEmpty else { return }
+
+        var updateArguments = arguments
+        updateArguments["now_ts"] = now
 
         let updateSql = """
         UPDATE article_states
-        SET is_read = 1, updated_at = ?
+        SET is_read = 1, updated_at = :now_ts
         WHERE item_id IN (
-            SELECT i.id FROM items i INNER JOIN article_states s ON s.item_id = i.id WHERE \(whereSql)
+            SELECT i.id
+            FROM items i
+            INNER JOIN article_states s ON s.item_id = i.id
+            LEFT JOIN articles a ON a.item_id = i.id
+            WHERE \(whereSql)
         );
         """
-        var updateArgs: [DatabaseValueConvertible] = [now]
-        updateArgs.append(contentsOf: args)
-        try db.execute(sql: updateSql, arguments: StatementArguments(updateArgs))
+        try db.execute(sql: updateSql, arguments: StatementArguments(updateArguments))
     }
 
     // MARK: - Database-Scoped Primitives (Article State Outbox)
@@ -191,9 +214,22 @@ public final class ArticleStateRepository: Sendable {
         }
     }
 
-    public func markAllRead(accountID: String = "local-default", feedID: String? = nil, folderName: String? = nil) async throws {
+    public func markAllRead(
+        accountID: String = "local-default",
+        feedID: String? = nil,
+        feedIDs: Set<String>? = nil,
+        folderName: String? = nil,
+        startOfDayTimestamp: Double? = nil
+    ) async throws {
         try database.write { db in
-            try markAllRead(accountID: accountID, feedID: feedID, folderName: folderName, in: db)
+            try markAllRead(
+                accountID: accountID,
+                feedID: feedID,
+                feedIDs: feedIDs,
+                folderName: folderName,
+                startOfDayTimestamp: startOfDayTimestamp,
+                in: db
+            )
         }
     }
 

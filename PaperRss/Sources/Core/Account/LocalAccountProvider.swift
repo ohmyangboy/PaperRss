@@ -247,12 +247,19 @@ public final class LocalAccountProvider: Sendable {
         }
     }
 
-    public func markAllRead(feedID: UUID? = nil, folderName: String? = nil) throws {
+    public func markAllRead(
+        feedID: UUID? = nil,
+        feedIDs: Set<UUID>? = nil,
+        folderName: String? = nil,
+        startOfDayTimestamp: Double? = nil
+    ) throws {
         try database.write { db in
             try self.stateRepository.markAllRead(
                 accountID: self.accountID,
                 feedID: feedID?.uuidString,
+                feedIDs: feedIDs.map { Set($0.map(\.uuidString)) },
                 folderName: folderName,
+                startOfDayTimestamp: startOfDayTimestamp,
                 in: db
             )
         }

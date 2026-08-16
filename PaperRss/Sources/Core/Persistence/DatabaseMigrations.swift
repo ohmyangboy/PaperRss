@@ -285,6 +285,13 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v2-clean-local-account-sync-state") { db in
+            try db.execute(sql: """
+            DELETE FROM account_sync_state
+            WHERE account_id = 'local-default';
+            """)
+        }
+
         return migrator
     }
 }

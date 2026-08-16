@@ -792,11 +792,11 @@ private struct SidebarView: View {
     @ViewBuilder
     private var readingSection: some View {
         Section(I18N.localized("阅读")) {
-            SidebarRow(I18N.shared.localized("今天"), systemImage: "sun.max", count: store.todayUnreadCount)
+            SidebarRow(I18N.shared.localized("今天"), systemImage: "sun.max", count: store.sidebarCounts.todayUnread)
                 .tag(SidebarSelection.today)
-            SidebarRow(I18N.shared.localized("未读"), systemImage: "circle", count: store.unreadEntries.count)
+            SidebarRow(I18N.shared.localized("未读"), systemImage: "circle", count: store.sidebarCounts.allUnread)
                 .tag(SidebarSelection.unread)
-            SidebarRow(I18N.shared.localized("收藏"), systemImage: "star", count: store.starredEntries.count)
+            SidebarRow(I18N.shared.localized("收藏"), systemImage: "star", count: store.sidebarCounts.starred)
                 .tag(SidebarSelection.starred)
         }
     }
@@ -1238,28 +1238,57 @@ private struct EntryListView: View {
     var autoScrollTrigger: UUID
 
     @State private var isScrolled = false
+    @State private var loadedLimit = 100
+    private let pageSize = 100
+
+    private var timelineScope: TimelineScope {
+        switch selection {
+        case .today:
+            let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+            return .today(startOfDayTimestamp: startOfDay)
+        case .unread:
+            return .unread
+        case .starred:
+            return .starred
+        case let .folder(folder):
+            return .folder(folderName: folder)
+        case let .feed(id):
+            return .feed(feedID: id.uuidString)
+        case let .feeds(ids):
+            return .feeds(feedIDs: Set(ids.map(\.uuidString)))
+        }
+    }
 
     private var displayEntries: [EntryListItem] {
-        switch selection {
-        case .today: return store.todayEntryListItems
-        case .unread: return store.unreadEntryListItems(retainingIDs: retainedUnreadIDs)
-        case .starred: return store.starredEntryListItems
-        case let .folder(folder): return store.entryListItems(folder: folder).filter { !$0.isRead || retainedUnreadIDs.contains($0.id) }
-        case let .feed(id): return store.entryListItems(feedID: id)
-        case let .feeds(ids): return store.entryListItems(feedIDs: ids)
-        }
+        store.fetchTimelinePage(
+            scope: timelineScope,
+            retainingIDs: retainedUnreadIDs,
+            limit: loadedLimit,
+            offset: 0
+        )
     }
 
     private var hasUnread: Bool {
         displayEntries.contains { !$0.isRead }
     }
 
-    /// 将当前列表全部标为已读。
-    /// 未读/文件夹列表会同步清空 `retainedUnreadIDs`（保留正在阅读的文章），
-    /// 否则已打开的文章会以已读状态继续留在列表里，看起来像“全部已读”没生效。
+    /// 将当前选择范围在数据库中的全部未读文章标记为已读。
     private func markAllRead() {
-        let unreadIDs = Array(displayEntries.lazy.filter { !$0.isRead }.map(\.id))
-        store.markRead(entryIDs: unreadIDs, read: true)
+        switch selection {
+        case .today:
+            let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+            store.markAllRead(scope: .today(startOfDayTimestamp: startOfDay))
+        case .unread:
+            store.markAllRead()
+        case .starred:
+            store.markAllRead(scope: .starred)
+        case let .folder(folder):
+            store.markAllRead(folder: folder)
+        case let .feed(id):
+            store.markAllRead(feedID: id)
+        case let .feeds(ids):
+            store.markAllRead(feedIDs: ids)
+        }
         retainedUnreadIDs = selectedEntryID.map { [$0] } ?? []
     }
 
@@ -1279,7 +1308,12 @@ private struct EntryListView: View {
                                 store.toggleStar(entryID: entry.id)
                             }
                         }
-                    }
+                        .onAppear {
+                            if entry.id == displayEntries.last?.id && displayEntries.count >= loadedLimit {
+                                loadedLimit += pageSize
+                            }
+                        }
+                }
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
@@ -1302,6 +1336,7 @@ private struct EntryListView: View {
             }
             .onChange(of: selection) { _, _ in
                 retainedUnreadIDs.removeAll()
+                loadedLimit = pageSize
             }
             .onChange(of: autoScrollTrigger) { _, _ in
                 if let newID = selectedEntryID {

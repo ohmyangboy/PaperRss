@@ -8,6 +8,7 @@ public enum TimelineScope: Sendable, Equatable, Hashable {
     case unread
     case starred
     case feed(feedID: String)
+    case feeds(feedIDs: Set<String>)
     case folder(folderName: String)
 }
 
@@ -202,6 +203,17 @@ public final class TimelineQueryService: Sendable {
         case .feed(let feedID):
             whereClauses.append("i.feed_id = :feed_id")
             arguments["feed_id"] = feedID
+        case .feeds(let feedIDs):
+            if feedIDs.isEmpty {
+                whereClauses.append("1 = 0")
+            } else {
+                let placeholders = feedIDs.enumerated().map { idx, id -> String in
+                    let param = "feed_id_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("i.feed_id IN (\(placeholders))")
+            }
         case .folder(let folderName):
             whereClauses.append("""
             i.feed_id IN (
