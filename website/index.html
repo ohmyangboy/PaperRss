@@ -5,6 +5,151 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex" />
   <title>PaperRss</title>
+  <link rel="icon" type="image/png" href="./assets/app-icon.png" />
+  <style>
+    :root {
+      --bg-paper: #f7f5ef;
+      --text-main: #1c1a17;
+      --text-muted: #948e7f;
+      --border-light: rgba(28, 26, 23, 0.08);
+      --font-serif: "Cormorant Garamond", "Noto Serif SC", Georgia, serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      min-height: 100vh;
+      min-height: 100dvh;
+      background-color: var(--bg-paper);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-image: radial-gradient(var(--border-light) 1px, transparent 0);
+      background-size: 24px 24px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .splash-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 1.25rem;
+      animation: splashFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .icon-wrapper {
+      position: relative;
+      width: 88px;
+      height: 88px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .app-icon {
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 22px;
+      box-shadow: 
+        0 14px 34px rgba(28, 26, 23, 0.12),
+        0 3px 8px rgba(28, 26, 23, 0.06);
+      animation: iconBreathe 2.4s ease-in-out infinite;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .brand-title {
+      font-family: var(--font-serif);
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--text-main);
+      opacity: 0.85;
+      animation: textBreathe 2.4s ease-in-out infinite;
+    }
+
+    .fallback-nav {
+      position: absolute;
+      bottom: 2rem;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    .fallback-nav a {
+      color: inherit;
+      text-decoration: none;
+      transition: color 0.2s ease;
+      padding: 0.2rem 0.4rem;
+    }
+
+    .fallback-nav a:hover {
+      color: var(--text-main);
+      text-decoration: underline;
+    }
+
+    @keyframes splashFadeIn {
+      from {
+        opacity: 0;
+        transform: scale(0.96);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes iconBreathe {
+      0% {
+        opacity: 0.35;
+        transform: scale(0.96);
+        box-shadow: 0 10px 24px rgba(28, 26, 23, 0.08), 0 2px 6px rgba(28, 26, 23, 0.04);
+      }
+      50% {
+        opacity: 1;
+        transform: scale(1.03);
+        box-shadow: 0 22px 48px rgba(28, 26, 23, 0.18), 0 4px 12px rgba(28, 26, 23, 0.08);
+      }
+      100% {
+        opacity: 0.35;
+        transform: scale(0.96);
+        box-shadow: 0 10px 24px rgba(28, 26, 23, 0.08), 0 2px 6px rgba(28, 26, 23, 0.04);
+      }
+    }
+
+    @keyframes textBreathe {
+      0% {
+        opacity: 0.35;
+      }
+      50% {
+        opacity: 0.9;
+      }
+      100% {
+        opacity: 0.35;
+      }
+    }
+  </style>
   <script type="module">
     import { resolveWebsiteLocale } from './locale.mjs';
 
@@ -20,6 +165,14 @@
   <noscript><meta http-equiv="refresh" content="0; url=./zh-CN/" /></noscript>
 </head>
 <body>
-  <p><a href="./zh-CN/">简体中文</a> · <a href="./en/">English</a></p>
+  <div class="splash-container">
+    <div class="icon-wrapper">
+      <img class="app-icon" src="./assets/app-icon.png" alt="PaperRss" width="88" height="88" />
+    </div>
+    <div class="brand-title">PaperRss</div>
+  </div>
+  <nav class="fallback-nav" aria-label="Language selection">
+    <a href="./zh-CN/">简体中文</a> · <a href="./en/">English</a>
+  </nav>
 </body>
 </html>
