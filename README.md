@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.2.5](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -27,6 +27,7 @@ PaperRss 是一款专为 macOS 打造的现代纸感 RSS 阅读器，并在真�
 ## 核心亮点
 
 - **沉浸式纸感阅读**：适合长文的衬线排版、明暗主题与稳定的三栏导航。
+- **多账户与 FreshRSS 联动**：支持本地账户与 FreshRSS 服务，基于 Google Reader API 实现双向未读/星标同步、离线变更队列与安全 Keychain 凭据存储。
 - **文章章节导航（TOC Rail）**：长文章右侧提供极简刻度轨道，支持波峰悬停预览、视线重心平滑滚动与拖拽映射。
 - **按需 AI 摘要**：手动生成，或在首次打开没有缓存的文章时自动生成。
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
@@ -57,7 +58,7 @@ PaperRss 是一款专为 macOS 打造的现代纸感 RSS 阅读器，并在真�
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载 `PaperRss-v1.2.5.dmg`，打开后将 PaperRss 拖入 Applications 文件夹。
+从 [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载 `PaperRss-v1.3.0-beta.1.dmg`，打开后将 PaperRss 拖入 Applications 文件夹。
 
 当前 Release 没有 Apple 公证。若首次打开提示无法验证或应用已损坏，请在终端执行：
 

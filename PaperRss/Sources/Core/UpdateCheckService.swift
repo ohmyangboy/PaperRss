@@ -59,7 +59,7 @@ public struct UpdateCheckService: Sendable {
     public static let latestReleaseAPIURL = URL(string: "https://api.github.com/repos/ohmyangboy/PaperRss/releases/latest")!
 
     public static var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.5"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0-beta.1"
     }
 
     public static var currentBuild: String {
