@@ -16,7 +16,11 @@ trigger: always_on
 
 - 除非必要，勿增实体
 - 人机协作工作流：调用或接续 `triage`、`research`、`to-spec`、`to-tickets`、`implement` 时，修改文档或代码前完整读取并遵循 [Matt 开发工作流](../docs/development-workflow.md)。
-- 调试流程：按改动影响范围在对应层级完成针对性验证（Core 逻辑、App 编译构建、Web/Bridge 交互、仓库治理），视觉与交互变更必须有真实运行验证，不以推测替代验证，每项变更必须具备直接的验证证据，未经验证不得宣称完成。使用`./script/dev.sh` 来启动进程调试应用视图、日志用来辅助验证。
+- 自动化测试与分级验证矩阵：完成开发后，严格按照改动影响范围在对应层级完成验证，未经验证不得宣称完成：
+
+  1. **Tier 1 (纯 Core / 数据层)**：仅修改 `PaperRss/Sources/Core/` 时，强制执行 `./scripts/verify.sh --feature` 或 `--core`；免拉起 GUI 进程。
+  2. **Tier 2 (Web / 治理 / 脚本)**：仅修改 `website/`、`Tests/*.test.mjs` 或工程脚本时，强制执行 `./scripts/verify.sh --web` 或直接运行目标脚本；免拉起 GUI 进程。
+  3. **Tier 3 (App 视图 / 系统桥接 / 视觉交互)**：凡涉及 `PaperRss/Sources/App/`（如 SwiftUI 布局、主题色彩、Toolbar、侧边栏、快捷键、系统 Dock 联动及 `ArticleReaderView` 容器桥接），**必须执行 `./scripts/dev.sh` 启动真实 macOS 进程验证**。交付时必须附带直接证据（控制台无关键 warning/error 日志、交互响应行为或截图），严禁以编译通过或推测替代真实验证。
 - 发布全链路：遵守SemVer版本规范(`vX.Y.Z-beta.N`）；发布需涵盖测试、构建、产物、ChangeLog、官网和README状态同步、Tag/Release 及线上验证全链路闭环。
 - PaperRss对标业界最佳实践，参考netnewsware、freshRSS等优秀的开源实践
 
