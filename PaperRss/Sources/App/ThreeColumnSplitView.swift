@@ -105,25 +105,25 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
             }
         }
 
-        // 侧边栏 — 使用 sidebarWithViewController 声明 sidebar 身份
-        let sidebarHost = NSHostingController(rootView: sidebar)
-        sidebarHost.view.wantsLayer = true
-        sidebarHost.view.clipsToBounds = true
-        sidebarHost.view.layer?.masksToBounds = true
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+        // 侧边栏 — 使用 sidebarWithViewController 声明 sidebar 身份并挂载独立浮层滚动条
+        let sidebarContainer = PaperColumnContainerController(rootView: sidebar)
+        sidebarContainer.view.wantsLayer = true
+        sidebarContainer.view.clipsToBounds = true
+        sidebarContainer.view.layer?.masksToBounds = true
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarContainer)
         sidebarItem.minimumThickness = 240
         sidebarItem.maximumThickness = 340
         sidebarItem.canCollapse = true
 
-        // 文章列表 — 使用 contentListWithViewController 声明 content list 身份
-        let contentHost = NSHostingController(rootView: content)
-        contentHost.view.wantsLayer = true
-        contentHost.view.clipsToBounds = true
-        contentHost.view.layer?.masksToBounds = true
-        let contentItem = NSSplitViewItem(contentListWithViewController: contentHost)
+        // 文章列表 — 使用 contentListWithViewController 声明 content list 身份并挂载独立浮层滚动条
+        let contentContainer = PaperColumnContainerController(rootView: content)
+        contentContainer.view.wantsLayer = true
+        contentContainer.view.clipsToBounds = true
+        contentContainer.view.layer?.masksToBounds = true
+        let contentItem = NSSplitViewItem(contentListWithViewController: contentContainer)
         contentItem.minimumThickness = 280
 
-        // 文章详情
+        // 文章详情 (Reader 隔离：保持原有 NSHostingController，不受浮层滚动条影响)
         let detailHost = NSHostingController(rootView: detail)
         detailHost.view.wantsLayer = true
         detailHost.view.clipsToBounds = true
@@ -141,9 +141,8 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         // 核心修复：使用 KVO 监听 NSSplitView 被挂载到 window 的那一瞬间。
         // 这会在窗口准备显示的第 0 帧同步触发，早于任何 SwiftUI 的 update 周期，
         // 从而能在原生窗口呈现的第一秒前就将 Toolbar 与全屏标志位设定好，实现零闪烁 (Zero-flicker) 启动。
-        context.coordinator.windowObservation = splitVC.view.observe(\.window, options: [.new]) { [weak coordinator = context.coordinator, weak splitVC] view, _ in
+        context.coordinator.windowObservation = splitVC.view.observe(\.window, options: [.new]) { [weak coordinator = context.coordinator] view, _ in
             MainActor.assumeIsolated {
-                guard let splitVC else { return }
                 if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
                     coord.configureToolbar(on: window, splitView: splitVC.splitView)
                 }
@@ -173,10 +172,10 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         context.coordinator.actions = toolbarActions
 
         // 更新三栏的 SwiftUI 内容
-        if let host = splitVC.splitViewItems[0].viewController as? NSHostingController<Sidebar> {
+        if let host = splitVC.splitViewItems[0].viewController as? PaperColumnContainerController<Sidebar> {
             host.rootView = sidebar
         }
-        if let host = splitVC.splitViewItems[1].viewController as? NSHostingController<Content> {
+        if let host = splitVC.splitViewItems[1].viewController as? PaperColumnContainerController<Content> {
             host.rootView = content
         }
         if let host = splitVC.splitViewItems[2].viewController as? NSHostingController<Detail> {
