@@ -1,0 +1,18 @@
+{
+  "name": "paperrss-github-stars-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker caching proxy for PaperRss GitHub stars",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [
+    "cloudflare-worker",
+    "github-stars",
+    "paperrss"
+  ],
+  "author": "ohmyangboy",
+  "license": "GPL-3.0"
+}
