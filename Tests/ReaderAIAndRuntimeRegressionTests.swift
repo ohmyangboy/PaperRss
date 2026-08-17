@@ -765,4 +765,204 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
             XCTAssertEqual(externalID, "digest-1", "v3 migration must set external_id = id for local account items")
         }
     }
+
+    // MARK: - Test N: EntryListItem Account Source Projection & Badge
+    @MainActor
+    func testEntryListItemIncludesAccountSourceProjection() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+
+        let now = Date().timeIntervalSince1970
+
+        try db.write { database in
+            // 1. 创建 FreshRSS 账号
+            let frAccount = AccountRecord(
+                id: "freshrss-personal",
+                type: AccountType.freshRSS.rawValue,
+                displayName: "Personal RSS",
+                endpointURL: "https://myrss.com",
+                username: "user",
+                isEnabled: true,
+                createdAt: now,
+                updatedAt: now
+            )
+            try frAccount.save(database)
+
+            // 2. 创建 Feed
+            let feed = FeedRecord(
+                id: UUID().uuidString,
+                accountID: "freshrss-personal",
+                externalID: "feed/1",
+                title: "Swift Weekly",
+                feedURL: "https://swiftweekly.com/rss",
+                isDeleted: false,
+                updatedAt: now
+            )
+            try feed.save(database)
+
+            // 3. 创建 Item, Article, State
+            let itemID = "fr-item-123"
+            let item = ItemRecord(
+                id: itemID,
+                accountID: "freshrss-personal",
+                externalID: "tag:item123",
+                feedID: feed.id,
+                createdAt: now,
+                updatedAt: now
+            )
+            try item.save(database)
+
+            let article = ArticleRecord(
+                itemID: itemID,
+                title: "Swift 6.0 Released",
+                author: "Apple",
+                url: "https://swiftweekly.com/1",
+                publishedAt: now,
+                summary: "Summary",
+                contentHTML: "<p>Swift 6.0</p>",
+                contentUpdatedAt: now
+            )
+            try article.save(database)
+
+            let state = ArticleStateRecord(
+                itemID: itemID,
+                isRead: false,
+                isStarred: true,
+                dateArrived: now,
+                updatedAt: now
+            )
+            try state.save(database)
+        }
+
+        let items = store.fetchTimelinePage(scope: .all, limit: 10, offset: 0)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].accountID, "freshrss-personal")
+        XCTAssertEqual(items[0].accountType, AccountType.freshRSS.rawValue)
+        XCTAssertEqual(items[0].accountDisplayName, "Personal RSS")
+        XCTAssertEqual(items[0].accountSourceBadge, "Personal RSS")
+    }
+
+    // MARK: - Test O: Identical Feed Title across Local and FreshRSS is Distinguishable
+    @MainActor
+    func testIdenticalFeedTitleAcrossAccountsIsDistinguishable() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let now = Date().timeIntervalSince1970
+
+        try db.write { database in
+            let frAccount = AccountRecord(
+                id: "fr-acc",
+                type: AccountType.freshRSS.rawValue,
+                displayName: "Remote FreshRSS",
+                endpointURL: "https://fr.com",
+                username: "u",
+                isEnabled: true,
+                createdAt: now,
+                updatedAt: now
+            )
+            try frAccount.save(database)
+
+            // 1. 本地源：React News
+            let localFeed = FeedRecord(
+                id: UUID().uuidString,
+                accountID: "local-default",
+                title: "React News",
+                feedURL: "https://local-react.com/rss",
+                isDeleted: false,
+                updatedAt: now
+            )
+            try localFeed.save(database)
+
+            let localItemID = "local-react-1"
+            let localItem = ItemRecord(id: localItemID, accountID: "local-default", externalID: localItemID, feedID: localFeed.id, createdAt: now, updatedAt: now)
+            try localItem.save(database)
+            let localArticle = ArticleRecord(itemID: localItemID, title: "React 19 Hooks", summary: "", contentHTML: "<p>React 19</p>", contentUpdatedAt: now)
+            try localArticle.save(database)
+            let localState = ArticleStateRecord(itemID: localItemID, isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+            try localState.save(database)
+
+            // 2. 远端源：同名 React News
+            let frFeed = FeedRecord(
+                id: UUID().uuidString,
+                accountID: "fr-acc",
+                externalID: "feed/react",
+                title: "React News",
+                feedURL: "https://fr-react.com/rss",
+                isDeleted: false,
+                updatedAt: now
+            )
+            try frFeed.save(database)
+
+            let frItemID = "fr-react-1"
+            let frItem = ItemRecord(id: frItemID, accountID: "fr-acc", externalID: "tag:react1", feedID: frFeed.id, createdAt: now, updatedAt: now)
+            try frItem.save(database)
+            let frArticle = ArticleRecord(itemID: frItemID, title: "React Compiler Update", summary: "", contentHTML: "<p>Compiler</p>", contentUpdatedAt: now)
+            try frArticle.save(database)
+            let frState = ArticleStateRecord(itemID: frItemID, isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+            try frState.save(database)
+        }
+
+        let items = store.fetchTimelinePage(scope: .all, limit: 10, offset: 0)
+        XCTAssertEqual(items.count, 2)
+
+        let localItem = items.first(where: { $0.id == "local-react-1" })
+        let frItem = items.first(where: { $0.id == "fr-react-1" })
+
+        XCTAssertNotNil(localItem)
+        XCTAssertNotNil(frItem)
+
+        // 验证两者 Source Title 相同（都是 "React News"），但 Source Badge 能够立即区分
+        XCTAssertEqual(localItem?.sourceTitle, "React News")
+        XCTAssertEqual(frItem?.sourceTitle, "React News")
+
+        XCTAssertEqual(localItem?.accountSourceBadge, I18N.localized("本机"))
+        XCTAssertEqual(frItem?.accountSourceBadge, "Remote FreshRSS")
+        XCTAssertNotEqual(localItem?.accountSourceBadge, frItem?.accountSourceBadge)
+    }
+
+    // MARK: - Test P: Unread Selection Retention Policy Only Retains Current Item
+    @MainActor
+    func testUnreadSelectionRetentionPolicyOnlyRetainsCurrentItem() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let now = Date().timeIntervalSince1970
+
+        let feedUUID = UUID()
+        try db.write { database in
+            let feed = FeedRecord(id: feedUUID.uuidString, accountID: "local-default", title: "Feed", feedURL: "https://f.com/rss", isDeleted: false, updatedAt: now)
+            try feed.save(database)
+
+            for i in 1...3 {
+                let id = "unread-item-\(i)"
+                let item = ItemRecord(id: id, accountID: "local-default", externalID: id, feedID: feedUUID.uuidString, createdAt: now + Double(i), updatedAt: now)
+                try item.save(database)
+                let art = ArticleRecord(itemID: id, title: "Article \(i)", summary: "", contentHTML: "<p>\(i)</p>", contentUpdatedAt: now)
+                try art.save(database)
+                let state = ArticleStateRecord(itemID: id, isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+                try state.save(database)
+            }
+        }
+
+        // 初始状态：3 篇未读
+        let initialUnread = store.fetchTimelinePage(scope: .unread, limit: 10, offset: 0)
+        XCTAssertEqual(initialUnread.count, 3)
+
+        // 1. 用户点击第 1 篇（item-3 因为 created_at 最大排在最前），将其标为已读，且当前 retain item-3
+        store.markRead(entryID: "unread-item-3", read: true)
+        let pageRetaining3 = store.fetchTimelinePage(scope: .unread, retainingIDs: ["unread-item-3"], limit: 10, offset: 0)
+        XCTAssertEqual(pageRetaining3.count, 3, "Item 3 must be retained in unread list while selected")
+        XCTAssertTrue(pageRetaining3.contains(where: { $0.id == "unread-item-3" }))
+
+        // 2. 用户切换选择到第 2 篇 (item-2)，将其标为已读，retention 单项切换为 ["unread-item-2"]
+        store.markRead(entryID: "unread-item-2", read: true)
+        let pageRetaining2 = store.fetchTimelinePage(scope: .unread, retainingIDs: ["unread-item-2"], limit: 10, offset: 0)
+        XCTAssertEqual(pageRetaining2.count, 2, "Previous read Item 3 must naturally disappear, retaining only current Item 2")
+        XCTAssertFalse(pageRetaining2.contains(where: { $0.id == "unread-item-3" }))
+        XCTAssertTrue(pageRetaining2.contains(where: { $0.id == "unread-item-2" }))
+
+        // 3. 范围重置（例如切换 Sidebar 范围再切回 Unread），retention 清空
+        let cleanUnread = store.fetchTimelinePage(scope: .unread, retainingIDs: [], limit: 10, offset: 0)
+        XCTAssertEqual(cleanUnread.count, 1, "Only truly unread Item 1 remains")
+        XCTAssertEqual(cleanUnread[0].id, "unread-item-1")
+    }
 }

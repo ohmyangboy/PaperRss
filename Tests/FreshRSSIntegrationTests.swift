@@ -2014,7 +2014,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                     return (resp, json.data(using: .utf8)!)
                 }
             } else if path.contains("stream/items/contents") {
-                // 正文补齐接口
+                // 正文补齐接口：为历史老星标与老未读返回权威正文与 feed 归属
                 let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
                 let json = """
                 {
@@ -2025,6 +2025,13 @@ final class FreshRSSIntegrationTests: XCTestCase {
                             "origin": {"streamId": "feed/history"},
                             "content": {"content": "<p>Historical Starred Content</p>"},
                             "categories": ["user/-/state/com.google/starred", "user/-/state/com.google/read"]
+                        },
+                        {
+                            "id": "\(oldUnreadTagID)",
+                            "title": "Old Unread Article",
+                            "origin": {"streamId": "feed/history"},
+                            "content": {"content": "<p>Historical Unread Content</p>"},
+                            "categories": ["user/-/state/com.google/reading-list"]
                         }
                     ]
                 }
@@ -2311,5 +2318,252 @@ final class FreshRSSIntegrationTests: XCTestCase {
         } catch let ReaderAPIError.accountAlreadyExists(msg) {
             XCTAssertTrue(msg.contains("race_user"))
         }
+    }
+
+    /// 验证增量同步能够跨多页完整抓取 >1000 篇（如 1250 篇）新文章，且只有在到达已知边界后才推进时间戳
+    @MainActor
+    func testIncrementalSyncFetchesOver1250ArticlesAndAdvancesTimestamp() async throws {
+        let endpoint = URL(string: "https://huge-sync.freshrss.com")!
+        let store = AppStore(
+            databaseURL: sqliteURL,
+            persistenceURL: tempDir.appendingPathComponent("huge.json"),
+            credentialStore: inMemoryCredentialStore,
+            customSession: mockSession
+        )
+
+        // 构造 1250 篇增量文章数据，按 100 篇分页，共 13 页
+        let totalItems = 1250
+        let pageSize = 100
+        let isInitialSyncDoneBox = TestStateBox(false)
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let query = request.url?.query ?? ""
+
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = "{\"subscriptions\":[{\"id\":\"feed/huge\",\"title\":\"Huge Feed\",\"url\":\"https://huge.com/rss\",\"categories\":[]}]}"
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") || path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"subscriptions\":[],\"tags\":[],\"itemRefs\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                if !isInitialSyncDoneBox.value {
+                    // 初始同步时返回空列表
+                    return (resp, "{\"items\":[]}".data(using: .utf8)!)
+                }
+
+                // 增量同步时根据 continuation c 返回 1250 篇新文章
+                var pageIndex = 0
+                for item in query.split(separator: "&") {
+                    let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
+                    if pair.count == 2, pair[0] == "c", let cIdx = Int(pair[1].replacingOccurrences(of: "c_", with: "")) {
+                        pageIndex = cIdx
+                    }
+                }
+
+                let startIdx = pageIndex * pageSize
+                let endIdx = min(startIdx + pageSize, totalItems)
+                var itemsJSON: [String] = []
+                for i in startIdx..<endIdx {
+                    itemsJSON.append("""
+                    {
+                        "id": "tag:google.com,2005:reader/item/inc_\(String(format: "%016x", i + 1))",
+                        "title": "Incremental Article #\(i + 1)",
+                        "published": \(1700000000 + i),
+                        "origin": {"streamId": "feed/huge"},
+                        "content": {"content": "<p>Content #\(i + 1)</p>"},
+                        "categories": ["user/-/state/com.google/reading-list"]
+                    }
+                    """)
+                }
+
+                let nextC = (endIdx < totalItems) ? "\"c_\(pageIndex + 1)\"" : "null"
+                let json = "{\"items\":[\(itemsJSON.joined(separator: ", "))],\"continuation\":\(nextC)}"
+                return (resp, json.data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        // 1. 首次添加账号（完成初始同步）
+        let acc = try await store.addFreshRSSAccount(
+            endpointURLText: endpoint.absoluteString,
+            username: "huge_user",
+            password: "pwd",
+            customSession: mockSession
+        )
+        isInitialSyncDoneBox.mutate { $0 = true }
+
+        // 2. 模拟增量同步：触发 refresh
+        _ = await store.refresh()
+
+        // 3. 校验：1250 篇文章全部存在且无重复
+        let itemCount = try database.read { db in
+            try ItemRecord.filter(Column("account_id") == acc.id).fetchCount(db)
+        }
+        XCTAssertEqual(itemCount, 1250, "All 1250 incremental articles must be synced")
+
+        // 4. 校验：last_article_fetch_at 成功推进
+        let syncState = try database.read { db in
+            try AccountSyncStateRecord.filter(Column("account_id") == acc.id).fetchOne(db)
+        }
+        XCTAssertNotNil(syncState?.lastArticleFetchAt)
+        XCTAssertGreaterThan(syncState!.lastArticleFetchAt!, 0)
+    }
+
+    /// 验证增量同步遇到意外截断（未达已知边界）时，last_article_fetch_at 绝不提前推进
+    @MainActor
+    func testTruncatedContinuationDoesNotAdvanceLastArticleFetchAt() async throws {
+        let endpoint = URL(string: "https://truncated-sync.freshrss.com")!
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: "trunc-acc")
+        let apiClient = ReaderAPIClient(
+            endpointURL: endpoint,
+            username: "trunc_user",
+            accountID: "trunc-acc",
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        let requestCountBox = TestStateBox(0)
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let count = requestCountBox.value
+                requestCountBox.mutate { $0 += 1 }
+
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                // 每次返回 10 条，且每次带有不同的 continuation="c_\(count + 1)"
+                let itemsJSON = (0..<10).map { i in
+                    "{\"id\":\"tag:google.com,2005:reader/item/trunc_\(count * 10 + i)\",\"title\":\"T\(i)\",\"published\":1700000000}"
+                }
+                let json = "{\"items\":[\(itemsJSON.joined(separator: ", "))],\"continuation\":\"c_\(count + 1)\"}"
+                return (resp, json.data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        // 设置 maxTotal = 25，因为每次 10 条，第 3 次达到 30 条 > 25，触发截断退出
+        let (items, reachedBoundary) = try await apiClient.fetchIncrementalStreamContents(
+            sinceTimestamp: 1690000000,
+            pageSize: 10,
+            maxTotal: 25,
+            knownLocalExternalIDs: []
+        )
+
+        XCTAssertEqual(items.count, 30)
+        XCTAssertFalse(reachedBoundary, "When truncated at maxTotal with active continuation, reachedBoundary MUST be false")
+    }
+
+    /// 验证历史特殊状态 ID 绝不会被随意分配给默认 Feed，不产生空白标题文章，未读数不归属错误 Feed
+    @MainActor
+    func testHistoricalSpecialIDsNeverGetFakeFeedOwnership() async throws {
+        let endpoint = URL(string: "https://nofake.freshrss.com")!
+        let store = AppStore(
+            databaseURL: sqliteURL,
+            persistenceURL: tempDir.appendingPathComponent("nofake.json"),
+            credentialStore: inMemoryCredentialStore
+        )
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let query = request.url?.query ?? ""
+
+            if path.contains("ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=mock_auth".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let json = """
+                {
+                    "subscriptions": [
+                        {"id": "feed/tech", "title": "Tech Feed", "url": "https://tech.com/rss", "categories": []},
+                        {"id": "feed/design", "title": "Design Feed", "url": "https://design.com/rss", "categories": []}
+                    ]
+                }
+                """
+                return (resp, json.data(using: .utf8)!)
+            } else if path.contains("tag/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"tags\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                if query.contains("starred") {
+                    // 返回 3 个老星标 ID
+                    return (resp, "{\"itemRefs\":[{\"id\":\"old_starred_1\"},{\"id\":\"old_starred_2\"}]}".data(using: .utf8)!)
+                } else {
+                    return (resp, "{\"itemRefs\":[]}".data(using: .utf8)!)
+                }
+            } else if path.contains("stream/items/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                // 对老星标 ID 返回真实正文及 origin.streamId = "feed/design"
+                let itemsJSON = [
+                    """
+                    {
+                        "id": "old_starred_1",
+                        "title": "Design Historical Article 1",
+                        "published": 1600000000,
+                        "origin": {"streamId": "feed/design"},
+                        "content": {"content": "<p>Design 1</p>"},
+                        "categories": ["user/-/state/com.google/starred"]
+                    }
+                    """,
+                    """
+                    {
+                        "id": "old_starred_2",
+                        "title": "Design Historical Article 2",
+                        "published": 1600000001,
+                        "origin": {"streamId": "feed/design"},
+                        "content": {"content": "<p>Design 2</p>"},
+                        "categories": ["user/-/state/com.google/starred"]
+                    }
+                    """
+                ]
+                return (resp, "{\"items\":[\(itemsJSON.joined(separator: ", "))]}".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"items\":[]}".data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        // 添加账号
+        let acc = try await store.addFreshRSSAccount(
+            endpointURLText: endpoint.absoluteString,
+            username: "nofake_user",
+            password: "pwd",
+            displayName: "NoFake RSS",
+            customSession: mockSession
+        )
+
+        // 验证：文章正确归属到 Design Feed，而不是 Tech Feed (default)
+        let designFeeds = try database.read { db in
+            try FeedRecord.filter(Column("account_id") == acc.id && Column("external_id") == "feed/design").fetchAll(db)
+        }
+        XCTAssertEqual(designFeeds.count, 1)
+        let designFeedUUID = UUID(uuidString: designFeeds[0].id)!
+
+        let techFeeds = try database.read { db in
+            try FeedRecord.filter(Column("account_id") == acc.id && Column("external_id") == "feed/tech").fetchAll(db)
+        }
+        XCTAssertEqual(techFeeds.count, 1)
+        let techFeedUUID = UUID(uuidString: techFeeds[0].id)!
+
+        // Tech Feed 文章数应为 0
+        let techItems = store.fetchTimelinePage(scope: .feed(feedID: techFeedUUID.uuidString), limit: 10, offset: 0)
+        XCTAssertEqual(techItems.count, 0, "Tech feed must not receive fake stub items")
+
+        // Design Feed 文章数应为 2
+        let designItems = store.fetchTimelinePage(scope: .feed(feedID: designFeedUUID.uuidString), limit: 10, offset: 0)
+        XCTAssertEqual(designItems.count, 2, "Design feed must receive its hydrated items")
+        XCTAssertEqual(designItems[0].title, "Design Historical Article 2")
+        XCTAssertEqual(designItems[0].accountSourceBadge, "NoFake RSS")
     }
 }

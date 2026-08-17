@@ -68,12 +68,12 @@ public actor FreshRSSAccountProvider: AccountProvider {
             try await syncSubscriptionsAndFolders()
 
             // 3. 拉取文章与阅读/星标状态，并执行字段级状态调和
-            try await syncArticlesAndStates()
+            let reachedBoundary = try await syncArticlesAndStates()
 
             // 4. 同步完成后若有未结 outbox 再次推进
             _ = try await outboxProcessor.processOutbox()
 
-            await markSyncCompleted(timestamp: Date().timeIntervalSince1970)
+            await markSyncCompleted(timestamp: Date().timeIntervalSince1970, advanceFetchTimestamp: reachedBoundary)
             return RefreshResult(status: .success)
         } catch {
             let errorMsg = error.localizedDescription
@@ -95,8 +95,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let now = Date().timeIntervalSince1970
 
         try database.write { db in
-            // 1. 整理全部有效分类目录 (Tag / Category DTO)
-            var categoryByExternalID: [String: String] = [:] // externalID -> label/name
+            // 1. 提取所有文件夹（分类）
+            var categoryByExternalID: [String: String] = [:]
 
             for tag in tags {
                 let name = Self.extractFolderName(from: tag.id)
@@ -113,7 +113,6 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            // 同步 folders 表：按 (account_id, external_id) 匹配与更新
             var folderIDByExternalID: [String: String] = [:]
             var folderIDByName: [String: String] = [:]
             var activeFolderExternalIDs = Set<String>()
@@ -158,7 +157,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 activeRemoteFeedIDs.insert(sub.id)
                 let feedURL = sub.url ?? sub.htmlUrl ?? sub.id
 
-                let internalFeedID: String
+                var feedRecordID: String
                 if var existing = try FeedRecord.filter(Column("account_id") == self.accountID && Column("external_id") == sub.id).fetchOne(db) {
                     existing.title = sub.title
                     existing.feedURL = feedURL
@@ -166,11 +165,20 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     existing.isDeleted = false
                     existing.updatedAt = now
                     try existing.save(db)
-                    internalFeedID = existing.id
+                    feedRecordID = existing.id
+                } else if var existingByURL = try FeedRecord.filter(Column("account_id") == self.accountID && Column("feed_url") == feedURL).fetchOne(db) {
+                    existingByURL.externalID = sub.id
+                    existingByURL.title = sub.title
+                    existingByURL.siteURL = sub.htmlUrl
+                    existingByURL.isDeleted = false
+                    existingByURL.updatedAt = now
+                    try existingByURL.save(db)
+                    feedRecordID = existingByURL.id
                 } else {
-                    let feedID = UUID().uuidString
-                    let newFeed = FeedRecord(
-                        id: feedID,
+                    let newFeedID = UUID().uuidString
+                    let maxSort = (try Int.fetchOne(db, sql: "SELECT MAX(sort_order) FROM feeds WHERE account_id = ?;", arguments: [self.accountID])) ?? 0
+                    let record = FeedRecord(
+                        id: newFeedID,
                         accountID: self.accountID,
                         externalID: sub.id,
                         title: sub.title,
@@ -181,29 +189,26 @@ public actor FreshRSSAccountProvider: AccountProvider {
                         lastRefreshedAt: now,
                         isDeleted: false,
                         updatedAt: now,
-                        sortOrder: 0
+                        storedIconURL: nil,
+                        sortOrder: maxSort + 1
                     )
-                    try newFeed.save(db)
-                    internalFeedID = feedID
+                    try record.save(db)
+                    feedRecordID = newFeedID
                 }
 
-                // 重建该 feed 的所有 feed_folders 关联 (多对多)
-                _ = try FeedFolderRecord.filter(Column("feed_id") == internalFeedID).deleteAll(db)
+                // 关联分类
+                try FeedFolderRecord.filter(Column("feed_id") == feedRecordID).deleteAll(db)
                 for cat in sub.categories {
-                    let catExtID = cat.id
-                    let catName = cat.label ?? Self.extractFolderName(from: cat.id)
-                    let matchedFolderID = folderIDByExternalID[catExtID] ?? folderIDByName[catName]
-                    if let matchedFolderID {
-                        let ff = FeedFolderRecord(feedID: internalFeedID, folderID: matchedFolderID)
-                        try ff.save(db)
+                    let folderID = folderIDByExternalID[cat.id] ?? (cat.label.flatMap { folderIDByName[$0] })
+                    if let folderID {
+                        let link = FeedFolderRecord(feedID: feedRecordID, folderID: folderID)
+                        try link.save(db)
                     }
                 }
             }
 
-            // 3. 处理软删除：如果本地存在的远端订阅或文件夹已在 FreshRSS 端被删除，将其标为 is_deleted = 1
-            let localFeeds = try FeedRecord
-                .filter(Column("account_id") == self.accountID && Column("is_deleted") == false)
-                .fetchAll(db)
+            // 标记远端已删除的 feeds
+            let localFeeds = try FeedRecord.filter(Column("account_id") == self.accountID && Column("is_deleted") == false).fetchAll(db)
             for localFeed in localFeeds {
                 if let ext = localFeed.externalID, !activeRemoteFeedIDs.contains(ext) {
                     var updated = localFeed
@@ -213,9 +218,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            let localFolders = try FolderRecord
-                .filter(Column("account_id") == self.accountID && Column("is_deleted") == false && Column("external_id") != nil)
-                .fetchAll(db)
+            // 标记远端已删除的 folders
+            let localFolders = try FolderRecord.filter(Column("account_id") == self.accountID && Column("is_deleted") == false).fetchAll(db)
             for localFolder in localFolders {
                 if let ext = localFolder.externalID, !activeFolderExternalIDs.contains(ext) {
                     var updated = localFolder
@@ -229,7 +233,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
     // MARK: - Articles & States Sync
 
-    public func syncArticlesAndStates() async throws {
+    @discardableResult
+    public func syncArticlesAndStates() async throws -> Bool {
         // 1. 检查是否为初次同步，并获取上次成功拉取时间戳
         let (isInitialSync, lastArticleFetchAt): (Bool, TimeInterval?) = try database.read { db in
             let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
@@ -277,12 +282,13 @@ public actor FreshRSSAccountProvider: AccountProvider {
         // 4. 拉取文章内容（严禁吞掉必须的失败）
         var streamItems: [ReaderAPIStreamItem] = []
         var olderSpecialRawIDs: [String] = []
+        var reachedBoundary = true
 
         if isInitialSync {
             // 首次同步：有界拉取最近 200 篇文章内容
             streamItems = try await apiClient.fetchRecentStreamContents(limit: 200)
 
-            // Initial Sync Policy: 确保历史窗口外的 old unread / old starred 可达并按需补齐
+            // Initial Sync Policy: 识别历史窗口外的 old unread / old starred 并批量拉取真实正文
             var streamItemKeys = Set(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
 
             if let unreadSet = remoteUnreadSet {
@@ -304,11 +310,15 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            // 按需批量拉取前 50 篇历史特殊条目正文
+            // 按需分批拉取历史特殊条目真实正文（每批 50 篇，上限 200 篇），获取 origin.streamId 与完整内容
             if !olderSpecialRawIDs.isEmpty {
-                let initialHydrationBatch = Array(olderSpecialRawIDs.prefix(50))
-                if let fetchedOlder = try? await apiClient.fetchItemContents(itemIDs: initialHydrationBatch) {
-                    streamItems.append(contentsOf: fetchedOlder)
+                let initialHydrationBatch = Array(olderSpecialRawIDs.prefix(200))
+                let batchSize = 50
+                for startIdx in stride(from: 0, to: initialHydrationBatch.count, by: batchSize) {
+                    let chunk = Array(initialHydrationBatch[startIdx..<min(startIdx + batchSize, initialHydrationBatch.count)])
+                    if let fetchedOlder = try? await apiClient.fetchItemContents(itemIDs: chunk) {
+                        streamItems.append(contentsOf: fetchedOlder)
+                    }
                 }
             }
         } else {
@@ -319,15 +329,12 @@ public actor FreshRSSAccountProvider: AccountProvider {
             }
 
             // 使用时间边界与 continuation 遍历拉取增量新文章（直到追平时间边界或流结束）
-            let (incrementalItems, _) = try await apiClient.fetchIncrementalStreamContents(
+            let fetchResult = try await apiClient.fetchIncrementalStreamContents(
                 sinceTimestamp: lastArticleFetchAt,
-                pageSize: 100,
-                maxTotal: 1000,
-                isItemLocallyKnown: { rawID in
-                    existingExternalIDs.contains(rawID)
-                }
+                knownLocalExternalIDs: existingExternalIDs
             )
-            streamItems.append(contentsOf: incrementalItems)
+            reachedBoundary = fetchResult.reachedBoundary
+            streamItems.append(contentsOf: fetchResult.items)
 
             // 查找本地存在 item 但缺少 article 内容的条目（独立补齐与重试）
             let missingContentExternalIDs: [String] = try database.read { db in
@@ -353,32 +360,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
         // 5. 在单一事务中持久化文章、条目与状态，严格遵守字段级调和 (Reconciliation)
         try database.write { db in
             // 建立 feed_id 映射 (external_id -> internal UUID)
-            let activeFeedRecords = try FeedRecord
-                .filter(Column("account_id") == self.accountID && Column("is_deleted") == false)
-                .fetchAll(db)
             let allAccountFeeds = try FeedRecord
                 .filter(Column("account_id") == self.accountID)
                 .fetchAll(db)
-
-            let defaultFeedID: String
-            if let activeFirst = activeFeedRecords.first?.id {
-                defaultFeedID = activeFirst
-            } else if let anyFirst = allAccountFeeds.first?.id {
-                defaultFeedID = anyFirst
-            } else {
-                let fallbackFeedID = UUID().uuidString
-                let fallbackFeed = FeedRecord(
-                    id: fallbackFeedID,
-                    accountID: self.accountID,
-                    externalID: "default",
-                    title: "General",
-                    feedURL: "https://freshrss.local/feed",
-                    isDeleted: false,
-                    updatedAt: now
-                )
-                try fallbackFeed.save(db)
-                defaultFeedID = fallbackFeedID
-            }
 
             let feedIDByExternalID: [String: String] = Dictionary(
                 uniqueKeysWithValues: allAccountFeeds.compactMap { feed in
@@ -387,38 +371,6 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             )
 
-            // B0. 针对历史未读 / 星标条目（不在当前流历史中的条目），预先创建 stub ItemRecord 与 ArticleStateRecord
-            for rawID in olderSpecialRawIDs {
-                let canonicalTagID = rawID.contains("tag:google.com") ? rawID : (ReaderItemIDCodec.formatTagID(fromDecimal: rawID) ?? rawID)
-                let itemID: String
-                if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == canonicalTagID).fetchOne(db) {
-                    itemID = existingItem.id
-                } else {
-                    let newID = "\(self.accountID)::\(canonicalTagID)"
-                    let stubItem = ItemRecord(
-                        id: newID,
-                        accountID: self.accountID,
-                        externalID: canonicalTagID,
-                        feedID: defaultFeedID,
-                        createdAt: now,
-                        updatedAt: now
-                    )
-                    try stubItem.save(db)
-                    itemID = newID
-                }
-
-                if try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db) == nil {
-                    let stubState = ArticleStateRecord(
-                        itemID: itemID,
-                        isRead: true,
-                        isStarred: false,
-                        dateArrived: now,
-                        updatedAt: now
-                    )
-                    try stubState.save(db)
-                }
-            }
-
             var processedItemIDs = Set<String>()
 
             // A. 处理当前流返回的 streamItems（权威 categories 优先判定）
@@ -426,10 +378,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 let rawRemoteID = item.id.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawRemoteID.isEmpty else { continue }
 
-                // 关联 Feed ID
-                var targetFeedID = defaultFeedID
-                if let streamId = item.origin?.streamId, let mapped = feedIDByExternalID[streamId] {
-                    targetFeedID = mapped
+                // 关联 Feed ID：通过 origin.streamId 精确关联所属源，杜绝伪造 defaultFeedID
+                guard let streamId = item.origin?.streamId, let targetFeedID = feedIDByExternalID[streamId] else {
+                    continue
                 }
 
                 // 查找或新建 item（持久化 raw remote identity）
@@ -583,6 +534,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
         }
+        return reachedBoundary
     }
 
     // MARK: - Helpers
@@ -634,12 +586,14 @@ public actor FreshRSSAccountProvider: AccountProvider {
         }
     }
 
-    private func markSyncCompleted(timestamp: Double) async {
+    private func markSyncCompleted(timestamp: Double, advanceFetchTimestamp: Bool = true) async {
         try? database.write { db in
             if var state = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db) {
                 state.initialSyncCompleted = true
                 state.lastSyncCompletedAt = timestamp
-                state.lastArticleFetchAt = timestamp
+                if advanceFetchTimestamp {
+                    state.lastArticleFetchAt = timestamp
+                }
                 state.consecutiveFailureCount = 0
                 state.lastError = nil
                 try state.save(db)

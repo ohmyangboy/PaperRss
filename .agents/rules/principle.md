@@ -18,9 +18,9 @@ trigger: always_on
 - 人机协作工作流：调用或接续 `triage`、`research`、`to-spec`、`to-tickets`、`implement` 时，修改文档或代码前完整读取并遵循 [Matt 开发工作流](../docs/development-workflow.md)。
 - 自动化测试与分级验证矩阵：完成开发后，严格按照改动影响范围在对应层级完成验证，未经验证不得宣称完成：
 
-  1. **Tier 1 (纯 Core / 数据层)**：仅修改 `PaperRss/Sources/Core/` 时，强制执行 `./scripts/verify.sh --feature` 或 `--core`；免拉起 GUI 进程。
-  2. **Tier 2 (Web / 治理 / 脚本)**：仅修改 `website/`、`Tests/*.test.mjs` 或工程脚本时，强制执行 `./scripts/verify.sh --web` 或直接运行目标脚本；免拉起 GUI 进程。
-  3. **Tier 3 (App 视图 / 系统桥接 / 视觉交互)**：凡涉及 `PaperRss/Sources/App/`（如 SwiftUI 布局、主题色彩、Toolbar、侧边栏、快捷键、系统 Dock 联动及 `ArticleReaderView` 容器桥接），**必须执行 `./scripts/dev.sh` 启动真实 macOS 进程验证**。交付时必须附带直接证据（控制台无关键 warning/error 日志、交互响应行为或截图），严禁以编译通过或推测替代真实验证。
+  1. **Tier 1 (纯 Core / 数据层)**：纯 Core/数据变更必须至少执行 `./scripts/verify.sh --core`；若改动影响用户可见投影或行为，还必须执行 `./scripts/verify.sh --feature`（严禁表述为“--feature 或 --core”）；免拉起 GUI 进程。
+  2. **Tier 2 (Web / 治理 / 脚本)**：Web 改动执行 `./scripts/verify.sh --web`；脚本或治理改动强制执行语法/针对性脚本校验（严禁以 `--web` 替代 shell 脚本验证）；免拉起 GUI 进程。
+  3. **Tier 3 (App 视图 / 系统桥接 / 视觉交互)**：凡涉及 `PaperRss/Sources/App/`（如 SwiftUI 布局、主题色彩、Toolbar、侧边栏、快捷键、系统 Dock 联动及 `ArticleReaderView` 容器桥接），**必须完成相关自动化测试、macOS 宿主编译构建、执行 `./scripts/dev.sh` 启动真实 macOS 进程并进行实际交互观察**。若 Agent 环境无法真正点击或观察真实 GUI 交互，必须明确声明“Manual UI verification required”，严禁仅凭 dev.sh 进程拉起即宣称交互已验证通过。
 - 发布全链路：遵守SemVer版本规范(`vX.Y.Z-beta.N`）；发布需涵盖测试、构建、产物、ChangeLog、官网和README状态同步、Tag/Release 及线上验证全链路闭环。
 - PaperRss对标业界最佳实践，参考netnewsware、freshRSS等优秀的开源实践
 

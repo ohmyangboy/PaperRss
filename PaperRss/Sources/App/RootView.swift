@@ -669,6 +669,11 @@ private struct SidebarView: View {
                 return []
             },
             set: { newSet in
+                // 原生 List 在由单项向另一项切换过渡时会短暂发射 empty set。
+                // 忽略过渡瞬态的空集合，防止 selection 变为 nil 并触发 RootView 回退到 .today 导致界面闪烁
+                if newSet.isEmpty {
+                    return
+                }
                 let feeds = newSet.compactMap { sel -> UUID? in
                     if case let .feed(id) = sel { return id }
                     return nil
@@ -685,9 +690,6 @@ private struct SidebarView: View {
                 }) {
                     selectedFeedIDs = []
                     selection = firstNonFeed
-                } else {
-                    selectedFeedIDs = []
-                    selection = nil
                 }
             }
         )
@@ -1471,9 +1473,25 @@ private struct EntryListView: View {
         reloadCurrentPages()
     }
 
+    private var entryListSelection: Binding<String?> {
+        Binding(
+            get: { selectedEntryID },
+            set: { newID in
+                // 在提交 selectedEntryID 之前，先同步更新 unread retention 状态
+                // 仅保留当前选中的那一篇文章（Retain only the CURRENT selected article）
+                if let newID {
+                    retainedUnreadIDs = [newID]
+                } else {
+                    retainedUnreadIDs.removeAll()
+                }
+                selectedEntryID = newID
+            }
+        )
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
-            List(selection: $selectedEntryID) {
+            List(selection: entryListSelection) {
                 ForEach(loadedEntries) { entry in
                     EntryRow(entry: entry)
                         .tag(entry.id)
@@ -1513,11 +1531,6 @@ private struct EntryListView: View {
             .onAppear {
                 if loadedEntries.isEmpty {
                     loadInitialPage()
-                }
-            }
-            .onChange(of: selectedEntryID) { _, newID in
-                if let newID {
-                    retainedUnreadIDs.insert(newID)
                 }
             }
             .onChange(of: selection) { _, _ in
@@ -1747,6 +1760,10 @@ private struct EntryRow: View {
                 HStack(spacing: 5) {
                     FeedFaviconView(iconURL: entry.feedIconURL, title: entry.sourceTitle, size: 14)
                     Text(entry.sourceTitle)
+                    if !entry.accountSourceBadge.isEmpty {
+                        Text("·")
+                        Text(entry.accountSourceBadge)
+                    }
                     if entry.isStarred { Image(systemName: "star.fill").foregroundStyle(PaperTheme.warmAccent) }
                 }
                 .font(.caption)

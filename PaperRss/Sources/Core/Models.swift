@@ -196,6 +196,19 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let publishedAt: Date?
     public var isRead: Bool
     public var isStarred: Bool
+    public let accountID: String
+    public let accountType: String
+    public let accountDisplayName: String
+
+    public var accountSourceBadge: String {
+        if accountType == AccountType.local.rawValue || accountID == "local-default" {
+            return I18N.localized("本机")
+        }
+        if !accountDisplayName.isEmpty {
+            return accountDisplayName
+        }
+        return I18N.localized("FreshRSS")
+    }
 
     public init(
         id: String,
@@ -207,7 +220,10 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         feedIconURL: URL? = nil,
         publishedAt: Date? = nil,
         isRead: Bool = false,
-        isStarred: Bool = false
+        isStarred: Bool = false,
+        accountID: String = "local-default",
+        accountType: String = AccountType.local.rawValue,
+        accountDisplayName: String = "Local"
     ) {
         self.id = id
         self.feedID = feedID
@@ -219,9 +235,12 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         self.publishedAt = publishedAt
         self.isRead = isRead
         self.isStarred = isStarred
+        self.accountID = accountID
+        self.accountType = accountType
+        self.accountDisplayName = accountDisplayName
     }
 
-    public init(entry: Entry, sourceTitle: String, feedIconURL: URL? = nil, previewCharacterLimit: Int = 240) {
+    public init(entry: Entry, sourceTitle: String, feedIconURL: URL? = nil, previewCharacterLimit: Int = 240, accountID: String = "local-default", accountType: String = AccountType.local.rawValue, accountDisplayName: String = "Local") {
         id = entry.id
         feedID = entry.feedID
         title = entry.title
@@ -232,6 +251,9 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         publishedAt = entry.publishedAt
         isRead = entry.isRead
         isStarred = entry.isStarred
+        self.accountID = accountID
+        self.accountType = accountType
+        self.accountDisplayName = accountDisplayName
     }
 }
 

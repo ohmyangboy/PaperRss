@@ -434,8 +434,8 @@ public actor ReaderAPIClient {
         streamID: String = "user/-/state/com.google/reading-list",
         sinceTimestamp: TimeInterval? = nil,
         pageSize: Int = 100,
-        maxTotal: Int = 1000,
-        isItemLocallyKnown: ((String) -> Bool)? = nil
+        maxTotal: Int = 10000,
+        knownLocalExternalIDs: Set<String>? = nil
     ) async throws -> (items: [ReaderAPIStreamItem], reachedBoundary: Bool) {
         var allItems: [ReaderAPIStreamItem] = []
         var nextContinuation: String? = nil
@@ -443,7 +443,7 @@ public actor ReaderAPIClient {
 
         let cutoff = sinceTimestamp.map { max(0, $0 - 300) } // 5分钟重叠窗口
 
-        repeat {
+        while true {
             let (pageItems, continuation) = try await fetchStreamContentsPage(
                 streamID: streamID,
                 continuation: nextContinuation,
@@ -453,9 +453,9 @@ public actor ReaderAPIClient {
             allItems.append(contentsOf: pageItems)
 
             // 检查边界：如果某条 item 的 published 时间早于 cutoff，且本地已知该 item，说明已与存量历史接轨
-            if let cutoff, let isItemLocallyKnown {
+            if let cutoff, let knownIDs = knownLocalExternalIDs {
                 let hitKnownOld = pageItems.contains { item in
-                    if let pub = item.published, pub < cutoff, isItemLocallyKnown(item.id) {
+                    if let pub = item.published, pub < cutoff, knownIDs.contains(item.id) {
                         return true
                     }
                     return false
@@ -466,13 +466,20 @@ public actor ReaderAPIClient {
                 }
             }
 
-            if let continuation, !continuation.isEmpty, continuation != nextContinuation, allItems.count < maxTotal {
-                nextContinuation = continuation
-            } else {
-                nextContinuation = nil
+            guard let cont = continuation, !cont.isEmpty, cont != nextContinuation else {
+                // 流已完全穷尽（无下一页 continuation）
                 reachedBoundary = true
+                break
             }
-        } while nextContinuation != nil
+
+            if allItems.count >= maxTotal {
+                // 达到安全上限但 continuation 仍存在，属于未完成截断
+                reachedBoundary = false
+                break
+            }
+
+            nextContinuation = cont
+        }
 
         return (allItems, reachedBoundary)
     }

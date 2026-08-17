@@ -258,6 +258,9 @@ public final class TimelineQueryService: Sendable {
         SELECT
             i.id AS entry_id,
             i.feed_id AS feed_id,
+            i.account_id AS account_id,
+            COALESCE(acc.type, 'local') AS account_type,
+            COALESCE(acc.display_name, 'Local') AS account_display_name,
             COALESCE(a.title, '') AS title,
             a.url AS url,
             COALESCE(a.summary, '') AS summary,
@@ -270,6 +273,7 @@ public final class TimelineQueryService: Sendable {
             COALESCE(s.is_starred, 0) AS is_starred
         FROM items i
         INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         LEFT JOIN articles a ON a.item_id = i.id
         LEFT JOIN article_states s ON s.item_id = i.id
         WHERE \(whereClauses.joined(separator: " AND "))
@@ -308,6 +312,9 @@ public final class TimelineQueryService: Sendable {
             let publishedAt = publishedAtTimestamp.map { Date(timeIntervalSince1970: $0) }
             let isReadInt: Int = row["is_read"]
             let isStarredInt: Int = row["is_starred"]
+            let accountID: String = row["account_id"] ?? "local-default"
+            let accountType: String = row["account_type"] ?? AccountType.local.rawValue
+            let accountDisplayName: String = row["account_display_name"] ?? "Local"
 
             return EntryListItem(
                 id: id,
@@ -319,7 +326,10 @@ public final class TimelineQueryService: Sendable {
                 feedIconURL: iconURL,
                 publishedAt: publishedAt,
                 isRead: isReadInt == 1,
-                isStarred: isStarredInt == 1
+                isStarred: isStarredInt == 1,
+                accountID: accountID,
+                accountType: accountType,
+                accountDisplayName: accountDisplayName
             )
         }
     }
