@@ -4,13 +4,14 @@ import AppKit
 
 // MARK: - PaperOverlayScroller
 
-/// Codex 风格的细纤浮层 thumb：4pt 宽、无槽、中性灰、自动隐藏。
+/// Codex 风格细纤浮层 thumb：6pt 宽、无槽背景、中性灰、自动隐藏。
 ///
-/// 仅由 `paperListScrollStyle()` 显式安装在 Sidebar / 文章列表 / Settings，
-/// 不全局注入，不影响 WKWebView / ArticleReaderView。
+/// 只由 PaperNativeScrollStyler 安装在 Sidebar (column 0) 和 EntryList (column 1) 上，
+/// 绝不全局注入，不影响 WKWebView / ArticleReader (column 2)。
 final class PaperOverlayScroller: NSScroller {
 
     private var pointerInside = false
+    private var isDragging = false
     private var trackingArea: NSTrackingArea?
 
     override init(frame: NSRect) {
@@ -32,7 +33,7 @@ final class PaperOverlayScroller: NSScroller {
     override class var isCompatibleWithOverlayScrollers: Bool { true }
     override var isOpaque: Bool { false }
 
-    // MARK: 鼠标追踪（hover 增强 alpha）
+    // MARK: - 鼠标追踪与拖拽状态
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -59,23 +60,34 @@ final class PaperOverlayScroller: NSScroller {
         super.mouseExited(with: event)
     }
 
-    // MARK: 绘制 — 仅绘制 thumb capsule，不绘制 track/slot/arrow/background
+    override func mouseDown(with event: NSEvent) {
+        isDragging = true
+        needsDisplay = true
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isDragging = false
+        needsDisplay = true
+        super.mouseUp(with: event)
+    }
+
+    // MARK: - 绘制 — 仅浮层 neutral capsule，无 track / slot / background / separator / border / shadow / arrows
 
     override func draw(_ dirtyRect: NSRect) {
-        // 不调 super.draw：彻底跳过 AppKit 绘制 slot 背景的整个管线
         drawKnob()
     }
 
     override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {
-        // 有意留空：消灭任何灰色背景槽
+        // 有意留空：消灭任何灰色背景槽与轨道
     }
 
     override func drawKnob() {
         let native = rect(for: .knob)
         guard !native.isEmpty, native.height > 0, native.width > 0 else { return }
 
-        let visualWidth: CGFloat = 4          // 比系统默认 ~8pt 细一半
-        let trailingPad: CGFloat = 2          // 距右边缘
+        let visualWidth: CGFloat = 6          // 6pt 浮层 capsule
+        let trailingPad: CGFloat = 3          // 距右边缘内边距 3pt
         let vInset: CGFloat = 2               // 上下留白
 
         let x = bounds.maxX - trailingPad - visualWidth
@@ -87,78 +99,119 @@ final class PaperOverlayScroller: NSScroller {
         )
         guard knob.height > 0 else { return }
 
-        let alpha: CGFloat = pointerInside ? 0.40 : 0.22
+        // idle: ~0.18, hover: ~0.32, drag: ~0.42
+        let alpha: CGFloat = isDragging ? 0.42 : (pointerInside ? 0.32 : 0.18)
         NSColor.secondaryLabelColor.withAlphaComponent(alpha).setFill()
         NSBezierPath(roundedRect: knob, xRadius: visualWidth / 2, yRadius: visualWidth / 2).fill()
     }
 }
 
-// MARK: - ScrollStyleEnforcer (KVO 持续防守)
+// MARK: - PaperNativeScrollStyler
 
-/// KVO 监听者：当系统（或 SwiftUI List tile()）把 scrollerStyle 改回 legacy 时，
-/// 立即拦截并重设为 overlay，防止 "始终显示滚动条" 系统偏好破坏布局宽度。
+/// 精准目标化的滚动条样式配置器。
+///
+/// 通过 ThreeColumnSplitView 的已知列边界，仅对 column 0（Sidebar）和
+/// column 1（EntryList）的真实 NSScrollView 进行配置，不扫描整个窗口，
+/// 绝不触碰 column 2（ArticleReader / WKWebView）。
+///
+/// 查找策略：
+///   rootView → 递归查找 NSTableView / NSOutlineView
+///            → tableView.enclosingScrollView
+/// 比从 SwiftUI .background 向上爬取更稳定，因为 enclosingScrollView 是 AppKit 官方 API。
 @MainActor
-private final class ScrollStyleEnforcer: NSObject {
-    private weak var scrollView: NSScrollView?
-    private var isEnforcing = false   // 防止 KVO 回调触发无限递归
+enum PaperNativeScrollStyler {
 
-    init(_ sv: NSScrollView) {
-        self.scrollView = sv
-        super.init()
-        sv.addObserver(self, forKeyPath: "scrollerStyle", options: [.new], context: nil)
-    }
+    // 已处理过的 NSScrollView ObjectIdentifier 集合，避免重复配置
+    private static var configured = Set<ObjectIdentifier>()
 
-    deinit {
-        scrollView?.removeObserver(self, forKeyPath: "scrollerStyle")
-    }
+    /// 对指定列根视图下的 List scroll view 进行样式化（幂等）。
+    ///
+    /// - Parameter rootView: splitViewItems[0 or 1].viewController.view
+    static func configureListScrollViews(in rootView: NSView) {
+        let tableViews = findListViews(in: rootView)
+        if tableViews.isEmpty {
+            return
+        }
 
-    override nonisolated func observeValue(
-        forKeyPath keyPath: String?,
-        of object: Any?,
-        change: [NSKeyValueChangeKey: Any]?,
-        context: UnsafeMutableRawPointer?
-    ) {
-        guard keyPath == "scrollerStyle" else { return }
-        let rawValue = change?[.newKey] as? Int ?? 1
-        let newStyle = NSScroller.Style(rawValue: rawValue) ?? .legacy
-        guard newStyle != .overlay else { return }
+        var seen = Set<ObjectIdentifier>()
+        for tv in tableViews {
+            guard let sv = tv.enclosingScrollView else { continue }
+            let oid = ObjectIdentifier(sv)
+            guard !seen.contains(oid) else { continue }
+            seen.insert(oid)
 
-        // KVO 回调可能在非主线程，必须跳回主线程修改 UI 属性
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isEnforcing, let sv = self.scrollView else { return }
-            self.isEnforcing = true
-            sv.scrollerStyle = .overlay
-            sv.autohidesScrollers = true
-            sv.tile()
-            self.isEnforcing = false
+            install(on: sv)
         }
     }
+
+    // MARK: - 私有实现
+
+    /// 安装 PaperOverlayScroller 和 overlay style（幂等）。
+    private static func install(on sv: NSScrollView) {
+        let oid = ObjectIdentifier(sv)
+
+        // 幂等检查：若已配置且已经是 PaperOverlayScroller + overlay，则无需重复执行
+        if configured.contains(oid),
+           sv.verticalScroller is PaperOverlayScroller,
+           sv.scrollerStyle == .overlay,
+           sv.autohidesScrollers {
+            return
+        }
+
+        // 1. 设置 overlay 与自动隐藏
+        sv.scrollerStyle = .overlay
+        sv.autohidesScrollers = true
+
+        // 2. 安装自定义 scroller
+        if !(sv.verticalScroller is PaperOverlayScroller) {
+            let prev = sv.verticalScroller?.frame ?? .zero
+            let scroller = PaperOverlayScroller(frame: prev)
+            sv.verticalScroller = scroller
+        }
+
+        // 3. 重申 overlay 与自动隐藏并 tile
+        sv.scrollerStyle = .overlay
+        sv.autohidesScrollers = true
+        sv.tile()
+
+        configured.insert(oid)
+    }
+
+    /// 递归查找视图树中所有 NSTableView / NSOutlineView，不进入 WKWebView 子树。
+    private static func findListViews(in view: NSView) -> [NSTableView] {
+        // 遇到 WKWebView 立即停止（严格保护 ArticleReader）
+        let className = String(describing: type(of: view))
+        if className.contains("WKWebView") || className.contains("WebView") {
+            return []
+        }
+
+        var result: [NSTableView] = []
+        if let tv = view as? NSTableView {
+            result.append(tv)
+        }
+        for sub in view.subviews {
+            result.append(contentsOf: findListViews(in: sub))
+        }
+        return result
+    }
+}
+// MARK: - View extension (Settings 专用，保留细粒度控制)
+
+/// 仅用于 Settings 等独立面板，通过 SwiftUI background 注入。
+/// 3 列主 UI 由 PaperNativeScrollStyler 处理，不用此方法。
+extension View {
+    public func paperListScrollStyle() -> some View {
+        #if os(macOS)
+        background(PaperScrollViewCustomizer())
+        #else
+        self
+        #endif
+    }
 }
 
-// MARK: - AssociatedObject 辅助
+#if os(macOS)
+// MARK: - PaperScrollViewCustomizer (Settings / standalone panel 专用)
 
-private enum AssociatedKeys {
-    nonisolated(unsafe) static var enforcer: UInt8 = 0
-}
-
-private func attachEnforcer(_ enforcer: ScrollStyleEnforcer, to scrollView: NSScrollView) {
-    objc_setAssociatedObject(
-        scrollView,
-        &AssociatedKeys.enforcer,
-        enforcer,
-        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-    )
-}
-
-private func hasEnforcer(on scrollView: NSScrollView) -> Bool {
-    objc_getAssociatedObject(scrollView, &AssociatedKeys.enforcer) is ScrollStyleEnforcer
-}
-
-// MARK: - PaperScrollViewCustomizer (NSViewRepresentable)
-
-/// 附着在目标 View 背景中的透明 Representable。
-/// 向上遍历视图树找到最近的 NSScrollView，
-/// 安装 PaperOverlayScroller 并挂上 KVO enforcer，一次安装，持续生效。
 private struct PaperScrollViewCustomizer: NSViewRepresentable {
     func makeNSView(context: Context) -> Probe { Probe() }
     func updateNSView(_ nsView: Probe, context: Context) { nsView.apply() }
@@ -168,7 +221,6 @@ private struct PaperScrollViewCustomizer: NSViewRepresentable {
             super.viewDidMoveToWindow()
             apply()
         }
-
         override func viewDidMoveToSuperview() {
             super.viewDidMoveToSuperview()
             apply()
@@ -189,42 +241,19 @@ private struct PaperScrollViewCustomizer: NSViewRepresentable {
         }
 
         private static func install(on sv: NSScrollView) {
-            // --- 1. 安装 KVO enforcer（只装一次，持续保活）---
-            if !hasEnforcer(on: sv) {
-                let enforcer = ScrollStyleEnforcer(sv)
-                attachEnforcer(enforcer, to: sv)
-            }
-
-            // --- 2. 立即设为 overlay ---
             sv.scrollerStyle = .overlay
             sv.autohidesScrollers = true
-
-            // --- 3. 安装自定义 thumb（若已是则跳过）---
             if !(sv.verticalScroller is PaperOverlayScroller) {
-                let prev = sv.verticalScroller?.frame ?? .zero
-                let scroller = PaperOverlayScroller(frame: prev)
+                let scroller = PaperOverlayScroller(frame: sv.verticalScroller?.frame ?? .zero)
                 sv.verticalScroller = scroller
             }
-
-            // --- 4. 重申 overlay，让 tile() 生效后仍保持 ---
             sv.scrollerStyle = .overlay
             sv.autohidesScrollers = true
             sv.tile()
         }
     }
 }
-
-// MARK: - View extension
-
-extension View {
-    /// 将 PaperRss 的细纤 overlay thumb 安装到最近的 NSScrollView。
-    ///
-    /// 仅用于 Sidebar / 文章列表 / Settings 等普通列表；
-    /// ArticleReaderView / WKWebView 严禁调用此方法。
-    public func paperListScrollStyle() -> some View {
-        background(PaperScrollViewCustomizer())
-    }
-}
+#endif
 
 #else
 extension View {

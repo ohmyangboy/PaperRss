@@ -97,10 +97,15 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
     func makeNSViewController(context: Context) -> NSSplitViewController {
         let splitVC = PaperSplitViewController()
-        splitVC.onLayout = { [weak coordinator = context.coordinator] in
+        splitVC.onLayout = { [weak coordinator = context.coordinator, weak splitVC] in
             MainActor.assumeIsolated {
+                guard let splitVC else { return }
                 if let window = splitVC.view.window {
                     coordinator?.removeTitlebarBlur(from: window)
+                }
+                if splitVC.splitViewItems.count >= 2 {
+                    PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[0].viewController.view)
+                    PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[1].viewController.view)
                 }
             }
         }
@@ -141,10 +146,15 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         // 核心修复：使用 KVO 监听 NSSplitView 被挂载到 window 的那一瞬间。
         // 这会在窗口准备显示的第 0 帧同步触发，早于任何 SwiftUI 的 update 周期，
         // 从而能在原生窗口呈现的第一秒前就将 Toolbar 与全屏标志位设定好，实现零闪烁 (Zero-flicker) 启动。
-        context.coordinator.windowObservation = splitVC.view.observe(\.window, options: [.new]) { [weak coordinator = context.coordinator] view, _ in
+        context.coordinator.windowObservation = splitVC.view.observe(\.window, options: [.new]) { [weak coordinator = context.coordinator, weak splitVC] view, _ in
             MainActor.assumeIsolated {
+                guard let splitVC else { return }
                 if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
                     coord.configureToolbar(on: window, splitView: splitVC.splitView)
+                }
+                if splitVC.splitViewItems.count >= 2 {
+                    PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[0].viewController.view)
+                    PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[1].viewController.view)
                 }
                 if let coord = coordinator, view.window != nil, !coord.didInitializeFocus {
                     coord.didInitializeFocus = true
@@ -180,6 +190,12 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         }
         if let host = splitVC.splitViewItems[2].viewController as? NSHostingController<Detail> {
             host.rootView = detail
+        }
+
+        // 配置 Sidebar 与 EntryList 真实 AppKit 列表滚动条（Column 0 与 1 专属，绝不触及 Column 2）
+        if splitVC.splitViewItems.count >= 2 {
+            PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[0].viewController.view)
+            PaperNativeScrollStyler.configureListScrollViews(in: splitVC.splitViewItems[1].viewController.view)
         }
 
         // 同步刷新按钮及 Header 状态

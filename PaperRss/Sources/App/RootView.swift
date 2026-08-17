@@ -780,7 +780,6 @@ private struct SidebarView: View {
             // 与文章列表一致：纸张背景延伸到窗口顶部，避免 44pt 占位区透出白色背景
             PaperSurface(kind: .sidebar, textureOpacity: 0.52).ignoresSafeArea()
         }
-        .paperListScrollStyle()
         #if os(iOS)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -1571,7 +1570,6 @@ private struct EntryListView: View {
                 // 否则占位区会透出窗口默认白色背景，形成顶部空白条
                 PaperSurface(kind: .articleList, textureOpacity: 0.62).ignoresSafeArea()
             }
-            .paperListScrollStyle()
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
