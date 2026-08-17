@@ -25,6 +25,14 @@ public final class AccountRepository: Sendable {
         try record.save(db)
     }
 
+    public func updateAccountEnabled(id: String, isEnabled: Bool, in db: Database) throws {
+        let now = Date().timeIntervalSince1970
+        try db.execute(
+            sql: "UPDATE accounts SET is_enabled = ?, updated_at = ? WHERE id = ?;",
+            arguments: [isEnabled ? 1 : 0, now, id]
+        )
+    }
+
     public func deleteAccount(id: String, in db: Database) throws {
         _ = try AccountRecord.filter(Column("id") == id).deleteAll(db)
     }
@@ -48,6 +56,12 @@ public final class AccountRepository: Sendable {
     public func fetchAccount(id: String) async throws -> AccountRecord? {
         try database.read { db in
             try fetchAccount(id: id, in: db)
+        }
+    }
+
+    public func updateAccountEnabled(id: String, isEnabled: Bool) async throws {
+        try database.write { db in
+            try updateAccountEnabled(id: id, isEnabled: isEnabled, in: db)
         }
     }
 

@@ -743,13 +743,15 @@ private struct SidebarView: View {
     }
 
     private var freshRSSAccounts: [AccountRecord] {
-        store.accounts.filter { $0.type == AccountType.freshRSS.rawValue }
+        store.accounts.filter { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }
     }
 
     var body: some View {
         List(selection: selectedSidebarSelections) {
             readingSection
-            localSubscriptionsSection
+            if store.isAccountEnabled("local-default") {
+                localSubscriptionsSection
+            }
             ForEach(freshRSSAccounts) { account in
                 freshRSSAccountSection(account)
             }
@@ -760,7 +762,15 @@ private struct SidebarView: View {
         .scrollIndicators(.never, axes: .vertical)
         #endif
         .overlay {
-            if store.feeds.isEmpty {
+            let hasAnyAccount = store.isAccountEnabled("local-default") || !freshRSSAccounts.isEmpty
+            if !hasAnyAccount {
+                ContentUnavailableView {
+                    Label(I18N.localized("未启用任何账号"), systemImage: "person.crop.circle.badge.xmark")
+                } description: {
+                    Text(I18N.localized("请前往“设置 -> 账号”启用本地或 FreshRSS 订阅账号。"))
+                }
+                .padding()
+            } else if (store.isAccountEnabled("local-default") ? store.feeds.isEmpty : true) && freshRSSAccounts.allSatisfy({ store.rootFeeds(for: $0.id).isEmpty && store.folders(for: $0.id).isEmpty }) {
                 ContentUnavailableView {
                     Label(I18N.localized("还没有订阅"), systemImage: "dot.radiowaves.left.and.right")
                 } description: {
@@ -770,6 +780,9 @@ private struct SidebarView: View {
                 }
                 .padding()
             }
+        }
+        .onChange(of: store.accounts) {
+            validateSelectionAgainstEnabledAccounts()
         }
         .safeAreaInset(edge: .bottom) {
             settingsFooter
@@ -1275,6 +1288,24 @@ private struct SidebarView: View {
         #elseif os(iOS)
         UIPasteboard.general.string = text
         #endif
+    }
+
+    private func validateSelectionAgainstEnabledAccounts() {
+        guard let sel = selection else { return }
+        switch sel {
+        case .folder(let accountID, _):
+            if !store.isAccountEnabled(accountID) {
+                selection = .today
+            }
+        case .feed(let feedID):
+            let feedAccountID = store.accountID(forFeedID: feedID)
+            if !store.isAccountEnabled(feedAccountID) {
+                selection = .today
+                selectedFeedIDs = []
+            }
+        default:
+            break
+        }
     }
 }
 

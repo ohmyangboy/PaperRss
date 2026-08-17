@@ -356,9 +356,9 @@ public final class AppStore: ObservableObject {
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
         let limit = Self.defaultTimelineLimit
 
-        // 1. 读取所有启用账号
+        // 1. 读取所有账号（包括已禁用账号，供设置页管理与切换）
         let fetchedAccounts = (try? libraryDatabase.read { db in
-            try AccountRecord.filter(Column("is_enabled") == true).order(Column("created_at").asc).fetchAll(db)
+            try AccountRecord.order(Column("created_at").asc).fetchAll(db)
         }) ?? []
         self.accounts = fetchedAccounts
 
@@ -398,7 +398,7 @@ public final class AppStore: ObservableObject {
         self.starredEntryListItems = (try? localProvider.timelineQueryService.fetchListItems(scope: .starred, limit: limit)) ?? []
         self.cachedEntryLookup.removeAll(keepingCapacity: true)
 
-        // 3. 读取 SyncState 并注册 FreshRSS Providers
+        // 3. 读取 SyncState 并维护启用的 FreshRSS Providers
         var syncStates: [String: AccountSyncStateRecord] = [:]
         for account in fetchedAccounts {
             if let state = try? libraryDatabase.read({ db in
@@ -406,22 +406,53 @@ public final class AppStore: ObservableObject {
             }) {
                 syncStates[account.id] = state
             }
-            if account.type == AccountType.freshRSS.rawValue, let urlStr = account.endpointURL, let url = URL(string: urlStr), let username = account.username {
-                let provider = FreshRSSAccountProvider(
-                    accountID: account.id,
-                    endpointURL: url,
-                    username: username,
-                    database: libraryDatabase,
-                    credentialStore: credentialStore,
-                    session: customSession
-                )
-                Task { [syncCoordinator] in
-                    await syncCoordinator.registerProvider(provider)
+            if account.type == AccountType.freshRSS.rawValue {
+                if account.isEnabled, let urlStr = account.endpointURL, let url = URL(string: urlStr), let username = account.username {
+                    let provider = FreshRSSAccountProvider(
+                        accountID: account.id,
+                        endpointURL: url,
+                        username: username,
+                        database: libraryDatabase,
+                        credentialStore: credentialStore,
+                        session: customSession
+                    )
+                    Task { [syncCoordinator] in
+                        await syncCoordinator.registerProvider(provider)
+                    }
+                } else {
+                    Task { [syncCoordinator] in
+                        await syncCoordinator.unregisterProvider(accountID: account.id)
+                    }
                 }
             }
         }
         self.accountSyncStates = syncStates
         self.timelineRevision &+= 1
+    }
+
+    public var enabledAccounts: [AccountRecord] {
+        accounts.filter { $0.isEnabled }
+    }
+
+    public func isAccountEnabled(_ accountID: String) -> Bool {
+        accounts.first { $0.id == accountID }?.isEnabled ?? (accountID == "local-default")
+    }
+
+    public func setAccountEnabled(accountID: String, isEnabled: Bool) async throws {
+        try await accountRepository.updateAccountEnabled(id: accountID, isEnabled: isEnabled)
+        if !isEnabled {
+            await syncCoordinator.unregisterProvider(accountID: accountID)
+        }
+        reloadState()
+    }
+
+    public func accountID(forFeedID feedID: UUID) -> String {
+        for (accID, feeds) in feedsByAccount {
+            if feeds.contains(where: { $0.id == feedID }) {
+                return accID
+            }
+        }
+        return "local-default"
     }
 
     // MARK: - Computed Public Accessors
@@ -793,8 +824,10 @@ public final class AppStore: ObservableObject {
         let targetFeeds: [Feed]
         if let feedIDs {
             targetFeeds = feeds.filter { feedIDs.contains($0.id) && !$0.isDeleted }
-        } else {
+        } else if isAccountEnabled("local-default") {
             targetFeeds = feeds.filter { !$0.isDeleted }
+        } else {
+            targetFeeds = []
         }
 
         let total = targetFeeds.count

@@ -349,12 +349,15 @@ test('rail lines stay short by default, current only changes color, and hover cr
   assert.equal(buttons[0].getAttribute('aria-current'), 'true');
 
   buttons[2].dispatchEvent({ type: 'mouseenter', relatedTarget: null });
-  assert.deepEqual(lines.map((line) => line.style.width), ['11px', '16px', '22px', '16px', '11px']);
+  assert.deepEqual(lines.map((line) => line.style.width), ['14px', '21px', '29px', '21px', '14px']);
+  assert.equal(buttons[2].getAttribute('aria-current'), 'true');
+  assert.equal(buttons[0].getAttribute('aria-current'), 'false');
   rail.dispatchEvent({ type: 'pointerdown', target: buttons[2], pointerId: 3, button: 0, clientY: 200 });
   assert.equal(lines.every((line) => !line.style.width), true);
   rail.dispatchEvent({ type: 'pointerup', target: buttons[2], pointerId: 3, clientY: 200 });
   buttons[2].dispatchEvent({ type: 'mouseleave', relatedTarget: null });
   assert.equal(lines.every((line) => !line.style.width), true);
+  assert.equal(buttons[0].getAttribute('aria-current'), 'true');
 });
 
 test('scrolling updates the current anchor and clicking navigates to the visual reading focus offset', () => {

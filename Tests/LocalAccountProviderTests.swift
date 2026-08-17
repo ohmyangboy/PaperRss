@@ -258,4 +258,61 @@ final class LocalAccountProviderTests: XCTestCase {
         let importedFeeds = try provider2.fetchFeeds()
         XCTAssertEqual(importedFeeds.count, 2)
     }
+
+    func testAccountEnableAndDisableIsolation() async throws {
+        let accountRepo = AccountRepository(database: database)
+        let account = try await accountRepo.fetchAccount(id: "local-default")
+        XCTAssertEqual(account?.isEnabled, true)
+
+        let feed = try provider.addFeed(
+            title: "Local Feed",
+            feedURL: URL(string: "https://example.com/rss3")!
+        )
+        let parsed = [
+            ParsedFeedEntry(
+                id: "item-disable-test",
+                title: "Disabled Item",
+                author: nil,
+                url: URL(string: "https://example.com/disable-1"),
+                publishedAt: Date(),
+                summary: "Summary",
+                contentHTML: "<p>Content</p>"
+            )
+        ]
+        let res = LocalAccountProvider.SingleFeedRefreshResult(
+            feedID: feed.id,
+            oldTitle: feed.title,
+            result: .success(.updated(
+                ParsedFeed(title: "Local Feed", siteURL: nil, iconURL: nil, entries: parsed),
+                etag: nil,
+                lastModified: nil
+            ))
+        )
+        _ = try provider.applyRefreshResult(res)
+
+        let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        var counts = try provider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)
+        XCTAssertEqual(counts.allUnread, 1)
+
+        var items = try provider.timelineQueryService.fetchListItems(scope: .all)
+        XCTAssertEqual(items.count, 1)
+
+        // 禁用 local-default 账号
+        try await accountRepo.updateAccountEnabled(id: "local-default", isEnabled: false)
+        let disabledAccount = try await accountRepo.fetchAccount(id: "local-default")
+        XCTAssertEqual(disabledAccount?.isEnabled, false)
+
+        // 全局未读数与时间线应隔离并排除禁用账号
+        counts = try provider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)
+        XCTAssertEqual(counts.allUnread, 0)
+        items = try provider.timelineQueryService.fetchListItems(scope: .all)
+        XCTAssertEqual(items.count, 0)
+
+        // 重新启用 local-default 账号
+        try await accountRepo.updateAccountEnabled(id: "local-default", isEnabled: true)
+        counts = try provider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)
+        XCTAssertEqual(counts.allUnread, 1)
+        items = try provider.timelineQueryService.fetchListItems(scope: .all)
+        XCTAssertEqual(items.count, 1)
+    }
 }

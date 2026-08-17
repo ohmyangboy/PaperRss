@@ -77,7 +77,7 @@ public final class TimelineQueryService: Sendable {
         startOfDayTimestamp: Double,
         in db: Database
     ) throws -> SidebarCounts {
-        let accountWhere = accountID != nil ? "AND i.account_id = :account_id" : ""
+        let accountWhere = accountID != nil ? "AND i.account_id = :account_id" : "AND (acc.is_enabled = 1 OR acc.id IS NULL)"
         var arguments: [String: (any DatabaseValueConvertible)?] = [:]
         if let accountID {
             arguments["account_id"] = accountID
@@ -89,6 +89,7 @@ public final class TimelineQueryService: Sendable {
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
         INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         WHERE f.is_deleted = 0 AND s.is_read = 0 \(accountWhere);
         """
         let allUnread = try Int.fetchOne(db, sql: allUnreadSql, arguments: StatementArguments(arguments)) ?? 0
@@ -102,6 +103,7 @@ public final class TimelineQueryService: Sendable {
         INNER JOIN article_states s ON s.item_id = i.id
         INNER JOIN articles a ON a.item_id = i.id
         INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         WHERE f.is_deleted = 0 AND s.is_read = 0 \(accountWhere)
           AND (a.published_at >= :start_of_day OR (a.published_at IS NULL AND i.created_at >= :start_of_day));
         """
@@ -117,6 +119,7 @@ public final class TimelineQueryService: Sendable {
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
         INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         WHERE f.is_deleted = 0 AND s.is_starred = 1 \(accountWhere);
         """
         let starred = try Int.fetchOne(db, sql: starredSql, arguments: StatementArguments(arguments)) ?? 0
@@ -127,6 +130,7 @@ public final class TimelineQueryService: Sendable {
         FROM items i
         INNER JOIN article_states s ON s.item_id = i.id
         INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         WHERE f.is_deleted = 0 AND s.is_read = 0 \(accountWhere)
         GROUP BY i.feed_id;
         """
@@ -147,6 +151,7 @@ public final class TimelineQueryService: Sendable {
         INNER JOIN feeds f ON f.id = i.feed_id
         INNER JOIN feed_folders ff ON ff.feed_id = f.id
         INNER JOIN folders fo ON fo.id = ff.folder_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
         WHERE f.is_deleted = 0 AND fo.is_deleted = 0 AND s.is_read = 0 \(accountWhere)
         GROUP BY fo.account_id, fo.name;
         """
@@ -196,6 +201,8 @@ public final class TimelineQueryService: Sendable {
         if let accountID {
             whereClauses.append("i.account_id = :account_id")
             arguments["account_id"] = accountID
+        } else {
+            whereClauses.append("(acc.is_enabled = 1 OR acc.id IS NULL)")
         }
 
         switch scope {
@@ -382,6 +389,8 @@ public final class TimelineQueryService: Sendable {
         if let accountID {
             whereClauses.append("i.account_id = :account_id")
             arguments["account_id"] = accountID
+        } else {
+            whereClauses.append("(acc.is_enabled = 1 OR acc.id IS NULL)")
         }
 
         switch scope {

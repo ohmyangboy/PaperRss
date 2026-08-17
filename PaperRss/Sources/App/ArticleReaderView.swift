@@ -1925,7 +1925,7 @@ enum PaperReaderBridge {
           const state = {
             anchors: [], buttons: [], rail: null, preview: null, style: null,
             observer: null, resizeObserver: null, scheduled: false,
-            hoverTimer: null, closeTimer: null, hoveredElement: null,
+            hoverTimer: null, closeTimer: null, hoveredElement: null, hoveredIndex: null,
             dragging: false, dragged: false, dragPointerId: null, dragTarget: null,
             dragStartY: 0, dragStartX: 0, hasMovedPastThreshold: false,
             suppressClick: false, navigatingAnchor: null, navigatingTimer: null,
@@ -2032,24 +2032,30 @@ enum PaperReaderBridge {
           };
 
           const clearHoverPeak = () => {
+            state.hoveredIndex = null;
             state.buttons.forEach(button => {
               const line = button.children?.[0];
               if (line?.style) line.style.width = "";
             });
+            updateActive();
           };
 
           const setHoverPeak = index => {
+            state.hoveredIndex = index;
             state.buttons.forEach((button, buttonIndex) => {
               const line = button.children?.[0];
               if (!line?.style) return;
               const distance = Math.abs(buttonIndex - index);
               line.style.width = distance === 0
-                ? "22px"
+                ? "29px"
                 : distance === 1
-                  ? "16px"
+                  ? "21px"
                   : distance === 2
-                    ? "11px"
-                    : "8px";
+                    ? "14px"
+                    : "";
+              const active = buttonIndex === index;
+              button.classList.toggle("is-current", active);
+              button.setAttribute("aria-current", active ? "true" : "false");
             });
           };
 
@@ -2234,6 +2240,7 @@ enum PaperReaderBridge {
             state.hideTimer = null;
             state.mouseNear = false;
             state.railHovered = false;
+            state.hoveredIndex = null;
             if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
             state.navigatingTimer = null;
             state.navigatingAnchor = null;
@@ -2260,6 +2267,9 @@ enum PaperReaderBridge {
 
           const updateActive = () => {
             if (!state.anchors.length) return;
+            if (state.hoveredIndex !== null && state.hoveredIndex >= 0 && state.hoveredIndex < state.buttons.length) {
+              return;
+            }
             if (state.navigatingAnchor) {
               const lockedIndex = state.anchors.indexOf(state.navigatingAnchor);
               if (lockedIndex >= 0) {

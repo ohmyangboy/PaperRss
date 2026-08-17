@@ -337,7 +337,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
                 I18N.shared.localized("当前账号", "Current Accounts"),
-                footer: I18N.shared.localized("PaperRss 支持多账号并行。本地订阅与 FreshRSS 远端订阅相互隔离，各账号独立管理与同步。")
+                footer: I18N.shared.localized("PaperRss 支持多账号并行与按需启用。本地订阅与 FreshRSS 远端订阅相互隔离，禁用账号不会删除本地数据或凭据。")
             ) {
                 // 本地账号
                 HStack(spacing: 12) {
@@ -356,12 +356,19 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    Text(I18N.shared.localized("默认"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { store.isAccountEnabled("local-default") },
+                            set: { newValue in
+                                Task {
+                                    try? await store.setAccountEnabled(accountID: "local-default", isEnabled: newValue)
+                                }
+                            }
+                        )
+                    )
+                    .toggleStyle(.switch)
+                    .labelsHidden()
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -371,7 +378,8 @@ struct SettingsView: View {
                 ForEach(freshRSSAccounts, id: \.id) { account in
                     Divider().padding(.horizontal, 18).opacity(0.35)
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // 主行：图标 + 标题与端点 + Toggle
                         HStack(spacing: 12) {
                             Image(systemName: "server.rack")
                                 .font(.system(size: 20))
@@ -391,12 +399,55 @@ struct SettingsView: View {
 
                             Spacer()
 
+                            Toggle(
+                                "",
+                                isOn: Binding(
+                                    get: { account.isEnabled },
+                                    set: { newValue in
+                                        Task {
+                                            try? await store.setAccountEnabled(accountID: account.id, isEnabled: newValue)
+                                        }
+                                    }
+                                )
+                            )
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                        }
+
+                        // 次行：左侧同步状态，右侧操作（立即同步 + 删除）
+                        HStack(spacing: 8) {
+                            if let syncState = store.accountSyncStates[account.id] {
+                                HStack(spacing: 6) {
+                                    if let lastSync = syncState.lastSyncCompletedAt {
+                                        let date = Date(timeIntervalSince1970: lastSync)
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.green)
+                                        Text(I18N.shared.localizedFormat("上次同步：%@", DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if let error = syncState.lastError, !error.isEmpty {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.orange)
+                                        Text(error)
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+
+                            Spacer()
+
                             Button(I18N.shared.localized("立即同步")) {
                                 Task {
                                     await store.syncAccount(accountID: account.id)
                                 }
                             }
                             .controlSize(.small)
+                            .disabled(!account.isEnabled)
 
                             Button(role: .destructive) {
                                 accountPendingDeletion = account
@@ -408,31 +459,7 @@ struct SettingsView: View {
                             .buttonStyle(.plain)
                             .padding(.leading, 4)
                         }
-
-                        // 同步状态展示
-                        if let syncState = store.accountSyncStates[account.id] {
-                            HStack(spacing: 6) {
-                                if let lastSync = syncState.lastSyncCompletedAt {
-                                    let date = Date(timeIntervalSince1970: lastSync)
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.green)
-                                    Text(I18N.shared.localizedFormat("上次同步：%@", DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let error = syncState.lastError, !error.isEmpty {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.orange)
-                                    Text(error)
-                                        .font(.caption2)
-                                        .foregroundStyle(.orange)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .padding(.leading, 40)
-                        }
+                        .padding(.leading, 40)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
