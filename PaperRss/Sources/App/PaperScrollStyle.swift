@@ -140,7 +140,18 @@ enum PaperNativeScrollStyler {
             guard !seen.contains(oid) else { continue }
             seen.insert(oid)
 
-            install(on: sv)
+            // 快速路径：若已完成配置且 scroller 正常，直接跳过
+            if configured.contains(oid),
+               sv.verticalScroller is PaperOverlayScroller,
+               sv.scrollerStyle == .overlay,
+               sv.autohidesScrollers {
+                continue
+            }
+
+            // 异步解耦：避免在 SwiftUI AttributeGraph 更新或 AppKit 同步布局中途触发 tile() 导致重入崩溃
+            DispatchQueue.main.async {
+                install(on: sv)
+            }
         }
     }
 
