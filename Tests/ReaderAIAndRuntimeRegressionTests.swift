@@ -966,12 +966,12 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         XCTAssertEqual(cleanUnread[0].id, "unread-item-1")
     }
 
-    // MARK: - Test Q: Selection State Machine Ignores Transient Nil & Retains Current Selection
+    // MARK: - Test Q: Selection State Machine Ignores Transient Nil & Retains Session Unread Items
     @MainActor
-    func testSelectionStateMachineIgnoresTransientNilAndRetainsCurrentSelection() {
+    func testSelectionStateMachineIgnoresTransientNilAndRetainsSessionUnreadItems() {
         var selectedEntryID: String? = nil
         var retainedUnreadIDs: Set<String> = []
-        let timelineScope: TimelineScope = .unread
+        var timelineScope: TimelineScope = .unread
 
         // 模拟 EntryListView.entryListSelection 的 Binding setter
         let setSelection: (String?) -> Void = { newID in
@@ -980,7 +980,7 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
                 return
             }
             if timelineScope == .unread {
-                retainedUnreadIDs = [newID]
+                retainedUnreadIDs.insert(newID)
             } else {
                 retainedUnreadIDs.removeAll()
             }
@@ -1000,13 +1000,19 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         // 3. 显式选择 B
         setSelection("item-B")
         XCTAssertEqual(selectedEntryID, "item-B")
-        XCTAssertEqual(retainedUnreadIDs, ["item-B"], "Only current selected item B is retained, A is replaced")
+        XCTAssertEqual(retainedUnreadIDs, ["item-A", "item-B"], "Both A and B remain retained in the active Unread session")
 
-        // 4. 显式应用层切换作用域 / 退出 Unread
+        // 4. 显式选择 C
+        setSelection("item-C")
+        XCTAssertEqual(selectedEntryID, "item-C")
+        XCTAssertEqual(retainedUnreadIDs, ["item-A", "item-B", "item-C"], "Session retention accumulates read items until scope exit")
+
+        // 5. 显式离开 Unread 会话（例如切换到 Today）
+        timelineScope = .today(startOfDayTimestamp: 0)
         selectedEntryID = nil
         retainedUnreadIDs.removeAll()
         XCTAssertNil(selectedEntryID)
-        XCTAssertTrue(retainedUnreadIDs.isEmpty)
+        XCTAssertTrue(retainedUnreadIDs.isEmpty, "Scope exit must reset session retention")
     }
 
     // MARK: - Test R: Timeline Revision Increments on Structural Changes Only
@@ -1045,5 +1051,128 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         // 结构性更新：markAllRead() 递增 timelineRevision
         store.markAllRead()
         XCTAssertEqual(store.timelineRevision, initialRevision + 2, "markAllRead must increment timelineRevision")
+    }
+
+    // MARK: - Test S: Unread Session Retention Lifecycle and Pagination Drift Prevention
+    @MainActor
+    func testUnreadSessionRetentionLifecycleAndPagination() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let baseTime = Date().timeIntervalSince1970
+        let totalUnread = 250
+
+        let feedUUID = UUID()
+        try db.write { database in
+            let feed = FeedRecord(id: feedUUID.uuidString, accountID: "local-default", title: "Unread Feed", feedURL: "https://unread.com/rss", isDeleted: false, updatedAt: baseTime)
+            try feed.save(database)
+            for i in 0..<totalUnread {
+                let id = String(format: "unread-%03d", i)
+                let itemTime = baseTime - Double(i * 10)
+                let item = ItemRecord(id: id, accountID: "local-default", externalID: id, feedID: feedUUID.uuidString, createdAt: itemTime, updatedAt: itemTime)
+                try item.save(database)
+                let art = ArticleRecord(itemID: id, title: "Title \(i)", url: nil, publishedAt: itemTime, summary: "Summary \(i)", contentHTML: "<p>\(i)</p>", contentUpdatedAt: itemTime)
+                try art.save(database)
+                let state = ArticleStateRecord(itemID: id, isRead: false, isStarred: false, dateArrived: itemTime, updatedAt: itemTime)
+                try state.save(database)
+            }
+        }
+
+        // 1. 初始进入 Unread 视图：拉取第 1 页 100 条
+        var retainedUnreadIDs: Set<String> = []
+        var loadedEntries = store.fetchTimelinePage(scope: .unread, retainingIDs: retainedUnreadIDs, limit: 100, offset: 0)
+        XCTAssertEqual(loadedEntries.count, 100)
+        XCTAssertEqual(loadedEntries.first?.id, "unread-000")
+        XCTAssertEqual(loadedEntries.last?.id, "unread-099")
+
+        // 2. 在当前 Unread 会话中依次阅读第 1 页中的多篇（000, 005, 010）
+        let readTargetIDs = ["unread-000", "unread-005", "unread-010"]
+        for targetID in readTargetIDs {
+            retainedUnreadIDs.insert(targetID)
+            store.markRead(entryID: targetID, read: true)
+            if let idx = loadedEntries.firstIndex(where: { $0.id == targetID }) {
+                loadedEntries[idx].isRead = true
+            }
+        }
+
+        // 验证：已读文章在当前会话中空间稳定保留，并未从 loadedEntries 消失
+        XCTAssertEqual(loadedEntries.count, 100, "Loaded entries count must remain stable during active session")
+        XCTAssertTrue(loadedEntries[0].isRead, "unread-000 is marked read but remains in place")
+        XCTAssertTrue(loadedEntries[5].isRead, "unread-005 is marked read but remains in place")
+        XCTAssertTrue(loadedEntries[10].isRead, "unread-010 is marked read but remains in place")
+
+        // 3. 向下滑动加载第 2 页 (offset = loadedEntries.count = 100)
+        let page2 = store.fetchTimelinePage(
+            scope: .unread,
+            retainingIDs: retainedUnreadIDs,
+            limit: 100,
+            offset: loadedEntries.count
+        )
+        XCTAssertEqual(page2.count, 100, "Page 2 must load 100 items")
+        XCTAssertEqual(page2.first?.id, "unread-100", "Page 2 must start precisely at unread-100 without skipping")
+        XCTAssertEqual(page2.last?.id, "unread-199", "Page 2 must end at unread-199")
+
+        let existingIDs = Set(loadedEntries.map(\.id))
+        let freshPage2Items = page2.filter { !existingIDs.contains($0.id) }
+        XCTAssertEqual(freshPage2Items.count, 100, "No duplicate rows between page 1 and page 2")
+        loadedEntries.append(contentsOf: freshPage2Items)
+        XCTAssertEqual(loadedEntries.count, 200)
+
+        // 4. 离开 Unread 会话（切到 Today），再重新进入 Unread
+        retainedUnreadIDs.removeAll()
+        let freshUnreadPage = store.fetchTimelinePage(scope: .unread, retainingIDs: retainedUnreadIDs, limit: 100, offset: 0)
+
+        // 验证：新会话中此前已读的 000, 005, 010 不再出现
+        XCTAssertFalse(freshUnreadPage.contains(where: { readTargetIDs.contains($0.id) }), "New Unread session must exclude genuinely read articles")
+        XCTAssertEqual(freshUnreadPage.first?.id, "unread-001", "unread-000 is read, so first item in fresh session is unread-001")
+        XCTAssertEqual(store.sidebarCounts.allUnread, 247, "Sidebar unread count accurately reflects 250 - 3 = 247")
+    }
+
+    // MARK: - Test T: Bounded Adjacent Timeline Query Over 1200 Items
+    @MainActor
+    func testBoundedAdjacentTimelineQueryOver1200Items() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let baseTime = Date().timeIntervalSince1970
+        let totalItems = 1200
+
+        let feedUUID = UUID()
+        try db.write { database in
+            let feed = FeedRecord(id: feedUUID.uuidString, accountID: "local-default", title: "Big Feed", feedURL: "https://big.com/rss", isDeleted: false, updatedAt: baseTime)
+            try feed.save(database)
+
+            for i in 0..<totalItems {
+                let id = String(format: "big-item-%04d", i)
+                let itemTime = baseTime - Double(i * 10)
+                let item = ItemRecord(id: id, accountID: "local-default", externalID: id, feedID: feedUUID.uuidString, createdAt: itemTime, updatedAt: itemTime)
+                try item.save(database)
+                let art = ArticleRecord(itemID: id, title: "Title \(i)", url: nil, publishedAt: itemTime, summary: "Summary \(i)", contentHTML: "<p>\(i)</p>", contentUpdatedAt: itemTime)
+                try art.save(database)
+                let state = ArticleStateRecord(itemID: id, isRead: false, isStarred: false, dateArrived: itemTime, updatedAt: itemTime)
+                try state.save(database)
+            }
+        }
+
+        let scope: TimelineScope = .feed(feedID: feedUUID.uuidString)
+
+        // 选中第 1100 篇 (index 1100, id: "big-item-1100")
+        let currentID = "big-item-1100"
+
+        // 1. 获取下一篇 (更早发布的，即 index 1101)
+        let nextItem = store.fetchAdjacentItem(scope: scope, currentItemID: currentID, direction: .next)
+        XCTAssertNotNil(nextItem, "Must be able to navigate to next item beyond 1000 threshold")
+        XCTAssertEqual(nextItem?.id, "big-item-1101", "Next item of 1100 must be 1101")
+
+        // 2. 获取上一篇 (更新发布的，即 index 1099)
+        let prevItem = store.fetchAdjacentItem(scope: scope, currentItemID: currentID, direction: .previous)
+        XCTAssertNotNil(prevItem, "Must be able to navigate to previous item beyond 1000 threshold")
+        XCTAssertEqual(prevItem?.id, "big-item-1099", "Previous item of 1100 must be 1099")
+
+        // 3. 边界测试：第 0 篇没有上一篇
+        let firstItemPrev = store.fetchAdjacentItem(scope: scope, currentItemID: "big-item-0000", direction: .previous)
+        XCTAssertNil(firstItemPrev, "Item 0 must not have a previous item")
+
+        // 4. 边界测试：第 1199 篇没有下一篇
+        let lastItemNext = store.fetchAdjacentItem(scope: scope, currentItemID: "big-item-1199", direction: .next)
+        XCTAssertNil(lastItemNext, "Item 1199 must not have a next item")
     }
 }

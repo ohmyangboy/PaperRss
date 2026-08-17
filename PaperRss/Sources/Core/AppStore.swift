@@ -535,6 +535,20 @@ public final class AppStore: ObservableObject {
         )) ?? []
     }
 
+    public func fetchAdjacentItem(
+        scope: TimelineScope,
+        currentItemID: String,
+        direction: AdjacentTimelineDirection,
+        retainingIDs: Set<String> = []
+    ) -> EntryListItem? {
+        try? localProvider.timelineQueryService.fetchAdjacentItem(
+            scope: scope,
+            currentItemID: currentItemID,
+            direction: direction,
+            retainingIDs: retainingIDs
+        )
+    }
+
     public func entryListItems(folder: String) -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(scope: .folder(folderName: folder))) ?? []
     }

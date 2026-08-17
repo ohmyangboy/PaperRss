@@ -334,6 +334,204 @@ public final class TimelineQueryService: Sendable {
         }
     }
 
+    // MARK: - Adjacent Item Query (O(1) Bounded Navigation)
+
+    public func fetchAdjacentItem(
+        accountID: String? = nil,
+        scope: TimelineScope,
+        currentItemID: String,
+        direction: AdjacentTimelineDirection,
+        retainingIDs: Set<String> = []
+    ) throws -> EntryListItem? {
+        try database.read { db in
+            try fetchAdjacentItem(
+                accountID: accountID,
+                scope: scope,
+                currentItemID: currentItemID,
+                direction: direction,
+                retainingIDs: retainingIDs,
+                in: db
+            )
+        }
+    }
+
+    public func fetchAdjacentItem(
+        accountID: String? = nil,
+        scope: TimelineScope,
+        currentItemID: String,
+        direction: AdjacentTimelineDirection,
+        retainingIDs: Set<String> = [],
+        in db: Database
+    ) throws -> EntryListItem? {
+        // 1. 获取当前文章的排序基准 (published_at 或 created_at)
+        let curSql = """
+        SELECT COALESCE(a.published_at, i.created_at) AS sort_time
+        FROM items i
+        LEFT JOIN articles a ON a.item_id = i.id
+        WHERE i.id = :cur_id
+        LIMIT 1;
+        """
+        guard let curRow = try Row.fetchOne(db, sql: curSql, arguments: ["cur_id": currentItemID]),
+              let curSortTime: Double = curRow["sort_time"] else {
+            return nil
+        }
+
+        // 2. 构造与 fetchListItems 完全一致的 Scope 过滤条件
+        var whereClauses = ["f.is_deleted = 0"]
+        var arguments: [String: (any DatabaseValueConvertible)?] = [:]
+        if let accountID {
+            whereClauses.append("i.account_id = :account_id")
+            arguments["account_id"] = accountID
+        }
+
+        switch scope {
+        case .all:
+            break
+        case .today(let startOfDay):
+            whereClauses.append("(a.published_at >= :start_of_day OR (a.published_at IS NULL AND i.created_at >= :start_of_day))")
+            arguments["start_of_day"] = startOfDay
+        case .unread:
+            if retainingIDs.isEmpty {
+                whereClauses.append("s.is_read = 0")
+            } else {
+                let placeholders = retainingIDs.enumerated().map { idx, id -> String in
+                    let param = "ret_unread_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("(s.is_read = 0 OR i.id IN (\(placeholders)))")
+            }
+        case .starred:
+            if retainingIDs.isEmpty {
+                whereClauses.append("s.is_starred = 1")
+            } else {
+                let placeholders = retainingIDs.enumerated().map { idx, id -> String in
+                    let param = "ret_starred_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("(s.is_starred = 1 OR i.id IN (\(placeholders)))")
+            }
+        case .feed(let feedID):
+            whereClauses.append("i.feed_id = :feed_id")
+            arguments["feed_id"] = feedID
+        case .feeds(let feedIDs):
+            if feedIDs.isEmpty {
+                whereClauses.append("1 = 0")
+            } else {
+                let placeholders = feedIDs.enumerated().map { idx, id -> String in
+                    let param = "feed_id_\(idx)"
+                    arguments[param] = id
+                    return ":\(param)"
+                }.joined(separator: ", ")
+                whereClauses.append("i.feed_id IN (\(placeholders))")
+            }
+        case .folder(let folderAccID, let folderName):
+            whereClauses.append("i.account_id = :folder_acc_id")
+            whereClauses.append("""
+            i.feed_id IN (
+                SELECT ff.feed_id
+                FROM feed_folders ff
+                INNER JOIN folders fo ON fo.id = ff.folder_id
+                WHERE fo.account_id = :folder_acc_id AND fo.name = :folder_name AND fo.is_deleted = 0
+            )
+            """)
+            arguments["folder_acc_id"] = folderAccID
+            arguments["folder_name"] = folderName
+        }
+
+        arguments["cur_id"] = currentItemID
+        arguments["cur_sort_time"] = curSortTime
+
+        // 3. 根据方向添加比较条件和排序
+        let orderClause: String
+        switch direction {
+        case .next:
+            // 下一篇：更旧的文章 (sort_time 较小，或同时间 id 较小)
+            whereClauses.append("(COALESCE(a.published_at, i.created_at) < :cur_sort_time OR (COALESCE(a.published_at, i.created_at) = :cur_sort_time AND i.id < :cur_id))")
+            orderClause = "ORDER BY COALESCE(a.published_at, i.created_at) DESC, i.id DESC"
+        case .previous:
+            // 上一篇：更新的文章 (sort_time 较大，或同时间 id 较大)
+            whereClauses.append("(COALESCE(a.published_at, i.created_at) > :cur_sort_time OR (COALESCE(a.published_at, i.created_at) = :cur_sort_time AND i.id > :cur_id))")
+            orderClause = "ORDER BY COALESCE(a.published_at, i.created_at) ASC, i.id ASC"
+        }
+
+        let sql = """
+        SELECT
+            i.id AS entry_id,
+            i.feed_id AS feed_id,
+            i.account_id AS account_id,
+            COALESCE(acc.type, 'local') AS account_type,
+            COALESCE(acc.display_name, 'Local') AS account_display_name,
+            COALESCE(a.title, '') AS title,
+            a.url AS url,
+            COALESCE(a.summary, '') AS summary,
+            f.title AS feed_title,
+            f.stored_icon_url AS stored_icon_url,
+            f.site_url AS site_url,
+            f.feed_url AS feed_url,
+            a.published_at AS published_at,
+            COALESCE(s.is_read, 0) AS is_read,
+            COALESCE(s.is_starred, 0) AS is_starred
+        FROM items i
+        INNER JOIN feeds f ON f.id = i.feed_id
+        LEFT JOIN accounts acc ON acc.id = i.account_id
+        LEFT JOIN articles a ON a.item_id = i.id
+        LEFT JOIN article_states s ON s.item_id = i.id
+        WHERE \(whereClauses.joined(separator: " AND "))
+        \(orderClause)
+        LIMIT 1;
+        """
+
+        guard let row = try Row.fetchOne(db, sql: sql, arguments: StatementArguments(arguments)) else {
+            return nil
+        }
+
+        guard let id: String = row["entry_id"],
+              let feedIDString: String = row["feed_id"],
+              let feedUUID = UUID(uuidString: feedIDString) else { return nil }
+
+        let title: String = row["title"]
+        let urlString: String? = row["url"]
+        let url = urlString.flatMap { URL(string: $0) }
+        let summary: String = row["summary"]
+        let preview = String(summary.prefix(240))
+        let sourceTitle: String = row["feed_title"]
+        let storedIconURLString: String? = row["stored_icon_url"]
+        let siteURLString: String? = row["site_url"]
+        let feedURLString: String = row["feed_url"]
+
+        let iconURL = Self.resolveIconURL(
+            storedIconURLString: storedIconURLString,
+            siteURLString: siteURLString,
+            feedURLString: feedURLString
+        )
+
+        let publishedAtTimestamp: Double? = row["published_at"]
+        let publishedAt = publishedAtTimestamp.map { Date(timeIntervalSince1970: $0) }
+        let isReadInt: Int = row["is_read"]
+        let isStarredInt: Int = row["is_starred"]
+        let rowAccountID: String = row["account_id"] ?? "local-default"
+        let accountType: String = row["account_type"] ?? AccountType.local.rawValue
+        let accountDisplayName: String = row["account_display_name"] ?? "Local"
+
+        return EntryListItem(
+            id: id,
+            feedID: feedUUID,
+            title: title,
+            url: url,
+            summaryPreview: preview,
+            sourceTitle: sourceTitle,
+            feedIconURL: iconURL,
+            publishedAt: publishedAt,
+            isRead: isReadInt == 1,
+            isStarred: isStarredInt == 1,
+            accountID: rowAccountID,
+            accountType: accountType,
+            accountDisplayName: accountDisplayName
+        )
+    }
+
     private static func resolveIconURL(
         storedIconURLString: String?,
         siteURLString: String?,
@@ -352,4 +550,9 @@ public final class TimelineQueryService: Sendable {
         }
         return URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
     }
+}
+
+public enum AdjacentTimelineDirection: Sendable {
+    case previous
+    case next
 }

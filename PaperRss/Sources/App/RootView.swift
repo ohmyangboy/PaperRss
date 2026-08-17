@@ -344,53 +344,55 @@ struct RootView: View {
     }
 
     private func selectNextEntry() {
-        let entries = store.fetchTimelinePage(
-            scope: currentTimelineScope,
-            retainingIDs: selectedEntryID.map { [$0] } ?? [],
-            limit: 1000,
-            offset: 0
-        )
-
-        guard !entries.isEmpty else {
-            cancelNavigationConfirmation(dismissToast: true)
-            showToast(I18N.shared.localized("列表已经阅读完毕"))
-            return
-        }
-
-        if let selectedEntryID,
-           let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) {
-            if currentIndex + 1 < entries.count {
-                let trailingEntries = entries.suffix(from: currentIndex + 1)
-                let trailingUnread = trailingEntries.filter { !$0.isRead }.count
-                let unreadCount = trailingUnread > 0 ? trailingUnread : max(1, store.sidebarCounts.allUnread)
-
-                let prompt: String = {
-                    if I18N.shared.isEnglish {
-                        return "Press Space again for next article. \(unreadCount) unread"
-                    } else {
-                        return "再次按下空格，切换下一篇。未读 \(unreadCount) 篇"
-                    }
-                }()
-
-                guard confirmNavigation(
-                    .spaceNextArticle,
-                    entryID: selectedEntryID,
-                    prompt: prompt
-                ) else { return }
-                let nextID = entries[currentIndex + 1].id
-                self.selectedEntryID = nextID
-                self.retainedEntryListIDs = [nextID]
+        guard let selectedEntryID else {
+            // 没有选中项时，拉取当前时间线第一篇
+            if let firstID = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first?.id {
+                self.selectedEntryID = firstID
+                if currentTimelineScope == .unread {
+                    self.retainedEntryListIDs.insert(firstID)
+                } else {
+                    self.retainedEntryListIDs.removeAll()
+                }
                 self.autoScrollTrigger = UUID()
             } else {
                 cancelNavigationConfirmation(dismissToast: true)
                 showToast(I18N.shared.localized("列表已经阅读完毕"))
             }
-        } else {
-            if let firstID = entries.first?.id {
-                self.selectedEntryID = firstID
-                self.retainedEntryListIDs = [firstID]
-                self.autoScrollTrigger = UUID()
+            return
+        }
+
+        if let nextItem = store.fetchAdjacentItem(
+            scope: currentTimelineScope,
+            currentItemID: selectedEntryID,
+            direction: .next,
+            retainingIDs: retainedEntryListIDs.union([selectedEntryID])
+        ) {
+            let unreadCount = max(1, store.sidebarCounts.allUnread)
+            let prompt: String = {
+                if I18N.shared.isEnglish {
+                    return "Press Space again for next article. \(unreadCount) unread"
+                } else {
+                    return "再次按下空格，切换下一篇。未读 \(unreadCount) 篇"
+                }
+            }()
+
+            guard confirmNavigation(
+                .spaceNextArticle,
+                entryID: selectedEntryID,
+                prompt: prompt
+            ) else { return }
+
+            let nextID = nextItem.id
+            self.selectedEntryID = nextID
+            if currentTimelineScope == .unread {
+                self.retainedEntryListIDs.insert(nextID)
+            } else {
+                self.retainedEntryListIDs.removeAll()
             }
+            self.autoScrollTrigger = UUID()
+        } else {
+            cancelNavigationConfirmation(dismissToast: true)
+            showToast(I18N.shared.localized("列表已经阅读完毕"))
         }
     }
 
@@ -400,52 +402,48 @@ struct RootView: View {
     }
 
     private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {
-        let entries = store.fetchTimelinePage(
-            scope: currentTimelineScope,
-            retainingIDs: selectedEntryID.map { [$0] } ?? [],
-            limit: 1000,
-            offset: 0
-        )
-
-        guard let selectedEntryID,
-              let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) else {
+        guard let selectedEntryID else {
             cancelNavigationConfirmation(dismissToast: true)
             return
         }
 
-        let destinationIndex: Int
         let confirmationKey: ReaderNavigationConfirmation.Key
         let prompt: String
         let boundaryMessage: String
+        let adjacentDir: AdjacentTimelineDirection
+
         switch direction {
         case .previous:
-            destinationIndex = currentIndex - 1
             confirmationKey = .previousArticle
             prompt = I18N.shared.localized("再次按下 B 查看上一篇")
             boundaryMessage = I18N.shared.localized("已经是列表第一篇")
+            adjacentDir = .previous
         case .next:
-            destinationIndex = currentIndex + 1
             confirmationKey = .nextArticle
             prompt = I18N.shared.localized("再次按下 N 查看下一篇")
             boundaryMessage = I18N.shared.localized("列表已经阅读完毕")
+            adjacentDir = .next
         }
 
-        guard destinationIndex >= 0 else {
-            cancelNavigationConfirmation(dismissToast: true)
-            showToast(boundaryMessage)
-            return
-        }
-
-        guard destinationIndex < entries.count else {
+        guard let adjacentItem = store.fetchAdjacentItem(
+            scope: currentTimelineScope,
+            currentItemID: selectedEntryID,
+            direction: adjacentDir,
+            retainingIDs: retainedEntryListIDs.union([selectedEntryID])
+        ) else {
             cancelNavigationConfirmation(dismissToast: true)
             showToast(boundaryMessage)
             return
         }
 
         guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
-        let nextID = entries[destinationIndex].id
+        let nextID = adjacentItem.id
         self.selectedEntryID = nextID
-        self.retainedEntryListIDs = [nextID]
+        if currentTimelineScope == .unread {
+            self.retainedEntryListIDs.insert(nextID)
+        } else {
+            self.retainedEntryListIDs.removeAll()
+        }
         self.autoScrollTrigger = UUID()
     }
 
@@ -1380,7 +1378,6 @@ private struct EntryListView: View {
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
-    @State private var nextOffset: Int = 0
     @State private var hasMore: Bool = true
     @State private var isLoadingPage: Bool = false
     private let pageSize = 100
@@ -1417,7 +1414,6 @@ private struct EntryListView: View {
             offset: 0
         )
         loadedEntries = firstPage
-        nextOffset = firstPage.count
         hasMore = (firstPage.count == pageSize)
         isLoadingPage = false
     }
@@ -1429,13 +1425,16 @@ private struct EntryListView: View {
             scope: timelineScope,
             retainingIDs: retainedUnreadIDs,
             limit: pageSize,
-            offset: nextOffset
+            offset: loadedEntries.count
         )
         let existingIDs = Set(loadedEntries.map(\.id))
         let freshItems = page.filter { !existingIDs.contains($0.id) }
-        loadedEntries.append(contentsOf: freshItems)
-        nextOffset += page.count
-        hasMore = (page.count == pageSize)
+        if freshItems.isEmpty {
+            hasMore = false
+        } else {
+            loadedEntries.append(contentsOf: freshItems)
+            hasMore = (page.count == pageSize)
+        }
         isLoadingPage = false
     }
 
@@ -1448,7 +1447,6 @@ private struct EntryListView: View {
             offset: 0
         )
         loadedEntries = refreshed
-        nextOffset = refreshed.count
         hasMore = (refreshed.count >= totalCount)
     }
 
@@ -1487,10 +1485,9 @@ private struct EntryListView: View {
                 // 严禁让原生 List 决定应用层选择状态，忽略此类瞬态 nil 以免清空 selectedEntryID 或 retainedUnreadIDs。
                 guard let newID else { return }
 
-                // 在提交 selectedEntryID 之前，先同步更新 unread retention 状态
-                // 仅保留当前选中的那一篇文章（Retain only the CURRENT selected article）
+                // 在未读浏览会话中，累积保留所有在当前会话中被阅读过的条目
                 if timelineScope == .unread {
-                    retainedUnreadIDs = [newID]
+                    retainedUnreadIDs.insert(newID)
                 } else {
                     retainedUnreadIDs.removeAll()
                 }
@@ -1551,6 +1548,9 @@ private struct EntryListView: View {
             }
             .onChange(of: selectedEntryID) { _, newID in
                 if let newID {
+                    if timelineScope == .unread {
+                        retainedUnreadIDs.insert(newID)
+                    }
                     patchEntryState(entryID: newID, isRead: true)
                 }
             }
@@ -1825,6 +1825,7 @@ private struct EntryRow: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 .font(.caption)
