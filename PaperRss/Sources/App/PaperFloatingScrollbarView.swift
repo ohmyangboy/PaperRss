@@ -19,9 +19,9 @@ final class PaperFloatingScrollbarView: NSView {
 
     // MARK: 常量配置
 
-    static let hitLaneWidth: CGFloat = 11.0
-    static let thumbWidth: CGFloat = 3.0
-    static let trailingInset: CGFloat = 3.0
+    static let hitLaneWidth: CGFloat = 12.0
+    static let thumbWidth: CGFloat = 4.5
+    static let trailingInset: CGFloat = 2.5
     static let topInset: CGFloat = 6.0
     static let bottomInset: CGFloat = 6.0
     static let minThumbHeight: CGFloat = 24.0
