@@ -1175,4 +1175,137 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         let lastItemNext = store.fetchAdjacentItem(scope: scope, currentItemID: "big-item-1199", direction: .next)
         XCTAssertNil(lastItemNext, "Item 1199 must not have a next item")
     }
+
+    // MARK: - Test U: Redundant Summary Detection
+    func testRedundantSummaryDetection() {
+        // 1. 完全相同 -> 隐藏
+        let title1 = "Hello World"
+        let summary1 = "  Hello World  \n"
+        XCTAssertFalse(EntryListItem.shouldShowSummary(title: title1, summary: summary1))
+
+        // 2. 合成标题前缀截断 (… 或 ...) -> 隐藏
+        let title2 = "RT Dash: 上周比较有趣的更新是现在 Cindy 下每条任务都可以丝滑…"
+        let summary2 = "RT Dash: 上周比较有趣的更新是现在 Cindy 下每条任务都可以丝滑的拖动窗口位置……"
+        XCTAssertFalse(EntryListItem.shouldShowSummary(title: title2, summary: summary2))
+
+        let title2b = "Twitter update: new features are rolling out..."
+        let summary2b = "Twitter update: new features are rolling out today for all beta users."
+        XCTAssertFalse(EntryListItem.shouldShowSummary(title: title2b, summary: summary2b))
+
+        // 3. 真实不同短标题 + 摘要 -> 显示
+        let title3 = "Apple 发布 M4 Mac"
+        let summary3 = "Apple 今日正式发布了搭载 M4 芯片的全新 Mac mini 和 MacBook Pro。"
+        XCTAssertTrue(EntryListItem.shouldShowSummary(title: title3, summary: summary3))
+
+        // 4. 短标题是正文前缀但非合成省略截断 -> 显示
+        let title4 = "Swift 6"
+        let summary4 = "Swift 6 is now officially released with complete data isolation."
+        XCTAssertTrue(EntryListItem.shouldShowSummary(title: title4, summary: summary4))
+
+        // 5. 空摘要 -> 隐藏
+        XCTAssertFalse(EntryListItem.shouldShowSummary(title: "Title", summary: "   \n  "))
+    }
+
+    // MARK: - Test V: Reader Duplicate Leading Heading Removal
+    func testReaderDuplicateLeadingHeadingRemoval() {
+        // 1. Paper Blog 样式：首部重复 <h1> 必须被移除
+        let title1 = "👋你好，世界"
+        let html1 = "<h1>👋你好，世界</h1><p>欢迎阅读我的第一篇博客文章！</p>"
+        let cleaned1 = ArticleExtractor.removingDuplicateLeadingHeading(from: html1, articleTitle: title1)
+        XCTAssertEqual(cleaned1, "<p>欢迎阅读我的第一篇博客文章！</p>")
+
+        // 2. 带有轻量空白与 HTML 实体/Case 不同的首部标题
+        let title2 = "Hello & World"
+        let html2 = "\n  <h2>Hello &amp; World</h2>\n<p>Body paragraph.</p>"
+        let cleaned2 = ArticleExtractor.removingDuplicateLeadingHeading(from: html2, articleTitle: title2)
+        XCTAssertEqual(cleaned2?.trimmingCharacters(in: .whitespacesAndNewlines), "<p>Body paragraph.</p>")
+
+        // 3. OpenAI 风格：包含前置轻量日期与分类元数据的大标题移除
+        let openAITitle = "OpenAI appoints Dali Rajic as Chief Revenue Officer"
+        let openAIHTML = "<time>August 13, 2026</time><div class=\"category\">Company</div><h1>OpenAI appoints Dali Rajic as Chief Revenue Officer</h1><p>As enterprise AI deployment accelerates, OpenAI is building on its global scale to grow even faster.</p>"
+        let openAICleaned = ArticleExtractor.removingDuplicateLeadingHeading(from: openAIHTML, articleTitle: openAITitle)
+        XCTAssertEqual(openAICleaned, "<time>August 13, 2026</time><div class=\"category\">Company</div><p>As enterprise AI deployment accelerates, OpenAI is building on its global scale to grow even faster.</p>")
+
+        // 4. 不同的首部标题 -> 完好保留
+        let title3 = "👋你好，世界"
+        let html3 = "<h1>完全不同的主标题</h1><p>正文内容</p>"
+        let cleaned3 = ArticleExtractor.removingDuplicateLeadingHeading(from: html3, articleTitle: title3)
+        XCTAssertEqual(cleaned3, html3)
+
+        // 5. 正文中部/后部出现的相同标题 -> 完好保留
+        let title4 = "小结"
+        let html4 = "<p>正文开头</p><h2>小结</h2><p>最后内容</p>"
+        let cleaned4 = ArticleExtractor.removingDuplicateLeadingHeading(from: html4, articleTitle: title4)
+        XCTAssertEqual(cleaned4, html4, "Mid-body headings must never be stripped")
+
+        // 6. 双语对照与段落索引一致性验证
+        let paragraphs = ArticleExtractor.readerParagraphs(in: cleaned1 ?? "", title: title1)
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs[0].id, "title")
+        XCTAssertEqual(paragraphs[0].original, "👋你好，世界")
+        XCTAssertEqual(paragraphs[1].id, "p0")
+        XCTAssertEqual(paragraphs[1].original, "欢迎阅读我的第一篇博客文章！")
+    }
+
+    // MARK: - Test W: Scope Unread Count Calculation
+    @MainActor
+    func testScopeUnreadCountCalculation() async throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let now = Date().timeIntervalSince1970
+
+        let feedA = UUID()
+        let feedB = UUID()
+        let folderTechID = UUID().uuidString
+        let folderDesignID = UUID().uuidString
+
+        try db.write { database in
+            let fTech = FolderRecord(id: folderTechID, accountID: "local-default", externalID: nil, name: "Tech", sortOrder: 0, isDeleted: false, updatedAt: now)
+            try fTech.save(database)
+            let fDesign = FolderRecord(id: folderDesignID, accountID: "local-default", externalID: nil, name: "Design", sortOrder: 0, isDeleted: false, updatedAt: now)
+            try fDesign.save(database)
+
+            let fA = FeedRecord(id: feedA.uuidString, accountID: "local-default", title: "Feed A", feedURL: "https://a.com/rss", isDeleted: false, updatedAt: now)
+            try fA.save(database)
+            let ffA = FeedFolderRecord(feedID: feedA.uuidString, folderID: folderTechID)
+            try ffA.save(database)
+
+            let fB = FeedRecord(id: feedB.uuidString, accountID: "local-default", title: "Feed B", feedURL: "https://b.com/rss", isDeleted: false, updatedAt: now)
+            try fB.save(database)
+            let ffB = FeedFolderRecord(feedID: feedB.uuidString, folderID: folderDesignID)
+            try ffB.save(database)
+
+            // Feed A: 3 条未读
+            for i in 0..<3 {
+                let id = "a-\(i)"
+                let item = ItemRecord(id: id, accountID: "local-default", externalID: id, feedID: feedA.uuidString, createdAt: now, updatedAt: now)
+                try item.save(database)
+                let art = ArticleRecord(itemID: id, title: "Art A \(i)", url: nil, publishedAt: now, summary: "Sum", contentHTML: "<p>A</p>", contentUpdatedAt: now)
+                try art.save(database)
+                let state = ArticleStateRecord(itemID: id, isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+                try state.save(database)
+            }
+
+            // Feed B: 2 条未读
+            for i in 0..<2 {
+                let id = "b-\(i)"
+                let item = ItemRecord(id: id, accountID: "local-default", externalID: id, feedID: feedB.uuidString, createdAt: now, updatedAt: now)
+                try item.save(database)
+                let art = ArticleRecord(itemID: id, title: "Art B \(i)", url: nil, publishedAt: now, summary: "Sum", contentHTML: "<p>B</p>", contentUpdatedAt: now)
+                try art.save(database)
+                let state = ArticleStateRecord(itemID: id, isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+                try state.save(database)
+            }
+        }
+
+        await store.refresh()
+
+        // 验证各 scope 下的未读数精准性
+        XCTAssertEqual(store.unreadCount(scope: .all), 5)
+        XCTAssertEqual(store.unreadCount(scope: .unread), 5)
+        XCTAssertEqual(store.unreadCount(scope: .feed(feedID: feedA.uuidString)), 3, "Feed A scope must have 3 unread")
+        XCTAssertEqual(store.unreadCount(scope: .feed(feedID: feedB.uuidString)), 2, "Feed B scope must have 2 unread")
+        XCTAssertEqual(store.unreadCount(scope: .folder(accountID: "local-default", folderName: "Tech")), 3, "Tech folder scope must have 3 unread")
+        XCTAssertEqual(store.unreadCount(scope: .folder(accountID: "local-default", folderName: "Design")), 2, "Design folder scope must have 2 unread")
+    }
 }

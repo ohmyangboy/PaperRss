@@ -2566,4 +2566,110 @@ final class FreshRSSIntegrationTests: XCTestCase {
         XCTAssertEqual(designItems[0].title, "Design Historical Article 2")
         XCTAssertEqual(designItems[0].accountSourceBadge, "NoFake RSS")
     }
+
+    // MARK: - Authoritative Category Sync and Bogus Folder Exclusion
+    @MainActor
+    func testFreshRSSAuthoritativeCategorySyncAndBogusFolderExclusion() async throws {
+        let database = AppDatabase.empty
+        let store = AppStore(testDatabase: database, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let endpoint = URL(string: "https://freshrss.category-test.com/api/greader.php")!
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockFreshRSSURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            guard let url = request.url else { throw URLError(.badURL) }
+            let path = url.path
+
+            if path.contains("accounts/ClientLogin") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "Auth=cat_token_123\n".data(using: .utf8)!)
+            } else if path.contains("token") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "token_val".data(using: .utf8)!)
+            } else if path.contains("user-info") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"userName\":\"cat_user\",\"userId\":\"cat_1\"}".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                let subsJSON = """
+                {
+                    "subscriptions": [
+                        {
+                            "id": "feed/web_test",
+                            "title": "Web Test Feed",
+                            "categories": [
+                                {
+                                    "id": "user/-/label/测试fromweb",
+                                    "label": "测试fromweb"
+                                }
+                            ],
+                            "url": "https://test.com/rss",
+                            "htmlUrl": "https://test.com"
+                        },
+                        {
+                            "id": "feed/uncat",
+                            "title": "Uncategorized Feed",
+                            "categories": [],
+                            "url": "https://uncat.com/rss",
+                            "htmlUrl": "https://uncat.com"
+                        }
+                    ]
+                }
+                """
+                return (resp, subsJSON.data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") || path.contains("stream/contents") {
+                let resp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (resp, "{\"items\":[]}".data(using: .utf8)!)
+            }
+            throw URLError(.badURL)
+        }
+
+        // 1. 添加 FreshRSS 账号
+        let acc = try await store.addFreshRSSAccount(
+            endpointURLText: endpoint.absoluteString,
+            username: "cat_user",
+            password: "pwd",
+            displayName: "Category Test",
+            customSession: mockSession
+        )
+
+        // 2. 模拟之前由历史错误 tag/list 塞入数据库的伪文件夹
+        try store.libraryDatabase.write { db in
+            let bogusExternalIDs = [
+                "user/-/state/com.google/starred",
+                "user/-/state/com.google/reading-list",
+                "user/-/state/org.freshrss/main",
+                "user/-/state/org.freshrss/important",
+                "user/-/label/test" // article tag
+            ]
+            for ext in bogusExternalIDs {
+                let folder = FolderRecord(id: UUID().uuidString, accountID: acc.id, externalID: ext, name: ext.components(separatedBy: "/").last ?? ext, sortOrder: 0, isDeleted: false, updatedAt: 1000)
+                try folder.save(db)
+            }
+        }
+
+        // 3. 执行同步
+        await store.syncAccount(accountID: acc.id)
+
+        // 4. 验证数据库中 Folders 的状态
+        let activeFolders = try store.libraryDatabase.read { db in
+            try FolderRecord.filter(Column("account_id") == acc.id && Column("is_deleted") == false).fetchAll(db)
+        }
+        XCTAssertEqual(activeFolders.count, 1, "Only the authentic subscription category must remain active")
+        XCTAssertEqual(activeFolders[0].name, "测试fromweb")
+        XCTAssertEqual(activeFolders[0].externalID, "user/-/label/测试fromweb")
+
+        let deletedFolders = try store.libraryDatabase.read { db in
+            try FolderRecord.filter(Column("account_id") == acc.id && Column("is_deleted") == true).fetchAll(db)
+        }
+        XCTAssertEqual(deletedFolders.count, 5, "All 5 bogus pseudo-folders must be soft-deleted")
+        let deletedExtIDs = Set(deletedFolders.compactMap(\.externalID))
+        XCTAssertTrue(deletedExtIDs.contains("user/-/state/com.google/starred"))
+        XCTAssertTrue(deletedExtIDs.contains("user/-/state/com.google/reading-list"))
+        XCTAssertTrue(deletedExtIDs.contains("user/-/state/org.freshrss/main"))
+        XCTAssertTrue(deletedExtIDs.contains("user/-/state/org.freshrss/important"))
+        XCTAssertTrue(deletedExtIDs.contains("user/-/label/test"))
+    }
 }

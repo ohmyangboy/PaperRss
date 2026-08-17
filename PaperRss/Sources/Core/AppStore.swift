@@ -499,6 +499,29 @@ public final class AppStore: ObservableObject {
         sidebarCounts.unreadCount(folder: folder, accountID: accountID)
     }
 
+    public func unreadCount(scope: TimelineScope) -> Int {
+        switch scope {
+        case .all:
+            return sidebarCounts.allUnread
+        case .today:
+            return sidebarCounts.todayUnread
+        case .unread:
+            return sidebarCounts.allUnread
+        case .starred:
+            return sidebarCounts.starred
+        case let .folder(accountID, folderName):
+            return sidebarCounts.unreadCount(folder: folderName, accountID: accountID)
+        case let .feed(feedIDStr):
+            if let uuid = UUID(uuidString: feedIDStr) {
+                return sidebarCounts.unreadByFeed[uuid, default: 0]
+            }
+            return 0
+        case let .feeds(feedIDStrs):
+            let uuids = feedIDStrs.compactMap { UUID(uuidString: $0) }
+            return uuids.reduce(0) { $0 + sidebarCounts.unreadByFeed[$1, default: 0] }
+        }
+    }
+
     public func unreadEntryListItems(retainingIDs: Set<String>) -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(scope: .unread, retainingIDs: retainingIDs)) ?? unreadEntryListItems
     }

@@ -271,7 +271,8 @@ struct ArticleReaderView: View {
             }
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
-            let loadedHTML = store.articleHTML(for: requestedEntry)
+            let rawHTML = store.articleHTML(for: requestedEntry)
+            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: rawHTML, articleTitle: requestedEntry.title)
             let parsedParagraphs: [ReaderParagraph] = await Task.detached(priority: .userInitiated) { () -> [ReaderParagraph] in
                 guard let loadedHTML, !loadedHTML.isEmpty else { return [] }
                 return ArticleExtractor.readerParagraphs(in: loadedHTML, title: requestedEntry.title)

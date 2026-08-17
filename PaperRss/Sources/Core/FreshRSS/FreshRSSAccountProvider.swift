@@ -90,23 +90,17 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
     public func syncSubscriptionsAndFolders() async throws {
         let subscriptions = try await apiClient.fetchSubscriptions()
-        let tags = (try? await apiClient.fetchTags()) ?? []
-
         let now = Date().timeIntervalSince1970
 
         try database.write { db in
-            // 1. 提取所有文件夹（分类）
+            // 1. 仅以 subscriptions[].categories 作为权威的订阅文件夹来源
             var categoryByExternalID: [String: String] = [:]
 
-            for tag in tags {
-                let name = Self.extractFolderName(from: tag.id)
-                if !name.isEmpty {
-                    categoryByExternalID[tag.id] = name
-                }
-            }
             for sub in subscriptions {
                 for cat in sub.categories {
-                    let name = cat.label ?? Self.extractFolderName(from: cat.id)
+                    let trimmedLabel = cat.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let extracted = Self.extractFolderName(from: cat.id)
+                    let name = (trimmedLabel?.isEmpty == false ? trimmedLabel : nil) ?? extracted
                     if !name.isEmpty {
                         categoryByExternalID[cat.id] = name
                     }
@@ -540,6 +534,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - Helpers
 
     public static func extractFolderName(from categoryID: String) -> String {
+        // 排除系统 stream / state（如 starred、reading-list、main、important 等）
+        if categoryID.contains("user/-/state/") || categoryID.contains("/state/com.google/") || categoryID.contains("org.freshrss") {
+            return ""
+        }
         let labelPrefix = "user/-/label/"
         if let range = categoryID.range(of: labelPrefix) {
             let label = String(categoryID[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)

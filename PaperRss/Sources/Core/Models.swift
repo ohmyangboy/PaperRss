@@ -210,6 +210,41 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         return I18N.localized("FreshRSS")
     }
 
+    public var isSummaryVisible: Bool {
+        Self.shouldShowSummary(title: title, summary: summaryPreview)
+    }
+
+    public static func shouldShowSummary(title: String, summary: String) -> Bool {
+        let normTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let normSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
+        guard !normSummary.isEmpty else { return false }
+        guard !normTitle.isEmpty else { return true }
+
+        // 1. 完全相同
+        if normSummary == normTitle {
+            return false
+        }
+
+        // 2. 合成标题前缀截断 (以 … 或 ... 结尾)
+        let strippedTitle: String
+        if normTitle.hasSuffix("…") {
+            strippedTitle = String(normTitle.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if normTitle.hasSuffix("...") {
+            strippedTitle = String(normTitle.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            strippedTitle = ""
+        }
+
+        if !strippedTitle.isEmpty && normSummary.hasPrefix(strippedTitle) {
+            return false
+        }
+
+        return true
+    }
+
     public init(
         id: String,
         feedID: UUID,

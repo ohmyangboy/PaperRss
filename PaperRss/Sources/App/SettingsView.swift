@@ -9,8 +9,8 @@ import PaperRssCore
 #endif
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
-    case accounts
     case appearance
+    case accounts
     case aiService
     case refresh
     case language
@@ -23,8 +23,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var title: String {
         switch self {
-        case .accounts: I18N.shared.localized("账号", "Accounts")
         case .appearance: I18N.shared.localized("外观", "Appearance")
+        case .accounts: I18N.shared.localized("账号", "Accounts")
         case .aiService: I18N.shared.localized("AI 功能", "AI Features")
         case .refresh: I18N.shared.localized("刷新", "Refresh")
         case .language: I18N.shared.localized("语言", "Language")
@@ -36,8 +36,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .accounts: "person.crop.circle"
         case .appearance: "paintpalette"
+        case .accounts: "person.crop.circle"
         case .aiService: "sparkles"
         case .refresh: "arrow.clockwise.circle"
         case .language: "globe"
@@ -50,8 +50,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var subtitle: String {
         switch self {
-        case .accounts: I18N.shared.localized("管理本地与 FreshRSS 订阅账号及双向状态同步")
         case .appearance: I18N.shared.localized("控制界面颜色主题与文章阅读字号")
+        case .accounts: I18N.shared.localized("管理本地与 FreshRSS 订阅账号及双向状态同步")
         case .aiService: I18N.shared.localized("配置模型服务、阅读助手与生成偏好")
         case .refresh: I18N.shared.localized("控制订阅的自动更新")
         case .language: I18N.shared.localized("切换应用界面语言")
@@ -67,7 +67,7 @@ struct SettingsView: View {
     #if os(macOS)
     @ObservedObject var attention: MacSystemAttentionController
     #endif
-    @State private var selectedSection: SettingsSection = .accounts
+    @State private var selectedSection: SettingsSection = SettingsSection.allCases.first ?? .appearance
     @State private var configuration = LLMConfiguration.default
     @State private var apiKey = ""
     @State private var showsAPIKey = false
@@ -76,8 +76,11 @@ struct SettingsView: View {
     @State private var isTesting = false
     @State private var showingTargetLanguagePopover = false
 
-    // FreshRSS 账号添加状态
-    @State private var freshRSSEndpoint = ""
+    // 账号管理与添加弹窗状态
+    @State private var isShowingAddAccountSheet = false
+    @State private var accountPendingDeletion: AccountRecord? = nil
+    @State private var isShowingDeleteAccountAlert = false
+    @State private var deleteAccountError: String? = nil
     @State private var freshRSSUsername = ""
     @State private var freshRSSPassword = ""
     @State private var freshRSSDisplayName = ""
@@ -148,6 +151,7 @@ struct SettingsView: View {
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 20)
                         }
+                        .paperListScrollStyle()
 
                         Divider().opacity(0.5)
                         actionBar
@@ -171,6 +175,7 @@ struct SettingsView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 18)
                     }
+                    .paperListScrollStyle()
 
                     Divider()
                     actionBar
@@ -330,20 +335,19 @@ struct SettingsView: View {
 
     private var accountsSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            // 已配置账号列表
             settingsGroup(
-                I18N.shared.localized("当前账号"),
-                footer: I18N.shared.localized("每个账号下的订阅、文章与阅读状态均物理隔离。")
+                I18N.shared.localized("当前账号", "Current Accounts"),
+                footer: I18N.shared.localized("PaperRss 支持多账号并行。本地订阅与 FreshRSS 远端订阅相互隔离，各账号独立管理与同步。")
             ) {
                 // 本地账号
                 HStack(spacing: 12) {
-                    Image(systemName: "internaldrive")
+                    Image(systemName: "macbook.and.iphone")
                         .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(PaperTheme.accent)
                         .frame(width: 28)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(I18N.shared.localized("本地账号 (Local)"))
+                        Text(I18N.shared.localized("我的 Mac (本地账号)"))
                             .font(.system(size: 14, weight: .semibold))
                         Text(I18N.shared.localized("本机独立存储与离线阅读"))
                             .font(.footnote)
@@ -395,9 +399,8 @@ struct SettingsView: View {
                             .controlSize(.small)
 
                             Button(role: .destructive) {
-                                Task {
-                                    try? await store.removeAccount(accountID: account.id)
-                                }
+                                accountPendingDeletion = account
+                                isShowingDeleteAccountAlert = true
                             } label: {
                                 Image(systemName: "trash")
                                     .foregroundStyle(.red)
@@ -436,106 +439,56 @@ struct SettingsView: View {
                 }
             }
 
-            // 添加 FreshRSS 账号表单
-            settingsGroup(
-                I18N.shared.localized("添加 FreshRSS 账号"),
-                footer: I18N.shared.localized("使用 FreshRSS 的 Google Reader 兼容 API。密码将安全保存在系统 Keychain 中，绝不存入纯文本或日志。")
-            ) {
-                VStack(spacing: 12) {
-                    HStack {
-                        Text(I18N.shared.localized("服务器地址"))
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 80, alignment: .leading)
-                        TextField(I18N.shared.localized("https://rss.example.com 或 /api/greader.php"), text: $freshRSSEndpoint)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    HStack {
-                        Text(I18N.shared.localized("用户名"))
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 80, alignment: .leading)
-                        TextField(I18N.shared.localized("FreshRSS 用户名"), text: $freshRSSUsername)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    HStack {
-                        Text(I18N.shared.localized("API 密码"))
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 80, alignment: .leading)
-                        SecureField(I18N.shared.localized("用户配置中生成的 API 密码"), text: $freshRSSPassword)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    HStack {
-                        Text(I18N.shared.localized("显示名称"))
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 80, alignment: .leading)
-                        TextField(I18N.shared.localized("可选（默认服务器域名）"), text: $freshRSSDisplayName)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    if let error = addFreshRSSError {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.red)
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                            Spacer()
-                        }
-                        .padding(.top, 4)
-                    }
-
-                    if let success = addFreshRSSSuccess {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text(success)
-                                .font(.footnote)
-                                .foregroundStyle(.green)
-                            Spacer()
-                        }
-                        .padding(.top, 4)
-                    }
-
-                    HStack {
-                        Spacer()
-                        Button {
-                            Task {
-                                isAddingFreshRSS = true
-                                addFreshRSSError = nil
-                                addFreshRSSSuccess = nil
-                                do {
-                                    _ = try await store.addFreshRSSAccount(
-                                        endpointURLText: freshRSSEndpoint,
-                                        username: freshRSSUsername,
-                                        password: freshRSSPassword,
-                                        displayName: freshRSSDisplayName.isEmpty ? nil : freshRSSDisplayName
-                                    )
-                                    addFreshRSSSuccess = I18N.shared.localized("FreshRSS 账号已成功添加并开始同步！")
-                                    freshRSSEndpoint = ""
-                                    freshRSSUsername = ""
-                                    freshRSSPassword = ""
-                                    freshRSSDisplayName = ""
-                                } catch {
-                                    addFreshRSSError = error.localizedDescription
-                                }
-                                isAddingFreshRSS = false
-                            }
-                        } label: {
-                            if isAddingFreshRSS {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Text(I18N.shared.localized("测试连接并添加账号"))
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isAddingFreshRSS || freshRSSEndpoint.isEmpty || freshRSSUsername.isEmpty || freshRSSPassword.isEmpty)
-                    }
-                    .padding(.top, 6)
+            if let deleteError = deleteAccountError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(deleteError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Spacer()
                 }
-                .padding(16)
+                .padding(.horizontal, 4)
             }
+
+            HStack {
+                Button {
+                    isShowingAddAccountSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle.fill")
+                        Text(I18N.shared.localized("添加账号…", "Add Account…"))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                Spacer()
+            }
+            .padding(.top, 4)
+        }
+        .sheet(isPresented: $isShowingAddAccountSheet) {
+            AddAccountSheet(store: store, isPresented: $isShowingAddAccountSheet)
+        }
+        .alert(
+            I18N.shared.localized("确认移除账号？"),
+            isPresented: $isShowingDeleteAccountAlert,
+            presenting: accountPendingDeletion
+        ) { account in
+            Button(I18N.shared.localized("移除账号"), role: .destructive) {
+                Task {
+                    do {
+                        deleteAccountError = nil
+                        try await store.removeAccount(accountID: account.id)
+                    } catch {
+                        deleteAccountError = error.localizedDescription
+                    }
+                }
+            }
+            Button(I18N.shared.localized("取消"), role: .cancel) {}
+        } message: { account in
+            Text(I18N.shared.localizedFormat(
+                "移除此账号将清除其在 PaperRss 本地同步的数据与凭据，但不会从 FreshRSS 服务器删除或退订您的 Feed。",
+                account.displayName
+            ))
         }
     }
 
@@ -1576,6 +1529,247 @@ struct RefreshStatusView: View {
         case .completed: I18N.shared.localized("订阅刷新完成")
         case .failed: I18N.shared.localized("部分订阅刷新失败")
         case .idle: I18N.shared.localized("还没有进行刷新")
+        }
+    }
+}
+
+private enum AccountProviderType: String, CaseIterable, Identifiable {
+    case freshRSS
+
+    var id: String { rawValue }
+
+    @MainActor
+    var title: String {
+        switch self {
+        case .freshRSS: return "FreshRSS"
+        }
+    }
+
+    @MainActor
+    var subtitle: String {
+        switch self {
+        case .freshRSS: return I18N.shared.localized("兼容 Google Reader API 的自建 RSS 服务", "Google Reader compatible account")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .freshRSS: return "server.rack"
+        }
+    }
+}
+
+private struct AddAccountSheet: View {
+    @ObservedObject var store: AppStore
+    @Binding var isPresented: Bool
+
+    @State private var selectedProvider: AccountProviderType? = nil
+
+    // FreshRSS 表单状态
+    @State private var freshRSSEndpoint = ""
+    @State private var freshRSSUsername = ""
+    @State private var freshRSSPassword = ""
+    @State private var freshRSSDisplayName = ""
+    @State private var isAdding = false
+    @State private var errorMessage: String? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            headerView
+
+            Divider()
+
+            if let provider = selectedProvider {
+                switch provider {
+                case .freshRSS:
+                    freshRSSFormView
+                }
+            } else {
+                providerChooserView
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 460, maxWidth: 500, minHeight: 360)
+        #endif
+    }
+
+    private var headerView: some View {
+        HStack {
+            if selectedProvider != nil {
+                Button {
+                    withAnimation {
+                        selectedProvider = nil
+                        errorMessage = nil
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text(I18N.shared.localized("上一步", "Back"))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            } else {
+                Text(I18N.shared.localized("添加账号", "Add Account"))
+                    .font(.headline)
+            }
+
+            Spacer()
+
+            if selectedProvider != nil {
+                Text(selectedProvider?.title ?? "")
+                    .font(.headline)
+                Spacer()
+            }
+
+            Button(I18N.shared.localized("取消", "Cancel")) {
+                isPresented = false
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private var providerChooserView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(I18N.shared.localized("选择 RSS 服务提供商", "Choose an RSS Provider"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+
+            List(AccountProviderType.allCases) { provider in
+                Button {
+                    withAnimation {
+                        selectedProvider = provider
+                        errorMessage = nil
+                    }
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: provider.icon)
+                            .font(.system(size: 22))
+                            .foregroundStyle(PaperTheme.accent)
+                            .frame(width: 32)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(provider.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                            Text(provider.subtitle)
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.footnote)
+                            .foregroundStyle(Color.secondary.opacity(0.5))
+                    }
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            #if os(macOS)
+            .listStyle(.inset(alternatesRowBackgrounds: false))
+            #else
+            .listStyle(.inset)
+            #endif
+        }
+    }
+
+    private var freshRSSFormView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(I18N.shared.localized("输入您的 FreshRSS 服务信息与 API 凭据。密码将安全保存在系统 Keychain 中。"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                VStack(spacing: 12) {
+                    HStack {
+                        Text(I18N.shared.localized("服务器地址"))
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 80, alignment: .leading)
+                        TextField(I18N.shared.localized("https://rss.example.com 或 /api/greader.php"), text: $freshRSSEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    HStack {
+                        Text(I18N.shared.localized("用户名"))
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 80, alignment: .leading)
+                        TextField(I18N.shared.localized("FreshRSS 用户名"), text: $freshRSSUsername)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    HStack {
+                        Text(I18N.shared.localized("API 密码"))
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 80, alignment: .leading)
+                        SecureField(I18N.shared.localized("用户配置中生成的 API 密码"), text: $freshRSSPassword)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    HStack {
+                        Text(I18N.shared.localized("显示名称"))
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 80, alignment: .leading)
+                        TextField(I18N.shared.localized("可选（默认服务器域名）"), text: $freshRSSDisplayName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                if let error = errorMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                        Spacer()
+                    }
+                    .padding(.top, 4)
+                }
+
+                HStack {
+                    Spacer()
+                    Button {
+                        Task {
+                            isAdding = true
+                            errorMessage = nil
+                            do {
+                                _ = try await store.addFreshRSSAccount(
+                                    endpointURLText: freshRSSEndpoint,
+                                    username: freshRSSUsername,
+                                    password: freshRSSPassword,
+                                    displayName: freshRSSDisplayName.isEmpty ? nil : freshRSSDisplayName
+                                )
+                                isPresented = false
+                                freshRSSEndpoint = ""
+                                freshRSSUsername = ""
+                                freshRSSPassword = ""
+                                freshRSSDisplayName = ""
+                            } catch {
+                                errorMessage = error.localizedDescription
+                            }
+                            isAdding = false
+                        }
+                    } label: {
+                        if isAdding {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(I18N.shared.localized("测试连接并添加账号"))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isAdding || freshRSSEndpoint.isEmpty || freshRSSUsername.isEmpty || freshRSSPassword.isEmpty)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
         }
     }
 }

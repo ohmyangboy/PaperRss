@@ -367,7 +367,7 @@ struct RootView: View {
             direction: .next,
             retainingIDs: retainedEntryListIDs.union([selectedEntryID])
         ) {
-            let unreadCount = max(1, store.sidebarCounts.allUnread)
+            let unreadCount = max(1, store.unreadCount(scope: currentTimelineScope))
             let prompt: String = {
                 if I18N.shared.isEnglish {
                     return "Press Space again for next article. \(unreadCount) unread"
@@ -647,13 +647,62 @@ private struct SidebarView: View {
     /// leaves a stale selection behind — the toolbar would otherwise render
     /// an empty capsule placeholder.
     var onDeleteSelection: () -> Void
-    @State private var expandedFolders: Set<String> = []
+    @AppStorage("sidebar_collapsed_accounts_raw") private var collapsedAccountsRaw: String = ""
+    @AppStorage("sidebar_collapsed_folders_raw") private var collapsedFoldersRaw: String = ""
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     #if os(macOS)
     @Environment(\.openSettings) private var openSettings
     #endif
+
+    private var collapsedAccounts: Set<String> {
+        get {
+            Set(collapsedAccountsRaw.split(separator: "|||").map(String.init))
+        }
+        nonmutating set {
+            collapsedAccountsRaw = newValue.sorted().joined(separator: "|||")
+        }
+    }
+
+    private var collapsedFolders: Set<String> {
+        get {
+            Set(collapsedFoldersRaw.split(separator: "|||").map(String.init))
+        }
+        nonmutating set {
+            collapsedFoldersRaw = newValue.sorted().joined(separator: "|||")
+        }
+    }
+
+    private func isAccountExpandedBinding(accountID: String) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedAccounts.contains(accountID) },
+            set: { isExpanded in
+                var current = collapsedAccounts
+                if isExpanded {
+                    current.remove(accountID)
+                } else {
+                    current.insert(accountID)
+                }
+                collapsedAccounts = current
+            }
+        )
+    }
+
+    private func isFolderExpandedBinding(key: String) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedFolders.contains(key) },
+            set: { isExpanded in
+                var current = collapsedFolders
+                if isExpanded {
+                    current.remove(key)
+                } else {
+                    current.insert(key)
+                }
+                collapsedFolders = current
+            }
+        )
+    }
 
     private var selectedSidebarSelections: Binding<Set<SidebarSelection>> {
         Binding(
@@ -707,12 +756,6 @@ private struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .onAppear {
-            expandedFolders = Set(store.folders)
-        }
-        .onChange(of: store.folders) { _, newFolders in
-            expandedFolders.formUnion(newFolders)
-        }
         .overlay {
             if store.feeds.isEmpty {
                 ContentUnavailableView {
@@ -737,6 +780,7 @@ private struct SidebarView: View {
             // 与文章列表一致：纸张背景延伸到窗口顶部，避免 44pt 占位区透出白色背景
             PaperSurface(kind: .sidebar, textureOpacity: 0.52).ignoresSafeArea()
         }
+        .paperListScrollStyle()
         #if os(iOS)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -843,7 +887,7 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private var localSubscriptionsSection: some View {
-        Section {
+        Section(isExpanded: isAccountExpandedBinding(accountID: "local-default")) {
             ForEach(store.rootFeeds(for: "local-default")) { feed in
                 feedRow(feed)
             }
@@ -852,19 +896,9 @@ private struct SidebarView: View {
             }
 
             ForEach(store.folders(for: "local-default"), id: \.self) { folder in
+                let key = "local-default::\(folder)"
                 DisclosureGroup(
-                    isExpanded: Binding(
-                        get: { expandedFolders.contains("local-default::\(folder)") || expandedFolders.contains(folder) },
-                        set: { isExpanded in
-                            if isExpanded {
-                                expandedFolders.insert("local-default::\(folder)")
-                                expandedFolders.insert(folder)
-                            } else {
-                                expandedFolders.remove("local-default::\(folder)")
-                                expandedFolders.remove(folder)
-                            }
-                        }
-                    ),
+                    isExpanded: isFolderExpandedBinding(key: key),
                     content: {
                         ForEach(store.feeds(in: folder, for: "local-default")) { feed in
                             feedRow(feed, inFolder: true)
@@ -889,12 +923,18 @@ private struct SidebarView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isAccountExpandedBinding(accountID: "local-default").wrappedValue.toggle()
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func freshRSSAccountSection(_ account: AccountRecord) -> some View {
-        Section {
+        Section(isExpanded: isAccountExpandedBinding(accountID: account.id)) {
             ForEach(store.rootFeeds(for: account.id)) { feed in
                 remoteFeedRow(feed, accountID: account.id)
             }
@@ -902,12 +942,7 @@ private struct SidebarView: View {
             ForEach(store.folders(for: account.id), id: \.self) { folder in
                 let key = "\(account.id)::\(folder)"
                 DisclosureGroup(
-                    isExpanded: Binding(
-                        get: { expandedFolders.contains(key) },
-                        set: { isExpanded in
-                            if isExpanded { expandedFolders.insert(key) } else { expandedFolders.remove(key) }
-                        }
-                    ),
+                    isExpanded: isFolderExpandedBinding(key: key),
                     content: {
                         ForEach(store.feeds(in: folder, for: account.id)) { feed in
                             remoteFeedRow(feed, accountID: account.id, inFolder: true)
@@ -926,30 +961,29 @@ private struct SidebarView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isAccountExpandedBinding(accountID: account.id).wrappedValue.toggle()
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func remoteFolderRow(_ folder: String, accountID: String) -> some View {
         let count = store.unreadCount(folder: folder, accountID: accountID)
+        let key = "\(accountID)::\(folder)"
         SidebarRow(folder, systemImage: "folder", count: count)
             .contentShape(Rectangle())
             .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
             .onTapGesture {
-                let key = "\(accountID)::\(folder)"
                 if selection == .folder(accountID: accountID, folderName: folder) {
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        if expandedFolders.contains(key) {
-                            expandedFolders.remove(key)
-                        } else {
-                            expandedFolders.insert(key)
-                        }
+                        isFolderExpandedBinding(key: key).wrappedValue.toggle()
                     }
                 } else {
                     selection = .folder(accountID: accountID, folderName: folder)
-                    _ = withAnimation(.easeInOut(duration: 0.2)) {
-                        expandedFolders.insert(key)
-                    }
                 }
             }
             .contextMenu {
@@ -1022,26 +1056,23 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func folderRow(_ folder: String, accountID: String = "local-default") -> some View {
+        let key = "\(accountID)::\(folder)"
         FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder, accountID: accountID)) { feedIDs in
             store.setFeedFolder(feedIDs: feedIDs, folder: folder)
-            expandedFolders.insert(folder)
+            var current = collapsedFolders
+            current.remove(key)
+            current.remove(folder)
+            collapsedFolders = current
         }
         .contentShape(Rectangle())
         .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
         .onTapGesture {
             if selection == .folder(accountID: accountID, folderName: folder) {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    if expandedFolders.contains(folder) {
-                        expandedFolders.remove(folder)
-                    } else {
-                        expandedFolders.insert(folder)
-                    }
+                    isFolderExpandedBinding(key: key).wrappedValue.toggle()
                 }
             } else {
                 selection = .folder(accountID: accountID, folderName: folder)
-                _ = withAnimation(.easeInOut(duration: 0.2)) {
-                    expandedFolders.insert(folder)
-                }
             }
         }
             .contextMenu {
@@ -1129,7 +1160,10 @@ private struct SidebarView: View {
                             ForEach(store.folders, id: \.self) { targetFolder in
                                 Button {
                                     store.setFeedFolder(feedIDs: selectedFeedIDs, folder: targetFolder)
-                                    expandedFolders.insert(targetFolder)
+                                    var current = collapsedFolders
+                                    current.remove("local-default::\(targetFolder)")
+                                    current.remove(targetFolder)
+                                    collapsedFolders = current
                                 } label: {
                                     Text(targetFolder)
                                 }
@@ -1184,7 +1218,10 @@ private struct SidebarView: View {
                             ForEach(store.folders, id: \.self) { targetFolder in
                                 Button {
                                     store.setFeedFolder(feed, folder: targetFolder)
-                                    expandedFolders.insert(targetFolder)
+                                    var current = collapsedFolders
+                                    current.remove("local-default::\(targetFolder)")
+                                    current.remove(targetFolder)
+                                    collapsedFolders = current
                                 } label: {
                                     if feed.folder == targetFolder {
                                         Label(targetFolder, systemImage: "checkmark")
@@ -1534,6 +1571,7 @@ private struct EntryListView: View {
                 // 否则占位区会透出窗口默认白色背景，形成顶部空白条
                 PaperSurface(kind: .articleList, textureOpacity: 0.62).ignoresSafeArea()
             }
+            .paperListScrollStyle()
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
@@ -1782,17 +1820,19 @@ private struct EntryRow: View {
                 .padding(.top, 6)
                 .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
             VStack(alignment: .leading, spacing: 5) {
-                // Title 独占整行
+                // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）
                 Text(entry.title)
                     .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
                     .tracking(0.1)
-                    .lineLimit(2)
+                    .lineLimit(entry.isSummaryVisible ? 2 : 4)
 
-                // Desc 独占整行
-                Text(entry.summaryPreview)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                // Desc 独占整行（仅在非冗余时渲染）
+                if entry.isSummaryVisible {
+                    Text(entry.summaryPreview)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
 
                 // 最下行：左侧为 [icon、name] 与 [source]，右侧为 [日期]
                 HStack(alignment: .center, spacing: 6) {

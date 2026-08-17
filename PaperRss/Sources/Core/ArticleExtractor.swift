@@ -290,6 +290,58 @@ public enum ArticleExtractor {
         return result.filter { !$0.isEmpty }
     }
 
+    /// Presentation-stage helper: examines the first leading heading block (h1/h2/h3).
+    /// If its normalized text is semantically identical to the article title rendered in the Reader header,
+    /// removes that leading heading block from the display HTML so it doesn't appear twice.
+    public static func removingDuplicateLeadingHeading(
+        from html: String?,
+        articleTitle: String
+    ) -> String? {
+        guard let html, !html.isEmpty else { return html }
+        let cleanTitle = normalizeHeadingText(articleTitle)
+        guard !cleanTitle.isEmpty else { return html }
+
+        // 查找 HTML 前部的第一个 <h1|h2|h3...>...</h1> 标签
+        let pattern = "<(?i:h[1-3])[^>]*>([\\s\\S]*?)</(?i:h[1-3])>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return html
+        }
+
+        let range = NSRange(html.startIndex..., in: html)
+        guard let match = regex.firstMatch(in: html, options: [], range: range),
+              let fullMatchRange = Range(match.range, in: html),
+              let contentRange = Range(match.range(at: 1), in: html) else {
+            return html
+        }
+
+        // 检查 heading 前面的前置内容：若仅为轻量元数据/空白（如日期、分类、作者，且在段落 <p> 之前，纯文本少于 120 字符），
+        // 且 heading 文本与 articleTitle 语义一致，则移除该标题标签
+        let prefixHTML = String(html[..<fullMatchRange.lowerBound])
+        let hasPriorParagraph = prefixHTML.range(of: "<(?i:p)[^>]*>", options: .regularExpression) != nil
+        guard !hasPriorParagraph else { return html }
+
+        let prefixPlainText = normalizeHeadingText(prefixHTML.plainText)
+
+        let headingContentHTML = String(html[contentRange])
+        let headingText = normalizeHeadingText(headingContentHTML.plainText)
+
+        if headingText == cleanTitle && prefixPlainText.count <= 120 {
+            var result = html
+            result.removeSubrange(fullMatchRange)
+            return result
+        }
+
+        return html
+    }
+
+    private static func normalizeHeadingText(_ text: String) -> String {
+        return text
+            .precomposedStringWithCanonicalMapping
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+    }
+
     /// Returns the source blocks WebKit can observe while the reader scrolls.
     /// The same expression is used by the renderer below, keeping paragraph IDs
     /// stable between translation requests and document reloads.
