@@ -648,7 +648,6 @@ body {
   }
   .site-nav { display: none; }
   .header-actions { gap: 0.5rem; }
-  .btn-github { display: none; }
   .btn-download-primary { padding: 0.42rem 0.75rem; }
   .hero h1 { font-size: 2.4rem; }
   .features-grid { grid-template-columns: 1fr; }
@@ -661,6 +660,8 @@ body {
   .brand-name { font-size: 1.1rem; }
   .language-switcher { font-size: 0.75rem; }
   .btn-download-primary { font-size: 0.8rem; }
+  .btn-github { padding: 0.36rem 0.5rem; }
+  .btn-github > span:first-child { display: none; }
   .hero h1 { font-size: 2rem; }
   .hero-subtitle { font-size: 1.05rem; }
 }

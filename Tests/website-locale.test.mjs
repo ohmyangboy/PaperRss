@@ -99,7 +99,7 @@ test('hero elements share one visual alignment group', async () => {
 test('mobile header and animated title fit narrow screens', async () => {
   const styles = await readFile(new URL('../website/styles.css', import.meta.url), 'utf8');
 
-  assert.match(styles, /@media \(max-width:\s*860px\)[\s\S]*?\.btn-github\s*\{\s*display:\s*none;/);
+  assert.match(styles, /@media \(max-width:\s*480px\)[\s\S]*?\.btn-github\s*>\s*span:first-child\s*\{\s*display:\s*none;/);
   assert.match(styles, /@media \(max-width:\s*480px\)[\s\S]*?\.brand-tag\s*\{\s*display:\s*none;/);
   assert.match(styles, /@media \(max-width:\s*480px\)[\s\S]*?\.hero h1\s*\{\s*font-size:\s*2rem;/);
 });
