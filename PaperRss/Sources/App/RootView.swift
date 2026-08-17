@@ -756,6 +756,9 @@ private struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        #if os(macOS)
+        .scrollIndicators(.never, axes: .vertical)
+        #endif
         .overlay {
             if store.feeds.isEmpty {
                 ContentUnavailableView {
@@ -1561,6 +1564,7 @@ private struct EntryListView: View {
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
+            .scrollIndicators(.never, axes: .vertical)
             #else
             .listStyle(.inset)
             #endif

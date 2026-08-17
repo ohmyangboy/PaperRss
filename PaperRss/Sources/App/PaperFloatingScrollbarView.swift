@@ -7,17 +7,29 @@ import SwiftUI
 /// 真正浮动的独立滚动条视图（Overlay Sibling）。
 ///
 /// 核心架构原则：
-/// 1. 它是 List / ScrollView 的同级兄弟视图（或叠加在容器上的独立视图），
-///    绝对不参与 SwiftUI List 内容区域的宽度排版，彻底解决内容跳动与 1px 移动问题。
-/// 2. 纯 AppKit CALayer 本地状态绘制，零 SwiftUI 状态分发，绝不调用 `scrollView.tile()`。
-/// 3. 仿照 Codex 设计规范：
-///    - 宽 5pt，全圆角药丸 (pill) 形状
-///    - Idle: 完全透明隐藏 (opacity: 0.0)
-///    - Scrolling: 细腻中性灰色 (opacity: 0.38)
-///    - Hover / Drag: 增强对比度 (opacity: 0.68)
-///    - 滚动停止 0.8s 后平滑淡出
+/// 1. 作为 List / ScrollView 的同级兄弟视图（叠加在单栏容器 Trailing 边缘），
+///    绝对不参与 SwiftUI List 内容区域的排版，实现 0 像素位移（Zero Layout Shift）。
+/// 2. 纯观察者模式（Observer-Only）：只读取 NSScrollView 的滚动与几何状态，
+///    绝对不修改 hasVerticalScroller、verticalScroller、insets 等任何 AppKit 属性，
+///    绝不调用 `scrollView.tile()` 或 `layoutSubtreeIfNeeded()`。
+/// 3. 分离命中测试车道 (Hit Lane, 11pt) 与视觉 Thumb (3pt)。
+/// 4. 极度克制的中性系统语义色彩与透明度动效。
 @MainActor
 final class PaperFloatingScrollbarView: NSView {
+
+    // MARK: 常量配置
+
+    static let hitLaneWidth: CGFloat = 11.0
+    static let thumbWidth: CGFloat = 3.0
+    static let trailingInset: CGFloat = 3.0
+    static let topInset: CGFloat = 6.0
+    static let bottomInset: CGFloat = 6.0
+    static let minThumbHeight: CGFloat = 24.0
+
+    static let opacityIdle: Float = 0.0
+    static let opacityScrolling: Float = 0.18
+    static let opacityHover: Float = 0.28
+    static let opacityDragging: Float = 0.36
 
     // MARK: 私有属性
 
@@ -34,6 +46,9 @@ final class PaperFloatingScrollbarView: NSView {
     nonisolated(unsafe) private var boundsObserver: (any NSObjectProtocol)?
     nonisolated(unsafe) private var frameObserver: (any NSObjectProtocol)?
     nonisolated(unsafe) private var documentFrameObserver: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var liveScrollStartObserver: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var liveScrollObserver: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var liveScrollEndObserver: (any NSObjectProtocol)?
 
     // MARK: 初始化
 
@@ -52,6 +67,9 @@ final class PaperFloatingScrollbarView: NSView {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         if let documentFrameObserver { NotificationCenter.default.removeObserver(documentFrameObserver) }
+        if let liveScrollStartObserver { NotificationCenter.default.removeObserver(liveScrollStartObserver) }
+        if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
+        if let liveScrollEndObserver { NotificationCenter.default.removeObserver(liveScrollEndObserver) }
     }
 
     override var isFlipped: Bool { true }
@@ -60,9 +78,9 @@ final class PaperFloatingScrollbarView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
-        thumbLayer.cornerRadius = 2.5
+        thumbLayer.cornerRadius = Self.thumbWidth / 2.0
         thumbLayer.masksToBounds = true
-        thumbLayer.opacity = 0.0
+        thumbLayer.opacity = Self.opacityIdle
         updateThumbColor()
         layer?.addSublayer(thumbLayer)
     }
@@ -73,15 +91,11 @@ final class PaperFloatingScrollbarView: NSView {
     }
 
     private func updateThumbColor() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if isDark {
-            thumbLayer.backgroundColor = NSColor.white.cgColor
-        } else {
-            thumbLayer.backgroundColor = NSColor.black.cgColor
-        }
+        // 使用系统级语义色彩，不使用纯黑纯白
+        thumbLayer.backgroundColor = NSColor.labelColor.cgColor
     }
 
-    // MARK: 绑定目标 NSScrollView
+    // MARK: 绑定目标 NSScrollView (纯观察者，零属性突变)
 
     func attach(to scrollView: NSScrollView) {
         if targetScrollView === scrollView { return }
@@ -90,27 +104,24 @@ final class PaperFloatingScrollbarView: NSView {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         if let documentFrameObserver { NotificationCenter.default.removeObserver(documentFrameObserver) }
+        if let liveScrollStartObserver { NotificationCenter.default.removeObserver(liveScrollStartObserver) }
+        if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
+        if let liveScrollEndObserver { NotificationCenter.default.removeObserver(liveScrollEndObserver) }
 
         targetScrollView = scrollView
 
-        // 1. 隐藏原生滚动条可视化（零 gutter 占位）
-        scrollView.hasVerticalScroller = false
-        scrollView.verticalScroller?.isHidden = true
-        scrollView.autohidesScrollers = true
-
-        // 2. 开启 clipView 的滚动通知
         let clipView = scrollView.contentView
         clipView.postsBoundsChangedNotifications = true
         scrollView.postsFrameChangedNotifications = true
 
-        // 3. 监听滚动与尺寸变化
+        // 1. 几何同步通知 (只更新几何，不触发显隐闪烁)
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
             object: clipView,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.handleScrollChange(animated: false)
+                self?.syncGeometry()
             }
         }
 
@@ -137,28 +148,55 @@ final class PaperFloatingScrollbarView: NSView {
             }
         }
 
+        // 2. 真实滚动事件通知 (控制显隐与淡出)
+        liveScrollStartObserver = NotificationCenter.default.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification,
+            object: scrollView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isHovered, !self.isDragging else { return }
+                self.showThumb(opacity: Self.opacityScrolling, animated: true)
+            }
+        }
+
+        liveScrollObserver = NotificationCenter.default.addObserver(
+            forName: NSScrollView.didLiveScrollNotification,
+            object: scrollView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isHovered, !self.isDragging else { return }
+                self.showThumb(opacity: Self.opacityScrolling, animated: false)
+                self.scheduleFadeOut(delay: 0.8)
+            }
+        }
+
+        liveScrollEndObserver = NotificationCenter.default.addObserver(
+            forName: NSScrollView.didEndLiveScrollNotification,
+            object: scrollView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isHovered, !self.isDragging else { return }
+                self.scheduleFadeOut(delay: 0.5)
+            }
+        }
+
         syncGeometry()
     }
 
-    // MARK: 几何计算与同步
+    // MARK: 几何计算与绘制
 
     override func layout() {
         super.layout()
-        thumbLayer.cornerRadius = bounds.width / 2.0
+        thumbLayer.cornerRadius = Self.thumbWidth / 2.0
         syncGeometry()
-    }
-
-    private func handleScrollChange(animated: Bool) {
-        syncGeometry()
-        if !isHovered && !isDragging {
-            showThumb(opacity: 0.38, animated: true)
-            scheduleFadeOut()
-        }
     }
 
     private func syncGeometry() {
         guard let scrollView = targetScrollView else {
-            thumbLayer.opacity = 0
+            thumbLayer.opacity = Self.opacityIdle
             return
         }
 
@@ -166,31 +204,33 @@ final class PaperFloatingScrollbarView: NSView {
         let viewportH = clipView.bounds.height
         let documentH = max(viewportH, scrollView.documentView?.bounds.height ?? viewportH)
         let scrollableH = documentH - viewportH
-        let trackH = bounds.height
 
-        guard trackH > 0, scrollableH > 1.0 else {
+        let usableTrackH = max(1.0, bounds.height - Self.topInset - Self.bottomInset)
+
+        guard usableTrackH > 0, scrollableH > 1.0 else {
             thumbLayer.isHidden = true
             return
         }
 
         thumbLayer.isHidden = false
 
-        // 计算比例与高度（参考 Codex 规范，最小高度 24pt）
-        let ratio = max(0.06, min(1.0, viewportH / documentH))
-        let minThumbH: CGFloat = 24.0
-        let thumbH = max(minThumbH, trackH * ratio)
-        let availableTravel = trackH - thumbH
+        // 真实视口/文档比例计算
+        let ratio = min(1.0, viewportH / documentH)
+        let proportionalH = usableTrackH * ratio
+        let thumbH = max(Self.minThumbHeight, proportionalH)
+        let availableTravel = max(0.0, usableTrackH - thumbH)
 
         let currentY = clipView.bounds.origin.y
         let progress = max(0.0, min(1.0, currentY / scrollableH))
-        let thumbY = availableTravel * progress
+        let thumbY = Self.topInset + (availableTravel * progress)
+        let thumbX = bounds.width - Self.trailingInset - Self.thumbWidth
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         thumbLayer.frame = CGRect(
-            x: 0,
+            x: thumbX,
             y: thumbY,
-            width: bounds.width,
+            width: Self.thumbWidth,
             height: thumbH
         )
         CATransaction.commit()
@@ -222,11 +262,11 @@ final class PaperFloatingScrollbarView: NSView {
                 guard let self = self, !self.isHovered, !self.isDragging else { return }
                 let anim = CABasicAnimation(keyPath: "opacity")
                 anim.fromValue = self.thumbLayer.presentation()?.opacity ?? self.thumbLayer.opacity
-                anim.toValue = 0.0
+                anim.toValue = Self.opacityIdle
                 anim.duration = 0.28
                 anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 self.thumbLayer.add(anim, forKey: "fade")
-                self.thumbLayer.opacity = 0.0
+                self.thumbLayer.opacity = Self.opacityIdle
             }
         }
     }
@@ -249,7 +289,7 @@ final class PaperFloatingScrollbarView: NSView {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         isHovered = true
-        showThumb(opacity: 0.68, animated: true)
+        showThumb(opacity: Self.opacityHover, animated: true)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -260,36 +300,34 @@ final class PaperFloatingScrollbarView: NSView {
         }
     }
 
-    // MARK: 鼠标拖拽 (Drag to Scroll)
+    // MARK: 命中检测与鼠标拖拽
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let superview else { return nil }
         let localPoint = convert(point, from: superview)
-        if bounds.contains(localPoint) {
+        guard bounds.contains(localPoint), !thumbLayer.isHidden, thumbLayer.opacity > 0.01 else {
+            return nil
+        }
+        // 仅在 Thumb 及其附近拖拽区域返回 self，其余空白区域返回 nil 透传给 List 行
+        let hitRect = thumbLayer.frame.insetBy(dx: -4, dy: -4)
+        if hitRect.contains(localPoint) {
             return self
         }
-        return super.hitTest(point)
+        return nil
     }
 
     override func mouseDown(with event: NSEvent) {
         guard let scrollView = targetScrollView else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let thumbFrame = thumbLayer.frame
+        let hitRect = thumbLayer.frame.insetBy(dx: -4, dy: -4)
 
-        if thumbFrame.contains(point) {
-            // 点中 thumb：开始平滑拖拽
+        if hitRect.contains(point) {
             isDragging = true
             dragStartMouseY = point.y
             dragStartScrollY = scrollView.contentView.bounds.origin.y
-            showThumb(opacity: 0.75, animated: true)
-        } else {
-            // 点击轨道其他位置：按点击位置立即跳转
-            isDragging = true
-            showThumb(opacity: 0.75, animated: true)
-            scrollToRatio(at: point.y)
-            dragStartMouseY = point.y
-            dragStartScrollY = scrollView.contentView.bounds.origin.y
+            showThumb(opacity: Self.opacityDragging, animated: true)
         }
     }
 
@@ -302,9 +340,9 @@ final class PaperFloatingScrollbarView: NSView {
         let viewportH = clipView.bounds.height
         let documentH = max(viewportH, scrollView.documentView?.bounds.height ?? viewportH)
         let scrollableH = documentH - viewportH
-        let trackH = bounds.height
+        let usableTrackH = max(1.0, bounds.height - Self.topInset - Self.bottomInset)
         let thumbH = thumbLayer.frame.height
-        let availableTravel = max(1.0, trackH - thumbH)
+        let availableTravel = max(1.0, usableTrackH - thumbH)
 
         let deltaProgress = deltaY / availableTravel
         let targetScrollY = dragStartScrollY + (deltaProgress * scrollableH)
@@ -318,25 +356,10 @@ final class PaperFloatingScrollbarView: NSView {
     override func mouseUp(with event: NSEvent) {
         isDragging = false
         if isHovered {
-            showThumb(opacity: 0.68, animated: true)
+            showThumb(opacity: Self.opacityHover, animated: true)
         } else {
             scheduleFadeOut(delay: 0.5)
         }
-    }
-
-    private func scrollToRatio(at clickY: CGFloat) {
-        guard let scrollView = targetScrollView else { return }
-        let clipView = scrollView.contentView
-        let viewportH = clipView.bounds.height
-        let documentH = max(viewportH, scrollView.documentView?.bounds.height ?? viewportH)
-        let scrollableH = documentH - viewportH
-        let trackH = max(1.0, bounds.height)
-
-        let targetRatio = max(0.0, min(1.0, clickY / trackH))
-        let targetScrollY = targetRatio * scrollableH
-        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetScrollY))
-        scrollView.reflectScrolledClipView(clipView)
-        syncGeometry()
     }
 }
 
@@ -371,7 +394,6 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
         get { hostingController.rootView }
         set {
             hostingController.rootView = newValue
-            // 数据源或视图更新后，异步同步一次滚动条几何
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     self?.findAndAttachScrollViewIfNeeded()
@@ -389,7 +411,7 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 1. 添加 hostingController 作为子控制器
+        // 1. 添加 hostingController 作为底层子控制器
         addChild(hostingController)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hostingController.view)
@@ -405,11 +427,11 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
             hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
             hostingController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            // 浮层滚动条贴在右侧，固定 5pt 宽，上下预留 4pt 边距
-            scrollbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -2),
-            scrollbar.widthAnchor.constraint(equalToConstant: 5),
-            scrollbar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
-            scrollbar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4)
+            // 浮层滚动条车道贴在右侧，宽度 11pt，全高
+            scrollbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollbar.widthAnchor.constraint(equalToConstant: PaperFloatingScrollbarView.hitLaneWidth),
+            scrollbar.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollbar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
     }
 
@@ -428,14 +450,17 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
         scrollbar.attach(to: scrollView)
     }
 
-    /// 递归查找视图树中的 NSScrollView（严格排除 WKWebView 子树）
+    /// 递归查找视图树中的 NSTableView / NSOutlineView 的 enclosingScrollView（严格排除 WKWebView 子树）
     private func findScrollView(in view: NSView) -> NSScrollView? {
         let className = String(describing: type(of: view))
         if className.contains("WKWebView") || className.contains("WebView") {
             return nil
         }
-        if let sv = view as? NSScrollView {
-            return sv
+        if let tv = view as? NSTableView {
+            return tv.enclosingScrollView
+        }
+        if let ov = view as? NSOutlineView {
+            return ov.enclosingScrollView
         }
         for subview in view.subviews {
             if let found = findScrollView(in: subview) {
