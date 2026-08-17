@@ -71,22 +71,7 @@
       .catch(() => {
         // 请求失败（大概率是触发了 GitHub 60次/小时 的 IP 限制）：
         // 保持当前数字，不进行修改、不清空数字、不显示NaN。
-        // 【关键修复】：将当前缓存的时间戳刷新，进行“错误退避(Error Backoff)”，
-        // 防止每次切标签页都疯狂重试导致被 GitHub 持续封锁。
-        const cached = getStoredCache();
-        if (cached) {
-          try {
-            localStorage.setItem(
-              STORAGE_KEY,
-              JSON.stringify({
-                count: cached.count,
-                timestamp: Date.now()
-              })
-            );
-          } catch (e) {
-            // 忽略写入失败
-          }
-        }
+        // 失败时不修改缓存时间，保证 GitHub API 恢复后能够重新尝试获取最新 Star。
       })
       .finally(() => {
         isFetching = false;
