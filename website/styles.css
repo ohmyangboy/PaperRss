@@ -143,18 +143,41 @@ body {
 }
 
 .btn-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   text-decoration: none;
   font-family: var(--font-mono);
   font-size: 0.82rem;
   color: var(--text-main);
   border: 1px solid var(--border-medium);
-  padding: 0.4rem 0.9rem;
+  padding: 0.36rem 0.7rem;
   border-radius: 6px;
-  transition: background 0.2s;
+  transition: background 0.2s, border-color 0.2s;
+  white-space: nowrap;
 }
 
 .btn-github:hover {
   background: rgba(0,0,0,0.05);
+}
+
+.gh-star-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(28, 26, 23, 0.06);
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1.2;
+}
+
+.gh-star-icon {
+  width: 11px;
+  height: 11px;
+  fill: #d97706;
 }
 
 .btn-download-primary {

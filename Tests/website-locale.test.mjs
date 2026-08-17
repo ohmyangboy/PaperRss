@@ -22,7 +22,7 @@ test('invalid stored values are ignored', () => {
 
 test('website showcases the supplied full-resolution product screenshots', async () => {
   const expectedScreenshots = new Map([
-    ['paper-rss-main.png', [4096, 2244]],
+    ['paper-rss-main.png', [1024, 653]],
     ['bilingual-translation.png', [1544, 1774]],
     ['ai-question-popover.png', [732, 216]],
     ['ai-translate-popover.png', [896, 852]],

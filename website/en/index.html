@@ -12,15 +12,19 @@
   <link rel="icon" type="image/png" href="../assets/app-icon.png" />
   <link rel="stylesheet" href="../styles.css" />
   <script src="../scramble-title.js" defer></script>
+  <script src="../github-stars.js" defer></script>
 </head>
 <body>
   <header class="site-header">
-    <a href="./" class="brand"><img src="../assets/app-icon.png" alt="PaperRss icon" /><div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">PAPER & AI READER</span></div></a>
+    <a href="./" class="brand"><img src="../assets/app-icon.png" alt="PaperRss icon" /><div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">Reading first, AI second</span></div></a>
     <nav class="site-nav"><a href="#features">Features</a><a href="#ai-assistant">AI Assistant</a><a href="#sponsor">Support</a><a href="#install">Install</a></nav>
     <div class="header-actions">
       <a class="language-switcher" href="../zh-CN/" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')" aria-label="切换到简体中文">🌐 English</a>
-      <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github">GitHub</a>
-      <a href="https://github.com/ohmyangboy/PaperRss/releases/latest" class="btn-download-primary">Download v1.3.0-beta.1</a>
+      <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
+        <span>GitHub</span>
+        <span class="gh-star-badge" aria-label="GitHub Star Count"><svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg><span class="gh-star-count">16</span></span>
+      </a>
+      <a href="https://github.com/ohmyangboy/PaperRss/releases" class="btn-download-primary">Release Notes</a>
     </div>
   </header>
 
