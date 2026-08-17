@@ -147,9 +147,6 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
                 if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
                     coord.configureToolbar(on: window, splitView: splitVC.splitView)
                 }
-                if view.window != nil {
-                    PaperNativeScrollStyler.scheduleConfiguration(for: splitVC)
-                }
                 if let coord = coordinator, view.window != nil, !coord.didInitializeFocus {
                     coord.didInitializeFocus = true
                     DispatchQueue.main.async {
@@ -185,9 +182,6 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         if let host = splitVC.splitViewItems[2].viewController as? NSHostingController<Detail> {
             host.rootView = detail
         }
-
-        // 调度 Sidebar 与 EntryList 列表滚动条原生配置（Column 0 与 1 专属，合并防抖）
-        PaperNativeScrollStyler.scheduleConfiguration(for: splitVC)
 
         // 同步刷新按钮及 Header 状态
         context.coordinator.syncLocalizedToolbarText()

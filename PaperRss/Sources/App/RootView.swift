@@ -756,6 +756,14 @@ private struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        #if os(macOS)
+        .safeAreaInset(edge: .trailing) {
+            Color.clear.frame(width: PaperScrollGutter.width)
+        }
+        .safeAreaInset(edge: .top) {
+            Color.clear.frame(height: 44)
+        }
+        #endif
         .overlay {
             if store.feeds.isEmpty {
                 ContentUnavailableView {
@@ -771,11 +779,6 @@ private struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             settingsFooter
         }
-        #if os(macOS)
-        .safeAreaInset(edge: .top) {
-            Color.clear.frame(height: 44)
-        }
-        #endif
         .background {
             // 与文章列表一致：纸张背景延伸到窗口顶部，避免 44pt 占位区透出白色背景
             PaperSurface(kind: .sidebar, textureOpacity: 0.52).ignoresSafeArea()
@@ -1561,6 +1564,9 @@ private struct EntryListView: View {
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
+            .safeAreaInset(edge: .trailing) {
+                Color.clear.frame(width: PaperScrollGutter.width)
+            }
             #else
             .listStyle(.inset)
             #endif
