@@ -344,22 +344,12 @@ struct RootView: View {
     }
 
     private func selectNextEntry() {
-        let entries: [EntryListItem]
-        switch currentSelection {
-        case .today:
-            entries = store.todayEntryListItems
-        case .unread:
-            entries = store.unreadEntryListItems(retainingIDs: selectedEntryID.map { [$0] } ?? [])
-        case .starred:
-            entries = store.starredEntryListItems
-        case let .folder(acc, folder):
-            let retained = selectedEntryID.map { [$0] } ?? []
-            entries = store.entryListItems(folder: folder, accountID: acc).filter { !$0.isRead || retained.contains($0.id) }
-        case let .feed(id):
-            entries = store.entryListItems(feedID: id)
-        case let .feeds(ids):
-            entries = store.entryListItems(feedIDs: ids)
-        }
+        let entries = store.fetchTimelinePage(
+            scope: currentTimelineScope,
+            retainingIDs: selectedEntryID.map { [$0] } ?? [],
+            limit: 1000,
+            offset: 0
+        )
 
         guard !entries.isEmpty else {
             cancelNavigationConfirmation(dismissToast: true)
@@ -370,20 +360,37 @@ struct RootView: View {
         if let selectedEntryID,
            let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) {
             if currentIndex + 1 < entries.count {
+                let trailingEntries = entries.suffix(from: currentIndex + 1)
+                let trailingUnread = trailingEntries.filter { !$0.isRead }.count
+                let unreadCount = trailingUnread > 0 ? trailingUnread : max(1, store.sidebarCounts.allUnread)
+
+                let prompt: String = {
+                    if I18N.shared.isEnglish {
+                        return "Press Space again for next article. \(unreadCount) unread"
+                    } else {
+                        return "再次按下空格，切换下一篇。未读 \(unreadCount) 篇"
+                    }
+                }()
+
                 guard confirmNavigation(
                     .spaceNextArticle,
                     entryID: selectedEntryID,
-                    prompt: I18N.shared.localized("再次按下空格切换下一篇")
+                    prompt: prompt
                 ) else { return }
-                self.selectedEntryID = entries[currentIndex + 1].id
+                let nextID = entries[currentIndex + 1].id
+                self.selectedEntryID = nextID
+                self.retainedEntryListIDs = [nextID]
                 self.autoScrollTrigger = UUID()
             } else {
                 cancelNavigationConfirmation(dismissToast: true)
                 showToast(I18N.shared.localized("列表已经阅读完毕"))
             }
         } else {
-            self.selectedEntryID = entries.first?.id
-            if self.selectedEntryID != nil { self.autoScrollTrigger = UUID() }
+            if let firstID = entries.first?.id {
+                self.selectedEntryID = firstID
+                self.retainedEntryListIDs = [firstID]
+                self.autoScrollTrigger = UUID()
+            }
         }
     }
 
@@ -392,30 +399,16 @@ struct RootView: View {
         case next
     }
 
-    private var shortcutNavigationEntries: [EntryListItem] {
-        var retainedIDs = retainedEntryListIDs
-        if let selectedEntryID {
-            retainedIDs.insert(selectedEntryID)
-        }
-        switch currentSelection {
-        case .today:
-            return store.todayEntryListItems
-        case .unread:
-            return store.unreadEntryListItems(retainingIDs: retainedIDs)
-        case .starred:
-            return store.starredEntryListItems(retainingIDs: retainedIDs)
-        case let .folder(acc, folder):
-            return store.entryListItems(folder: folder, accountID: acc).filter { !$0.isRead || retainedIDs.contains($0.id) }
-        case let .feed(id):
-            return store.entryListItems(feedID: id)
-        case let .feeds(ids):
-            return store.entryListItems(feedIDs: ids)
-        }
-    }
-
     private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {
+        let entries = store.fetchTimelinePage(
+            scope: currentTimelineScope,
+            retainingIDs: selectedEntryID.map { [$0] } ?? [],
+            limit: 1000,
+            offset: 0
+        )
+
         guard let selectedEntryID,
-              let currentIndex = shortcutNavigationEntries.firstIndex(where: { $0.id == selectedEntryID }) else {
+              let currentIndex = entries.firstIndex(where: { $0.id == selectedEntryID }) else {
             cancelNavigationConfirmation(dismissToast: true)
             return
         }
@@ -437,16 +430,23 @@ struct RootView: View {
             boundaryMessage = I18N.shared.localized("列表已经阅读完毕")
         }
 
-        let entries = shortcutNavigationEntries
-        guard entries.indices.contains(destinationIndex) else {
+        guard destinationIndex >= 0 else {
             cancelNavigationConfirmation(dismissToast: true)
             showToast(boundaryMessage)
             return
         }
-        guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
 
-        self.selectedEntryID = entries[destinationIndex].id
-        autoScrollTrigger = UUID()
+        guard destinationIndex < entries.count else {
+            cancelNavigationConfirmation(dismissToast: true)
+            showToast(boundaryMessage)
+            return
+        }
+
+        guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
+        let nextID = entries[destinationIndex].id
+        self.selectedEntryID = nextID
+        self.retainedEntryListIDs = [nextID]
+        self.autoScrollTrigger = UUID()
     }
 
     private func dispatchReaderShortcut(_ action: ReaderShortcutAction) {
@@ -1473,13 +1473,23 @@ private struct EntryListView: View {
         reloadCurrentPages()
     }
 
+    private func patchEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
+        guard let index = loadedEntries.firstIndex(where: { $0.id == entryID }) else { return }
+        if let isRead { loadedEntries[index].isRead = isRead }
+        if let isStarred { loadedEntries[index].isStarred = isStarred }
+    }
+
     private var entryListSelection: Binding<String?> {
         Binding(
             get: { selectedEntryID },
             set: { newID in
+                // 原生 List 在自身结构调和、局部刷新或状态变化时可能会发出瞬态 nil。
+                // 严禁让原生 List 决定应用层选择状态，忽略此类瞬态 nil 以免清空 selectedEntryID 或 retainedUnreadIDs。
+                guard let newID else { return }
+
                 // 在提交 selectedEntryID 之前，先同步更新 unread retention 状态
                 // 仅保留当前选中的那一篇文章（Retain only the CURRENT selected article）
-                if let newID {
+                if timelineScope == .unread {
                     retainedUnreadIDs = [newID]
                 } else {
                     retainedUnreadIDs.removeAll()
@@ -1499,12 +1509,14 @@ private struct EntryListView: View {
                         .listRowBackground(Color.clear)
                         .contextMenu {
                             Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
-                                store.markRead(entryID: entry.id, read: !entry.isRead)
-                                reloadCurrentPages()
+                                let nextRead = !entry.isRead
+                                store.markRead(entryID: entry.id, read: nextRead)
+                                patchEntryState(entryID: entry.id, isRead: nextRead)
                             }
                             Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
+                                let nextStarred = !entry.isStarred
                                 store.toggleStar(entryID: entry.id)
-                                reloadCurrentPages()
+                                patchEntryState(entryID: entry.id, isStarred: nextStarred)
                             }
                         }
                         .onAppear {
@@ -1537,7 +1549,12 @@ private struct EntryListView: View {
                 retainedUnreadIDs.removeAll()
                 loadInitialPage()
             }
-            .onReceive(store.objectWillChange) { _ in
+            .onChange(of: selectedEntryID) { _, newID in
+                if let newID {
+                    patchEntryState(entryID: newID, isRead: true)
+                }
+            }
+            .onChange(of: store.timelineRevision) { _, _ in
                 reloadCurrentPages()
             }
             .onChange(of: autoScrollTrigger) { _, _ in
@@ -1741,6 +1758,22 @@ private struct PaperCapsuleButton: NSViewRepresentable {
 private struct EntryRow: View {
     let entry: EntryListItem
 
+    private func formattedDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let now = Date()
+
+        if calendar.isDateInToday(date) {
+            // 当天的：只标记时间
+            return date.formatted(date: .omitted, time: .shortened)
+        } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            // 超过当天的：标记具体的日月
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        } else {
+            // 超过今年的：标记具体的年月
+            return date.formatted(.dateTime.year().month(.abbreviated))
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Circle()
@@ -1749,32 +1782,53 @@ private struct EntryRow: View {
                 .padding(.top, 6)
                 .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
             VStack(alignment: .leading, spacing: 5) {
+                // Title 独占整行
                 Text(entry.title)
                     .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
                     .tracking(0.1)
                     .lineLimit(2)
+
+                // Desc 独占整行
                 Text(entry.summaryPreview)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                HStack(spacing: 5) {
+
+                // 最下行：左侧为 [icon、name] 与 [source]，右侧为 [日期]
+                HStack(alignment: .center, spacing: 6) {
                     FeedFaviconView(iconURL: entry.feedIconURL, title: entry.sourceTitle, size: 14)
                     Text(entry.sourceTitle)
+                        .lineLimit(1)
+
                     if !entry.accountSourceBadge.isEmpty {
-                        Text("·")
                         Text(entry.accountSourceBadge)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                Capsule()
+                                    .fill(Color.primary.opacity(0.06))
+                            )
+                            .lineLimit(1)
                     }
-                    if entry.isStarred { Image(systemName: "star.fill").foregroundStyle(PaperTheme.warmAccent) }
+
+                    if entry.isStarred {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(PaperTheme.warmAccent)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let date = entry.publishedAt {
+                        Text(formattedDate(date))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 4)
-            if let date = entry.publishedAt {
-                Text(date, format: .dateTime.month(.abbreviated).day())
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
             }
         }
         .padding(.vertical, 6)

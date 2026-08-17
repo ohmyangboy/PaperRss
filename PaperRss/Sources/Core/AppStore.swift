@@ -69,6 +69,7 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var todayEntryListItems: [EntryListItem] = []
     @Published public private(set) var unreadEntryListItems: [EntryListItem] = []
     @Published public private(set) var starredEntryListItems: [EntryListItem] = []
+    @Published public private(set) var timelineRevision: UInt64 = 0
     @Published public var llmConfiguration: LLMConfiguration = .default
 
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
@@ -420,6 +421,7 @@ public final class AppStore: ObservableObject {
             }
         }
         self.accountSyncStates = syncStates
+        self.timelineRevision &+= 1
     }
 
     // MARK: - Computed Public Accessors

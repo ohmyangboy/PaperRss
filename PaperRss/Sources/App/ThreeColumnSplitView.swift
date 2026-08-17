@@ -545,7 +545,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 switch outcome {
                 case .activate(let col):
                     DispatchQueue.main.async { [weak self] in
-                        MainActor.assumeIsolated { self?.setActiveColumn(col) }
+                        MainActor.assumeIsolated { self?.setActiveColumn(col, autoSelect: false) }
                     }
                 case .trackReader:
                     DispatchQueue.main.async { [weak self] in

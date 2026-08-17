@@ -965,4 +965,85 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         XCTAssertEqual(cleanUnread.count, 1, "Only truly unread Item 1 remains")
         XCTAssertEqual(cleanUnread[0].id, "unread-item-1")
     }
+
+    // MARK: - Test Q: Selection State Machine Ignores Transient Nil & Retains Current Selection
+    @MainActor
+    func testSelectionStateMachineIgnoresTransientNilAndRetainsCurrentSelection() {
+        var selectedEntryID: String? = nil
+        var retainedUnreadIDs: Set<String> = []
+        let timelineScope: TimelineScope = .unread
+
+        // 模拟 EntryListView.entryListSelection 的 Binding setter
+        let setSelection: (String?) -> Void = { newID in
+            guard let newID else {
+                // 忽略原生 List 在结构调和或刷新时发出的瞬态 nil
+                return
+            }
+            if timelineScope == .unread {
+                retainedUnreadIDs = [newID]
+            } else {
+                retainedUnreadIDs.removeAll()
+            }
+            selectedEntryID = newID
+        }
+
+        // 1. 显式选择 A
+        setSelection("item-A")
+        XCTAssertEqual(selectedEntryID, "item-A")
+        XCTAssertEqual(retainedUnreadIDs, ["item-A"])
+
+        // 2. 原生 List 触发瞬态 nil
+        setSelection(nil)
+        XCTAssertEqual(selectedEntryID, "item-A", "Transient nil from List must NOT clear selectedEntryID")
+        XCTAssertEqual(retainedUnreadIDs, ["item-A"], "Transient nil from List must NOT clear retained unread IDs")
+
+        // 3. 显式选择 B
+        setSelection("item-B")
+        XCTAssertEqual(selectedEntryID, "item-B")
+        XCTAssertEqual(retainedUnreadIDs, ["item-B"], "Only current selected item B is retained, A is replaced")
+
+        // 4. 显式应用层切换作用域 / 退出 Unread
+        selectedEntryID = nil
+        retainedUnreadIDs.removeAll()
+        XCTAssertNil(selectedEntryID)
+        XCTAssertTrue(retainedUnreadIDs.isEmpty)
+    }
+
+    // MARK: - Test R: Timeline Revision Increments on Structural Changes Only
+    @MainActor
+    func testTimelineRevisionIncrementsOnStructuralChangesOnly() throws {
+        let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        let db = store.libraryDatabase
+        let now = Date().timeIntervalSince1970
+
+        let feedUUID = UUID()
+        try db.write { database in
+            let feed = FeedRecord(id: feedUUID.uuidString, accountID: "local-default", title: "Feed", feedURL: "https://rev.com/rss", isDeleted: false, updatedAt: now)
+            try feed.save(database)
+            let item = ItemRecord(id: "rev-item-1", accountID: "local-default", externalID: "rev-item-1", feedID: feedUUID.uuidString, createdAt: now, updatedAt: now)
+            try item.save(database)
+            let art = ArticleRecord(itemID: "rev-item-1", title: "Rev Art", summary: "", contentHTML: "<p>1</p>", contentUpdatedAt: now)
+            try art.save(database)
+            let state = ArticleStateRecord(itemID: "rev-item-1", isRead: false, isStarred: false, dateArrived: now, updatedAt: now)
+            try state.save(database)
+        }
+
+        let initialRevision = store.timelineRevision
+
+        // 单篇 markRead 不递增 timelineRevision（通过局部 patch，避免重构整页列表）
+        store.markRead(entryID: "rev-item-1", read: true)
+        XCTAssertEqual(store.timelineRevision, initialRevision, "Single markRead must not increment timelineRevision")
+
+        // 单篇 toggleStar 不递增 timelineRevision
+        store.toggleStar(entryID: "rev-item-1")
+        XCTAssertEqual(store.timelineRevision, initialRevision, "Single toggleStar must not increment timelineRevision")
+
+        // 结构性更新：reloadState() 递增 timelineRevision
+        store.reloadState()
+        XCTAssertEqual(store.timelineRevision, initialRevision + 1, "reloadState must increment timelineRevision")
+
+        // 结构性更新：markAllRead() 递增 timelineRevision
+        store.markAllRead()
+        XCTAssertEqual(store.timelineRevision, initialRevision + 2, "markAllRead must increment timelineRevision")
+    }
 }
