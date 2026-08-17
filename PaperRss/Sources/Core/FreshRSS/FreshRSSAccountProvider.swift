@@ -18,7 +18,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
         username: String,
         database: LibraryDatabase,
         credentialStore: CredentialStore,
-        session: URLSession = .shared
+        session: URLSession? = nil
     ) {
         self.accountID = accountID
         self.database = database
@@ -28,7 +28,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
             username: username,
             accountID: accountID,
             credentialStore: credentialStore,
-            session: session
+            session: session ?? .shared
         )
         self.outboxProcessor = ArticleStateOutboxProcessor(
             accountID: accountID,
@@ -230,10 +230,12 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - Articles & States Sync
 
     public func syncArticlesAndStates() async throws {
-        // 1. 检查是否为初次同步
-        let isInitialSync: Bool = try database.read { db in
+        // 1. 检查是否为初次同步，并获取上次成功拉取时间戳
+        let (isInitialSync, lastArticleFetchAt): (Bool, TimeInterval?) = try database.read { db in
             let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
-            return !(syncState?.initialSyncCompleted ?? false)
+            let isInitial = !(syncState?.initialSyncCompleted ?? false)
+            let lastFetch = syncState?.lastArticleFetchAt ?? syncState?.lastSyncCompletedAt
+            return (isInitial, lastFetch)
         }
 
         // 2. 拉取远端未读与星标 ID 集合（支持 continuation 翻页，显式标记完整性）
@@ -274,14 +276,58 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
         // 4. 拉取文章内容（严禁吞掉必须的失败）
         var streamItems: [ReaderAPIStreamItem] = []
+        var olderSpecialRawIDs: [String] = []
 
         if isInitialSync {
             // 首次同步：有界拉取最近 200 篇文章内容
             streamItems = try await apiClient.fetchRecentStreamContents(limit: 200)
+
+            // Initial Sync Policy: 确保历史窗口外的 old unread / old starred 可达并按需补齐
+            var streamItemKeys = Set(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+
+            if let unreadSet = remoteUnreadSet {
+                for rawID in unreadSet.ids {
+                    let key = ReaderItemIDCodec.canonicalComparisonKey(for: rawID)
+                    if !streamItemKeys.contains(key) {
+                        olderSpecialRawIDs.append(rawID)
+                        streamItemKeys.insert(key)
+                    }
+                }
+            }
+            if let starredSet = remoteStarredSet {
+                for rawID in starredSet.ids {
+                    let key = ReaderItemIDCodec.canonicalComparisonKey(for: rawID)
+                    if !streamItemKeys.contains(key) {
+                        olderSpecialRawIDs.append(rawID)
+                        streamItemKeys.insert(key)
+                    }
+                }
+            }
+
+            // 按需批量拉取前 50 篇历史特殊条目正文
+            if !olderSpecialRawIDs.isEmpty {
+                let initialHydrationBatch = Array(olderSpecialRawIDs.prefix(50))
+                if let fetchedOlder = try? await apiClient.fetchItemContents(itemIDs: initialHydrationBatch) {
+                    streamItems.append(contentsOf: fetchedOlder)
+                }
+            }
         } else {
-            // 增量同步：拉取最近流数据（mandatory，失败抛出）
-            let recentStream = try await apiClient.fetchRecentStreamContents(limit: 100)
-            streamItems.append(contentsOf: recentStream)
+            // 增量同步：获取本地已存在的 external_id 集合
+            let existingExternalIDs: Set<String> = try database.read { db in
+                let items = try ItemRecord.filter(Column("account_id") == self.accountID).fetchAll(db)
+                return Set(items.compactMap(\.externalID))
+            }
+
+            // 使用时间边界与 continuation 遍历拉取增量新文章（直到追平时间边界或流结束）
+            let (incrementalItems, _) = try await apiClient.fetchIncrementalStreamContents(
+                sinceTimestamp: lastArticleFetchAt,
+                pageSize: 100,
+                maxTotal: 1000,
+                isItemLocallyKnown: { rawID in
+                    existingExternalIDs.contains(rawID)
+                }
+            )
+            streamItems.append(contentsOf: incrementalItems)
 
             // 查找本地存在 item 但缺少 article 内容的条目（独立补齐与重试）
             let missingContentExternalIDs: [String] = try database.read { db in
@@ -340,6 +386,38 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     return (ext, feed.id)
                 }
             )
+
+            // B0. 针对历史未读 / 星标条目（不在当前流历史中的条目），预先创建 stub ItemRecord 与 ArticleStateRecord
+            for rawID in olderSpecialRawIDs {
+                let canonicalTagID = rawID.contains("tag:google.com") ? rawID : (ReaderItemIDCodec.formatTagID(fromDecimal: rawID) ?? rawID)
+                let itemID: String
+                if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == canonicalTagID).fetchOne(db) {
+                    itemID = existingItem.id
+                } else {
+                    let newID = "\(self.accountID)::\(canonicalTagID)"
+                    let stubItem = ItemRecord(
+                        id: newID,
+                        accountID: self.accountID,
+                        externalID: canonicalTagID,
+                        feedID: defaultFeedID,
+                        createdAt: now,
+                        updatedAt: now
+                    )
+                    try stubItem.save(db)
+                    itemID = newID
+                }
+
+                if try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db) == nil {
+                    let stubState = ArticleStateRecord(
+                        itemID: itemID,
+                        isRead: true,
+                        isStarred: false,
+                        dateArrived: now,
+                        updatedAt: now
+                    )
+                    try stubState.save(db)
+                }
+            }
 
             var processedItemIDs = Set<String>()
 

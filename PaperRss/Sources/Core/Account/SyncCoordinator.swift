@@ -46,6 +46,25 @@ public actor SyncCoordinator {
         return results
     }
 
+    /// 刷新所有远端账号（排除本地 local-default 账号）。
+    public func refreshRemoteAccounts(reason: RefreshReason = .manual) async -> [String: Result<RefreshResult, Error>] {
+        var results: [String: Result<RefreshResult, Error>] = [:]
+        for (accountID, provider) in providers where accountID != "local-default" {
+            if isSyncing[accountID] == true {
+                continue
+            }
+            isSyncing[accountID] = true
+            do {
+                let result = try await provider.refresh(reason: reason)
+                results[accountID] = .success(result)
+            } catch {
+                results[accountID] = .failure(error)
+            }
+            isSyncing[accountID] = false
+        }
+        return results
+    }
+
     /// 刷新特定账号。
     public func refreshAccount(accountID: String, reason: RefreshReason = .manual) async throws -> RefreshResult {
         guard let provider = providers[accountID] else {

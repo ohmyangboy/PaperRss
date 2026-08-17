@@ -629,7 +629,7 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         )
 
         let store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { feed in
-            if feed.id == feedA.id {
+            if feed.feedURL.host == "a.com" {
                 return .updated(ParsedFeed(title: "Feed A", siteURL: nil, iconURL: nil, entries: [parsedA]), etag: nil, lastModified: nil)
             } else {
                 return .updated(ParsedFeed(title: "Feed B", siteURL: nil, iconURL: nil, entries: [parsedB]), etag: nil, lastModified: nil)
@@ -638,10 +638,18 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
 
         // 添加 Feed A
         await store.addFeed(urlText: feedA.feedURL.absoluteString)
+        let countAfterA = try store.libraryDatabase.read { db in
+            try ItemRecord.fetchCount(db)
+        }
+        XCTAssertEqual(countAfterA, 1, "After Feed A, items count must be 1")
+
         // 添加 Feed B (不应触发 UNIQUE(account_id, external_id) 冲突)
         await store.addFeed(urlText: feedB.feedURL.absoluteString)
+        let countAfterB = try store.libraryDatabase.read { db in
+            try ItemRecord.fetchCount(db)
+        }
+        XCTAssertEqual(countAfterB, 2, "After Feed B, items count must be 2")
 
-        XCTAssertEqual(store.feeds.count, 2)
         let allItems = store.fetchTimelinePage(scope: .all, limit: 100, offset: 0)
         XCTAssertEqual(allItems.count, 2, "Both items with same parsed.id from different feeds must coexist")
 

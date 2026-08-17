@@ -154,6 +154,7 @@ public final class AppStore: ObservableObject {
     public let credentialStore: CredentialStore
     public let syncCoordinator: SyncCoordinator
     public let accountRepository: AccountRepository
+    public let customSession: URLSession?
 
     @Published public private(set) var accounts: [AccountRecord] = []
     @Published public var activeAccountID: String = "local-default"
@@ -183,9 +184,13 @@ public final class AppStore: ObservableObject {
         fileManager: FileManager = .default,
         databaseURL: URL? = nil,
         persistenceURL: URL? = nil,
-        credentialStore: CredentialStore? = nil
+        credentialStore: CredentialStore? = nil,
+        customSession: URLSession? = nil,
+        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil
     ) {
-        self.feedFetcher = { try await FeedService.fetch($0) }
+        let actualFetcher = feedFetcher ?? { try await FeedService.fetch($0) }
+        self.feedFetcher = actualFetcher
+        self.customSession = customSession
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -206,7 +211,7 @@ public final class AppStore: ObservableObject {
         self.localProvider = LocalAccountProvider(
             accountID: "local-default",
             database: libraryDatabase,
-            feedFetcher: feedFetcher
+            feedFetcher: actualFetcher
         )
 
         Task { [syncCoordinator, localProvider] in
@@ -280,6 +285,7 @@ public final class AppStore: ObservableObject {
         credentialStore: CredentialStore? = nil
     ) {
         self.feedFetcher = feedFetcher
+        self.customSession = nil
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -405,7 +411,8 @@ public final class AppStore: ObservableObject {
                     endpointURL: url,
                     username: username,
                     database: libraryDatabase,
-                    credentialStore: credentialStore
+                    credentialStore: credentialStore,
+                    session: customSession
                 )
                 Task { [syncCoordinator] in
                     await syncCoordinator.registerProvider(provider)
@@ -553,7 +560,19 @@ public final class AppStore: ObservableObject {
     }
 
     public func feed(for entry: Entry) -> Feed? {
-        feeds.first { $0.id == entry.feedID }
+        feed(forFeedID: entry.feedID)
+    }
+
+    public func feed(forFeedID feedID: UUID) -> Feed? {
+        if let local = feeds.first(where: { $0.id == feedID }) {
+            return local
+        }
+        for accountFeeds in feedsByAccount.values {
+            if let matched = accountFeeds.first(where: { $0.id == feedID }) {
+                return matched
+            }
+        }
+        return nil
     }
 
     // MARK: - Feed & Folder Management
@@ -724,8 +743,14 @@ public final class AppStore: ObservableObject {
         guard !isRefreshing else { return nil }
         let startedAt = Date.now
         isRefreshing = true
+        defer { isRefreshing = false }
         refreshStatus = .refreshing
 
+        var failures: [String] = []
+        var updatedFeeds = 0
+        var newUnreadEntries: [Entry] = []
+
+        // 1. 本地源抓取（指定局部源或全局本地源）
         let targetFeeds: [Feed]
         if let feedIDs {
             targetFeeds = feeds.filter { feedIDs.contains($0.id) && !$0.isDeleted }
@@ -735,18 +760,11 @@ public final class AppStore: ObservableObject {
 
         let total = targetFeeds.count
         refreshProgress = (0, total)
-        defer {
-            refreshProgress = nil
-            isRefreshing = false
-        }
-
-        var failures: [String] = []
-        var updatedFeeds = 0
-        var newUnreadEntries: [Entry] = []
-        var completedCount = 0
+        defer { refreshProgress = nil }
 
         let maxConcurrency = 6
         let provider = self.localProvider
+        var completedCount = 0
 
         await withTaskGroup(of: LocalAccountProvider.SingleFeedRefreshResult.self) { group in
             var feedIndex = 0
@@ -785,9 +803,34 @@ public final class AppStore: ObservableObject {
             }
         }
 
-        // 若为全局刷新，同时协调驱动所有注册的远端账号进行同步与 Outbox 推送
+        // 2. 全局刷新时，仅协调刷新所有远端账号（排除 local-default，杜绝本地重复刷新）
         if feedIDs == nil {
-            await syncCoordinator.refreshAll(reason: .manual)
+            let initialUnreadIDs = Set(self.unreadEntryListItems.map(\.id))
+
+            let syncResults = await syncCoordinator.refreshRemoteAccounts(reason: origin == .manual ? .manual : .scheduled)
+
+            for (accID, res) in syncResults {
+                switch res {
+                case .success(let result):
+                    if case let .failed(msg) = result.status {
+                        failures.append("账号 \(accID)：\(msg)")
+                    }
+                case .failure(let error):
+                    failures.append("账号 \(accID)：\(error.localizedDescription)")
+                }
+            }
+
+            // 重新载入全量状态，确保成功账号的数据即刻生效
+            reloadState()
+
+            // 提取远端同步产生的新未读文章
+            let currentUnreads = self.unreadEntryListItems.map(\.id)
+            let newlyArrivedIDs = currentUnreads.filter { !initialUnreadIDs.contains($0) }
+            for id in newlyArrivedIDs {
+                if let entry = entry(id: id) {
+                    newUnreadEntries.append(entry)
+                }
+            }
         }
 
         reloadState()
@@ -796,7 +839,7 @@ public final class AppStore: ObservableObject {
         var reportedEntryIDs: Set<String> = []
         let finalNewUnreads = newUnreadEntries.compactMap { candidate -> Entry? in
             guard reportedEntryIDs.insert(candidate.id).inserted,
-                  let current = try? provider.fetchEntry(id: candidate.id),
+                  let current = try? localProvider.fetchEntry(id: candidate.id) ?? self.entry(id: candidate.id),
                   !current.isRead else { return nil }
             return current
         }
@@ -1020,7 +1063,7 @@ public final class AppStore: ObservableObject {
             updatedAt: now
         )
 
-        try await accountRepository.saveAccount(accountRecord)
+        try await accountRepository.saveAccountAtomicWithDuplicateCheck(accountRecord)
 
         // 4. 将密码写入真实 Keychain
         do {

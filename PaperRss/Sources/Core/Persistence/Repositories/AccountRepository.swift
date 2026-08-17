@@ -57,6 +57,26 @@ public final class AccountRepository: Sendable {
         }
     }
 
+    public func saveAccountAtomicWithDuplicateCheck(_ record: AccountRecord) async throws {
+        try database.write { db in
+            if record.type == AccountType.freshRSS.rawValue, let ep = record.endpointURL, let un = record.username {
+                let canonical = (URL(string: ep).map { ReaderAPIClient.canonicalBaseURL(for: $0).absoluteString }) ?? ep
+                let existing = try AccountRecord
+                    .filter(Column("type") == AccountType.freshRSS.rawValue && Column("username") == un)
+                    .fetchAll(db)
+                    .first { acc in
+                        guard let existingEP = acc.endpointURL else { return false }
+                        let existingCanonical = (URL(string: existingEP).map { ReaderAPIClient.canonicalBaseURL(for: $0).absoluteString }) ?? existingEP
+                        return existingCanonical == canonical
+                    }
+                if let existing {
+                    throw ReaderAPIError.accountAlreadyExists("\(un) @ \(canonical) (ID: \(existing.id))")
+                }
+            }
+            try saveAccount(record, in: db)
+        }
+    }
+
     public func deleteAccount(id: String) async throws {
         try database.write { db in
             try deleteAccount(id: id, in: db)

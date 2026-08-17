@@ -387,16 +387,28 @@ public actor ReaderAPIClient {
         return allItems
     }
 
-    /// 拉取最近文章流（有界拉取，用于首次初始化同步）
-    public func fetchRecentStreamContents(limit: Int = 200) async throws -> [ReaderAPIStreamItem] {
-        let url = canonicalBaseURL
-            .appendingPathComponent("reader/api/0/stream/contents/user/-/state/com.google/reading-list")
+    /// 单页拉取文章流内容 (`/reader/api/0/stream/contents/...`)
+    public func fetchStreamContentsPage(
+        streamID: String = "user/-/state/com.google/reading-list",
+        continuation: String? = nil,
+        limit: Int = 100,
+        startTime: TimeInterval? = nil
+    ) async throws -> (items: [ReaderAPIStreamItem], continuation: String?) {
+        let streamPath = "reader/api/0/stream/contents/\(streamID)"
+        let url = canonicalBaseURL.appendingPathComponent(streamPath)
 
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
+        var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "n", value: String(limit)),
             URLQueryItem(name: "output", value: "json")
         ]
+        if let continuation, !continuation.isEmpty {
+            queryItems.append(URLQueryItem(name: "c", value: continuation))
+        }
+        if let startTime, startTime > 0 {
+            queryItems.append(URLQueryItem(name: "ot", value: String(Int(startTime))))
+        }
+        components?.queryItems = queryItems
 
         guard let requestURL = components?.url else {
             throw ReaderAPIError.invalidEndpointURL(url.absoluteString)
@@ -411,10 +423,64 @@ public actor ReaderAPIClient {
 
         do {
             let decoded = try JSONDecoder().decode(ReaderAPIStreamContentsResponse.self, from: data)
-            return decoded.items
+            return (decoded.items, decoded.continuation)
         } catch {
             throw ReaderAPIError.decodingError("stream/contents: \(error.localizedDescription)")
         }
+    }
+
+    /// 遍历拉取指定时间戳之后的所有新文章内容（支持 continuation 分页循环直到追平时间边界或流结束）
+    public func fetchIncrementalStreamContents(
+        streamID: String = "user/-/state/com.google/reading-list",
+        sinceTimestamp: TimeInterval? = nil,
+        pageSize: Int = 100,
+        maxTotal: Int = 1000,
+        isItemLocallyKnown: ((String) -> Bool)? = nil
+    ) async throws -> (items: [ReaderAPIStreamItem], reachedBoundary: Bool) {
+        var allItems: [ReaderAPIStreamItem] = []
+        var nextContinuation: String? = nil
+        var reachedBoundary = false
+
+        let cutoff = sinceTimestamp.map { max(0, $0 - 300) } // 5分钟重叠窗口
+
+        repeat {
+            let (pageItems, continuation) = try await fetchStreamContentsPage(
+                streamID: streamID,
+                continuation: nextContinuation,
+                limit: pageSize,
+                startTime: cutoff
+            )
+            allItems.append(contentsOf: pageItems)
+
+            // 检查边界：如果某条 item 的 published 时间早于 cutoff，且本地已知该 item，说明已与存量历史接轨
+            if let cutoff, let isItemLocallyKnown {
+                let hitKnownOld = pageItems.contains { item in
+                    if let pub = item.published, pub < cutoff, isItemLocallyKnown(item.id) {
+                        return true
+                    }
+                    return false
+                }
+                if hitKnownOld {
+                    reachedBoundary = true
+                    break
+                }
+            }
+
+            if let continuation, !continuation.isEmpty, continuation != nextContinuation, allItems.count < maxTotal {
+                nextContinuation = continuation
+            } else {
+                nextContinuation = nil
+                reachedBoundary = true
+            }
+        } while nextContinuation != nil
+
+        return (allItems, reachedBoundary)
+    }
+
+    /// 拉取最近文章流（有界拉取，用于首次初始化同步）
+    public func fetchRecentStreamContents(limit: Int = 200) async throws -> [ReaderAPIStreamItem] {
+        let (items, _) = try await fetchStreamContentsPage(limit: limit)
+        return items
     }
 
     // MARK: - State Mutations (edit-tag)
