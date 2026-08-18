@@ -4,7 +4,7 @@
 
   # PaperRss
 
-  ***Move between languages. Keep intelligence in its place.***
+  ***Move between languages. Keep intelligence in its place. Let reading return to its pure, immersive essence.***
 
   **English** · [简体中文](README.md)
 
@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Report an Issue](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download Latest v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -20,73 +20,87 @@
 
 ## About PaperRss
 
-PaperRss is a modern, paper-inspired RSS reader for macOS. It keeps your feeds calm and readable, then brings in AI only where it genuinely helps.
+**PaperRss** is a modern, paper-inspired RSS reader for macOS featuring a serene and minimalist immersive interface, bilingual translation, and configurable AI capabilities — placing full control in the reader's hands.
 
-Use the focused three-column reading space for everyday browsing, generate a full-article summary when you need one, or select text to translate it, explain it, or ask a contextual question. PaperRss works with DeepSeek, OpenAI-compatible services, and trusted local models.
+With no sticky chatbots or intrusive LUIs, PaperRss champions active reading with restrained AI enhancements that quietly blend into the background.
+
+**Reading First, AI Second**
+
+_This project is inspired by another outstanding open-source RSS reader, [NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire/)._
 
 ## Highlights
 
-- **Focused, paper-inspired reading** with serif typography, light and dark appearances, and dependable three-column navigation.
-- **Multi-Account & FreshRSS Sync**: Support for local accounts and FreshRSS servers via the Google Reader API, featuring bidirectional unread/star synchronization, durable offline queueing, and secure macOS Keychain credential storage.
-- **Article TOC Rail**: a compact right-hand chapter rail for long articles with wave hover expansion, visual focus scrolling, and continuous drag mapping.
-- **AI summaries on your terms**, generated manually or automatically when an uncached article is first opened.
-- **Contextual selection tools** for translation, explanation, and questions.
-- **Local-first credentials**: API keys stay on your Mac and are excluded from iCloud sync.
-- **Bring your own model service** through DeepSeek, OpenAI-compatible APIs, or trusted local HTTP endpoints.
-- **Independent language controls**: switch the app interface between Chinese and English without changing the AI output language.
+- **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, and dependable three-column navigation.
+- **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
+- **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
+- **Custom Model Integration**: Bring your own DeepSeek or OpenAI-compatible API keys, with customizable system prompts.
+- **Multi-Account Support**: Currently supports local accounts and FreshRSS synchronization.
 
 ## Screenshots
 
-The screenshots currently show the Chinese interface; the macOS app itself supports both Chinese and English.
-
-### Three-column reading space
+### Immersive Paper-like Reading
 
 ![PaperRss main window](assets/screenshots/paper-rss-main.png)
 
-### AI summary
+### AI Full-Article Summary
 
 ![AI summary card](assets/screenshots/ai-summary-card.png)
 
-### Selection explanation and translation
+### Contextual Explanation and Translation
 
 <p align="center">
   <img src="assets/screenshots/ai-explain-popover.png" width="48%" alt="AI explanation popover" />
   <img src="assets/screenshots/ai-translate-popover.png" width="48%" alt="AI translation popover" />
 </p>
 
-### Model configuration
+### AI Model Configuration
 
 ![PaperRss AI settings](assets/screenshots/settings-ai-config.png)
 
+### Multi-Account Integration
+
+![PaperRss multi-account settings](assets/screenshots/accounts.png)
+
 ## Download and Install
 
-Download `PaperRss-v1.3.0-beta.1.dmg` from the [latest release](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
+Download `PaperRss-v1.3.0-beta.1.dmg` from [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
 
-The current release is not notarized by Apple. If macOS says the app cannot be verified or is damaged, run:
+The current release is not notarized by Apple. If macOS indicates that the app cannot be verified or is damaged upon first launch, run the following command in Terminal:
 
 ```bash
 sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app
 ```
 
+Alternatively, go to **System Settings > Privacy & Security**, scroll down to the bottom, and click **Open Anyway**.
+
+_As PaperRss is actively being refined, we welcome and appreciate your feedback and interest. Official Apple notarization will be considered in future releases._
+
 ## Build from Source
 
-Requirements: macOS 14.0+, Xcode 15.0+, and Swift 5.9+.
+Requirements: macOS 14.0+, Xcode 15.0+, Swift 5.9+.
 
 ```bash
 git clone https://github.com/ohmyangboy/PaperRss.git
 cd PaperRss
 swift build -c release
 
-# Or open the Xcode project
+# Or open with Xcode
 open PaperRss.xcodeproj
 ```
 
 ## Support and Feedback
 
-PaperRss is independently developed and open source. If it improves your reading, you can [support continued development through PayPal](https://paypal.me/ohmyangboy).
+If PaperRss improves your daily reading experience, you can support independent development and ongoing maintenance via WeChat Pay or [PayPal](https://paypal.me/ohmyangboy).
 
-For bugs, ideas, and code improvements, please open a [GitHub Issue](https://github.com/ohmyangboy/PaperRss/issues).
+Or simply leave a free **star** — it makes the author's day ;D
+
+<div align="center">
+  <img src="assets/wechat-sponsor-qr.jpg" alt="WeChat Sponsor QR" width="220" />
+  <p><i>Thank you to every reader who loves independent software and mindful reading.</i></p>
+</div>
+
+For bugs, feature ideas, and code improvements, please open a [GitHub Issue](https://github.com/ohmyangboy/PaperRss/issues), leave a message on [social media](https://xhslink.cn/m/972wHfC16uj), or contact via email at `ohmyangboy@gmail.com`.
 
 ## License
 
-PaperRss is available under the [GNU General Public License v3.0](LICENSE).
+PaperRss is open-sourced under the [GNU General Public License v3.0](LICENSE).
