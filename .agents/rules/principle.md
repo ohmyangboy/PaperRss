@@ -4,6 +4,8 @@ trigger: always_on
 
 # PaperRss 构建原则
 
+Agent行为核心原则在 全局的(Global rule)[/Users/yangbukun/.gemini/GEMINI.md]中，
+
 本文档是 Agent 构建 PaperRss 时唯一的规则来源
 
 ## 对话风格
