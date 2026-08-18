@@ -114,7 +114,7 @@ test('.github/workflows/deploy-pages.yml configures push, schedule, workflow_dis
   // Trigger verifications
   assert.match(workflowContent, /push:/);
   assert.match(workflowContent, /branches:\s*\n\s*-\s*main/);
-  assert.match(workflowContent, /schedule:\s*\n\s*-\s*cron:\s*['"]17 \* \* \* \*['"]/);
+  assert.match(workflowContent, /schedule:\s*\n\s*-\s*cron:\s*['"]17 \*\s*\/12 \* \* \*['"]/);
   assert.match(workflowContent, /workflow_dispatch:/);
 
   // GitHub stars fetch step verifications

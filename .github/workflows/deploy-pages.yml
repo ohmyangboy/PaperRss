@@ -8,7 +8,7 @@ on:
       - 'website/**'
       - '.github/workflows/deploy-pages.yml'
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17 */12 * * *'
   workflow_dispatch:
 
 permissions:
