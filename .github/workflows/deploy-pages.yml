@@ -7,6 +7,8 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/deploy-pages.yml'
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -27,6 +29,32 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Fetch and generate GitHub stars data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          DATA_FILE="website/github-stars.json"
+          FETCHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          STARS=""
+          if response=$(gh api repos/ohmyangboy/PaperRss --jq '.stargazers_count' 2>/dev/null); then
+            if [ -n "$response" ] && [ "$response" != "null" ]; then
+              STARS="$response"
+            fi
+          fi
+
+          if [ -n "$STARS" ]; then
+            echo "Successfully fetched GitHub stars count: $STARS"
+            printf '{\n  "stars": %s,\n  "fetchedAt": "%s"\n}\n' "$STARS" "$FETCHED_AT" > "$DATA_FILE"
+          else
+            echo "::warning::Failed to fetch stars from GitHub API, retaining existing fallback"
+            if [ ! -f "$DATA_FILE" ]; then
+              printf '{\n  "stars": 16,\n  "fetchedAt": "%s"\n}\n' "$FETCHED_AT" > "$DATA_FILE"
+            fi
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
