@@ -9,8 +9,8 @@
   **English** · [简体中文](README.md)
 
   [![Release](https://img.shields.io/github/v/release/ohmyangboy/PaperRss?include_prereleases&style=flat-square&color=1d4ed8)](https://github.com/ohmyangboy/PaperRss/releases)
-  [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
-  [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
+[![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
   [Website](https://ohmyangboy.github.io/PaperRss/) · [Download Latest v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
@@ -41,6 +41,10 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 ### Immersive Paper-like Reading
 
 ![PaperRss main window](assets/screenshots/paper-rss-main.png)
+
+
+
+![PaperRss full-screen reading](assets/screenshots/full-screen.png)
 
 ### AI Full-Article Summary
 

@@ -23,6 +23,7 @@ test('invalid stored values are ignored', () => {
 test('website showcases the supplied full-resolution product screenshots', async () => {
   const expectedScreenshots = new Map([
     ['paper-rss-main.png', [2910, 1858]],
+    ['full-screen.png', [2818, 1846]],
     ['bilingual-translation.png', [1544, 1774]],
     ['ai-question-popover.png', [732, 216]],
     ['ai-translate-popover.png', [896, 852]],
@@ -103,3 +104,27 @@ test('mobile header and animated title fit narrow screens', async () => {
   assert.match(styles, /@media \(max-width:\s*480px\)[\s\S]*?\.brand-tag\s*\{\s*display:\s*none;/);
   assert.match(styles, /@media \(max-width:\s*480px\)[\s\S]*?\.hero h1\s*\{\s*font-size:\s*2rem;/);
 });
+
+test('stage card stacking parallax is shared by both locales and respects reduced motion', async () => {
+  const localePages = await Promise.all([
+    readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/en/index.html', import.meta.url), 'utf8'),
+  ]);
+
+  for (const page of localePages) {
+    assert.match(page, /src="\.\.\/stage-parallax\.js"/);
+    assert.match(page, /id="stage-showcase"/);
+    assert.match(page, /class="stage-sticky-viewport"/);
+    assert.match(page, /class="stage-card stage-card-base"/);
+    assert.match(page, /class="stage-card stage-card-overlay"/);
+  }
+
+  const script = await readFile(new URL('../website/stage-parallax.js', import.meta.url), 'utf8');
+  assert.match(script, /requestAnimationFrame/);
+  assert.match(script, /prefers-reduced-motion: reduce/);
+  assert.match(script, /getBoundingClientRect/);
+  assert.match(script, /blur/);
+  assert.match(script, /scale/);
+  assert.match(script, /translate3d/);
+});
+

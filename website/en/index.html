@@ -12,12 +12,13 @@
   <link rel="icon" type="image/png" href="../assets/app-icon.png" />
   <link rel="stylesheet" href="../styles.css" />
   <script src="../scramble-title.js" defer></script>
+  <script src="../stage-parallax.js" defer></script>
   <script src="../github-stars.js" defer></script>
 </head>
 <body>
   <header class="site-header">
     <a href="./" class="brand"><img src="../assets/app-icon.png" alt="PaperRss icon" /><div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">Reading first, AI second</span></div></a>
-    <nav class="site-nav"><a href="#features">Features</a><a href="#ai-assistant">AI Assistant</a><a href="#sponsor">Support</a><a href="#install">Install</a></nav>
+    <nav class="site-nav"><a href="#features">Features</a><a href="#sponsor">Feedback & Support</a><a href="#install">Installation</a></nav>
     <div class="header-actions">
       <a class="language-switcher" href="../zh-CN/" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')" aria-label="切换到简体中文">🌐 English</a>
       <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
@@ -42,7 +43,19 @@
       </div>
     </section>
 
-    <section class="stage-section"><img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss three-column reading workspace (Chinese interface shown)" class="stage-image" /></section>
+    <section class="stage-section" id="stage-showcase">
+      <div class="stage-sticky-viewport">
+        <div class="stage-cards-wrapper">
+          <div class="stage-card stage-card-base">
+            <img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss three-column reading workspace (Chinese interface shown)" class="stage-image" />
+            <div class="stage-card-scrim" aria-hidden="true"></div>
+          </div>
+          <div class="stage-card stage-card-overlay">
+            <img src="../assets/screenshots/full-screen.png" alt="PaperRss full-screen reading workspace" class="stage-image stage-image-fullscreen" />
+          </div>
+        </div>
+      </div>
+    </section>
 
     <aside class="trust-rail">
       <div class="trust-item"><strong>Local First</strong><span>API keys stay on your Mac</span></div>
@@ -61,17 +74,32 @@
     </section>
 
     <section id="sponsor" class="sponsor-section">
-      <span class="sponsor-badge">SPONSOR & COMMUNITY</span><h2>Support PaperRss</h2>
-      <p class="sponsor-desc">PaperRss is independently developed and open source. If it makes your reading better, you can support continued development through PayPal or share feedback on GitHub.</p>
+      <span class="sponsor-badge">FEEDBACK & COMMUNITY</span><h2>Feedback & Support</h2>
+      <p class="sponsor-desc">PaperRss is independently developed and open source. We welcome your feedback on GitHub, and you can also support continued development via PayPal.</p>
       <div class="sponsor-box paypal-sponsor"><a href="https://paypal.me/ohmyangboy" class="paypal-button" target="_blank" rel="noopener">Support via PayPal</a><div class="feedback-links"><a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn">Open a GitHub Issue</a><a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback">★ Star PaperRss</a></div></div>
     </section>
 
     <section id="install" class="install-section">
       <div class="section-title-group install-title"><p class="section-eyebrow">INSTALLATION GUIDE</p><h2>Install and Open PaperRss</h2></div>
-      <div class="install-box"><p>The current release is not notarized by Apple. If macOS says the app cannot be verified or is damaged, run:</p><div class="install-cmd">sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app</div></div>
+      <div class="install-box">
+        <p>The current release is not notarized by Apple. If macOS says the app cannot be opened or is damaged, choose either option below:</p>
+        <div class="install-methods">
+          <div class="install-method-item">
+            <strong>Option 1: Run terminal trust command (Recommended)</strong>
+            <div class="install-cmd">sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app</div>
+          </div>
+          <div class="install-method-item">
+            <strong>Option 2: Allow in macOS System Settings</strong>
+            <p class="install-subtext">Open System Settings → Privacy & Security, scroll down to the Security section and click "Open Anyway".</p>
+          </div>
+        </div>
+        <div class="install-note">
+          <p>📌 <strong>Beta Status & Apple Notarization</strong>: PaperRss is currently in active <strong>Beta</strong> with frequent updates. Once the feature set matures, we will provision an official Apple Developer account for code notarization, eliminating gatekeeper prompts. For full details, see the <a href="https://github.com/ohmyangboy/PaperRss#readme" target="_blank" rel="noopener noreferrer">GitHub README</a>.</p>
+        </div>
+      </div>
     </section>
   </main>
 
-  <footer class="site-footer"><div class="container"><div class="footer-nav"><a href="#features">Features</a><a href="#ai-assistant">AI Assistant</a><a href="#sponsor">Support</a><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">GPLv3</a><a href="https://github.com/ohmyangboy/PaperRss">GitHub</a></div><p>© 2026 PaperRss. Made with care by @ohmyangboy.</p></div></footer>
+  <footer class="site-footer"><div class="container"><div class="footer-nav"><a href="#features">Features</a><a href="#sponsor">Feedback & Support</a><a href="#install">Installation</a><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">GPLv3</a><a href="https://github.com/ohmyangboy/PaperRss">GitHub</a></div><p>© 2026 PaperRss. Made with care by @ohmyangboy.</p></div></footer>
 </body>
 </html>
