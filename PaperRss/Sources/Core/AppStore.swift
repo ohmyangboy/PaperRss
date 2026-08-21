@@ -164,6 +164,7 @@ public final class AppStore: ObservableObject {
     private let persistenceURL: URL
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
+    private let preparationEngine: ArticlePreparationEngine
     private var automaticRefreshTask: Task<Void, Never>?
 
     private enum PreferenceKey {
@@ -187,11 +188,13 @@ public final class AppStore: ObservableObject {
         persistenceURL: URL? = nil,
         credentialStore: CredentialStore? = nil,
         customSession: URLSession? = nil,
+        pageLoader: (any ArticlePageLoading)? = nil,
         feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil
     ) {
         let actualFetcher = feedFetcher ?? { try await FeedService.fetch($0) }
         self.feedFetcher = actualFetcher
         self.customSession = customSession
+        self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -287,6 +290,7 @@ public final class AppStore: ObservableObject {
     ) {
         self.feedFetcher = feedFetcher
         self.customSession = nil
+        self.preparationEngine = ArticlePreparationEngine()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1199,62 +1203,54 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    // MARK: - Article Caches & Details
+    // MARK: - Article Preparation & Caches
+
+    /// 统一正文准备入口：每个 entry 返回同源绑定的 PreparedArticle，并在内容更新时写入本地缓存
+    public func prepareArticle(for entry: Entry) async -> PreparedArticle {
+        let cached = try? localProvider.fetchCache(entryID: entry.id)
+        let feed = self.feed(for: entry)
+        let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: cached, feed: feed)
+        if let updatedCache, !Task.isCancelled {
+            try? localProvider.saveCache(updatedCache)
+        }
+        return prepared
+    }
 
     public func cachedText(for entry: Entry) -> String? {
         (try? localProvider.fetchCache(entryID: entry.id))?.text
     }
 
     public func articleText(for entry: Entry) async throws -> String {
-        if let feedContent = preferredFeedContent(for: entry) {
-            return feedContent.text.isEmpty ? entry.sourceText : feedContent.text
-        }
-        if let cached = cachedText(for: entry) {
-            return cached
-        }
-        return try await fetchFullArticle(for: entry)
+        let prepared = await prepareArticle(for: entry)
+        return prepared.text.isEmpty ? entry.sourceText : prepared.text
     }
 
     public func articleHTML(for entry: Entry) -> String? {
-        if let feedContent = preferredFeedContent(for: entry) {
-            let existing = try? localProvider.fetchCache(entryID: entry.id)
-            let text = feedContent.text.isEmpty ? entry.sourceText : feedContent.text
-            if existing?.html != feedContent.html || existing?.text != text || existing?.imageURLs != feedContent.imageURLs || existing?.sourceURL != entry.url || existing?.isSanitized != true {
-                let cache = ArticleCache(
-                    entryID: entry.id,
-                    text: text,
-                    html: feedContent.html,
-                    imageURLs: feedContent.imageURLs,
-                    fetchedAt: existing?.fetchedAt ?? .now,
-                    sourceURL: entry.url,
-                    isSanitized: true
-                )
-                try? localProvider.saveCache(cache)
+        let feed = self.feed(for: entry)
+        if preparationEngine.isTwitterOrSelfContainedFeed(entry: entry, feed: feed) {
+            if let rawHTML = entry.contentHTML, !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return ArticleExtractor.content(from: rawHTML, baseURL: entry.url).html
             }
-            return feedContent.html
         }
 
         if let cache = try? localProvider.fetchCache(entryID: entry.id), let html = cache.html, !html.isEmpty {
-            if cache.isSanitized {
-                let sourceURL = cache.sourceURL ?? entry.url
-                var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
-                if let sourceHTML = entry.contentHTML {
-                    repairedHTML = ArticleExtractor.repairingCollapsedWhitespaceImageURLs(
-                        in: repairedHTML,
-                        sourceHTML: sourceHTML,
-                        baseURL: sourceURL
-                    )
-                }
-                if repairedHTML != html {
-                    var repaired = cache
-                    repaired.html = repairedHTML
-                    repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
-                    repaired.sourceURL = sourceURL
-                    try? localProvider.saveCache(repaired)
-                }
-                return repairedHTML
+            let sourceURL = cache.sourceURL ?? entry.url
+            var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
+            if let sourceHTML = entry.contentHTML {
+                repairedHTML = ArticleExtractor.repairingCollapsedWhitespaceImageURLs(
+                    in: repairedHTML,
+                    sourceHTML: sourceHTML,
+                    baseURL: sourceURL
+                )
             }
-            return ArticleExtractor.sanitizedHTML(html, baseURL: cache.sourceURL ?? entry.url)
+            if repairedHTML != html && cache.isSanitized {
+                var repaired = cache
+                repaired.html = repairedHTML
+                repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
+                repaired.sourceURL = sourceURL
+                try? localProvider.saveCache(repaired)
+            }
+            return repairedHTML
         }
         return entry.contentHTML.map { ArticleExtractor.sanitizedHTML($0, baseURL: entry.url) }
     }
@@ -1272,31 +1268,8 @@ public final class AppStore: ObservableObject {
     }
 
     public func fetchFullArticle(for entry: Entry) async throws -> String {
-        let fallback = entry.sourceText
-        guard let url = entry.url else { return fallback }
-        var cache = try await ArticleExtractor.extract(from: url)
-        cache.entryID = entry.id
-        cache.isSanitized = true
-        try? localProvider.saveCache(cache)
-        return cache.text
-    }
-
-    private func preferredFeedContent(for entry: Entry) -> ArticleExtractor.Content? {
-        guard let rawHTML = entry.contentHTML,
-              !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-
-        let entryHost = entry.url?.host?.lowercased() ?? ""
-        let isTwitterStatus = entryHost == "x.com" || entryHost == "www.x.com" || entryHost == "twitter.com" || entryHost == "www.twitter.com"
-
-        let feedURL = feed(for: entry)?.feedURL
-        let feedHost = feedURL?.host?.lowercased() ?? ""
-        let feedPath = feedURL?.path.lowercased() ?? ""
-        let isTwitterRoute = feedPath.contains("/twitter/") || feedPath.hasPrefix("/twitter") || feedPath.contains("/x/")
-        let isRSSHub = feedHost.contains("rsshub")
-
-        guard isTwitterRoute || isTwitterStatus || isRSSHub else { return nil }
-
-        return ArticleExtractor.content(from: rawHTML, baseURL: entry.url)
+        let prepared = await prepareArticle(for: entry)
+        return prepared.text.isEmpty ? entry.sourceText : prepared.text
     }
 
     // MARK: - AI Artifacts

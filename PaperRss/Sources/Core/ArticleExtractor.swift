@@ -36,22 +36,106 @@ public enum ArticleExtractor {
     }
 
     public static func imageURLs(from html: String, baseURL: URL?) -> [URL] {
-        let pattern = "(?is)<img\\b[^>]*?\\b(?:src|data-src|data-original|data-lazy-src)\\s*=\\s*(?:[\\\"']([^\\\"']+)[\\\"']|([^\\s>]+))[^>]*>"
+        let pattern = "(?is)<img\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(html.startIndex..., in: html)
         var seen = Set<URL>()
         var result: [URL] = []
         expression.enumerateMatches(in: html, range: range) { match, _, _ in
-            guard let match else { return }
-            let captureRange = match.range(at: match.range(at: 1).location == NSNotFound ? 2 : 1)
-            guard let swiftRange = Range(captureRange, in: html) else { return }
-            let source = String(html[swiftRange]).replacingOccurrences(of: "&amp;", with: "&")
-            guard let url = URL(string: source, relativeTo: baseURL)?.absoluteURL,
-                  let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+            guard let match, let attrRange = Range(match.range(at: 1), in: html) else { return }
+            let attrString = String(html[attrRange])
+            guard let url = extractBestImageURL(from: attrString, baseURL: baseURL),
                   seen.insert(url).inserted else { return }
             result.append(url)
         }
         return result
+    }
+
+    /// 从 img 标签属性中提取最合适的非占位图片 URL，依次支持 data-original, data-src, data-lazy-src, data-actualsrc, srcset 和 src
+    static func extractBestImageURL(from attributesString: String, baseURL: URL?) -> URL? {
+        let attrMap = parseAttributesMap(from: attributesString)
+
+        // 1. 尝试从常见懒加载属性提取
+        let lazyKeys = ["data-original", "data-src", "data-lazy-src", "data-actualsrc", "data-full-url", "data-url"]
+        for key in lazyKeys {
+            if let val = attrMap[key], !val.isEmpty, !isPlaceholderImageURL(val),
+               let url = safeRemoteURL(val, baseURL: baseURL) {
+                return url
+            }
+        }
+
+        // 2. 尝试从 srcset 解析多分辨率并选取高分辨率项
+        if let srcsetVal = attrMap["srcset"], !srcsetVal.isEmpty,
+           let url = parseBestURLFromSrcset(srcsetVal, baseURL: baseURL) {
+            return url
+        }
+
+        // 3. 尝试从 src 提取
+        if let srcVal = attrMap["src"], !srcVal.isEmpty, !isPlaceholderImageURL(srcVal),
+           let url = safeRemoteURL(srcVal, baseURL: baseURL) {
+            return url
+        }
+
+        return nil
+    }
+
+    static func isPlaceholderImageURL(_ raw: String) -> Bool {
+        let lower = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasPrefix("data:image/") { return true }
+        if lower.contains("1x1") || lower.contains("placeholder") || lower.contains("spacer") || lower.contains("blank.gif") {
+            return true
+        }
+        return false
+    }
+
+    static func parseBestURLFromSrcset(_ srcset: String, baseURL: URL?) -> URL? {
+        let items = srcset.components(separatedBy: ",")
+        var bestURL: URL?
+        var maxDescriptorValue: Double = -1
+
+        for item in items {
+            let parts = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .whitespaces)
+                .filter { !$0.isEmpty }
+            guard let first = parts.first, !isPlaceholderImageURL(first),
+                  let url = safeRemoteURL(first, baseURL: baseURL) else { continue }
+
+            var descriptorVal: Double = 1.0
+            if parts.count > 1, let desc = parts.last {
+                let cleanDesc = desc.lowercased()
+                if cleanDesc.hasSuffix("w"), let w = Double(cleanDesc.dropLast()) {
+                    descriptorVal = w
+                } else if cleanDesc.hasSuffix("x"), let x = Double(cleanDesc.dropLast()) {
+                    descriptorVal = x * 1000
+                }
+            }
+
+            if descriptorVal > maxDescriptorValue {
+                maxDescriptorValue = descriptorVal
+                bestURL = url
+            }
+        }
+        return bestURL
+    }
+
+    private static func parseAttributesMap(from source: String) -> [String: String] {
+        guard let expression = try? NSRegularExpression(pattern: "(?is)([a-z][a-z0-9:-]*)(?:\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+)))?") else { return [:] }
+        let range = NSRange(source.startIndex..., in: source)
+        var map: [String: String] = [:]
+        expression.enumerateMatches(in: source, range: range) { match, _, _ in
+            guard let match, let nameRange = Range(match.range(at: 1), in: source) else { return }
+            let name = source[nameRange].lowercased()
+            let valueRange = [2, 3, 4].lazy.compactMap { index -> Range<String.Index>? in
+                let candidate = match.range(at: index)
+                return candidate.location == NSNotFound ? nil : Range(candidate, in: source)
+            }.first
+            if let valueRange {
+                map[name] = String(source[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                map[name] = ""
+            }
+        }
+        return map
     }
 
     /// Repairs image URLs written by older builds that removed legal spaces
@@ -61,7 +145,7 @@ public enum ArticleExtractor {
         sourceHTML: String,
         baseURL: URL?
     ) -> String {
-        let pattern = "(?is)<img\\b[^>]*?\\b(?:src|data-src|data-original|data-lazy-src)\\s*=\\s*(?:[\\\"']([^\\\"']+)[\\\"']|([^\\s>]+))[^>]*>"
+        let pattern = "(?is)<img\\b[^>]*?\\b(?:src|data-src|data-original|data-lazy-src)\\s*=\\s*(?:[\"']([^\"']+)[\"']|([^\\s>]+))[^>]*>"
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return sanitizedHTML }
         let range = NSRange(sourceHTML.startIndex..., in: sourceHTML)
         var repairedHTML = sanitizedHTML
@@ -94,34 +178,165 @@ public enum ArticleExtractor {
     }
 
     public static func content(from html: String, baseURL: URL?) -> Content {
-        let cleaned = stripNoiseBlocks(html)
+        let normalized = ArticleMarkupNormalizer.normalize(html, baseURL: baseURL)
+        let cleaned = stripNoiseBlocks(normalized)
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|nav|footer|aside)[^>]*>.*?</\\1>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "(?is)<!--.*?-->", with: " ", options: .regularExpression)
 
-        let containerPatterns = [
-            "(?is)<(div|article|section)\\b[^>]*?\\bclass\\s*=\\s*[\"'][^\"']*?\\b(?:article-body|post-content|entry-content|article-content|ss-article-content|markdown-body|content)\\b[^\"']*?[\"'][^>]*?>(.*?)</\\1>",
-            "(?is)<article[^>]*>(.*?)</article>",
-            "(?is)<main[^>]*>(.*?)</main>",
-            "(?is)<body[^>]*>(.*?)</body>"
+        // 运行容器评分器寻找最佳正文容器
+        if let bestContainer = extractBestArticleContainer(from: cleaned, baseURL: baseURL) {
+            let safeHTML = sanitizedHTML(bestContainer, baseURL: baseURL)
+            let text = safeHTML.plainText
+            if !text.isEmpty {
+                return Content(text: text, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+            }
+        }
+
+        let safeHTML = sanitizedHTML(cleaned, baseURL: baseURL)
+        return Content(text: safeHTML.plainText, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+    }
+
+    struct ScannedContainer: Sendable {
+        let tag: String
+        let attributes: String
+        let innerHTML: String
+        let fullHTML: String
+    }
+
+    /// 基于语义标签、通用 class 词元、段落/媒体密度与链接密度评估并提取最佳正文容器
+    private static func extractBestArticleContainer(from html: String, baseURL: URL?) -> String? {
+        let candidates = scanBalancedContainers(from: html)
+        guard !candidates.isEmpty else { return nil }
+
+        var bestScore: Double = -100
+        var bestFragment: String?
+
+        for candidate in candidates {
+            let score = scoreCandidateContainer(tag: candidate.tag, attributes: candidate.attributes, bodyHTML: candidate.innerHTML)
+            if score > bestScore {
+                bestScore = score
+                bestFragment = candidate.fullHTML
+            }
+        }
+
+        if bestScore >= 35 {
+            return bestFragment
+        }
+        return nil
+    }
+
+    /// 使用标签栈扫描平衡容器，天然安全支持同名与多级嵌套
+    private static func scanBalancedContainers(from html: String) -> [ScannedContainer] {
+        let targetTags: Set<String> = ["article", "main", "section", "div"]
+        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
+        guard let expression = try? NSRegularExpression(pattern: tagPattern) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        let matches = expression.matches(in: html, range: range)
+
+        struct OpenTag {
+            let name: String
+            let attributes: String
+            let tagStart: String.Index
+            let innerStart: String.Index
+        }
+
+        var stacks: [String: [OpenTag]] = ["article": [], "main": [], "section": [], "div": []]
+        var candidates: [ScannedContainer] = []
+
+        for match in matches {
+            guard let nameRange = Range(match.range(at: 1), in: html),
+                  let attrRange = Range(match.range(at: 2), in: html),
+                  let fullRange = Range(match.range, in: html) else { continue }
+
+            let tagName = String(html[nameRange]).lowercased()
+            guard targetTags.contains(tagName) else { continue }
+            let attrString = String(html[attrRange])
+            let tagString = html[fullRange]
+            let isClosing = tagString.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/")
+
+            if isClosing {
+                if var tagStack = stacks[tagName], let opened = tagStack.popLast() {
+                    stacks[tagName] = tagStack
+                    let inner = String(html[opened.innerStart..<fullRange.lowerBound])
+                    let full = String(html[opened.tagStart..<fullRange.upperBound])
+                    candidates.append(ScannedContainer(tag: tagName, attributes: opened.attributes, innerHTML: inner, fullHTML: full))
+                }
+            } else {
+                let opened = OpenTag(name: tagName, attributes: attrString, tagStart: fullRange.lowerBound, innerStart: fullRange.upperBound)
+                stacks[tagName, default: []].append(opened)
+            }
+        }
+
+        return candidates
+    }
+
+    private static func scoreCandidateContainer(tag: String, attributes: String, bodyHTML: String) -> Double {
+        var score: Double = 0
+
+        // 1. 语义标签基础分
+        switch tag {
+        case "article": score += 40
+        case "main": score += 30
+        case "section": score += 15
+        default: score += 5
+        }
+
+        // 2. 通用 class / id 词元评分
+        let attrMap = parseAttributesMap(from: attributes)
+        let classAndID = "\(attrMap["class"] ?? "") \(attrMap["id"] ?? "")".lowercased()
+
+        let positiveTokens = [
+            "article", "content", "post", "entry", "main", "body", "story", "detail",
+            "text", "rich-text", "article-body", "post-content", "entry-content",
+            "article-content", "markdown-body", "story-body"
+        ]
+        let negativeTokens = [
+            "sidebar", "nav", "footer", "header", "comment", "share", "ad", "recommend",
+            "related", "widget", "modal", "dialog", "popover", "author-bio", "nav-links",
+            "menu", "banner", "copyright"
         ]
 
-        for pattern in containerPatterns {
-            if let expression = try? NSRegularExpression(pattern: pattern) {
-                let range = NSRange(cleaned.startIndex..., in: cleaned)
-                let matches = expression.matches(in: cleaned, range: range)
-                for match in matches {
-                    guard let matchRange = Range(match.range, in: cleaned) else { continue }
-                    let fragment = String(cleaned[matchRange])
-                    let safeHTML = sanitizedHTML(fragment, baseURL: baseURL)
-                    let text = safeHTML.plainText
-                    if text.count >= 120 {
-                        return Content(text: text, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
-                    }
+        for token in positiveTokens {
+            if classAndID.contains(token) { score += 30 }
+        }
+        for token in negativeTokens {
+            if classAndID.contains(token) { score -= 45 }
+        }
+
+        // 3. 语义段落数
+        let pCount = (try? NSRegularExpression(pattern: "(?is)<p\\b[^>]*>.*?</p>"))?.numberOfMatches(in: bodyHTML, range: NSRange(bodyHTML.startIndex..., in: bodyHTML)) ?? 0
+        score += Double(pCount * 12)
+
+        // 4. 图片与多媒体数
+        let imgCount = (try? NSRegularExpression(pattern: "(?is)<(img|figure|video)\\b[^>]*>"))?.numberOfMatches(in: bodyHTML, range: NSRange(bodyHTML.startIndex..., in: bodyHTML)) ?? 0
+        score += Double(min(4, imgCount) * 15)
+
+        // 5. 纯文本长度
+        let plain = bodyHTML.plainText
+        score += Double(min(150, plain.count / 10))
+
+        // 6. 链接文本密度计算
+        let linkPattern = "(?is)<a\\b[^>]*>(.*?)</a>"
+        if let regex = try? NSRegularExpression(pattern: linkPattern) {
+            let matches = regex.matches(in: bodyHTML, range: NSRange(bodyHTML.startIndex..., in: bodyHTML))
+            var linkTextCount = 0
+            for match in matches {
+                if let r = Range(match.range(at: 1), in: bodyHTML) {
+                    linkTextCount += String(bodyHTML[r]).plainText.count
+                }
+            }
+            if plain.count > 0 {
+                let linkDensity = Double(linkTextCount) / Double(plain.count)
+                if linkDensity > 0.35 {
+                    score *= max(0.05, 1.0 - linkDensity * 1.5)
+                }
+                if linkDensity > 0.55 {
+                    score -= 150
                 }
             }
         }
-        let safeHTML = sanitizedHTML(cleaned, baseURL: baseURL)
-        return Content(text: safeHTML.plainText, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+
+        return score
     }
 
     private static func stripNoiseBlocks(_ html: String) -> String {
@@ -162,7 +377,7 @@ public enum ArticleExtractor {
             "img", "a", "video", "source", "audio", "picture"
         ]
         let voidTags: Set<String> = ["br", "hr", "img", "source"]
-        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b([^>]*)>"
+        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
         guard let expression = try? NSRegularExpression(pattern: tagPattern) else { return "" }
         let range = NSRange(withoutExecutableBlocks.startIndex..., in: withoutExecutableBlocks)
         var result = ""
@@ -206,7 +421,7 @@ public enum ArticleExtractor {
             "figcaption", "dt", "dd", "table", "thead", "tbody", "tfoot", "tr", "ul", "ol", "hr"
         ]
         let voidTags: Set<String> = ["br", "hr", "img", "source"]
-        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b[^>]*>"
+        let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
         guard let expression = try? NSRegularExpression(pattern: tagPattern) else { return html }
         let range = NSRange(html.startIndex..., in: html)
         var output = ""
@@ -480,10 +695,37 @@ public enum ArticleExtractor {
     }
 
     private static func sanitizedAttributes(_ source: String, for tag: String, baseURL: URL?, eagerImage: Bool = false) -> String {
+        if tag == "img" {
+            var attributes: [String] = []
+            let attrMap = parseAttributesMap(from: source)
+
+            if let targetURL = extractBestImageURL(from: source, baseURL: baseURL) {
+                attributes.append(" src=\"\(htmlAttributeEscaped(targetURL.absoluteString))\"")
+            } else if let rawSrc = attrMap["src"], let safeURL = safeRemoteURL(rawSrc, baseURL: baseURL) {
+                attributes.append(" src=\"\(htmlAttributeEscaped(safeURL.absoluteString))\"")
+            }
+
+            if let alt = attrMap["alt"] {
+                attributes.append(" alt=\"\(htmlAttributeEscaped(alt))\"")
+            }
+            if let title = attrMap["title"] {
+                attributes.append(" title=\"\(htmlAttributeEscaped(title))\"")
+            }
+            if let width = attrMap["width"], let num = Int(width), num > 0, num <= 10_000 {
+                attributes.append(" width=\"\(num)\"")
+            }
+            if let height = attrMap["height"], let num = Int(height), num > 0, num <= 10_000 {
+                attributes.append(" height=\"\(num)\"")
+            }
+
+            attributes.append(" loading=\"\(eagerImage ? "eager" : "lazy")\"")
+            attributes.append(" decoding=\"async\"")
+            return attributes.joined()
+        }
+
         let allowed: Set<String>
         switch tag {
         case "a": allowed = ["href", "title"]
-        case "img": allowed = ["src", "alt", "title", "width", "height"]
         case "video": allowed = ["src", "poster", "controls", "autoplay", "loop", "muted", "playsinline", "webkit-playsinline", "allowfullscreen", "preload", "width", "height"]
         case "source": allowed = ["src", "type"]
         case "audio": allowed = ["src", "controls", "autoplay", "loop", "muted", "preload"]
@@ -519,10 +761,7 @@ public enum ArticleExtractor {
                 attributes.append(" \(name)")
             }
         }
-        if tag == "img" {
-            attributes.append(" loading=\"\(eagerImage ? "eager" : "lazy")\"")
-            attributes.append(" decoding=\"async\"")
-        } else if tag == "video" {
+        if tag == "video" {
             // Guarantee controls and fullscreen behavior for HTML5 videos in WKWebView
             if !seenNames.contains("controls") { attributes.append(" controls") }
             if !seenNames.contains("playsinline") { attributes.append(" playsinline") }

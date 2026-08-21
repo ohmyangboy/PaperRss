@@ -7,3 +7,4 @@
 | 文档 | 内容 |
 | --- | --- |
 | [PaperRss 技术架构](architecture.md) | 当前模块边界、数据与持久化、主要运行链路、网站发布、验证结构和已知限制 |
+| [Reader Engine 技术计划](article-rendering-engine-plan.md) | 已接受的正文准备、渲染模块化、性能、安全、公式与分阶段验收计划 |

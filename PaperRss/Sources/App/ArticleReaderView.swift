@@ -84,6 +84,7 @@ struct ArticleReaderView: View {
     var onToggleZenMode: () -> Void = {}
     @State private var text = ""
     @State private var html: String?
+    @State private var articleFeatures = ArticleFeatures()
     /// Parsing a long document's paragraph structure is deliberately done once
     /// per article. The same stable index drives viewport translation requests
     /// and validation of returned translations.
@@ -260,19 +261,11 @@ struct ArticleReaderView: View {
             parsedReaderParagraphs = []
             store.markRead(requestedEntry)
 
-            let loadedText: String
-            do {
-                loadedText = try await store.articleText(for: requestedEntry)
-            } catch is CancellationError {
-                return
-            } catch {
-                loadedText = requestedEntry.sourceText
-                store.dismissError()
-            }
+            let prepared = await store.prepareArticle(for: requestedEntry)
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
-            let rawHTML = store.articleHTML(for: requestedEntry)
-            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: rawHTML, articleTitle: requestedEntry.title)
+            let loadedText = prepared.text.isEmpty ? requestedEntry.sourceText : prepared.text
+            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: prepared.html, articleTitle: requestedEntry.title)
             let parsedParagraphs: [ReaderParagraph] = await Task.detached(priority: .userInitiated) { () -> [ReaderParagraph] in
                 guard let loadedHTML, !loadedHTML.isEmpty else { return [] }
                 return ArticleExtractor.readerParagraphs(in: loadedHTML, title: requestedEntry.title)
@@ -281,8 +274,9 @@ struct ArticleReaderView: View {
 
             text = loadedText
             html = loadedHTML
+            articleFeatures = prepared.features
             parsedReaderParagraphs = parsedParagraphs
-            articleBaseURL = store.articleSourceURL(for: requestedEntry)
+            articleBaseURL = prepared.baseURL
             isLoading = false
             requestVisibleTranslationsIfPossible()
             if store.llmConfiguration.showsAISummary,
@@ -335,6 +329,7 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                features: articleFeatures,
                 summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
@@ -386,6 +381,7 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                features: articleFeatures,
                 summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
@@ -1753,6 +1749,18 @@ th, td {
     animation: none;
   }
 }
+mjx-container[jax="SVG"][display="true"] {
+  display: block !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  max-width: 100% !important;
+  padding: 0.35em 0;
+  margin: 0.6em 0;
+}
+mjx-container[jax="SVG"]:not([display="true"]) {
+  display: inline-block !important;
+  vertical-align: middle;
+}
 """
 
 @MainActor
@@ -1761,6 +1769,70 @@ enum PaperReaderBridge {
     static let visibleParagraphsMessageName = "paperRssVisibleParagraphs"
     static let explainSelectionMessageName = "paperRssExplainSelection"
     static let askSelectionMessageName = "paperRssAskSelection"
+
+    static let translationSynchronizationScript = """
+    const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
+      .filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+    const anchor = visibleNodes[0] || null;
+    const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
+
+    const translationNodeID = id => "paper-rss-translation-" + id;
+    const makeTranslation = update => {
+      const aside = document.createElement("aside");
+      aside.id = translationNodeID(update.id);
+      aside.dataset.paperRssTranslationFor = update.id;
+
+      const label = document.createElement("span");
+      label.className = "paper-rss-translation-label";
+      label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
+      ["A", "文"].forEach(value => {
+        const chip = document.createElement("span");
+        chip.className = "paper-rss-language-chip";
+        chip.textContent = value;
+        chip.setAttribute("aria-hidden", "true");
+        label.appendChild(chip);
+      });
+      const paragraph = document.createElement("p");
+      const text = document.createElement("span");
+      text.className = "paper-rss-translation-text";
+      paragraph.append(label, text);
+      aside.append(paragraph);
+      return aside;
+    };
+
+    const applyUpdate = update => {
+      if (!update || !update.id) return;
+      const source = document.querySelector(
+        '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
+      );
+      if (!source) return;
+      let aside = document.getElementById(translationNodeID(update.id));
+      if (!aside) {
+        aside = makeTranslation(update);
+        source.insertAdjacentElement("afterend", aside);
+      }
+      aside.classList.toggle("is-loading", Boolean(update.isLoading));
+      aside.setAttribute("aria-label", update.isLoading
+        ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
+        : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
+      if (update.isLoading) aside.setAttribute("aria-live", "polite");
+      else aside.removeAttribute("aria-live");
+      const paragraph = aside.querySelector(".paper-rss-translation-text");
+      if (paragraph) paragraph.textContent = update.text || "";
+    };
+
+    removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
+    updates.forEach(applyUpdate);
+
+    if (anchor && anchorTop !== null) {
+      const delta = anchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+    }
+    """
+
     static var localizedSelectionLabels: [String: String] {
         [
             "explain": I18N.localized("解释所选文字"),
@@ -3601,6 +3673,38 @@ enum PaperReaderBridge {
         forMainFrameOnly: true,
         in: .defaultClient
     )
+
+    static let mathRuntimeScript = WKUserScript(
+        source: """
+        (() => {
+          if (window.MathJax) return;
+          window.MathJax = {
+            tex: {
+              inlineMath: [['\\\\(', '\\\\)'], ['$', '$']],
+              displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true
+            },
+            svg: {
+              fontCache: 'local'
+            },
+            options: {
+              enableMenu: false
+            },
+            startup: {
+              pageReady: () => {
+                return (window.MathJax.startup?.defaultPageReady ? window.MathJax.startup.defaultPageReady() : Promise.resolve()).then(() => {
+                  window.dispatchEvent(new CustomEvent("paperRssLayoutRefresh"));
+                }).catch(() => {});
+              }
+            }
+          };
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
 }
 
 #if os(macOS)
@@ -3643,6 +3747,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    var features: ArticleFeatures = ArticleFeatures()
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
     let isGeneratingSummary: Bool
@@ -3736,6 +3841,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.fontSizeScript)
+        if context.coordinator.parent.features.containsMath {
+            configuration.userContentController.addUserScript(PaperReaderBridge.mathRuntimeScript)
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.wantsLayer = true
@@ -4129,11 +4237,12 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
-            let document = Self.documentHTML(
-                body: readerHTML,
-                topInset: parent.contentTopInset,
+            let document = ReaderDocumentRenderer.renderHTMLDocument(
+                bodyHTML: readerHTML,
+                headerHTML: headerHTML,
+                topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                headerHTML: headerHTML
+                extraStyleCSS: paperArticleStyle
             )
             loadedArticleKey = articleKey
             renderedTranslations = initialTranslationState.translations
@@ -4215,7 +4324,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             renderedPendingTranslationIDs = desired.pendingIDs
             Task { @MainActor in
                 _ = try? await webView.callAsyncJavaScript(
-                    Self.translationSynchronizationScript,
+                    PaperReaderBridge.translationSynchronizationScript,
                     arguments: ["updates": updates, "removals": removals],
                     in: nil,
                     contentWorld: .defaultClient
@@ -4249,81 +4358,6 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         private var pendingScrollOffset: CGFloat?
-
-        private static let translationSynchronizationScript = """
-        const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
-          .filter(node => {
-            const rect = node.getBoundingClientRect();
-            return rect.bottom > 0 && rect.top < window.innerHeight;
-          });
-        const anchor = visibleNodes[0] || null;
-        const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
-
-        const translationNodeID = id => "paper-rss-translation-" + id;
-        const makeTranslation = update => {
-          const aside = document.createElement("aside");
-          aside.id = translationNodeID(update.id);
-          aside.dataset.paperRssTranslationFor = update.id;
-
-          const label = document.createElement("span");
-          label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
-          ["A", "文"].forEach(value => {
-            const chip = document.createElement("span");
-            chip.className = "paper-rss-language-chip";
-            chip.textContent = value;
-            chip.setAttribute("aria-hidden", "true");
-            label.appendChild(chip);
-          });
-          const paragraph = document.createElement("p");
-          const text = document.createElement("span");
-          text.className = "paper-rss-translation-text";
-          paragraph.append(label, text);
-          aside.append(paragraph);
-          return aside;
-        };
-
-        const applyUpdate = update => {
-          if (!update || !update.id) return;
-          const source = document.querySelector(
-            '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
-          );
-          if (!source) return;
-          let aside = document.getElementById(translationNodeID(update.id));
-          if (!aside) {
-            aside = makeTranslation(update);
-            source.insertAdjacentElement("afterend", aside);
-          }
-          aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading
-            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
-            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
-          if (update.isLoading) aside.setAttribute("aria-live", "polite");
-          else aside.removeAttribute("aria-live");
-          const paragraph = aside.querySelector(".paper-rss-translation-text");
-          if (paragraph) paragraph.textContent = update.text || "";
-        };
-
-        removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
-        updates.forEach(applyUpdate);
-
-        if (anchor && anchorTop !== null) {
-          const delta = anchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
-        }
-        """
-
-        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
-            return """
-            <!doctype html>
-            <html><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
-            </head><body>\(headerHTML)\(body)</body></html>
-            """
-        }
     }
 }
 #endif
@@ -4341,6 +4375,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    var features: ArticleFeatures = ArticleFeatures()
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
     let isGeneratingSummary: Bool
@@ -4415,6 +4450,9 @@ private struct ArticleHTMLView: UIViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
+        if context.coordinator.parent.features.containsMath {
+            configuration.userContentController.addUserScript(PaperReaderBridge.mathRuntimeScript)
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -4737,11 +4775,12 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
-            let document = Self.documentHTML(
-                body: readerHTML,
-                topInset: parent.contentTopInset,
+            let document = ReaderDocumentRenderer.renderHTMLDocument(
+                bodyHTML: readerHTML,
+                headerHTML: headerHTML,
+                topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                headerHTML: headerHTML
+                extraStyleCSS: paperArticleStyle
             )
             loadedArticleKey = articleKey
             renderedTranslations = initialTranslationState.translations
@@ -4824,7 +4863,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             renderedPendingTranslationIDs = desired.pendingIDs
             Task { @MainActor in
                 _ = try? await webView.callAsyncJavaScript(
-                    Self.translationSynchronizationScript,
+                    PaperReaderBridge.translationSynchronizationScript,
                     arguments: ["updates": updates, "removals": removals],
                     in: nil,
                     contentWorld: .defaultClient
@@ -4853,81 +4892,6 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 return
             }
             decisionHandler(navigationAction.navigationType == .other && navigationAction.targetFrame?.isMainFrame == true ? .allow : .cancel)
-        }
-
-        private static let translationSynchronizationScript = """
-        const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
-          .filter(node => {
-            const rect = node.getBoundingClientRect();
-            return rect.bottom > 0 && rect.top < window.innerHeight;
-          });
-        const anchor = visibleNodes[0] || null;
-        const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
-
-        const translationNodeID = id => "paper-rss-translation-" + id;
-        const makeTranslation = update => {
-          const aside = document.createElement("aside");
-          aside.id = translationNodeID(update.id);
-          aside.dataset.paperRssTranslationFor = update.id;
-
-          const label = document.createElement("span");
-          label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
-          ["A", "文"].forEach(value => {
-            const chip = document.createElement("span");
-            chip.className = "paper-rss-language-chip";
-            chip.textContent = value;
-            chip.setAttribute("aria-hidden", "true");
-            label.appendChild(chip);
-          });
-          const paragraph = document.createElement("p");
-          const text = document.createElement("span");
-          text.className = "paper-rss-translation-text";
-          paragraph.append(label, text);
-          aside.append(paragraph);
-          return aside;
-        };
-
-        const applyUpdate = update => {
-          if (!update || !update.id) return;
-          const source = document.querySelector(
-            '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
-          );
-          if (!source) return;
-          let aside = document.getElementById(translationNodeID(update.id));
-          if (!aside) {
-            aside = makeTranslation(update);
-            source.insertAdjacentElement("afterend", aside);
-          }
-          aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading
-            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
-            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
-          if (update.isLoading) aside.setAttribute("aria-live", "polite");
-          else aside.removeAttribute("aria-live");
-          const paragraph = aside.querySelector(".paper-rss-translation-text");
-          if (paragraph) paragraph.textContent = update.text || "";
-        };
-
-        removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
-        updates.forEach(applyUpdate);
-
-        if (anchor && anchorTop !== null) {
-          const delta = anchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
-        }
-        """
-
-        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
-            return """
-            <!doctype html>
-            <html><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
-            </head><body>\(headerHTML)\(body)</body></html>
-            """
         }
     }
 }
