@@ -33,7 +33,7 @@ final class ArticlePreparationEngineTests: XCTestCase {
         let loader = MockPageLoader()
         let engine = ArticlePreparationEngine(pageLoader: loader)
 
-        let longBody = String(repeating: "<p>这是详实的长正文段落，提供丰富的见解与细节。</p>\n", count: 25)
+        let longBody = String(repeating: "<p>这是详实的长正文段落，提供丰富的见解与细节。</p>\n", count: 30)
         let entry = Entry(
             id: "entry-strong-1",
             feedID: defaultFeedID,
@@ -406,5 +406,110 @@ final class ArticlePreparationEngineTests: XCTestCase {
 
         XCTAssertEqual(prepared2.source, .web)
         XCTAssertTrue(prepared2.html.contains("Fast article web content"))
+    }
+
+    // MARK: - 14. Strong Feed Strict Boundaries (Spec Alignment)
+
+    func testStrongFeedStrictThresholdBoundaries() async {
+        let loader = MockPageLoader()
+        loader.responseMap[URL(string: "https://example.com/web-article")!] = "<article><p>Web article content with sufficient details.</p></article>"
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+
+        // Case A1: 599 chars, 3 blocks -> 弱 Feed (应发起 1 次 web 请求)
+        // plainText 将段落间以 \n\n (2字符) 分隔，3 个段落包含 2 处分隔共 4 个换行字符
+        let p198 = String(repeating: "字", count: 198)
+        let p199 = String(repeating: "字", count: 199)
+        let html599 = "<p>\(p198)</p><p>\(p198)</p><p>\(p199)</p>" // 198 + 2 + 198 + 2 + 199 = 599 字符
+        let entry599 = Entry(id: "e599", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html599)
+        _ = await engine.prepare(entry: entry599, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "599 字不足 600 字，必须判定为弱 Feed 并请求网页")
+
+        // Case A2: 600 chars, 3 blocks -> 强 Feed (0 web 请求)
+        loader.requestCount = 0
+        let html600 = "<p>\(p198)</p><p>\(p199)</p><p>\(p199)</p>" // 198 + 2 + 199 + 2 + 199 = 600 字符
+        let entry600 = Entry(id: "e600", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html600)
+        let (prepared600, _) = await engine.prepare(entry: entry600, cached: nil)
+        XCTAssertEqual(loader.requestCount, 0, "600 字且 3 个语义块必须判定为强 Feed，0 web 请求")
+        XCTAssertEqual(prepared600.source, .feed)
+
+        // Case A3: 600 chars, 2 blocks -> 弱 Feed (应发起 1 次 web 请求)
+        loader.requestCount = 0
+        let p299 = String(repeating: "字", count: 299)
+        let html600_2blocks = "<p>\(p299)</p><p>\(p299)</p>" // 299 + 2 + 299 = 600 字符，2 个块
+        let entry600_2b = Entry(id: "e600_2b", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html600_2blocks)
+        _ = await engine.prepare(entry: entry600_2b, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "600 字但只有 2 块不满足 >= 3 块要求，必须请求网页")
+
+        // Case A4: 500 chars single block -> 弱 Feed (应发起 1 次 web 请求)
+        loader.requestCount = 0
+        let block500 = String(repeating: "字", count: 500)
+        let html500_1b = "<p>\(block500)</p>"
+        let entry500_1b = Entry(id: "e500_1b", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html500_1b)
+        _ = await engine.prepare(entry: entry500_1b, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "500 字单块不得放宽为强 Feed，必须请求网页")
+
+        // Case B1: 199 chars, 2 blocks, 1 image -> 弱 Feed (应发起 1 次 web 请求)
+        // 2 个段落包含 1 处 \n\n (2字符) 分隔：98 + 2 + 99 = 199 字符
+        loader.requestCount = 0
+        let p98 = String(repeating: "字", count: 98)
+        let p99 = String(repeating: "字", count: 99)
+        let html199_img = "<p>\(p98)</p><p>\(p99)<img src=\"https://example.com/a.jpg\"></p>"
+        let entry199_img = Entry(id: "e199_img", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html199_img)
+        _ = await engine.prepare(entry: entry199_img, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "199 字带图不足 200 字，必须判定为弱 Feed 并请求网页")
+
+        // Case B2: 200 chars, 2 blocks, 1 image -> 强 Feed (0 web 请求)
+        // 99 + 2 + 99 = 200 字符
+        loader.requestCount = 0
+        let html200_img = "<p>\(p99)</p><p>\(p99)<img src=\"https://example.com/a.jpg\"></p>"
+        let entry200_img = Entry(id: "e200_img", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html200_img)
+        let (prepared200_img, _) = await engine.prepare(entry: entry200_img, cached: nil)
+        XCTAssertEqual(loader.requestCount, 0, "200 字且 2 个语义块且 1 张有效图片必须判定为强 Feed，0 web 请求")
+        XCTAssertEqual(prepared200_img.source, .feed)
+
+        // Case B3: 200 chars, 1 block, 1 image -> 弱 Feed (应发起 1 次 web 请求)
+        loader.requestCount = 0
+        let block200 = String(repeating: "字", count: 200)
+        let html200_1b_img = "<p>\(block200)<img src=\"https://example.com/a.jpg\"></p>"
+        let entry200_1b_img = Entry(id: "e200_1b_img", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html200_1b_img)
+        _ = await engine.prepare(entry: entry200_1b_img, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "200 字带图但只有 1 个语义块不足 2 块，必须判定为弱 Feed 并请求网页")
+
+        // Case C: 600 chars, 3 blocks with truncation signal -> 弱 Feed (应发起 1 次 web 请求)
+        loader.requestCount = 0
+        let html600_trunc = "<p>\(p198)</p><p>\(p199)</p><p>\(p199)……阅读全文</p>"
+        let entry600_trunc = Entry(id: "e600_trunc", feedID: defaultFeedID, title: "T", url: URL(string: "https://example.com/web-article"), publishedAt: .now, summary: "", contentHTML: html600_trunc)
+        _ = await engine.prepare(entry: entry600_trunc, cached: nil)
+        XCTAssertEqual(loader.requestCount, 1, "存在截断信号的长文章必须判定为弱 Feed 并请求网页")
+    }
+
+    // MARK: - 15. Fallback HTML Security Pipeline (Finding 3)
+
+    func testFallbackArticleEscapingAndSanitization() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+
+        // 空内容且带危险 sourceText 的 entry
+        let dangerousText = "<script>alert('xss')</script><img src=\"x\" onerror=\"alert(1)\"><b>粗体纯文本</b>\n\n第二行内容 & 特殊字符 < >"
+        let entry = Entry(
+            id: "e-fallback-sec",
+            feedID: defaultFeedID,
+            title: "安全回退测试",
+            url: URL(string: "https://example.com/safe"),
+            publishedAt: .now,
+            summary: dangerousText,
+            contentHTML: nil
+        )
+
+        let (prepared, _) = await engine.prepare(entry: entry, cached: nil)
+
+        XCTAssertEqual(prepared.source, .fallback)
+        // 验证 raw script 和 onerror 不得存在于 HTML 中
+        XCTAssertFalse(prepared.html.contains("<script>"), "fallback HTML 严禁包含未经转义的 script 标签")
+        XCTAssertFalse(prepared.html.contains("onerror"), "fallback HTML 严禁包含 onerror 事件属性")
+        // 验证纯文本换行保留
+        XCTAssertTrue(prepared.html.contains("<p>") || prepared.html.contains("<br>"), "fallback HTML 必须保留可读段落换行")
+        // 验证同源性与特殊符号 escaping
+        XCTAssertTrue(prepared.html.contains("&lt;") || prepared.html.contains("&gt;") || prepared.html.contains("&amp;"), "fallback HTML 必须执行 HTML escaping")
     }
 }

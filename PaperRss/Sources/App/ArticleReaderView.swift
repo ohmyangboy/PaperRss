@@ -3674,7 +3674,54 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
-    static let mathRuntimeScript = WKUserScript(
+    private static var _cachedMathJaxSource: String?
+
+    public static func loadMathJaxBundleSource() -> String? {
+        if let cached = _cachedMathJaxSource {
+            return cached
+        }
+        // 1. 尝试从 App Bundle / Resources 加载
+        if let url = Bundle.main.url(forResource: "tex-mml-svg", withExtension: "js", subdirectory: "MathJax") ??
+                     Bundle.main.url(forResource: "tex-mml-svg", withExtension: "js") {
+            if let content = try? String(contentsOf: url, encoding: .utf8), !content.isEmpty {
+                _cachedMathJaxSource = content
+                return content
+            }
+        }
+        #if SWIFT_PACKAGE
+        if let moduleURL = Bundle.module.url(forResource: "tex-mml-svg", withExtension: "js", subdirectory: "Resources/MathJax") ??
+                           Bundle.module.url(forResource: "tex-mml-svg", withExtension: "js") {
+            if let content = try? String(contentsOf: moduleURL, encoding: .utf8), !content.isEmpty {
+                _cachedMathJaxSource = content
+                return content
+            }
+        }
+        #endif
+        // 2. 本地开发源码目录相对路径兜底
+        let localPath = "PaperRss/Resources/MathJax/tex-mml-svg.js"
+        if let text = try? String(contentsOfFile: localPath, encoding: .utf8), !text.isEmpty {
+            _cachedMathJaxSource = text
+            return text
+        }
+        return nil
+    }
+
+    public static func mathUserScripts(containsMath: Bool) -> [WKUserScript] {
+        guard containsMath else { return [] }
+        var scripts: [WKUserScript] = [mathConfigScript]
+        if let mathSource = loadMathJaxBundleSource() {
+            let libraryScript = WKUserScript(
+                source: mathSource,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true,
+                in: .defaultClient
+            )
+            scripts.append(libraryScript)
+        }
+        return scripts
+    }
+
+    static let mathConfigScript = WKUserScript(
         source: """
         (() => {
           if (window.MathJax) return;
@@ -3842,7 +3889,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.fontSizeScript)
         if context.coordinator.parent.features.containsMath {
-            configuration.userContentController.addUserScript(PaperReaderBridge.mathRuntimeScript)
+            for script in PaperReaderBridge.mathUserScripts(containsMath: true) {
+                configuration.userContentController.addUserScript(script)
+            }
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -4451,7 +4500,9 @@ private struct ArticleHTMLView: UIViewRepresentable {
         configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
         configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
         if context.coordinator.parent.features.containsMath {
-            configuration.userContentController.addUserScript(PaperReaderBridge.mathRuntimeScript)
+            for script in PaperReaderBridge.mathUserScripts(containsMath: true) {
+                configuration.userContentController.addUserScript(script)
+            }
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)

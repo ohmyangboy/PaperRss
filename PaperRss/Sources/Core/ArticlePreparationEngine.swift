@@ -120,11 +120,10 @@ public final class ArticlePreparationEngine: Sendable {
         var isStrong: Bool {
             if isSpecialSelfContained { return true }
             guard !hasTruncationSignal else { return false }
-            // 1. 正文不少于 400 字且至少 2 个语义块，或单段不少于 500 字
-            if charCount >= 400 && blockCount >= 2 { return true }
-            if charCount >= 500 { return true }
-            // 2. 正文不少于 200 字且至少 1 张有效图片
-            if charCount >= 200 && imageCount >= 1 { return true }
+            // 1. 正文不少于 600 字且至少 3 个语义块
+            if charCount >= 600 && blockCount >= 3 { return true }
+            // 2. 正文不少于 200 字、至少 2 个语义块且至少 1 张有效图片
+            if charCount >= 200 && blockCount >= 2 && imageCount >= 1 { return true }
             return false
         }
 
@@ -232,12 +231,12 @@ public final class ArticlePreparationEngine: Sendable {
 
         // 2. 通用跳转全文提示词检测
         let truncationKeywords = [
-            "阅读全文", "继续阅读", "查看全文", "展开全文", "阅读原文", "查看原网页", "展开阅读", "全文",
-            "Read more", "Continue reading", "Full article", "Read full article", "Click to read"
+            "阅读全文", "继续阅读", "查看全文", "展开全文", "阅读原文", "查看原网页", "展开阅读",
+            "read more", "continue reading", "full article", "read full article", "click to read"
         ]
         let lower = text.lowercased()
         for kw in truncationKeywords {
-            if lower.contains(kw.lowercased()) {
+            if lower.contains(kw) {
                 return true
             }
         }
@@ -349,12 +348,38 @@ public final class ArticlePreparationEngine: Sendable {
     }
 
     private func makeFallbackArticle(for entry: Entry) -> PreparedArticle {
-        let fallbackText = entry.sourceText
-        let fallbackHTML = "<p>\(fallbackText)</p>"
-        let containsMath = ArticleMathDetector.containsMath(in: fallbackHTML) || ArticleMathDetector.containsMath(in: fallbackText)
+        let rawText = entry.sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rawText.isEmpty {
+            return PreparedArticle(
+                text: "",
+                html: "",
+                imageURLs: [],
+                baseURL: entry.url,
+                source: .fallback,
+                features: ArticleFeatures(containsMath: false)
+            )
+        }
+
+        // 纯文本 HTML escaping 与分段结构化
+        let escaped = ArticleMarkupNormalizer.escapeHTML(rawText)
+        let paragraphs = escaped
+            .components(separatedBy: "\n\n")
+            .map { $0.replacingOccurrences(of: "\n", with: "<br>") }
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        let rawHTML: String
+        if paragraphs.isEmpty {
+            rawHTML = "<p>\(escaped)</p>"
+        } else {
+            rawHTML = paragraphs.map { "<p>\($0)</p>" }.joined(separator: "\n")
+        }
+
+        let safeHTML = ArticleExtractor.sanitizedHTML(rawHTML, baseURL: entry.url)
+        let containsMath = ArticleMathDetector.containsMath(in: safeHTML) || ArticleMathDetector.containsMath(in: rawText)
+
         return PreparedArticle(
-            text: fallbackText,
-            html: fallbackHTML,
+            text: rawText,
+            html: safeHTML,
             imageURLs: [],
             baseURL: entry.url,
             source: .fallback,

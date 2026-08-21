@@ -1,9 +1,9 @@
 # PaperRss Reader Engine 技术计划与实现规范
 
-- **Status**: implemented & verified (Goal 01R - Goal 06)
+- **Status**: implemented, automated & build verified, manual UI verification pending
 - **核对日期**: 2026-08-21
 - **适用范围**: macOS 主产品、共享 Core、现有 WKWebView Reader
-- **实施状态**: 全部 6 个目标阶段均已实施并通过分级自动化验证矩阵与 macOS 宿主构建
+- **实施状态**: 全部 6 个目标阶段及 Reviewer Findings 修复均已实施，并通过全量自动化测试套件 (226 Core + 55 Web/Bridge)、macOS 宿主 Clean Build 与 dev.sh 进程启动，待真机人工视觉与交互确认
 - **跟踪方式**: 本地 tracker 归档于 `.scratch/reader-engine/goals/`
 
 本文定义 PaperRss Reader Engine 的目标结构、分阶段实施顺序和验收门槛。各 Agent 必须先读本文，再只执行当前获准的 Goal；不得自行跨阶段、提交、推送或发布。

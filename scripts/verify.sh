@@ -69,7 +69,7 @@ run_build_test() {
 
 run_git_diff_check() {
     echo -e "\n${BLUE}▶ 执行代码规范与空白字符核查 (git diff --check)...${NC}"
-    git diff --check -- . ':!weekly.md'
+    git diff --check
     echo -e "${GREEN}✔ 代码格式规范无违规！${NC}"
 }
 

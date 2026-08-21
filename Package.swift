@@ -26,7 +26,12 @@ let package = Package(
             name: "PaperRssDesktop",
             dependencies: ["PaperRssCore"],
             path: "PaperRss/Sources/App",
-            resources: [.process("../../Resources")]
+            exclude: ["../../Resources/iOS-Info.plist", "../../Resources/macOS-Info.plist", "../../Resources/PaperRss.entitlements.template"],
+            resources: [
+                .process("../../Resources/Assets.xcassets"),
+                .process("../../Resources/Localization/Localizable.xcstrings"),
+                .copy("../../Resources/MathJax")
+            ]
         ),
         .testTarget(
             name: "PaperRssCoreTests",
@@ -34,8 +39,8 @@ let package = Package(
                 "PaperRssCore",
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
-            path: "Tests",
             exclude: [
+                "mathjax-runtime.test.mjs",
                 "reader-shortcuts.test.mjs",
                 "reader-toc.test.mjs",
                 "repository-policy.test.mjs",

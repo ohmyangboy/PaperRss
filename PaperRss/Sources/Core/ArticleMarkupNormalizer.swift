@@ -81,7 +81,7 @@ enum ArticleMarkupNormalizer: Sendable {
             return normalizeMixedContent(trimmed)
 
         case .plainText:
-            let escaped = escapeHTMLText(trimmed)
+            let escaped = escapeHTML(trimmed)
             let paragraphs = escaped
                 .components(separatedBy: "\n\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -396,12 +396,13 @@ enum ArticleMarkupNormalizer: Sendable {
             .replacingOccurrences(of: "&amp;", with: "&", options: .caseInsensitive)
     }
 
-    private static func escapeHTMLText(_ value: String) -> String {
+    static func escapeHTML(_ value: String) -> String {
         return value
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 
