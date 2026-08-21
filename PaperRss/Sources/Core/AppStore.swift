@@ -1292,7 +1292,7 @@ public final class AppStore: ObservableObject {
         let feedHost = feedURL?.host?.lowercased() ?? ""
         let feedPath = feedURL?.path.lowercased() ?? ""
         let isTwitterRoute = feedPath.contains("/twitter/") || feedPath.hasPrefix("/twitter") || feedPath.contains("/x/")
-        let isRSSHub = feedHost.contains("rsshub") || feedHost == "47.251.82.23"
+        let isRSSHub = feedHost.contains("rsshub")
 
         guard isTwitterRoute || isTwitterStatus || isRSSHub else { return nil }
 

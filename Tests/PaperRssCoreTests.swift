@@ -891,6 +891,58 @@ final class PaperRssCoreTests: XCTestCase {
     }
 
     @MainActor
+    func testTwitterFeedRouteUsesFeedContentWithoutDependingOnHost() {
+        let feedID = UUID()
+        let entry = Entry(
+            id: "twitter-route-item-1",
+            feedID: feedID,
+            title: "Test Tweet Title",
+            url: URL(string: "https://example.com/posts/1"),
+            contentHTML: "<p>Tweet body from RSS feed</p>"
+        )
+        let database = AppDatabase(
+            feeds: [Feed(id: feedID, title: "Twitter Feed", feedURL: URL(string: "https://feeds.example.com/twitter/user/testuser")!)],
+            entries: [entry],
+            articleCaches: [entry.id: ArticleCache(entryID: entry.id, text: "Cached article", html: "<p>Cached article</p>", isSanitized: true)],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: .default
+        )
+        let store = AppStore(testDatabase: database) { _ in fatalError("Unused in test") }
+
+        let html = store.articleHTML(for: entry)
+
+        XCTAssertTrue(html?.contains("Tweet body from RSS feed") == true)
+        XCTAssertFalse(html?.contains("Cached article") == true)
+    }
+
+    @MainActor
+    func testArbitraryIPAddressDoesNotOverrideCachedArticleForUnrelatedRoute() {
+        let feedID = UUID()
+        let entry = Entry(
+            id: "arbitrary-ip-item-1",
+            feedID: feedID,
+            title: "Regular Article",
+            url: URL(string: "https://example.com/posts/1"),
+            contentHTML: "<p>Feed summary</p>"
+        )
+        let database = AppDatabase(
+            feeds: [Feed(id: feedID, title: "Regular Feed", feedURL: URL(string: "http://192.0.2.1/regular/feed.xml")!)],
+            entries: [entry],
+            articleCaches: [entry.id: ArticleCache(entryID: entry.id, text: "Cached article", html: "<p>Cached article</p>", isSanitized: true)],
+            readingStates: [:],
+            artifacts: [],
+            llmConfiguration: .default
+        )
+        let store = AppStore(testDatabase: database) { _ in fatalError("Unused in test") }
+
+        let html = store.articleHTML(for: entry)
+
+        XCTAssertTrue(html?.contains("Cached article") == true)
+        XCTAssertFalse(html?.contains("Feed summary") == true)
+    }
+
+    @MainActor
     func testArticleFontSizeAdjustmentsAndClamping() {
         let store = AppStore()
         XCTAssertEqual(store.articleFontSize, 17)

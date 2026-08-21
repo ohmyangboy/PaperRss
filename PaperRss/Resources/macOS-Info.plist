@@ -18,14 +18,6 @@
         <true/>
         <key>NSAllowsLocalNetworking</key>
         <true/>
-        <key>NSExceptionDomains</key>
-        <dict>
-            <key>47.251.82.23</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-            </dict>
-        </dict>
     </dict>
 </dict>
 </plist>
