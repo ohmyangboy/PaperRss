@@ -52,6 +52,7 @@ struct RootView: View {
     @State private var autoScrollTrigger = UUID()
     @State private var toastMessage: String?
     @State private var toastTask: Task<Void, Never>?
+    @State private var markdownExportError: String?
     @State private var navigationConfirmation = ReaderNavigationConfirmation()
     @State private var navigationConfirmationExpiryTask: Task<Void, Never>?
     @State private var readerShortcutInvocation: ReaderShortcutInvocation?
@@ -117,6 +118,9 @@ struct RootView: View {
             .alert("PaperRss", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.dismissError() } })) {
                 Button(I18N.localized("好"), role: .cancel) { store.dismissError() }
             } message: { Text(store.lastError ?? "") }
+            .alert(I18N.localized("Markdown 导出失败"), isPresented: Binding(get: { markdownExportError != nil }, set: { if !$0 { markdownExportError = nil } })) {
+                Button(I18N.localized("好"), role: .cancel) { markdownExportError = nil }
+            } message: { Text(markdownExportError ?? "") }
     }
 
     // MARK: - 平台分支主内容
@@ -209,6 +213,116 @@ struct RootView: View {
     private var currentSelection: SidebarSelection {
         selection ?? .today
     }
+
+    #if os(macOS)
+    private func markdownForExporting(_ entry: Entry) -> String {
+        // The reader has already populated this cache when it needed to fetch
+        // an article. Export must only use that cache or feed-provided content;
+        // opening an export action must never trigger another web request.
+        let text = store.cachedText(for: entry) ?? entry.sourceText
+        return MarkdownExporter.render(
+            entry: entry,
+            feedTitle: store.feed(for: entry)?.title,
+            html: store.articleHTML(for: entry),
+            plainText: text,
+            sourceURL: store.articleSourceURL(for: entry)
+        )
+    }
+
+    private func exportSelectedEntryAsMarkdown() {
+        guard let selectedEntry else { return }
+        let markdown = markdownForExporting(selectedEntry)
+
+        do {
+            let panel = NSSavePanel()
+            panel.title = I18N.localized("保存文章为 Markdown")
+            panel.prompt = I18N.localized("保存")
+            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+            panel.nameFieldStringValue = MarkdownExporter.suggestedFilename(for: selectedEntry.title)
+            panel.canCreateDirectories = true
+            panel.isExtensionHidden = false
+
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+            try Data(markdown.utf8).write(to: url, options: .atomic)
+            showToast(I18N.localized("文章已导出为 Markdown"))
+        } catch {
+            markdownExportError = I18N.localizedFormat(
+                "导出 Markdown 失败：%@",
+                arguments: [error.localizedDescription]
+            )
+        }
+    }
+
+    private func saveSelectedEntryToObsidian() {
+        guard let selectedEntry else { return }
+        let markdown = markdownForExporting(selectedEntry)
+
+        do {
+            let panel = NSOpenPanel()
+            panel.title = I18N.localized("选择 Obsidian Vault 或目录")
+            panel.prompt = I18N.localized("选择")
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = false
+
+            guard panel.runModal() == .OK, let directoryURL = panel.url else { return }
+            let didAccess = directoryURL.startAccessingSecurityScopedResource()
+            defer { if didAccess { directoryURL.stopAccessingSecurityScopedResource() } }
+
+            let targetURL = try writeMarkdownToObsidian(
+                markdown,
+                title: selectedEntry.title,
+                directoryURL: directoryURL
+            )
+            showToast(I18N.localizedFormat(
+                "文章已保存到 Obsidian：%@",
+                arguments: [targetURL.lastPathComponent]
+            ))
+        } catch {
+            markdownExportError = I18N.localizedFormat(
+                "保存到 Obsidian 失败：%@",
+                arguments: [error.localizedDescription]
+            )
+        }
+    }
+
+    private func writeMarkdownToObsidian(
+        _ markdown: String,
+        title: String,
+        directoryURL: URL
+    ) throws -> URL {
+        let fileManager = FileManager.default
+        var existingNames = Set(try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).map(\ .lastPathComponent))
+
+        for _ in 0..<100 {
+            let filename = MarkdownExporter.nextAvailableFilename(
+                for: title,
+                existingNames: existingNames
+            )
+            let targetURL = directoryURL.appendingPathComponent(filename, isDirectory: false)
+
+            do {
+                // `.withoutOverwriting` is intentionally separate from `.atomic`:
+                // Foundation rejects that combination on macOS.
+                try Data(markdown.utf8).write(to: targetURL, options: [.withoutOverwriting])
+                return targetURL
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                existingNames.insert(filename)
+            }
+        }
+
+        throw CocoaError(.fileWriteUnknown, userInfo: [
+            NSLocalizedDescriptionKey: I18N.localized("无法为文章生成不重复的文件名")
+        ])
+    }
+    #endif
 
     private var headerTitle: String {
         if let selectedEntryID,
@@ -615,6 +729,16 @@ struct RootView: View {
                     withAnimation {
                         isZenMode.toggle()
                     }
+                },
+                onExportMarkdown: {
+                    #if os(macOS)
+                    exportSelectedEntryAsMarkdown()
+                    #endif
+                },
+                onSaveToObsidian: {
+                    #if os(macOS)
+                    saveSelectedEntryToObsidian()
+                    #endif
                 }
             )
         } else {

@@ -4993,6 +4993,8 @@ struct ReaderCapsuleToolbar: View {
     let onToggleRead: () -> Void
     let onToggleStar: () -> Void
     var onToggleZenMode: () -> Void = {}
+    var onExportMarkdown: () -> Void = {}
+    var onSaveToObsidian: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -5032,9 +5034,29 @@ struct ReaderCapsuleToolbar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
             .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
+
+            #if os(macOS)
+            Menu {
+                Button(action: onExportMarkdown) {
+                    Label(I18N.localized("导出 Markdown…"), systemImage: "square.and.arrow.down")
+                }
+                Button(action: onSaveToObsidian) {
+                    Label(I18N.localized("保存到 Obsidian…"), systemImage: "folder")
+                }
+            } label: {
+                toolbarSymbol("square.and.arrow.down", isActive: false)
+            }
+            .disabled(disabled)
+            .accessibilityLabel(I18N.localized("导出 Markdown 或保存到 Obsidian"))
+            .help(I18N.localized("导出 Markdown 或保存到 Obsidian"))
+            #endif
         }
         .padding(.horizontal, 8)
+        #if os(macOS)
+        .frame(width: 172, height: 28)
+        #else
         .frame(width: 140, height: 28)
+        #endif
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {

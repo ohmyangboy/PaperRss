@@ -1249,6 +1249,136 @@
         }
       }
     },
+    "Markdown 导出失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown Export Failed"
+          }
+        }
+      }
+    },
+    "保存文章为 Markdown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save Article as Markdown"
+          }
+        }
+      }
+    },
+    "文章已导出为 Markdown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article Exported as Markdown"
+          }
+        }
+      }
+    },
+    "导出文章为 Markdown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Article as Markdown"
+          }
+        }
+      }
+    },
+    "导出 Markdown…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Markdown…"
+          }
+        }
+      }
+    },
+    "保存到 Obsidian…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save to Obsidian…"
+          }
+        }
+      }
+    },
+    "导出 Markdown 或保存到 Obsidian" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Markdown or Save to Obsidian"
+          }
+        }
+      }
+    },
+    "选择 Obsidian Vault 或目录" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose an Obsidian Vault or Folder"
+          }
+        }
+      }
+    },
+    "文章已保存到 Obsidian：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article Saved to Obsidian: %@"
+          }
+        }
+      }
+    },
+    "保存到 Obsidian 失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving to Obsidian failed: %@"
+          }
+        }
+      }
+    },
+    "选择" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose"
+          }
+        }
+      }
+    },
+    "无法为文章生成不重复的文件名" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to generate a unique filename"
+          }
+        }
+      }
+    },
+    "导出 Markdown 失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markdown export failed: %@"
+          }
+        }
+      }
+    },
     "将当前列表全部标为已读" : {
       "localizations" : {
         "en" : {

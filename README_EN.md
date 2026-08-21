@@ -35,6 +35,7 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
 - **Custom Model Integration**: Bring your own DeepSeek or OpenAI-compatible API keys, with customizable system prompts.
 - **Multi-Account Support**: Currently supports local accounts and FreshRSS synchronization.
+- **Markdown and Obsidian Export**: Save article content and metadata as Markdown files that can be placed directly in an Obsidian vault.
 
 ## Screenshots
 

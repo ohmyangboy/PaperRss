@@ -213,7 +213,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
                 }
                 host.rootView = toolbarActions.readerCapsule
                 let size = host.fittingSize
-                let width = size.width > 0 ? size.width : 140
+                let width = size.width > 0 ? size.width : 172
                 let height = size.height > 0 ? size.height : 28
                 host.frame = NSRect(x: 0, y: 0, width: width, height: height)
                 context.coordinator.readerCapsuleWidthConstraint?.constant = width
@@ -799,7 +799,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 case .paperReaderCapsule:
                     item.label = I18N.localized("阅读工具")
                     item.paletteLabel = I18N.localized("阅读工具")
-                    item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
+                    item.toolTip = I18N.localized("阅读工具")
                 default:
                     break
                 }
@@ -991,7 +991,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
                 item.label = I18N.localized("阅读工具")
                 item.paletteLabel = I18N.localized("阅读工具")
-                item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
+                item.toolTip = I18N.localized("阅读工具")
                 item.autovalidates = false
                 item.isEnabled = true
                 if #available(macOS 15.0, *) {
@@ -1005,7 +1005,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 host.isHidden = !actions.showsReaderCapsule
 
                 let size = host.fittingSize
-                let width: CGFloat = actions.showsReaderCapsule ? (size.width > 0 ? size.width : 108) : 0
+                let width: CGFloat = actions.showsReaderCapsule ? (size.width > 0 ? size.width : 172) : 0
                 let height: CGFloat = actions.showsReaderCapsule ? (size.height > 0 ? size.height : 28) : 0
                 host.frame = NSRect(x: 0, y: 0, width: width, height: height)
                 

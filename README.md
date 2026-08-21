@@ -35,6 +35,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
 - **自由模型接入**：支持自定义配置DeepSeek、OpenAI 兼容 API KEY，提供设置个性化prompt
 - **多账户接入**：目前支持本地账户、FreshRSS 服务
+- **Markdown 与 Obsidian 导出**：将文章正文和元数据保存为 Markdown 文件，可直接放入 Obsidian vault。
 
 ## 真实界面
 

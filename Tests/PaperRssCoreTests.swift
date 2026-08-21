@@ -306,6 +306,109 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(text.contains("Bad"))
     }
 
+    func testMarkdownExporterCreatesObsidianDocumentFromArticleHTML() {
+        let feedID = UUID()
+        let entry = Entry(
+            id: "markdown-1",
+            feedID: feedID,
+            title: "标题: \"带引号\"\n第二行",
+            author: "作者",
+            url: URL(string: "https://example.com/articles/1"),
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            isRead: true,
+            isStarred: true
+        )
+        let html = """
+        <article>
+          <h2>小节</h2>
+          <p>一段 <strong>重点</strong>，包含 <a href="https://example.com/docs?q=1&amp;lang=zh">链接</a>。</p>
+          <p><img src="/cover image.jpg" alt="封面"></p>
+          <blockquote><p>引用内容</p></blockquote>
+          <ul><li>第一项</li><li>第二项</li></ul>
+          <pre><code>let value = 1</code></pre>
+          <script>alert('must not export')</script>
+        </article>
+        """
+
+        let output = MarkdownExporter.render(
+            entry: entry,
+            feedTitle: "示例订阅",
+            html: html,
+            plainText: "fallback",
+            sourceURL: entry.url
+        )
+
+        XCTAssertTrue(output.hasPrefix("---\ntitle: \"标题: \\\"带引号\\\"\\n第二行\"\n"))
+        XCTAssertTrue(output.contains("feed: \"示例订阅\""))
+        XCTAssertTrue(output.contains("author: \"作者\""))
+        XCTAssertTrue(output.contains("date: \"2023-11-14T22:13:20Z\""))
+        XCTAssertTrue(output.contains("read: true"))
+        XCTAssertTrue(output.contains("starred: true"))
+        XCTAssertTrue(output.contains("## 小节"))
+        XCTAssertTrue(output.contains("一段 **重点**，包含 [链接](<https://example.com/docs?q=1&lang=zh>)。"))
+        XCTAssertTrue(output.contains("![封面](<https://example.com/cover%20image.jpg>)"))
+        XCTAssertTrue(output.contains("> 引用内容"))
+        XCTAssertTrue(output.contains("- 第一项\n- 第二项"))
+        XCTAssertTrue(output.contains("```\nlet value = 1\n```"))
+        XCTAssertFalse(output.contains("alert"))
+        XCTAssertTrue(output.hasSuffix("\n"))
+    }
+
+    func testMarkdownExporterFallsBackToPlainTextAndSanitizesFilename() {
+        let entry = Entry(id: "markdown-2", feedID: UUID(), title: " / 无效: 文件名? ")
+        let output = MarkdownExporter.render(
+            entry: entry,
+            feedTitle: nil,
+            html: nil,
+            plainText: "普通正文\n# 不应成为标题\n- 不应成为列表",
+            sourceURL: nil
+        )
+
+        XCTAssertTrue(output.contains("普通正文\n\\# 不应成为标题\n\\- 不应成为列表"))
+        XCTAssertEqual(MarkdownExporter.suggestedFilename(for: entry.title), "无效- 文件名.md")
+    }
+
+    func testMarkdownExporterIncludesUnreadStateAndAvoidsFilenameCollisions() {
+        let entry = Entry(id: "markdown-4", feedID: UUID(), title: "Same title", isRead: false)
+        let output = MarkdownExporter.render(
+            entry: entry,
+            feedTitle: nil,
+            html: nil,
+            plainText: "正文",
+            sourceURL: nil
+        )
+
+        XCTAssertTrue(output.contains("read: false"))
+        XCTAssertEqual(
+            MarkdownExporter.nextAvailableFilename(
+                for: entry.title,
+                existingNames: ["Same title.md"]
+            ),
+            "Same title-2.md"
+        )
+        XCTAssertEqual(
+            MarkdownExporter.nextAvailableFilename(
+                for: entry.title,
+                existingNames: ["Same title.md", "Same title-2.md", "same title-3.md"]
+            ),
+            "Same title-4.md"
+        )
+    }
+
+    func testMarkdownExporterFallsBackWhenSanitizedHTMLHasNoReadableContent() {
+        let entry = Entry(id: "markdown-3", feedID: UUID(), title: "Fallback")
+        let output = MarkdownExporter.render(
+            entry: entry,
+            feedTitle: nil,
+            html: "<script>discarded</script>",
+            plainText: "保留的正文",
+            sourceURL: nil
+        )
+
+        XCTAssertTrue(output.contains("保留的正文"))
+        XCTAssertFalse(output.contains("discarded"))
+    }
+
     func testArticleImageExtractionKeepsRelativeAndSecureURLs() {
         let html = """
         <article><img src="/cover.jpg"><p>Enough text for an article.</p><img data-src="https://cdn.example.com/photo.png"><img src="javascript:alert(1)"></article>
