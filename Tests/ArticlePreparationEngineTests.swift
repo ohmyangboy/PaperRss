@@ -6,10 +6,11 @@ final class MockPageLoader: ArticlePageLoading, @unchecked Sendable {
     var requestCount: Int = 0
     var requestedURLs: [URL] = []
     var responseMap: [URL: String] = [:]
+    var finalURLMap: [URL: URL] = [:]
     var errorMap: [URL: Error] = [:]
     var delay: TimeInterval = 0
 
-    func loadHTML(for url: URL) async throws -> String? {
+    func loadPage(for url: URL) async throws -> LoadedArticlePage? {
         requestCount += 1
         requestedURLs.append(url)
         if delay > 0 {
@@ -18,7 +19,8 @@ final class MockPageLoader: ArticlePageLoading, @unchecked Sendable {
         if let error = errorMap[url] {
             throw error
         }
-        return responseMap[url]
+        guard let html = responseMap[url] else { return nil }
+        return LoadedArticlePage(html: html, finalURL: finalURLMap[url] ?? url)
     }
 }
 
@@ -58,7 +60,7 @@ final class ArticlePreparationEngineTests: XCTestCase {
         let engine = ArticlePreparationEngine(pageLoader: loader)
 
         let longText = String(repeating: "高价值缓存文本内容，经过前期清洗与离线保存。", count: 20)
-        let cacheHTML = "<p>\(longText)</p>"
+        let cacheHTML = "<p>\(longText)</p><img src=\"https://example.com/cached.jpg\" loading=\"eager\" decoding=\"async\">"
         let existingCache = ArticleCache(
             entryID: "entry-cache-1",
             text: longText,
@@ -238,6 +240,36 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertEqual(prepared.baseURL, postURL)
     }
 
+    func testRedirectedResponseURLBecomesWebCandidateBaseURL() async {
+        let loader = MockPageLoader()
+        let requestedURL = URL(string: "https://example.com/redirect")!
+        let finalURL = URL(string: "https://cdn.example.net/articles/final/")!
+        loader.responseMap[requestedURL] = """
+        <article>
+            <p>重定向后的完整正文包含足够上下文，并通过多段内容证明相对资源必须基于最终响应地址解析。</p>
+            <p>第二段继续补充事实、证据和结论，使网页候选明显优于截断的 Feed 内容。</p>
+            <img src="images/chart.png">
+        </article>
+        """
+        loader.finalURLMap[requestedURL] = finalURL
+        let entry = Entry(
+            id: "redirected-page",
+            feedID: defaultFeedID,
+            title: "Redirected article",
+            url: requestedURL,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>截断……</p>"
+        )
+
+        let (prepared, _) = await ArticlePreparationEngine(pageLoader: loader).prepare(entry: entry, cached: nil)
+
+        XCTAssertEqual(prepared.source, .web)
+        XCTAssertEqual(prepared.baseURL, finalURL)
+        XCTAssertEqual(prepared.imageURLs, [URL(string: "https://cdn.example.net/articles/final/images/chart.png")!])
+        XCTAssertTrue(prepared.html.contains("https://cdn.example.net/articles/final/images/chart.png"))
+    }
+
     // MARK: - 8. Cancellation Prevents Stale Results and Cache Writes
 
     func testTaskCancellationPreventsCacheWrites() async throws {
@@ -296,6 +328,125 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertEqual(prepared.source, .cache)
         XCTAssertNotNil(updatedCache, "旧版未清洗缓存规范化后应当产生 1 次缓存回写")
         XCTAssertEqual(updatedCache?.isSanitized, true)
+    }
+
+    func testHighQualityCacheWinsOverShorterStrongFeed() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entryID = "entry-cache-vs-feed"
+        let url = URL(string: "https://example.com/cache-vs-feed")!
+        let feedBody = String(repeating: "Feed 正文刚刚达到强候选门槛。", count: 45)
+        let cachedBody = String(repeating: "缓存中的完整网页正文包含更多上下文、证据和结论。", count: 120)
+        let cache = ArticleCache(
+            entryID: entryID,
+            text: cachedBody,
+            html: "<article><p>\(cachedBody)</p></article>",
+            imageURLs: [],
+            sourceURL: url,
+            isSanitized: true
+        )
+        let entry = Entry(
+            id: entryID,
+            feedID: defaultFeedID,
+            title: "缓存优先级",
+            url: url,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(feedBody)</p><p>\(feedBody)</p><p>\(feedBody)</p>"
+        )
+
+        let (prepared, _) = await engine.prepare(entry: entry, cached: cache)
+
+        XCTAssertEqual(prepared.source, .cache)
+        XCTAssertTrue(prepared.text.contains("缓存中的完整网页正文"))
+        XCTAssertEqual(loader.requestCount, 0)
+    }
+
+    func testMuchStrongerFeedReplacesUsableButStaleCache() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entryID = "entry-feed-vs-stale-cache"
+        let cachedBody = String(repeating: "旧缓存只有有限上下文。", count: 15)
+        let feedBody = String(repeating: "新 Feed 正文包含完整背景、证据、分析和结论。", count: 80)
+        let cache = ArticleCache(
+            entryID: entryID,
+            text: cachedBody,
+            html: "<p>\(cachedBody)</p><p>缓存补充段。</p>",
+            imageURLs: [],
+            isSanitized: true
+        )
+        let entry = Entry(
+            id: entryID,
+            feedID: defaultFeedID,
+            title: "Feed 更新",
+            url: nil,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(feedBody)</p><p>\(feedBody)</p><p>\(feedBody)</p>"
+        )
+
+        let (prepared, _) = await engine.prepare(entry: entry, cached: cache)
+
+        XCTAssertEqual(prepared.source, .feed)
+        XCTAssertTrue(prepared.text.contains("新 Feed 正文"))
+        XCTAssertEqual(loader.requestCount, 0)
+    }
+
+    func testTextOnlyLegacyCacheRemainsAvailableOffline() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let cachedText = String(repeating: "旧缓存仍保存着可离线阅读的完整正文。", count: 30)
+        let cache = ArticleCache(
+            entryID: "entry-text-only-cache",
+            text: cachedText,
+            html: nil,
+            imageURLs: [],
+            sourceURL: URL(string: "https://example.com/text-cache"),
+            isSanitized: false
+        )
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "旧缓存",
+            url: nil,
+            publishedAt: .now,
+            summary: "很短的 Feed 摘要"
+        )
+
+        let (prepared, updatedCache) = await engine.prepare(entry: entry, cached: cache)
+
+        XCTAssertEqual(prepared.source, .cache)
+        XCTAssertEqual(prepared.text, cachedText)
+        XCTAssertTrue(prepared.html.contains("<p>"))
+        XCTAssertNotNil(updatedCache, "text-only 旧缓存应惰性升级为清洗后的 HTML 缓存")
+        XCTAssertEqual(loader.requestCount, 0)
+    }
+
+    func testTextOnlyLegacyCachePreservesLiteralAngleBracketExamples() async {
+        let loader = MockPageLoader()
+        let literalText = String(repeating: "示例 <strong> 只是正文，不是标签。\n", count: 20)
+        let cache = ArticleCache(
+            entryID: "literal-text-cache",
+            text: literalText,
+            html: nil,
+            imageURLs: [],
+            isSanitized: false
+        )
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "Literal markup",
+            url: nil,
+            publishedAt: .now,
+            summary: ""
+        )
+
+        let (prepared, _) = await ArticlePreparationEngine(pageLoader: loader).prepare(entry: entry, cached: cache)
+
+        XCTAssertEqual(prepared.source, .cache)
+        XCTAssertTrue(prepared.text.contains("<strong> 只是正文"))
+        XCTAssertTrue(prepared.html.contains("&lt;strong&gt;"))
+        XCTAssertFalse(prepared.html.contains("<strong>"))
     }
 
     // MARK: - 10. Fallback on Completely Empty

@@ -2,6 +2,10 @@ import XCTest
 import Foundation
 @testable import PaperRssCore
 
+private struct NoNetworkPageLoader: ArticlePageLoading {
+    func loadPage(for url: URL) async throws -> LoadedArticlePage? { nil }
+}
+
 final class ReaderEngineEndToEndTests: XCTestCase {
 
     let defaultFeedID = UUID()
@@ -37,7 +41,7 @@ final class ReaderEngineEndToEndTests: XCTestCase {
             contentHTML: rawContent
         )
 
-        let engine = ArticlePreparationEngine()
+        let engine = ArticlePreparationEngine(pageLoader: NoNetworkPageLoader())
         let (prepared, _) = await engine.prepare(entry: entry, cached: nil)
 
         // 1. 同源与来源断言
@@ -59,19 +63,22 @@ final class ReaderEngineEndToEndTests: XCTestCase {
         XCTAssertFalse(prepared.features.containsMath)
 
         // 5. 渲染为最终 Reader HTML 文档
-        let finalDocument = ReaderDocumentRenderer.renderHTMLDocument(
-            bodyHTML: prepared.html,
+        let renderedDocument = ReaderDocumentRenderer.renderDocument(
+            article: prepared,
+            documentIdentity: entry.id,
             headerHTML: "<header class=\"paper-header-container\"><h1>\(entry.title)</h1></header>",
             topInset: 84,
-            fontSize: 17,
-            features: prepared.features
+            fontSize: 17
         )
+        let finalDocument = renderedDocument.html
 
         XCTAssertTrue(finalDocument.hasPrefix("<!doctype html>"))
         XCTAssertTrue(finalDocument.contains("http-equiv=\"Content-Security-Policy\""))
         XCTAssertTrue(finalDocument.contains("default-src 'none'"))
         XCTAssertTrue(finalDocument.contains("--paper-reader-top-inset: 84.0px"))
         XCTAssertTrue(finalDocument.contains("--paper-font-size: 17px"))
+        XCTAssertEqual(renderedDocument.baseURL, prepared.baseURL)
+        XCTAssertEqual(renderedDocument.features, prepared.features)
     }
 
     // MARK: - 2. Math & Currency Disambiguation End-to-End
@@ -95,7 +102,7 @@ final class ReaderEngineEndToEndTests: XCTestCase {
             contentHTML: mathHTML
         )
 
-        let engine = ArticlePreparationEngine()
+        let engine = ArticlePreparationEngine(pageLoader: NoNetworkPageLoader())
         let (prepared, _) = await engine.prepare(entry: entry, cached: nil)
 
         XCTAssertTrue(prepared.features.containsMath, "必须精准识别块级 TeX 公式并忽略金额")
@@ -124,7 +131,7 @@ final class ReaderEngineEndToEndTests: XCTestCase {
             contentHTML: multiImgHTML
         )
 
-        let engine = ArticlePreparationEngine()
+        let engine = ArticlePreparationEngine(pageLoader: NoNetworkPageLoader())
         let (prepared, _) = await engine.prepare(entry: entry, cached: nil)
 
         XCTAssertEqual(prepared.imageURLs.count, 4)

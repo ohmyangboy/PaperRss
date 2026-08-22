@@ -216,4 +216,72 @@ final class ArticleMediaAndExtractionTests: XCTestCase {
         XCTAssertTrue(imageURLs.contains("https://example.com/markdown-img.png"))
         XCTAssertEqual(content.imageURLs.count, 2)
     }
+
+    // MARK: - 10. Media Sibling Around Article Body
+
+    func testArticleContainerRetainsAdjacentMediaSibling() {
+        let rawHTML = """
+        <section class="section">
+            <div class="card">
+                <div class="card-image">
+                    <img src="https://example.com/cover.jpg" alt="Cover">
+                </div>
+                <article class="card-content article">
+                    <p>正文第一段，包含足够的内容用于识别真实文章容器。</p>
+                    <p>正文第二段，继续说明文章观点并保持媒体顺序。</p>
+                    <p><img src="https://example.com/body-1.jpg" alt="Body one"></p>
+                    <p><img src="https://example.com/body-2.jpg" alt="Body two"></p>
+                </article>
+            </div>
+        </section>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+        let imageURLs = content.imageURLs.map(\.absoluteString)
+
+        XCTAssertEqual(imageURLs, [
+            "https://example.com/cover.jpg",
+            "https://example.com/body-1.jpg",
+            "https://example.com/body-2.jpg"
+        ])
+        XCTAssertTrue(content.html.contains("src=\"https://example.com/cover.jpg\""))
+    }
+
+    func testArticleContainerDoesNotExpandIntoNoisyParentMedia() {
+        let rawHTML = """
+        <div class="page-shell">
+            <div class="recommendations"><img src="https://example.com/sidebar.jpg" alt="Sidebar"></div>
+            <article class="article-content">
+                <p>真实正文第一段，包含足够文字用于识别文章容器。</p>
+                <p>真实正文第二段，继续提供文章内容和结论。</p>
+                <p><img src="https://example.com/body.jpg" alt="Body"></p>
+            </article>
+        </div>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertEqual(content.imageURLs.map(\.absoluteString), ["https://example.com/body.jpg"])
+        XCTAssertFalse(content.html.contains("sidebar.jpg"), "媒体扩展不得把侧栏图片带入正文")
+    }
+
+    // MARK: - 11. Safe Heading Anchors
+
+    func testSanitizerPreservesSafeHeadingIDWithoutSourceStyling() {
+        let html = "<h2 id=\"toc-1\" class=\"jltoc--item\">01 显存划的线</h2>"
+
+        let sanitized = ArticleExtractor.sanitizedHTML(html)
+
+        XCTAssertTrue(sanitized.contains("<h2 id=\"toc-1\">") )
+        XCTAssertFalse(sanitized.contains("jltoc--item"), "来源站点 class 不应进入统一 Reader 样式")
+    }
+
+    func testSanitizerPreservesSameDocumentFragmentLinks() {
+        let html = "<p><a href=\"#toc-1\">跳到章节</a></p>"
+
+        let sanitized = ArticleExtractor.sanitizedHTML(html, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(sanitized.contains("href=\"#toc-1\""))
+        XCTAssertFalse(sanitized.contains("https://example.com/post#toc-1"))
+    }
 }

@@ -1,6 +1,18 @@
 import Foundation
 
 public enum ArticleExtractor {
+    private static let positiveContainerTokens = [
+        "article", "content", "post", "entry", "main", "body", "story", "detail",
+        "text", "rich-text", "article-body", "post-content", "entry-content",
+        "article-content", "markdown-body", "story-body"
+    ]
+
+    private static let negativeContainerTokens = [
+        "sidebar", "nav", "footer", "header", "comment", "share", "ad", "recommend",
+        "related", "widget", "modal", "dialog", "popover", "author-bio", "nav-links",
+        "menu", "banner", "copyright"
+    ]
+
     public struct Content: Sendable {
         public var text: String
         public var html: String
@@ -201,6 +213,8 @@ public enum ArticleExtractor {
         let attributes: String
         let innerHTML: String
         let fullHTML: String
+        let startOffset: Int
+        let endOffset: Int
     }
 
     /// 基于语义标签、通用 class 词元、段落/媒体密度与链接密度评估并提取最佳正文容器
@@ -209,20 +223,63 @@ public enum ArticleExtractor {
         guard !candidates.isEmpty else { return nil }
 
         var bestScore: Double = -100
-        var bestFragment: String?
+        var bestCandidate: ScannedContainer?
 
         for candidate in candidates {
             let score = scoreCandidateContainer(tag: candidate.tag, attributes: candidate.attributes, bodyHTML: candidate.innerHTML)
             if score > bestScore {
                 bestScore = score
-                bestFragment = candidate.fullHTML
+                bestCandidate = candidate
             }
         }
 
-        if bestScore >= 35 {
-            return bestFragment
+        guard bestScore >= 35, let bestCandidate else { return nil }
+
+        // Some layouts keep a cover or media rail in a sibling of the text
+        // container. Expand only to the nearest containing candidate when it
+        // adds media without adding a substantial amount of unrelated text.
+        let bestMediaCount = mediaCount(in: bestCandidate.fullHTML)
+        let bestTextCount = bestCandidate.fullHTML.plainText.count
+        let expandedCandidate = candidates
+            .filter {
+                $0.startOffset < bestCandidate.startOffset &&
+                $0.endOffset > bestCandidate.endOffset &&
+                mediaCount(in: $0.fullHTML) > bestMediaCount &&
+                $0.fullHTML.plainText.count <= bestTextCount + max(120, bestTextCount / 4) &&
+                isLowNoiseContainer($0) &&
+                scoreCandidateContainer(tag: $0.tag, attributes: $0.attributes, bodyHTML: $0.innerHTML) >= 35
+            }
+            .min { lhs, rhs in
+                (lhs.endOffset - lhs.startOffset) < (rhs.endOffset - rhs.startOffset)
+            }
+
+        if let expandedCandidate {
+            return expandedCandidate.fullHTML
         }
-        return nil
+        return bestCandidate.fullHTML
+    }
+
+    private static func mediaCount(in html: String) -> Int {
+        let pattern = "(?is)<(img|figure|video)\\b"
+        return (try? NSRegularExpression(pattern: pattern))?.numberOfMatches(
+            in: html,
+            range: NSRange(html.startIndex..., in: html)
+        ) ?? 0
+    }
+
+    private static func isLowNoiseContainer(_ candidate: ScannedContainer) -> Bool {
+        let attributes = parseAttributesMap(from: candidate.attributes)
+        let classAndID = "\(attributes["class"] ?? "") \(attributes["id"] ?? "")".lowercased()
+        if negativeContainerTokens.contains(where: { classAndID.contains($0) }) {
+            return false
+        }
+
+        let tokenPattern = negativeContainerTokens.joined(separator: "|")
+        let pattern = "(?is)<[a-z][^>]*\\b(?:class|id)\\s*=\\s*[\"'][^\"']*(?:\(tokenPattern))[^\"']*[\"']"
+        return (try? NSRegularExpression(pattern: pattern))?.firstMatch(
+            in: candidate.innerHTML,
+            range: NSRange(candidate.innerHTML.startIndex..., in: candidate.innerHTML)
+        ) == nil
     }
 
     /// 使用标签栈扫描平衡容器，天然安全支持同名与多级嵌套
@@ -259,7 +316,18 @@ public enum ArticleExtractor {
                     stacks[tagName] = tagStack
                     let inner = String(html[opened.innerStart..<fullRange.lowerBound])
                     let full = String(html[opened.tagStart..<fullRange.upperBound])
-                    candidates.append(ScannedContainer(tag: tagName, attributes: opened.attributes, innerHTML: inner, fullHTML: full))
+                    let startOffset = html.distance(from: html.startIndex, to: opened.tagStart)
+                    let endOffset = html.distance(from: html.startIndex, to: fullRange.upperBound)
+                    candidates.append(
+                        ScannedContainer(
+                            tag: tagName,
+                            attributes: opened.attributes,
+                            innerHTML: inner,
+                            fullHTML: full,
+                            startOffset: startOffset,
+                            endOffset: endOffset
+                        )
+                    )
                 }
             } else {
                 let opened = OpenTag(name: tagName, attributes: attrString, tagStart: fullRange.lowerBound, innerStart: fullRange.upperBound)
@@ -285,21 +353,10 @@ public enum ArticleExtractor {
         let attrMap = parseAttributesMap(from: attributes)
         let classAndID = "\(attrMap["class"] ?? "") \(attrMap["id"] ?? "")".lowercased()
 
-        let positiveTokens = [
-            "article", "content", "post", "entry", "main", "body", "story", "detail",
-            "text", "rich-text", "article-body", "post-content", "entry-content",
-            "article-content", "markdown-body", "story-body"
-        ]
-        let negativeTokens = [
-            "sidebar", "nav", "footer", "header", "comment", "share", "ad", "recommend",
-            "related", "widget", "modal", "dialog", "popover", "author-bio", "nav-links",
-            "menu", "banner", "copyright"
-        ]
-
-        for token in positiveTokens {
+        for token in positiveContainerTokens {
             if classAndID.contains(token) { score += 30 }
         }
-        for token in negativeTokens {
+        for token in negativeContainerTokens {
             if classAndID.contains(token) { score -= 45 }
         }
 
@@ -374,7 +431,13 @@ public enum ArticleExtractor {
             "strong", "b", "em", "i", "u", "s", "del", "mark", "small", "sub", "sup",
             "blockquote", "pre", "code", "kbd", "ul", "ol", "li", "dl", "dt", "dd",
             "figure", "figcaption", "table", "thead", "tbody", "tfoot", "tr", "th", "td",
-            "img", "a", "video", "source", "audio", "picture"
+            "img", "a", "video", "source", "audio", "picture",
+            "math", "mrow", "mi", "mn", "mo", "mtext", "mspace", "mfrac", "msqrt", "mroot",
+            "mstyle", "merror", "mpadded", "mphantom", "mfenced", "menclose", "msub", "msup",
+            "msubsup", "munder", "mover", "munderover", "mmultiscripts", "mprescripts", "none",
+            "mtable", "mtr", "mtd", "mlabeledtr", "semantics", "annotation", "annotation-xml",
+            "maction", "maligngroup", "malignmark", "ms", "mlongdiv", "mscarries", "mscarry",
+            "msgroup", "msline", "msrow", "mstack"
         ]
         let voidTags: Set<String> = ["br", "hr", "img", "source"]
         let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
@@ -560,26 +623,104 @@ public enum ArticleExtractor {
     /// Returns the source blocks WebKit can observe while the reader scrolls.
     /// The same expression is used by the renderer below, keeping paragraph IDs
     /// stable between translation requests and document reloads.
+    /// Semantic block tags whose wrapper must be preserved when a reader block
+    /// is annotated. Splitting these into flat `<p>` fragments would destroy the
+    /// blockquote/pre/heading/list/table semantics the reader relies on.
+    private static let structuralBlockTags: Set<String> = [
+        "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
+        "li", "figcaption", "dt", "dd", "ol", "ul", "table", "div"
+    ]
+
+    private static func blockTagName(of block: String) -> String? {
+        guard let openingTag = block.range(of: "<[a-z][a-z0-9]*\\b", options: .regularExpression) else { return nil }
+        let tag = block[openingTag].dropFirst()
+        return tag.lowercased()
+    }
+
+    private struct ReaderBlockMatch {
+        let range: Range<String.Index>
+        let tag: String
+        let hasNestedReaderBlock: Bool
+    }
+
+    private static func readerBlockMatches(in html: String) -> [ReaderBlockMatch] {
+        let pattern = "(?is)</?(blockquote|pre|table|ul|ol|h[1-6]|figcaption|dt|dd|p|li|div)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        var stack: [(tag: String, start: String.Index, hasNestedReaderBlock: Bool)] = []
+        var matches: [ReaderBlockMatch] = []
+
+        for token in expression.matches(in: html, range: range) {
+            guard let tokenRange = Range(token.range, in: html),
+                  let nameRange = Range(token.range(at: 1), in: html) else { continue }
+            let tag = html[nameRange].lowercased()
+            let sourceTag = html[tokenRange]
+            let isClosing = sourceTag.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/")
+            if !isClosing {
+                for index in stack.indices {
+                    stack[index].hasNestedReaderBlock = true
+                }
+                stack.append((tag, tokenRange.lowerBound, false))
+                continue
+            }
+
+            guard let openingIndex = stack.lastIndex(where: { $0.tag == tag }) else { continue }
+            let opening = stack[openingIndex]
+            stack.removeSubrange(openingIndex...)
+            matches.append(ReaderBlockMatch(
+                range: opening.start..<tokenRange.upperBound,
+                tag: tag,
+                hasNestedReaderBlock: opening.hasNestedReaderBlock
+            ))
+        }
+
+        matches.sort {
+            if $0.range.lowerBound == $1.range.lowerBound {
+                return $0.range.upperBound > $1.range.upperBound
+            }
+            return $0.range.lowerBound < $1.range.lowerBound
+        }
+
+        var selected: [ReaderBlockMatch] = []
+        var selectedEnd: String.Index?
+        for candidate in matches {
+            if candidate.tag == "div" && candidate.hasNestedReaderBlock {
+                continue
+            }
+            if let end = selectedEnd, candidate.range.lowerBound < end {
+                continue
+            }
+            selected.append(candidate)
+            selectedEnd = candidate.range.upperBound
+        }
+        return selected
+    }
+
     public static func readerParagraphs(in html: String, title: String? = nil) -> [ReaderParagraph] {
         var paragraphs: [ReaderParagraph] = []
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             paragraphs.append(ReaderParagraph(id: "title", original: title))
         }
-        guard let expression = readerBlockExpression else { return paragraphs }
-        let range = NSRange(html.startIndex..., in: html)
         var paragraphIndex = 0
-        expression.enumerateMatches(in: html, range: range) { match, _, _ in
-            guard let match, let blockRange = Range(match.range, in: html) else { return }
-            let original = String(html[blockRange]).plainText
-            guard !original.isEmpty else { return }
+        for match in readerBlockMatches(in: html) {
+            let block = String(html[match.range])
+            let original = block.plainText
+            guard !original.isEmpty else { continue }
 
-            let subParagraphs = splitBlockTextIntoParagraphs(original)
-            if subParagraphs.count > 1 {
-                for (subIdx, subText) in subParagraphs.enumerated() {
-                    paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)_\(subIdx)", original: subText))
-                }
-            } else {
+            // Structural blocks stay a single observable, translatable unit so
+            // their wrapper (blockquote/pre/heading/table) survives annotation.
+            let tag = blockTagName(of: block)
+            if structuralBlockTags.contains(tag ?? "") {
                 paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
+            } else {
+                let subParagraphs = splitBlockTextIntoParagraphs(original)
+                if subParagraphs.count > 1 {
+                    for (subIdx, subText) in subParagraphs.enumerated() {
+                        paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)_\(subIdx)", original: subText))
+                    }
+                } else {
+                    paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
+                }
             }
             paragraphIndex += 1
         }
@@ -595,57 +736,64 @@ public enum ArticleExtractor {
         segments: [BilingualSegment],
         pendingIDs: Set<String> = []
     ) -> String {
-        guard let expression = readerBlockExpression else { return html }
-
-        let range = NSRange(html.startIndex..., in: html)
         var rendered = ""
         var cursor = html.startIndex
         var paragraphIndex = 0
         let segmentsByID = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
 
-        expression.enumerateMatches(in: html, range: range) { match, _, _ in
-            guard let match, let blockRange = Range(match.range, in: html) else { return }
-            rendered += html[cursor..<blockRange.lowerBound]
-            let block = String(html[blockRange])
-            cursor = blockRange.upperBound
+        for match in readerBlockMatches(in: html) {
+            rendered += html[cursor..<match.range.lowerBound]
+            let block = String(html[match.range])
+            cursor = match.range.upperBound
 
             let original = block.plainText
-            guard !original.isEmpty else {
+            if original.isEmpty {
                 rendered += block
-                return
+                continue
             }
 
-            let subParagraphs = splitBlockTextIntoParagraphs(original)
-            if subParagraphs.count > 1 {
-                for (subIdx, subText) in subParagraphs.enumerated() {
-                    let subID = "p\(paragraphIndex)_\(subIdx)"
-                    let escapedSubText = htmlTextEscaped(subText).replacingOccurrences(of: "\n", with: "<br>")
-                    rendered += "<p class=\"paper-rss-subparagraph\" data-paper-rss-id=\"\(subID)\">\(escapedSubText)</p>"
-                    if let segment = segmentsByID[subID], subText.isSameReaderParagraph(as: segment.original) {
-                        rendered += translationMarkup(for: segment.translation, id: subID)
-                    } else if pendingIDs.contains(subID) {
-                        rendered += pendingTranslationMarkup(for: subID)
-                    }
-                }
-            } else {
+            let tag = blockTagName(of: block)
+            if structuralBlockTags.contains(tag ?? "") {
+                // Preserve the structural wrapper (blockquote/pre/heading/table).
+                // The whole block stays one observable unit; sub-segmenting a
+                // blockquote into flat <p> fragments destroys its semantics.
                 let id = "p\(paragraphIndex)"
                 rendered += annotatedReaderBlock(block, id: id)
-
                 if let segment = segmentsByID[id],
                    original.isSameReaderParagraph(as: segment.original) {
                     rendered += translationMarkup(for: segment.translation, id: id)
                 } else if pendingIDs.contains(id) {
                     rendered += pendingTranslationMarkup(for: id)
                 }
+            } else {
+                let subParagraphs = splitBlockTextIntoParagraphs(original)
+                if subParagraphs.count > 1 {
+                    for (subIdx, subText) in subParagraphs.enumerated() {
+                        let subID = "p\(paragraphIndex)_\(subIdx)"
+                        let escapedSubText = htmlTextEscaped(subText).replacingOccurrences(of: "\n", with: "<br>")
+                        rendered += "<p class=\"paper-rss-subparagraph\" data-paper-rss-id=\"\(subID)\">\(escapedSubText)</p>"
+                        if let segment = segmentsByID[subID], subText.isSameReaderParagraph(as: segment.original) {
+                            rendered += translationMarkup(for: segment.translation, id: subID)
+                        } else if pendingIDs.contains(subID) {
+                            rendered += pendingTranslationMarkup(for: subID)
+                        }
+                    }
+                } else {
+                    let id = "p\(paragraphIndex)"
+                    rendered += annotatedReaderBlock(block, id: id)
+
+                    if let segment = segmentsByID[id],
+                       original.isSameReaderParagraph(as: segment.original) {
+                        rendered += translationMarkup(for: segment.translation, id: id)
+                    } else if pendingIDs.contains(id) {
+                        rendered += pendingTranslationMarkup(for: id)
+                    }
+                }
             }
             paragraphIndex += 1
         }
         rendered += html[cursor...]
         return rendered
-    }
-
-    private static var readerBlockExpression: NSRegularExpression? {
-        try? NSRegularExpression(pattern: "(?is)<(p|div|li|blockquote|pre|h[1-6]|figcaption|dt|dd)\\b[^>]*>.*?</\\1>")
     }
 
     private static func annotatedReaderBlock(_ block: String, id: String) -> String {
@@ -730,6 +878,15 @@ public enum ArticleExtractor {
         case "source": allowed = ["src", "type"]
         case "audio": allowed = ["src", "controls", "autoplay", "loop", "muted", "preload"]
         case "th", "td": allowed = ["colspan", "rowspan"]
+        case "h1", "h2", "h3", "h4", "h5", "h6": allowed = ["id"]
+        case "math": allowed = ["display"]
+        case "mi", "mn", "mo", "mtext", "mstyle": allowed = ["mathvariant"]
+        case "mspace": allowed = ["width", "height", "depth"]
+        case "menclose": allowed = ["notation"]
+        case "mtable": allowed = ["columnalign", "rowalign", "columnspacing", "rowspacing", "frame"]
+        case "mtd": allowed = ["columnalign", "rowalign", "columnspan", "rowspan"]
+        case "annotation", "annotation-xml": allowed = ["encoding"]
+        case "maction": allowed = ["actiontype", "selection"]
         default: allowed = []
         }
         guard !allowed.isEmpty,
@@ -748,12 +905,16 @@ public enum ArticleExtractor {
 
             if let valueRange {
                 var value = String(source[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if name == "href" || name == "src" || name == "poster" {
+                if name == "href", value.hasPrefix("#") {
+                    guard isSafeFragmentReference(value) else { return }
+                } else if name == "href" || name == "src" || name == "poster" {
                     guard let resolvedURL = safeRemoteURL(value, baseURL: baseURL) else { return }
                     value = resolvedURL.absoluteString
                 } else if name == "width" || name == "height" || name == "colspan" || name == "rowspan" {
                     guard let number = Int(value), number > 0, number <= 10_000 else { return }
                     value = String(number)
+                } else if name == "id" {
+                    guard isSafeHeadingID(value) else { return }
                 }
                 attributes.append(" \(name)=\"\(htmlAttributeEscaped(value))\"")
             } else {
@@ -769,6 +930,21 @@ public enum ArticleExtractor {
             if !seenNames.contains("allowfullscreen") { attributes.append(" allowfullscreen") }
         }
         return attributes.joined()
+    }
+
+    private static func isSafeHeadingID(_ value: String) -> Bool {
+        guard !value.isEmpty, value.count <= 200 else { return false }
+        return value.allSatisfy { character in
+            character.isLetter || character.isNumber || "-_:.".contains(character)
+        }
+    }
+
+    private static func isSafeFragmentReference(_ value: String) -> Bool {
+        guard value.count <= 500, value.first == "#", value.count > 1 else { return false }
+        return !value.unicodeScalars.contains(where: { scalar in
+            CharacterSet.whitespacesAndNewlines.contains(scalar) ||
+            CharacterSet.controlCharacters.contains(scalar)
+        })
     }
 
     private static func safeRemoteURL(_ rawValue: String, baseURL: URL?) -> URL? {

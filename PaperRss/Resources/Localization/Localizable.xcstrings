@@ -2379,6 +2379,16 @@
         }
       }
     },
+    "正文显示失败，请切换文章后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The article could not be displayed. Switch articles and try again."
+          }
+        }
+      }
+    },
     "正文字号" : {
       "localizations" : {
         "en" : {

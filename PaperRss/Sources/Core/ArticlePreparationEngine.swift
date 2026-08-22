@@ -22,16 +22,18 @@ public final class ArticlePreparationEngine: Sendable {
         // 2. 准备 Cache 候选
         let cacheCandidate = prepareCacheCandidate(cached, entry: entry)
 
-        // 3. 判定强 Feed 候选（强 Feed 直接采用，0 网页请求）
-        if let feedCandidate, feedCandidate.quality.isStrong {
-            let prepared = feedCandidate.toPreparedArticle()
+        // 3. 高质量缓存优先，避免用较短的新 Feed 覆盖已经抓取到的完整正文。
+        if let cacheCandidate,
+           cacheCandidate.quality.isUsableCache,
+           !isStrongFeedSignificantlyBetter(feedCandidate, than: cacheCandidate) {
+            let prepared = cacheCandidate.toPreparedArticle()
             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
             return (prepared, cacheUpdate)
         }
 
-        // 4. 判定高质量 Cache 候选（0 网页请求）
-        if let cacheCandidate, cacheCandidate.quality.isUsableCache {
-            let prepared = cacheCandidate.toPreparedArticle()
+        // 4. 强 Feed 候选直接采用，0 网页请求。
+        if let feedCandidate, feedCandidate.quality.isStrong {
+            let prepared = feedCandidate.toPreparedArticle()
             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
             return (prepared, cacheUpdate)
         }
@@ -46,14 +48,14 @@ public final class ArticlePreparationEngine: Sendable {
             }
 
             do {
-                if let webHTML = try await pageLoader.loadHTML(for: entryURL),
-                   !webHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let page = try await pageLoader.loadPage(for: entryURL),
+                   !page.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
 
                     if Task.isCancelled {
                         return cancelOrFallback(bestLocal: bestLocal, entry: entry)
                     }
 
-                    if let webCandidate = prepareWebCandidate(webHTML, baseURL: entryURL) {
+                    if let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL) {
                         // 判定 Web 是否“明显改善”
                         if let bestLocal {
                             if isSignificantlyBetter(webCandidate.quality, than: bestLocal.quality) {
@@ -98,7 +100,10 @@ public final class ArticlePreparationEngine: Sendable {
         let quality: ArticleCandidateQuality
 
         func toPreparedArticle() -> PreparedArticle {
-            let containsMath = ArticleMathDetector.containsMath(in: html) || ArticleMathDetector.containsMath(in: text)
+            // HTML retains code-block boundaries and safe MathML tags. Running
+            // detection against plain text would turn code samples such as
+            // `$$x$$` back into false-positive formulas.
+            let containsMath = ArticleMathDetector.containsMath(in: html)
             return PreparedArticle(
                 text: text,
                 html: html,
@@ -157,19 +162,28 @@ public final class ArticlePreparationEngine: Sendable {
     }
 
     private func prepareCacheCandidate(_ cache: ArticleCache?, entry: Entry) -> ArticleCandidate? {
-        guard let cache, let cachedHTML = cache.html,
-              !cachedHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let cache else {
             return nil
         }
+        let cachedHTML = cache.html?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceMarkup: String
+        if let cachedHTML, !cachedHTML.isEmpty {
+            sourceMarkup = cachedHTML
+        } else {
+            let escapedText = ArticleMarkupNormalizer.escapeHTML(cache.text)
+                .replacingOccurrences(of: "\n", with: "<br>")
+            sourceMarkup = "<p>\(escapedText)</p>"
+        }
+        guard !sourceMarkup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
         let sourceURL = cache.sourceURL ?? entry.url
-        let content = ArticleExtractor.content(from: cachedHTML, baseURL: sourceURL)
+        let content = ArticleExtractor.content(from: sourceMarkup, baseURL: sourceURL)
         let quality = evaluateQuality(text: content.text, html: content.html, imageCount: content.imageURLs.count, isSpecialSelfContained: false)
 
         return ArticleCandidate(
             text: content.text.isEmpty ? cache.text : content.text,
             html: content.html,
-            imageURLs: content.imageURLs.isEmpty ? cache.imageURLs : content.imageURLs,
+            imageURLs: content.imageURLs,
             baseURL: sourceURL,
             source: .cache,
             quality: quality
@@ -291,6 +305,14 @@ public final class ArticlePreparationEngine: Sendable {
         return false
     }
 
+    private func isStrongFeedSignificantlyBetter(
+        _ feed: ArticleCandidate?,
+        than cache: ArticleCandidate
+    ) -> Bool {
+        guard let feed, feed.quality.isStrong else { return false }
+        return isSignificantlyBetter(feed.quality, than: cache.quality)
+    }
+
     private func pickBestLocal(
         _ feed: ArticleCandidate?,
         _ cache: ArticleCandidate?
@@ -375,7 +397,7 @@ public final class ArticlePreparationEngine: Sendable {
         }
 
         let safeHTML = ArticleExtractor.sanitizedHTML(rawHTML, baseURL: entry.url)
-        let containsMath = ArticleMathDetector.containsMath(in: safeHTML) || ArticleMathDetector.containsMath(in: rawText)
+        let containsMath = ArticleMathDetector.containsMath(in: safeHTML)
 
         return PreparedArticle(
             text: rawText,

@@ -11,6 +11,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const mathjaxDir = path.join(projectRoot, "PaperRss", "Resources", "MathJax");
 const scriptPath = path.join(mathjaxDir, "tex-mml-svg.js");
 const licensePath = path.join(mathjaxDir, "LICENSE");
+const readerSourcePath = path.join(projectRoot, "PaperRss", "Sources", "App", "ArticleReaderView.swift");
 
 describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
   it("MathJax 4.1.2 files exist and match exact SHA-256 checksums", () => {
@@ -41,9 +42,40 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
     assert.ok(!scriptText.includes("unpkg.com/mathjax"), "Must not contain unpkg endpoint");
   });
 
-  it("MathJax 4.1.2 bundle executes self-contained initialization in safe JS sandbox", () => {
+  it("MathJax 4.1.2 bundle is a self-contained offline component", () => {
     const scriptText = fs.readFileSync(scriptPath, "utf8");
     assert.ok(scriptText.length > 1_500_000, "MathJax combined bundle must be full standalone bundle");
     assert.ok(scriptText.includes("MathJax"), "Bundle must define MathJax namespace");
+  });
+
+  it("Reader installs and removes MathJax per article navigation", () => {
+    const source = fs.readFileSync(readerSourcePath, "utf8");
+    const macOSStart = source.indexOf("private struct ArticleHTMLView: NSViewRepresentable");
+    const macOSCoordinator = source.slice(
+      macOSStart,
+      source.indexOf("#if os(iOS)", macOSStart)
+    );
+    const iOSCoordinator = source.slice(
+      source.indexOf("private struct ArticleHTMLView: UIViewRepresentable")
+    );
+    const sharedRuntimeStart = source.indexOf("static func synchronizeMathScripts");
+    const sharedRuntimeEnd = source.indexOf("static func isSameDocumentAnchor", sharedRuntimeStart);
+    const sharedRuntime = source.slice(sharedRuntimeStart, sharedRuntimeEnd);
+
+    assert.match(sharedRuntime, /removeAllUserScripts/);
+    assert.match(sharedRuntime, /addUserScript/);
+
+    for (const coordinator of [macOSCoordinator, iOSCoordinator]) {
+      assert.match(coordinator, /synchronizeMathScripts\(in webView: WKWebView\)/);
+      assert.match(coordinator, /PaperReaderBridge\.synchronizeMathScripts\(/);
+      assert.match(coordinator, /parent\.features\.containsMath/);
+    }
+  });
+
+  it("Math typesetting announces a layout refresh consumed by the reader observer", () => {
+    const source = fs.readFileSync(readerSourcePath, "utf8");
+    assert.match(source, /paperRssLayoutRefresh/);
+    assert.match(source, /addEventListener\(\s*["']paperRssLayoutRefresh["']/);
+    assert.match(source, /paperRssTOCRail\?\.refresh/);
   });
 });

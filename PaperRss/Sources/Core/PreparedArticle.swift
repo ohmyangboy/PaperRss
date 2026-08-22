@@ -44,15 +44,25 @@ public struct PreparedArticle: Sendable, Equatable {
 }
 
 /// 网页抓取 Seam 契约（用于生产网络抓取与单元测试注入）
+public struct LoadedArticlePage: Sendable, Equatable {
+    public let html: String
+    public let finalURL: URL
+
+    public init(html: String, finalURL: URL) {
+        self.html = html
+        self.finalURL = finalURL
+    }
+}
+
 public protocol ArticlePageLoading: Sendable {
-    func loadHTML(for url: URL) async throws -> String?
+    func loadPage(for url: URL) async throws -> LoadedArticlePage?
 }
 
 /// 默认系统 URLSession 网页加载器（受限 4MB）
 public struct DefaultArticlePageLoader: ArticlePageLoading {
     public init() {}
 
-    public func loadHTML(for url: URL) async throws -> String? {
+    public func loadPage(for url: URL) async throws -> LoadedArticlePage? {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 30
@@ -71,13 +81,16 @@ public struct DefaultArticlePageLoader: ArticlePageLoading {
         // 单个响应最大限制 4 MB
         guard data.count <= 4 * 1024 * 1024 else { return nil }
 
+        let html: String?
         if let utf8 = String(data: data, encoding: .utf8) {
-            return utf8
+            html = utf8
+        } else if let gbkEncoding = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)) as UInt?,
+                  let gbk = String(data: data, encoding: String.Encoding(rawValue: gbkEncoding)) {
+            html = gbk
+        } else {
+            html = String(data: data, encoding: .isoLatin1)
         }
-        if let gbkEncoding = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)) as UInt?,
-           let gbk = String(data: data, encoding: String.Encoding(rawValue: gbkEncoding)) {
-            return gbk
-        }
-        return String(data: data, encoding: .isoLatin1)
+        guard let html else { return nil }
+        return LoadedArticlePage(html: html, finalURL: httpResponse.url ?? url)
     }
 }

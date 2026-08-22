@@ -32,6 +32,9 @@ final class ArticleMathDetectorTests: XCTestCase {
         let mathDollar = #"Let $f(x) = x^2 + 2x + 1$ be a polynomial."#
         XCTAssertTrue(ArticleMathDetector.containsMath(in: mathDollar))
 
+        let singleSymbol = #"The notation $L$ means the number of labels."#
+        XCTAssertTrue(ArticleMathDetector.containsMath(in: singleSymbol), "单字母变量也是可信的行内公式")
+
         let singlePrice = "The subscription costs $9.99 per month or $99 per year."
         XCTAssertFalse(ArticleMathDetector.containsMath(in: singlePrice), "普通货币价格绝不能被误判为公式")
 
@@ -102,5 +105,52 @@ final class ArticleMathDetectorTests: XCTestCase {
         let (prepared, _) = await engine.prepare(entry: entry, cached: nil)
         XCTAssertFalse(prepared.features.containsMath)
         XCTAssertEqual(prepared.source, .feed)
+    }
+
+    func testPreparedArticlePreservesAndDetectsMathML() async {
+        let mathML = """
+        <div class="article-body">
+          <p>MathML should survive the complete preparation pipeline.</p>
+          <math xmlns="http://www.w3.org/1998/Math/MathML" display="block" onload="alert(1)">
+            <semantics>
+              <mfrac><mi>x</mi><mn>2</mn></mfrac>
+              <annotation encoding="application/x-tex">\\frac{x}{2}</annotation>
+            </semantics>
+          </math>
+        </div>
+        """
+        let entry = Entry(
+            id: "mathml-entry",
+            feedID: defaultFeedID,
+            title: "MathML Article",
+            url: nil,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: mathML
+        )
+
+        let (prepared, _) = await ArticlePreparationEngine().prepare(entry: entry, cached: nil)
+
+        XCTAssertTrue(prepared.features.containsMath)
+        XCTAssertTrue(prepared.html.contains("<math display=\"block\">"))
+        XCTAssertTrue(prepared.html.contains("<mfrac><mi>x</mi><mn>2</mn></mfrac>"))
+        XCTAssertTrue(prepared.html.contains("<annotation encoding=\"application/x-tex\">\\frac{x}{2}</annotation>"))
+        XCTAssertFalse(prepared.html.contains("onload"), "MathML 仍必须经过属性白名单清洗")
+    }
+
+    func testPreparedArticleDoesNotDetectMathInsideCodeBlock() async {
+        let entry = Entry(
+            id: "code-only-math",
+            feedID: defaultFeedID,
+            title: "Code Example",
+            url: nil,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<pre><code>const template = `$$x$$`;</code></pre>"
+        )
+
+        let (prepared, _) = await ArticlePreparationEngine().prepare(entry: entry, cached: nil)
+
+        XCTAssertFalse(prepared.features.containsMath, "代码块中的定界符不得触发 MathJax")
     }
 }

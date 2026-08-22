@@ -81,7 +81,13 @@ public enum ArticleMathDetector: Sendable {
             return true
         }
 
-        // 包含典型数学运算符或关系符（=, +, -, ^, _, <, >, \approx, etc.）
+        // Single-symbol notation such as `$L$` or `$y$` is common in papers
+        // even when it has no operator or LaTeX command.
+        if text.range(of: #"^[A-Za-z](?:[_^][A-Za-z0-9]+)?$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        // 包含典型数学运算符或关系符（=, +, -, ^, _, \approx, etc.）
         let mathSymbols: [Character] = ["=", "+", "^", "_", "<", ">", "∫", "∑", "∏", "√", "±", "≤", "≥", "≠", "≈", "∈", "⊂"]
         for symbol in mathSymbols {
             if text.contains(symbol) {

@@ -3,7 +3,7 @@
 - **Status**: implemented, automated & build verified, manual UI verification pending
 - **核对日期**: 2026-08-21
 - **适用范围**: macOS 主产品、共享 Core、现有 WKWebView Reader
-- **实施状态**: 全部 6 个目标阶段及 Reviewer Findings 修复均已实施，并通过全量自动化测试套件 (226 Core + 55 Web/Bridge)、macOS 宿主 Clean Build 与 dev.sh 进程启动，待真机人工视觉与交互确认
+- **实施状态**: 全部 6 个目标阶段及本轮 Reader Findings 修复均已实施，并通过全量自动化测试套件 (235 Core + 57 Web/Bridge)、macOS 宿主 Clean Build 与 dev.sh 进程启动，待真机人工视觉与交互确认
 - **跟踪方式**: 本地 tracker 归档于 `.scratch/reader-engine/goals/`
 
 本文定义 PaperRss Reader Engine 的目标结构、分阶段实施顺序和验收门槛。各 Agent 必须先读本文，再只执行当前获准的 Goal；不得自行跨阶段、提交、推送或发布。
@@ -161,6 +161,8 @@ Core ✕ SwiftUI / AppKit / UIKit / WebKit
 - 当前正则实现先通过最小改造和 fixture 证明；若嵌套 DOM fixture 仍无法安全通过，Agent 必须停止并提交 HTML parser 依赖提案，不能静默引入第三方库。
 - 图片候选依次考虑有效非占位 `src`、`data-original`、`data-src`、`data-lazy-src` 和安全解析后的 `srcset`。
 - Markdown 图片和 HTML 图片进入同一 URL 规范化与 allowlist。
+- 当正文文本容器与封面/媒体容器是相邻兄弟节点时，提取器可扩展到最近的低噪音父容器，保留正文顺序和媒体，而不是绑定某个站点 class。
+- Reader 文档使用浏览器标准的 `strict-origin-when-cross-origin` Referer 策略：同源资源可获得完整地址，跨域资源只获得来源 origin，HTTPS 降级到 HTTP 时不发送 Referer，避免泄露文章路径和 query。
 - 保持正文顺序、`figure/figcaption` 和图片比例；前两张 eager，其余 lazy，继续使用 async decoding。
 - 复杂表格、长代码和 display math 在正文宽度内横向滚动，不扩大整个页面宽度。
 
@@ -171,15 +173,18 @@ Core ✕ SwiftUI / AppKit / UIKit / WebKit
 - macOS/iOS wrapper 可以保留平台适配差异；文档生成、消息名、载荷、脚本和 Coordinator 共享逻辑必须只有一个权威实现。
 - AI 流式摘要和逐段翻译继续通过增量 DOM 更新，不能因 renderer 重构改为反复 `loadHTMLString`。
 - 初始文章加载每个 entry 只允许一次完整文档装载；主题或字号优先使用现有增量更新路径。
+- 在正文块上注入段落注解时，`blockquote`、`pre`、标题、列表与表格等结构块必须作为单一可观测、可翻译单元保留，不得因按换行拆分成多个子段而被展平为无语义 `<p>`（否则引用条、代码块、表格与标题语义丢失）。
+- MathJax user scripts 按当前 `PreparedArticle.features.containsMath` 在每次文章导航前同步安装或移除；复用 WebView 不得冻结上一篇文章的公式状态。
 
 ### 6.5 公式
 
 - 固定打包 MathJax 4.1.2 `tex-mml-svg`、许可证和文件校验值，不访问 CDN。
 - 仅当 `containsMath` 为真时安装并执行公式运行时；普通文章不读取或解析 MathJax bundle。
 - 检测 `\\(...\\)`、`\\[...\\]`、`$$...$$`、可信 `$...$` 和 MathML；排除价格、转义美元和代码块。
+- 单符号变量（例如 `$L$`、`$y$`）属于可信行内记号，不应因缺少运算符而被误判为货币文本。
 - 作者提供的 SVG 继续被 sanitizer 移除；只有清洗后由可信 MathJax 生成的 SVG 可以进入 DOM。
 - 公式错误保留可读源码；display math 在小窗口中横向滚动。
-- 排版完成后刷新依赖布局的 TOC、可见段落和高度计算，避免锚点或翻译视口失准。
+- 排版完成后通过 `paperRssLayoutRefresh` 刷新依赖布局的 TOC、可见段落和高度计算，避免锚点或翻译视口失准。
 
 ### 6.6 缓存、数据与隐私
 
@@ -188,6 +193,7 @@ Core ✕ SwiftUI / AppKit / UIKit / WebKit
 - GUI 验证前备份 `Application Support/PaperRss` 中的 SQLite、WAL/SHM 和遗留 JSON；备份不进入仓库。
 - Debug 诊断只记录来源类型、候选分数、字节/块/图片数量和阶段耗时，不记录标题、正文、URL、Feed 地址或用户标识。
 - 不新增远程正文、公式或遥测服务。
+- ATS 配置只保留 `NSAllowsArbitraryLoads` 作为唯一键：实测表明它与 `NSAllowsLocalNetworking`（或 `NSAllowsArbitraryLoadsInWebContent`）共存时，App Transport Security 会拒绝**所有 IP 地址的明文 HTTP**，导致用户自建 RSSHub（如 `http://<ip>:1200`）刷新即报 ATS 弹窗。不硬编码任何私有 IP；localhost 局域网 LLM 端点在 Apple ATS 内置豁免下仍可用。
 
 ## 7. Performance and Experience Budgets
 
@@ -215,7 +221,7 @@ Debug 构建记录各阶段耗时用于人工比较；性能回归测试验证�
 - 格式规范化阶段通过 `ArticleExtractor.content` 验证安全 HTML、文本和图片，而不是锁死内部分类函数。
 - 完整正文准备通过 `prepareArticle` 验证来源、同源字段、网络调用次数、缓存回写和取消。
 - Reader 文档通过 `ReaderDocumentRenderer` 验证 CSP、模板、feature set 和文档结构。
-- Bridge 行为延续现有 Node 测试，覆盖 macOS/iOS 消息契约、DOM 增量更新、TOC 和可见段落。
+- Bridge 行为延续现有 Node 测试，覆盖 macOS/iOS 消息契约、DOM 增量更新、TOC、可见段落、MathJax 按文章生命周期注入和布局刷新契约。
 - 真实 WebKit 图片、公式、滚动、主题和选择行为使用 `scripts/dev.sh` 启动的精确 Dev 产物验证。
 
 ### 8.1 通用 fixture
@@ -286,7 +292,7 @@ fixture 按结构命名并保持最小化，不复制完整受版权保护文章
 
 本地集成 MathJax，接入 feature 检测和布局刷新。
 
-**退出条件**：Lilian Weng 类公式、代码/价格反例、非公式零加载、错误降级和小窗口滚动通过。
+**退出条件**：Lilian Weng 类公式、代码/价格反例、单符号记号、非公式零加载、错误降级和小窗口滚动通过；bundle 完整性与注入契约可自动验证，真实 WebKit typeset 仍需 App/UI 环境验证。
 
 ### Goal 06 — End-to-end hardening
 
@@ -312,5 +318,3 @@ fixture 按结构命名并保持最小化，不复制完整受版权保护文章
 - **Swift Markdown 0.8.0** (Apache-2.0 with Runtime Exception)：使用 cmark-gfm 构建 Markdown AST，提供严格的 Markdown 结构解析：[source](https://github.com/swiftlang/swift-markdown/tree/0.8.0)、[manifest](https://github.com/swiftlang/swift-markdown/blob/0.8.0/Package%40swift-5.7.swift)。
 - **swift-cmark 0.8.0** (BSD-2-Clause / MIT)：Swift Markdown 底层 C-parser 传递依赖：[source](https://github.com/swiftlang/swift-cmark/tree/0.8.0)。
 - **MathJax 4.1.2** (Apache-2.0)：本地集成 `tex-mml-svg` combined component 运行时，支持 TeX 与 MathML 离线排版：[MathJax documentation](https://docs.mathjax.org/en/v4.0/web/components/combined.html)。
-
-

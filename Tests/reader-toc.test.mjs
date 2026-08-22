@@ -299,12 +299,17 @@ function makeFallbackFixture() {
 
 test('macOS injects the TOC rail script while iOS does not', () => {
   assert.match(source, /static let tocRailScript = WKUserScript/);
+  const standardScriptStart = source.indexOf('static func installStandardUserScripts');
+  const standardScriptEnd = source.indexOf('static let mathConfigScript', standardScriptStart);
+  const standardScripts = source.slice(standardScriptStart, standardScriptEnd);
+  assert.match(standardScripts, /#if os\(macOS\)[\s\S]*tocRailScript/);
   const macOSStart = source.indexOf('private struct ArticleHTMLView: NSViewRepresentable');
   const iOSStart = source.indexOf('private struct ArticleHTMLView: UIViewRepresentable');
   const macOSBody = source.slice(macOSStart, iOSStart);
   const iOSBody = source.slice(iOSStart);
-  assert.match(macOSBody, /addUserScript\(PaperReaderBridge\.tocRailScript\)/);
-  assert.doesNotMatch(iOSBody, /addUserScript\(PaperReaderBridge\.tocRailScript\)/);
+  assert.match(macOSBody, /installStandardUserScripts\(in:/);
+  assert.match(iOSBody, /installStandardUserScripts\(in:/);
+  assert.doesNotMatch(iOSBody, /tocRailScript/);
 });
 
 test('Swift multiline escaping preserves valid JavaScript Unicode regexes', () => {

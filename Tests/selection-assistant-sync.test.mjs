@@ -9,7 +9,7 @@ const source = await readFile(
 
 test('selection options are restored after every WebView navigation', () => {
   const didFinishBodies = [...source.matchAll(
-    /func webView\(_ webView: WKWebView, didFinish navigation: WKNavigation!\) \{([\s\S]*?)\n        \}\n\n        private func restoreSelectionAnnotations/g
+    /func webView\(_ webView: WKWebView, didFinish navigation: WKNavigation!\) \{([\s\S]*?)\n        \}\n\n        (?:private )?func restoreSelectionAnnotations/g
   )].map((match) => match[1]);
 
   assert.equal(didFinishBodies.length, 2, 'expected macOS and iOS navigation callbacks');
