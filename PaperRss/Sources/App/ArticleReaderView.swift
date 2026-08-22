@@ -94,6 +94,7 @@ struct ArticleReaderView: View {
     @State private var documentLoadFailed = false
     @State private var activeLoadEntryID: String?
     @State private var articleLoadSession = 0
+    @State private var articleReloadToken = 0
     @State private var isSummaryExpanded = false
     @State private var visibleBilingualParagraphIDs: [String] = []
     @State private var pendingBilingualParagraphIDs: Set<String> = []
@@ -261,7 +262,11 @@ struct ArticleReaderView: View {
             guard let invocation else { return }
             handleReaderShortcut(invocation.action)
         }
-        .task(id: entry.id) {
+        .onChange(of: store.articleRefreshSignal) { _, signal in
+            guard let signal, signal.entryID == entry.id else { return }
+            articleReloadToken += 1
+        }
+        .task(id: "\(entry.id)-\(articleReloadToken)") {
             cancelBilingualTranslationLocal()
             store.dismissError()
             let requestedEntry = entry

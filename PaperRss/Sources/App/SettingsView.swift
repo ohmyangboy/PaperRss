@@ -87,6 +87,10 @@ struct SettingsView: View {
     @State private var isAddingFreshRSS = false
     @State private var addFreshRSSError: String?
     @State private var addFreshRSSSuccess: String?
+    @State private var cacheClearMessage: String?
+    @State private var cacheClearDismissTask: Task<Void, Never>?
+    @State private var isClearingCache = false
+    @State private var cacheStats: ArticleCacheStats?
 
     var body: some View {
         Group {
@@ -1233,6 +1237,13 @@ struct SettingsView: View {
         #endif
     }
 
+    /// 「已缓存 XX 篇文章，大小 xx MB」；stats 未加载时返回空格占位（保持行高稳定）。
+    private var cacheStatsText: String {
+        guard let cacheStats else { return " " }
+        let mb = Double(cacheStats.totalBytes) / 1_048_576.0
+        return I18N.shared.localizedFormat("已缓存 %lld 篇文章，大小 %.1f MB", cacheStats.count, mb)
+    }
+
     private var refreshSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
@@ -1270,20 +1281,73 @@ struct SettingsView: View {
             }
 
             settingsGroup("状态") {
-                settingsRow("当前状态") {
-                    RefreshStatusView(store: store)
-                        .frame(width: 240, alignment: .trailing)
+                settingsRow("订阅源") {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Button {
+                            Task { await store.refresh() }
+                        } label: {
+                            Label(I18N.localized("刷新"), systemImage: "arrow.clockwise")
+                        }
+                        .disabled(store.isRefreshing)
+
+                        RefreshStatusView(store: store, compact: true)
+                    }
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
-                settingsRow("操作") {
-                    Button {
-                        Task { await store.refresh() }
-                    } label: {
-                        Label(I18N.localized("立即刷新"), systemImage: "arrow.clockwise")
+                settingsRow("缓存数据") {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Button(role: .destructive) {
+                            guard !isClearingCache else { return }
+                            isClearingCache = true
+                            cacheClearMessage = nil
+                            cacheClearDismissTask?.cancel()
+                            Task {
+                                do {
+                                    let count = try await store.clearArticleCaches()
+                                    cacheStats = try? store.articleCacheStats()
+                                    cacheClearMessage = I18N.shared.localizedFormat("已清除 %lld 条缓存", count)
+                                } catch {
+                                    cacheClearMessage = I18N.localized("清除失败")
+                                }
+                                isClearingCache = false
+                                cacheClearDismissTask = Task { @MainActor in
+                                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                                    cacheClearMessage = nil
+                                }
+                            }
+                        } label: {
+                            ZStack {
+                                // 隐形占位：以最宽状态（转圈 + 正在清除…）锁定按钮尺寸，避免清除前后左右抖动
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small).opacity(0)
+                                    Text(I18N.localized("正在清除…")).hidden()
+                                }
+                                if isClearingCache {
+                                    HStack(spacing: 6) {
+                                        ProgressView().controlSize(.small)
+                                        Text(I18N.localized("正在清除…"))
+                                    }
+                                } else {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "trash")
+                                        Text(I18N.localized("清除"))
+                                    }
+                                }
+                            }
+                        }
+                        .disabled(isClearingCache)
+
+                        // 固定槽位：清除结果消息优先，否则显示缓存统计；空时透明占位，行高恒定
+                        Text(cacheClearMessage ?? cacheStatsText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .opacity((cacheClearMessage != nil || cacheStats != nil) ? 1 : 0)
                     }
-                    .disabled(store.isRefreshing)
+                    .task {
+                        cacheStats = try? store.articleCacheStats()
+                    }
                 }
             }
 

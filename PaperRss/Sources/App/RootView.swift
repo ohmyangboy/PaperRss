@@ -148,7 +148,8 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
-                autoScrollTrigger: autoScrollTrigger
+                autoScrollTrigger: autoScrollTrigger,
+                onFeedback: { showToast($0) }
             )
                 .ignoresSafeArea(),
             detail: detailContent
@@ -197,7 +198,8 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
-                autoScrollTrigger: autoScrollTrigger
+                autoScrollTrigger: autoScrollTrigger,
+                onFeedback: { showToast($0) }
             )
         } detail: {
             detailContent
@@ -1445,6 +1447,7 @@ private struct EntryListView: View {
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
     var autoScrollTrigger: UUID
+    var onFeedback: (String) -> Void = { _ in }
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
@@ -1585,6 +1588,16 @@ private struct EntryListView: View {
                                 store.toggleStar(entryID: entry.id)
                                 patchEntryState(entryID: entry.id, isStarred: nextStarred)
                             }
+                            Divider()
+                            Button {
+                                Task {
+                                    let ok = await store.refetchArticle(entryID: entry.id)
+                                    onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
+                                }
+                            } label: {
+                                Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
+                            }
+                            .disabled(store.activeRefetchEntryIDs.contains(entry.id))
                         }
                         .onAppear {
                             if entry.id == loadedEntries.last?.id {

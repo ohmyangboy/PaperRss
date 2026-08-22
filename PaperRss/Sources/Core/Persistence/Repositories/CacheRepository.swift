@@ -1,6 +1,17 @@
 import Foundation
 import GRDB
 
+/// `article_caches` 表资源占用统计：缓存文章行数与近似字节数。
+public struct ArticleCacheStats: Equatable, Sendable {
+    public let count: Int
+    public let totalBytes: Int
+
+    public init(count: Int, totalBytes: Int) {
+        self.count = count
+        self.totalBytes = totalBytes
+    }
+}
+
 /// 管理文章网页正文提取离线缓存 (ArticleCache) 的持久化仓库。
 ///
 /// 遵循 Architecture Contract (Section 10)。
@@ -23,6 +34,26 @@ public final class CacheRepository: Sendable {
 
     public func deleteCache(itemID: String, in db: Database) throws {
         _ = try ArticleCacheRecord.filter(Column("item_id") == itemID).deleteAll(db)
+    }
+
+    public func deleteAllCaches(in db: Database) throws -> Int {
+        try ArticleCacheRecord.deleteAll(db)
+    }
+
+    /// article_caches 表内所有行的正文缓存资源占用统计（近似值，按 UTF-8 字节计）。
+    public func cacheStats(in db: Database) throws -> ArticleCacheStats {
+        let row = try Row.fetchOne(db, sql: """
+            SELECT COUNT(*) AS count,
+                   COALESCE(SUM(
+                       LENGTH(CAST(text AS BLOB))
+                       + LENGTH(CAST(COALESCE(html, '') AS BLOB))
+                       + LENGTH(CAST(COALESCE(image_urls_json, '') AS BLOB))
+                   ), 0) AS total_bytes
+            FROM article_caches
+            """)
+        let count = Int(row?["count"] ?? 0)
+        let totalBytes = Int(row?["total_bytes"] ?? 0)
+        return ArticleCacheStats(count: count, totalBytes: totalBytes)
     }
 
     // MARK: - Domain Model Helpers
@@ -89,6 +120,18 @@ public final class CacheRepository: Sendable {
     public func deleteCache(itemID: String) async throws {
         try database.write { db in
             try deleteCache(itemID: itemID, in: db)
+        }
+    }
+
+    public func deleteAllCaches() async throws -> Int {
+        try database.write { db in
+            try deleteAllCaches(in: db)
+        }
+    }
+
+    public func cacheStats() async throws -> ArticleCacheStats {
+        try database.read { db in
+            try cacheStats(in: db)
         }
     }
 }

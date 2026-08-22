@@ -52,6 +52,17 @@ public struct AIRequestStatus: Sendable, Equatable {
     }
 }
 
+/// 单篇正文重新拉取完成后的失效信号，用于驱动阅读页自动重载。
+public struct ArticleRefreshSignal: Sendable, Equatable {
+    public let entryID: String
+    public let token: UUID
+
+    public init(entryID: String, token: UUID) {
+        self.entryID = entryID
+        self.token = token
+    }
+}
+
 @MainActor
 public final class AppStore: ObservableObject {
     @Published public var appLanguage: AppLanguage = I18N.shared.language {
@@ -70,6 +81,8 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var unreadEntryListItems: [EntryListItem] = []
     @Published public private(set) var starredEntryListItems: [EntryListItem] = []
     @Published public private(set) var timelineRevision: UInt64 = 0
+    @Published public private(set) var articleRefreshSignal: ArticleRefreshSignal?
+    @Published public private(set) var activeRefetchEntryIDs: Set<String> = []
     @Published public var llmConfiguration: LLMConfiguration = .default
 
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
@@ -1214,6 +1227,47 @@ public final class AppStore: ObservableObject {
             try? localProvider.saveCache(updatedCache)
         }
         return prepared
+    }
+
+    /// 单篇重新拉取正文：忽略旧缓存重新评估，仅在新内容可用时覆盖。
+    /// - 成功（`.feed`/`.web` 来源且产出非空缓存）→ 写库并发布 `articleRefreshSignal`，返回 `true`。
+    /// - 失败（回退兜底、无新内容）→ 保留旧缓存，返回 `false`。
+    public func refetchArticle(for entry: Entry) async -> Bool {
+        guard !activeRefetchEntryIDs.contains(entry.id) else { return false }
+        activeRefetchEntryIDs.insert(entry.id)
+        defer { activeRefetchEntryIDs.remove(entry.id) }
+
+        let feed = self.feed(for: entry)
+        let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: nil, feed: feed)
+
+        let usable = !prepared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && prepared.source != .fallback
+            && updatedCache != nil
+        guard usable, let updatedCache else { return false }
+
+        try? localProvider.saveCache(updatedCache)
+        articleRefreshSignal = ArticleRefreshSignal(entryID: entry.id, token: UUID())
+        return true
+    }
+
+    /// 全量清除网页正文缓存并回收磁盘空间。返回删除的缓存行数。
+    /// VACUUM 可能耗时数秒，故在后台线程执行以免阻塞主线程 UI。
+    public func clearArticleCaches() async throws -> Int {
+        let provider = localProvider
+        return try await Task.detached(priority: .userInitiated) {
+            try provider.clearAllCaches()
+        }.value
+    }
+
+    /// 当前网页正文缓存文章数与占用大小（供设置页「缓存数据」展示）。
+    public func articleCacheStats() throws -> ArticleCacheStats {
+        try localProvider.cacheStats()
+    }
+
+    /// 按条目 ID 重新拉取正文；条目不存在时返回 `false`。
+    public func refetchArticle(entryID: String) async -> Bool {
+        guard let entry = self.entry(id: entryID) else { return false }
+        return await refetchArticle(for: entry)
     }
 
     public func cachedText(for entry: Entry) -> String? {

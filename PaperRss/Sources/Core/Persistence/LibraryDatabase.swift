@@ -64,4 +64,12 @@ public final class LibraryDatabase: Sendable {
     func write<T>(_ block: (Database) throws -> T) throws -> T {
         try dbPool.write(block)
     }
+
+    /// 回收 SQLite 磁盘空间。`VACUUM` 无法运行在事务内，
+    /// 因此必须走 `writeWithoutTransaction` 而非 `write`。
+    func vacuum() throws {
+        try dbPool.writeWithoutTransaction { db in
+            try db.execute(sql: "VACUUM")
+        }
+    }
 }
