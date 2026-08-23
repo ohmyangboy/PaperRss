@@ -28,6 +28,11 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertEqual(articleReader.components(separatedBy: "performDocumentLoad(entryID: requestedEntryID, in: webView)").count - 1, 2)
         XCTAssertTrue(articleReader.contains("guard scheduledNavigationEntryID == entryID,\n                  parent.entry.id == entryID else { return }"))
         XCTAssertTrue(articleReader.contains("Task { @MainActor in\n                store.markRead(requestedEntry)\n            }"))
+        // 翻译更新只走批量同步脚本（单次 DOM 变更 + 单次滚动补偿），不得逐段 evaluateJavaScript
+        XCTAssertFalse(articleReader.contains("updateInlineTranslationInWebView"))
+        XCTAssertFalse(articleReader.contains("paperRssSelectionAssistant?.updateInlineTranslation"))
+        // macOS/iOS 均在视图更新时同步字号 CSS 变量
+        XCTAssertEqual(articleReader.components(separatedBy: "setProperty('--paper-font-size'").count - 1, 2)
         XCTAssertTrue(articleReader.contains("if memoizedPrepared == nil {"))
         XCTAssertTrue(articleReader.contains("if showsLoadingIndicator"))
         XCTAssertTrue(articleReader.contains("Task.sleep(nanoseconds: 150_000_000)"))

@@ -3330,13 +3330,6 @@ enum PaperReaderBridge {
               removeAction();
               if (!hasEnabledAction(options)) dismissPopover();
             },
-            updateInlineTranslation(id, text) {
-              const el = document.getElementById("paper-rss-translation-" + id);
-              if (!el) return;
-              el.classList.remove("is-loading");
-              const span = el.querySelector(".paper-rss-translation-text");
-              if (span) span.textContent = text;
-            },
             append(id, text, kind) {
               if (!text) return;
               const body = activePopover?.dataset.explanationId === id ? activePopover.querySelector(".paper-rss-explanation-body") : null;
@@ -4114,9 +4107,6 @@ private struct ArticleHTMLView: NSViewRepresentable {
         context.coordinator.synchronizeSelectionOptions(in: webView)
         context.coordinator.restoreSelectionAnnotations(in: webView)
         webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
-        for segment in inlineTranslations {
-            context.coordinator.updateInlineTranslationInWebView(id: segment.id, translation: segment.translation)
-        }
     }
 
     static func dismantleNSView(_ container: ArticleWebViewContainer, coordinator: Coordinator) {
@@ -4186,13 +4176,6 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
-        }
-
-        func updateInlineTranslationInWebView(id: String, translation: String) {
-            guard renderedTranslations[id] != translation else { return }
-            renderedTranslations[id] = translation
-            let escaped = (try? String(data: JSONEncoder().encode(translation), encoding: .utf8)) ?? "\"\""
-            webView?.evaluateJavaScript("window.paperRssSelectionAssistant?.updateInlineTranslation('\(id)', \(escaped))")
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -4866,6 +4849,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
         context.coordinator.synchronizeSummaryCard(in: webView)
         context.coordinator.synchronizeSelectionOptions(in: webView)
         context.coordinator.restoreSelectionAnnotations(in: webView)
+        // 与 macOS 对称：字号变化即时生效，无需等待下次导航重建文档
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
