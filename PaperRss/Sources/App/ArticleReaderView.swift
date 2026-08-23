@@ -652,30 +652,27 @@ struct ArticleReaderView: View {
                             .lineLimit(isSummaryExpanded ? nil : 3)
                             .textSelection(.enabled)
                             .contentTransition(.opacity)
-                        if !summary.isComplete {
-                            if activeAIStatus(for: .summary) != nil {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text(I18N.localized("AI 正在生成摘要…"))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.top, 2)
-                            } else {
-                                // A partially generated summary survived an app
-                                // relaunch or cancellation. Offer a visible retry
-                                // instead of leaving an eternal spinner.
-                                HStack(spacing: 8) {
+                        if activeAIStatus(for: .summary) != nil {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(I18N.localized("AI 正在生成摘要…"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 2)
+                        } else {
+                            HStack(spacing: 8) {
+                                if !summary.isComplete {
                                     Text(I18N.localized("上次生成未完成"))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                    Button(I18N.localized("重新生成")) { generateSummary(force: true) }
-                                        .buttonStyle(.borderless)
-                                        .font(.caption.weight(.semibold))
                                 }
-                                .padding(.top, 2)
+                                Button(I18N.localized("重新生成")) { generateSummary(force: true) }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption.weight(.semibold))
                             }
+                            .padding(.top, 2)
                         }
                     }
                 } else if let status = activeAIStatus(for: .summary) {
@@ -1207,22 +1204,27 @@ private enum PaperReaderHeaderBuilder {
             let bodyClass = isSummaryExpanded ? "expanded" : "collapsed"
             
             var statusFooter = ""
-            if !summary.isComplete {
-                if isGeneratingSummary {
-                    statusFooter = """
-                    <div class="paper-summary-status">
-                      <span class="paper-spinner"></span>
-                      <span>\(I18N.localized("AI 正在生成摘要…").htmlEscaped)</span>
-                    </div>
-                    """
+            if isGeneratingSummary {
+                statusFooter = """
+                <div class="paper-summary-status">
+                  <span class="paper-spinner"></span>
+                  <span>\(I18N.localized("AI 正在生成摘要…").htmlEscaped)</span>
+                </div>
+                """
+            } else {
+                let noticeHTML: String
+                if let errorMessage {
+                    noticeHTML = "<span class=\"paper-summary-error\">\(errorMessage.htmlEscaped)</span> "
+                } else if !summary.isComplete {
+                    noticeHTML = "<span>\(I18N.localized("上次生成未完成").htmlEscaped)</span> "
                 } else {
-                    let errStr = errorMessage.map { "<span class=\"paper-summary-error\">\($0.htmlEscaped)</span> " } ?? "<span>\(I18N.localized("上次生成未完成").htmlEscaped)</span> "
-                    statusFooter = """
-                    <div class="paper-summary-status">
-                      \(errStr)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true" title="V" aria-keyshortcuts="V">\(I18N.localized("重新生成").htmlEscaped)</button>
-                    </div>
-                    """
+                    noticeHTML = ""
                 }
+                statusFooter = """
+                <div class="paper-summary-status">
+                  \(noticeHTML)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true" title="V" aria-keyshortcuts="V">\(I18N.localized("重新生成").htmlEscaped)</button>
+                </div>
+                """
             }
 
             // 提取摘要第一句作为折叠预览（去除 # 和 ** 等标识符）
@@ -4166,6 +4168,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let statusMessage: String?
             let errorMessage: String?
             let showsAISummary: Bool
+            // 完成态翻转必须触发重渲染：否则"上次生成未完成"的旧页脚
+            // 会因签名相等而被跳过更新，残留在 DOM 中。
+            let isComplete: Bool
         }
         private var renderedSummarySignature: SummaryRenderSignature?
         private var selectionExplanationTask: Task<Void, Never>?
@@ -4186,7 +4191,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                     isGenerating: false,
                     statusMessage: nil,
                     errorMessage: nil,
-                    showsAISummary: false
+                    showsAISummary: false,
+                    isComplete: true
                 )
                 guard renderedSummarySignature != sig else { return }
                 renderedSummarySignature = sig
@@ -4201,7 +4207,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 isGenerating: parent.isGeneratingSummary,
                 statusMessage: parent.aiStatusMessage,
                 errorMessage: parent.errorMessage,
-                showsAISummary: true
+                showsAISummary: true,
+                isComplete: parent.summaryArtifact?.isComplete ?? true
             )
             guard renderedSummarySignature != sig else { return }
             renderedSummarySignature = sig
@@ -4909,6 +4916,9 @@ private struct ArticleHTMLView: UIViewRepresentable {
             let statusMessage: String?
             let errorMessage: String?
             let showsAISummary: Bool
+            // 完成态翻转必须触发重渲染：否则"上次生成未完成"的旧页脚
+            // 会因签名相等而被跳过更新，残留在 DOM 中。
+            let isComplete: Bool
         }
         private var renderedSummarySignature: SummaryRenderSignature?
         private var selectionExplanationTask: Task<Void, Never>?
@@ -4929,7 +4939,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                     isGenerating: false,
                     statusMessage: nil,
                     errorMessage: nil,
-                    showsAISummary: false
+                    showsAISummary: false,
+                    isComplete: true
                 )
                 guard renderedSummarySignature != sig else { return }
                 renderedSummarySignature = sig
@@ -4944,7 +4955,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 isGenerating: parent.isGeneratingSummary,
                 statusMessage: parent.aiStatusMessage,
                 errorMessage: parent.errorMessage,
-                showsAISummary: true
+                showsAISummary: true,
+                isComplete: parent.summaryArtifact?.isComplete ?? true
             )
             guard renderedSummarySignature != sig else { return }
             renderedSummarySignature = sig

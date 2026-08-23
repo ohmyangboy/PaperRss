@@ -1463,8 +1463,11 @@ public final class AppStore: ObservableObject {
                 let (currentBuffer, shouldCheckpoint, artifactToCheckpoint) = tracker.append(delta)
 
                 // 1. 局部 UI 实时流式通知（不发全局 objectWillChange）
+                //    delta 必须被同步 await：迟到的非结构化 Task 会在
+                //    generateSummary 返回、视图清理 streamingSummary 之后
+                //    重新赋值，把已完成的摘要误标为未完成。
                 if let onDelta {
-                    Task { await onDelta(currentBuffer) }
+                    await onDelta(currentBuffer)
                 }
 
                 // 2. 节流持久化 Checkpoint（支持崩溃/取消恢复）

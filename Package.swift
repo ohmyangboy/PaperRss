@@ -45,6 +45,7 @@ let package = Package(
                 "reader-toc.test.mjs",
                 "repository-policy.test.mjs",
                 "selection-assistant-sync.test.mjs",
+                "summary-card.test.mjs",
                 "website-github-stars.test.mjs",
                 "website-locale.test.mjs"
             ]
