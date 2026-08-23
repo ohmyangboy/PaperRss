@@ -4188,17 +4188,12 @@ enum PaperReaderBridge {
 
     public static func mathUserScripts(containsMath: Bool) -> [WKUserScript] {
         guard containsMath else { return [] }
-        var scripts: [WKUserScript] = [mathConfigScript]
-        if let mathSource = loadMathJaxBundleSource() {
-            let libraryScript = WKUserScript(
-                source: mathSource,
-                injectionTime: .atDocumentEnd,
-                forMainFrameOnly: true,
-                in: .defaultClient
-            )
-            scripts.append(libraryScript)
-        }
-        return scripts
+        // 仅注入轻量配置脚本。TeX 运行时（tex-mml-svg.js，约 1.8MB）不再作为
+        // user script 注入：大体量 WKUserScript 存在被 WebKit 静默丢弃的风险，
+        // 且文档 CSP（script-src 'none'）可能限制其运行期行为。
+        // 运行时改为导航完成后经 evaluateJavaScript 显式求值——原生求值不受
+        // 页面 CSP 约束，见 Coordinator.injectMathJaxRuntimeIfNeeded(in:)。
+        return [mathConfigScript]
     }
 
     static func installStandardUserScripts(in controller: WKUserContentController) {
@@ -4796,6 +4791,33 @@ private struct ArticleHTMLView: NSViewRepresentable {
             )
         }
 
+        /// 已注入 TeX 运行时的文档键（entryID|renderSignature），避免同文档重复求值。
+        private var lastMathInjectionKey: String?
+
+        /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
+        /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
+        private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
+            guard parent.features.containsMath else { return }
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")"
+            guard lastMathInjectionKey != injectionKey else { return }
+            guard let runtimeSource = PaperReaderBridge.loadMathJaxBundleSource() else { return }
+            lastMathInjectionKey = injectionKey
+            // 按序执行：配置脚本幂等（window.MathJax 已定义则早退）→ 运行时 → 就绪校验
+            webView.evaluateJavaScript(PaperReaderBridge.mathConfigScript.source, completionHandler: nil)
+            webView.evaluateJavaScript(runtimeSource) { _, error in
+                if let error {
+                    print("[PaperRss][MathJax] runtime evaluation failed: \(error.localizedDescription)")
+                }
+            }
+            webView.evaluateJavaScript("typeof MathJax !== 'undefined'") { value, _ in
+                #if DEBUG
+                if (value as? Bool) != true {
+                    print("[PaperRss][MathJax] runtime not defined after injection")
+                }
+                #endif
+            }
+        }
+
         private func synchronizeMathScripts(in webView: WKWebView) {
             mathScriptsEnabled = PaperReaderBridge.synchronizeMathScripts(
                 in: webView,
@@ -4923,6 +4945,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                       load.generation == self.currentLoadGeneration else { return }
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
+                self.injectMathJaxRuntimeIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset = self.pendingScrollOffset,
@@ -5492,6 +5515,33 @@ private struct ArticleHTMLView: UIViewRepresentable {
             )
         }
 
+        /// 已注入 TeX 运行时的文档键（entryID|renderSignature），避免同文档重复求值。
+        private var lastMathInjectionKey: String?
+
+        /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
+        /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
+        private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
+            guard parent.features.containsMath else { return }
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")"
+            guard lastMathInjectionKey != injectionKey else { return }
+            guard let runtimeSource = PaperReaderBridge.loadMathJaxBundleSource() else { return }
+            lastMathInjectionKey = injectionKey
+            // 按序执行：配置脚本幂等（window.MathJax 已定义则早退）→ 运行时 → 就绪校验
+            webView.evaluateJavaScript(PaperReaderBridge.mathConfigScript.source, completionHandler: nil)
+            webView.evaluateJavaScript(runtimeSource) { _, error in
+                if let error {
+                    print("[PaperRss][MathJax] runtime evaluation failed: \(error.localizedDescription)")
+                }
+            }
+            webView.evaluateJavaScript("typeof MathJax !== 'undefined'") { value, _ in
+                #if DEBUG
+                if (value as? Bool) != true {
+                    print("[PaperRss][MathJax] runtime not defined after injection")
+                }
+                #endif
+            }
+        }
+
         private func synchronizeMathScripts(in webView: WKWebView) {
             mathScriptsEnabled = PaperReaderBridge.synchronizeMathScripts(
                 in: webView,
@@ -5621,6 +5671,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.pendingContentOffset = nil
+                self.injectMathJaxRuntimeIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset {

@@ -70,6 +70,17 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
       assert.match(coordinator, /PaperReaderBridge\.synchronizeMathScripts\(/);
       assert.match(coordinator, /parent\.features\.containsMath/);
     }
+
+    // TeX 运行时必须经导航完成后的原生求值注入（不受页面 CSP 与
+    // user script 体量限制影响），不得再作为 WKUserScript 注入。
+    const factoryStart = source.indexOf("static func mathUserScripts");
+    const factoryEnd = source.indexOf("static func installStandardUserScripts", factoryStart);
+    const userScriptFactory = source.slice(factoryStart, factoryEnd);
+    assert.ok(!userScriptFactory.includes("loadMathJaxBundleSource"), "mathUserScripts 不得注入 MathJax bundle");
+    for (const coordinator of [macOSCoordinator, iOSCoordinator]) {
+      assert.match(coordinator, /injectMathJaxRuntimeIfNeeded\(in: webView\)/);
+      assert.match(coordinator, /loadMathJaxBundleSource\(\)/);
+    }
   });
 
   it("Math typesetting announces a layout refresh consumed by the reader observer", () => {
