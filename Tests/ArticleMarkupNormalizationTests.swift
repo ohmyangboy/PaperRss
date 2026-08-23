@@ -237,8 +237,40 @@ final class ArticleMarkupNormalizationTests: XCTestCase {
         )
     }
 
-    // MARK: - 8. No Site Branches in Production Code
+    // MARK: - 7.5 公式字符不得被 markdown 强调吞并（lilianweng/harness 回归）
 
+    func testMathFormulaAsterisksSurviveMixedContentNormalization() {
+        let html = """
+        <article><p>The bi-level optimization:</p>
+        <div>
+        $$
+        \\text{Inner: }c_s^*=\\arg\\max_{c_s}J
+        \\text{Outer: }s^*=\\arg\\max_{s\\in\\mathcal{S}}
+        $$
+        </div></article>
+        """
+        let normalized = ArticleMarkupNormalizer.normalize(html)
+        XCTAssertFalse(normalized.contains("<em>"), "显示公式内部的星号不得被 markdown 强调吞并")
+        XCTAssertTrue(normalized.contains("c_s^*="), "公式星号必须逐字保留")
+        XCTAssertTrue(normalized.contains("s^*="))
+        XCTAssertFalse(normalized.contains("PAPERRSS_MATH_TOKEN"), "占位符必须全部还原，不得泄漏到最终文档")
+    }
+
+    func testGenuineProseEmphasisStillConvertsWhenFormulasPresent() {
+        let html = "<p>plain *emphasis* stays</p><p>formula $c_s^*$ and $s^*$ here</p>"
+        let normalized = ArticleMarkupNormalizer.normalize(html)
+        XCTAssertTrue(normalized.contains("<em>emphasis</em>"), "正文真实强调必须照常转换")
+        XCTAssertTrue(normalized.contains("$c_s^*$"), "行内公式必须逐字保留")
+        XCTAssertTrue(normalized.contains("$s^*$"))
+    }
+
+    func testDetectFormatDoesNotSelfTriggerOnFormulaAsterisks() {
+        // 仅由公式内部星号伪造 markdown 信号的输入必须判为 html（Fast Path）
+        let page = "<article><p>text</p><div>\n$$\nc_s^*=x \\quad s^*=y\n$$\n</div></article>"
+        XCTAssertEqual(ArticleMarkupNormalizer.detectFormat(page), .html)
+    }
+
+    // MARK: - 8. No Site Branches in Production Code
     func testProductionCodeDoesNotContainSiteBranches() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

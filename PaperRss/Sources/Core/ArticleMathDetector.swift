@@ -3,6 +3,123 @@ import Foundation
 /// 负责精确识别文章中是否包含 TeX 或 MathML 数学公式，并严格过滤货币价格与代码块内变量。
 public enum ArticleMathDetector: Sendable {
 
+    /// 公式屏蔽结果：shieldedText 中公式被占位注释替换，tokens 依序保存原文用于还原。
+    public struct FormulaShieldResult: Sendable {
+        public let shieldedText: String
+        public let tokens: [String]
+    }
+
+    /// 公式占位符前缀；完整形态为 <!--PAPERRSS_MATH_TOKEN_<n>-->。
+    /// 选择 HTML 注释形态：swift-markdown 将其解析为 HTMLBlock/InlineHTML 原样透传，
+    /// 纯文本场景下也不会触发任何 markdown 结构特征。
+    private static let tokenPrefix = "<!--PAPERRSS_MATH_TOKEN_"
+    private static let tokenSuffix = "-->"
+    private static let tokenPattern = "(?is)<!--PAPERRSS_MATH_TOKEN_\\d+-->"
+
+    /// 将文本中的 TeX 公式（$$...$$, \[...\], \(...\), $...$）替换为安全占位符，
+    /// 避免下游 markdown 解析器把公式内部的 *、_、\、{} 误识别为强调或转义。
+    /// 单美元公式沿用 containsMath 的货币误报过滤。
+    public static func shieldFormulas(in text: String) -> FormulaShieldResult {
+        guard text.contains("$") || text.contains("\\(") || text.contains("\\[") else {
+            return FormulaShieldResult(shieldedText: text, tokens: [])
+        }
+
+        struct FormulaRange {
+            let range: Range<String.Index>
+            let rawTeX: String
+        }
+
+        var ranges: [FormulaRange] = []
+
+        // 1. 显示公式：$$...$$ 与 \[...\]（跨行）
+        for pattern in [#"(?s)\$\$.*?\$\$"#, #"(?s)\\\[.*?\\\]"#] {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsRange = NSRange(text.startIndex..., in: text)
+                for match in regex.matches(in: text, range: nsRange) {
+                    if let r = Range(match.range, in: text) {
+                        ranges.append(FormulaRange(range: r, rawTeX: String(text[r])))
+                    }
+                }
+            }
+        }
+
+        // 2. 行内 \( ... \)
+        if let regex = try? NSRegularExpression(pattern: #"(?s)\\\(.*?\\\)"#) {
+            let nsRange = NSRange(text.startIndex..., in: text)
+            for match in regex.matches(in: text, range: nsRange) {
+                if let r = Range(match.range, in: text) {
+                    ranges.append(FormulaRange(range: r, rawTeX: String(text[r])))
+                }
+            }
+        }
+
+        // 3. 单美元 $...$，排除货币金额与转义美元符
+        if let regex = try? NSRegularExpression(pattern: #"(?<!\\|\w)\$([^$\r\n]+?)\$(?!\w)"#) {
+            let nsRange = NSRange(text.startIndex..., in: text)
+            for match in regex.matches(in: text, range: nsRange) {
+                guard let fullRange = Range(match.range, in: text),
+                      let innerRange = Range(match.range(at: 1), in: text) else { continue }
+                let innerText = String(text[innerRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !isPriceOrCurrency(innerText) && isMathExpression(innerText) {
+                    ranges.append(FormulaRange(range: fullRange, rawTeX: String(text[fullRange])))
+                }
+            }
+        }
+
+        guard !ranges.isEmpty else {
+            return FormulaShieldResult(shieldedText: text, tokens: [])
+        }
+
+        // 过滤重叠区间并按位置排序（显示公式优先于其内部的单美元匹配）
+        ranges.sort { $0.range.lowerBound < $1.range.lowerBound }
+        var selected: [FormulaRange] = []
+        var lastEnd = text.startIndex
+        for item in ranges where item.range.lowerBound >= lastEnd {
+            selected.append(item)
+            lastEnd = item.range.upperBound
+        }
+
+        var result = ""
+        var tokens: [String] = []
+        var cursor = text.startIndex
+        for (index, item) in selected.enumerated() {
+            result += text[cursor..<item.range.lowerBound]
+            result += "\(tokenPrefix)\(index)\(tokenSuffix)"
+            tokens.append(item.rawTeX)
+            cursor = item.range.upperBound
+        }
+        result += text[cursor...]
+        return FormulaShieldResult(shieldedText: result, tokens: tokens)
+    }
+
+    /// 将占位符替换回原始公式文本；token 数与顺序必须来自对应的 shieldFormulas 结果。
+    public static func unshieldFormulas(_ text: String, tokens: [String]) -> String {
+        guard !tokens.isEmpty else { return text }
+        var result = text
+        for (index, rawTeX) in tokens.enumerated() {
+            let token = "\(tokenPrefix)\(index)\(tokenSuffix)"
+            guard result.contains(token) else { continue }
+            result = result.replacingOccurrences(of: token, with: rawTeX)
+        }
+        return result
+    }
+
+    /// 返回剥离全部公式后的文本（占位符以空格代替），仅用于结构特征检测，不用于展示。
+    public static func strippingFormulas(in text: String) -> String {
+        let shielded = shieldFormulas(in: text)
+        guard !shielded.tokens.isEmpty else { return text }
+        return shielded.shieldedText.replacingOccurrences(
+            of: tokenPattern,
+            with: " ",
+            options: .regularExpression
+        )
+    }
+
+    /// 判断文本是否包含公式占位注释。
+    static func containsFormulaTokens(_ text: String) -> Bool {
+        return text.range(of: tokenPattern, options: .regularExpression) != nil
+    }
+
     /// 识别文本或 HTML 中是否包含真正的数学公式
     public static func containsMath(in content: String) -> Bool {
         guard !content.isEmpty else { return false }

@@ -153,4 +153,29 @@ final class ArticleMathDetectorTests: XCTestCase {
 
         XCTAssertFalse(prepared.features.containsMath, "代码块中的定界符不得触发 MathJax")
     }
+
+    // MARK: - 5. Formula Shielding（防 markdown 强调吞并公式字符）
+
+    func testShieldFormulasTokenizesDisplayBlockWithAsterisks() {
+        // lilianweng/harness 真实损坏形态：多行 $$ 块内含一对裸星号
+        let formula = "$$\n\\text{Inner: }c_s^*=\\arg\\max_{c_s}J\n\\text{Outer: }s^*=\\arg\\max\n$$"
+        let result = ArticleMathDetector.shieldFormulas(in: formula)
+        XCTAssertEqual(result.tokens.count, 1, "整个显示块应被单一占位符覆盖")
+        XCTAssertFalse(result.shieldedText.contains("*"), "星号必须对下游 markdown 解析器不可见")
+        let restored = ArticleMathDetector.unshieldFormulas(result.shieldedText, tokens: result.tokens)
+        XCTAssertTrue(restored == formula, "还原后必须逐字等于原文")
+    }
+
+    func testShieldFormulasSkipsCurrencyAmounts() {
+        let text = "It costs $100 or $200 total."
+        let result = ArticleMathDetector.shieldFormulas(in: text)
+        XCTAssertTrue(result.tokens.isEmpty)
+        XCTAssertTrue(result.shieldedText == text)
+    }
+
+    func testStrippingFormulasRemovesAsteriskSignals() {
+        let page = "<p>keep</p><div>\n$$\nc_s^*=\\arg\\max s^*=x\n$$\n</div>"
+        let stripped = ArticleMathDetector.strippingFormulas(in: page)
+        XCTAssertFalse(stripped.contains("*"))
+    }
 }

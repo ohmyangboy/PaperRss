@@ -32,10 +32,13 @@ enum ArticleMarkupNormalizer: Sendable {
         }
 
         let hasHTML = containsHTMLStructure(trimmed)
-        let hasMarkdown = containsMarkdownStructure(trimmed)
+        // 公式内部的 *、_、#、` 等字符会伪造 markdown 结构信号（自指误判），
+        // 检测前先剥离全部公式，仅以真实文本特征判定。
+        let signalText = ArticleMathDetector.strippingFormulas(in: trimmed)
+        let hasMarkdown = containsMarkdownStructure(signalText)
 
         if hasHTML && hasMarkdown {
-            if containsUnescapedMarkdownInText(trimmed) {
+            if containsUnescapedMarkdownInText(signalText) {
                 return .mixed
             } else {
                 return .html
@@ -96,9 +99,12 @@ enum ArticleMarkupNormalizer: Sendable {
 
     private static func renderPureMarkdown(_ source: String) -> String {
         diagnosticASTConstructionCount += 1
-        let document = Document(parsing: source, options: [.parseBlockDirectives, .parseSymbolLinks])
+        // 公式先占位再还原：防止 swift-markdown 把公式内部的 *、_、\、{} 误解析为强调/转义
+        let shielded = ArticleMathDetector.shieldFormulas(in: source)
+        let document = Document(parsing: shielded.shieldedText, options: [.parseBlockDirectives, .parseSymbolLinks])
         var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: false)
-        return renderer.render(document)
+        let rendered = renderer.render(document)
+        return ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
     }
 
     // MARK: - Quote-Aware Linear Scanner for Mixed HTML/Markdown
@@ -218,37 +224,42 @@ enum ArticleMarkupNormalizer: Sendable {
         }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, containsMarkdownStructure(trimmed) else {
+        // 结构检测先剥离公式：公式内部的 *、#、` 等字符不能作为 markdown 转换依据
+        guard !trimmed.isEmpty,
+              containsMarkdownStructure(ArticleMathDetector.strippingFormulas(in: trimmed)) else {
             return text
         }
 
         let isInsideInlineContainer = tagStack.contains(where: { inlineParentTags.contains($0) })
+        let shielded = ArticleMathDetector.shieldFormulas(in: trimmed)
 
         if isInsideInlineContainer {
             // 在 <p> 或其他内联容器内：只执行 inline Markdown 转换，严禁输出块级 heading/list/table
             diagnosticASTConstructionCount += 1
-            let document = Document(parsing: trimmed, options: [.parseBlockDirectives, .parseSymbolLinks])
+            let document = Document(parsing: shielded.shieldedText, options: [.parseBlockDirectives, .parseSymbolLinks])
             var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: true)
             let rendered = renderer.render(document).trimmingCharacters(in: .whitespacesAndNewlines)
+            let unshielded = ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
 
             let leadingSpaces = String(text.prefix(while: { $0.isWhitespace || $0.isNewline }))
             let trailingReversed = text.reversed().prefix(while: { $0.isWhitespace || $0.isNewline })
             let trailingSpaces = String(trailingReversed.reversed())
-            return leadingSpaces + rendered + trailingSpaces
+            return leadingSpaces + unshielded + trailingSpaces
         } else {
             // 在顶级或 div/article 块级容器内：允许执行完整块级 Markdown 转换
             // 清理 HTML 排版带来的多余缩进，但保留 fenced code 块内的原始缩进
-            let cleanedLines = stripLayoutIndentationPreservingFencedCode(text)
+            let cleanedLines = stripLayoutIndentationPreservingFencedCode(shielded.shieldedText)
 
             diagnosticASTConstructionCount += 1
             let document = Document(parsing: cleanedLines, options: [.parseBlockDirectives, .parseSymbolLinks])
             var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: false)
             let rendered = renderer.render(document).trimmingCharacters(in: .whitespacesAndNewlines)
+            let unshielded = ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
 
             let leadingSpaces = String(text.prefix(while: { $0.isWhitespace || $0.isNewline }))
             let trailingReversed = text.reversed().prefix(while: { $0.isWhitespace || $0.isNewline })
             let trailingSpaces = String(trailingReversed.reversed())
-            return leadingSpaces + rendered + trailingSpaces
+            return leadingSpaces + unshielded + trailingSpaces
         }
     }
 
