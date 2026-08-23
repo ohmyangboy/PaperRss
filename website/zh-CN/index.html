@@ -91,12 +91,16 @@
         <p>当前 Release 尚未配置 Apple 付费开发者公证签名。若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：</p>
         <div class="install-methods">
           <div class="install-method-item">
-            <strong>方式一：在终端执行信任命令（推荐）</strong>
-            <div class="install-cmd">sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app</div>
+            <strong>方式一：双击 DMG 内部的内测助手（推荐）</strong>
+            <p class="install-subtext">先将应用拖入 Applications，直接双击 DMG 镜像中的 <code>join-beta.command</code> 即可自动清除隔离标记并打开。</p>
           </div>
           <div class="install-method-item">
             <strong>方式二：通过系统设置手动放行</strong>
             <p class="install-subtext">打开 Mac「系统设置」→「隐私与安全性」，向下滑动至“安全性”一栏，点击「仍要打开」即可。</p>
+          </div>
+          <div class="install-method-item">
+            <strong>方式三：终端手动执行命令</strong>
+            <div class="install-cmd">xattr -dr com.apple.quarantine /Applications/PaperRss.app</div>
           </div>
         </div>
         <div class="install-note">

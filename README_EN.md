@@ -65,17 +65,18 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 
 ![PaperRss multi-account settings](assets/screenshots/accounts.png)
 
-## Download and Install
+## Download and Installation
 
-Download `PaperRss-v1.3.0-beta.1.dmg` from [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest), open it, and drag PaperRss into your Applications folder.
+Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases) and drag PaperRss into your Applications folder.
 
-The current release is not notarized by Apple. If macOS indicates that the app cannot be verified or is damaged upon first launch, run the following command in Terminal:
+As this is an open-source Beta release without paid Apple notarization, macOS may show a "damaged" or "cannot be opened" warning on first launch. You can resolve this using any of the following options:
 
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app
-```
-
-Alternatively, go to **System Settings > Privacy & Security**, scroll down to the bottom, and click **Open Anyway**.
+1. **Option 1 (Recommended)**: Double-click `join-beta.command` inside the DMG image to automatically remove the quarantine flag;
+2. **Option 2**: Go to macOS **System Settings** → **Privacy & Security**, scroll down to the Security section, and click **Open Anyway**;
+3. **Option 3**: Run the following command in Terminal:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/PaperRss.app
+   ```
 
 _As PaperRss is actively being refined, we welcome and appreciate your feedback and interest. Official Apple notarization will be considered in future releases._
 

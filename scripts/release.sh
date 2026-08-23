@@ -126,22 +126,32 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp -R "$APP_PATH" "$STAGING_DIR/"
 
+HELPER_SCRIPT_NAME="join-beta.command"
+HELPER_SRC="./scripts/${HELPER_SCRIPT_NAME}"
+if [ -f "$HELPER_SRC" ]; then
+    cp "$HELPER_SRC" "$STAGING_DIR/"
+    chmod +x "$STAGING_DIR/${HELPER_SCRIPT_NAME}"
+fi
+
 if command -v create-dmg &> /dev/null; then
     echo "💡 使用 create-dmg 制作 UI 镜像..."
-    create-dmg \
-      --volname "$PROJECT_NAME" \
-      --window-pos 200 120 \
-      --window-size 660 440 \
-      --icon-size 100 \
-      --icon "${PROJECT_NAME}.app" 175 120 \
-      --hide-extension "${PROJECT_NAME}.app" \
-      --app-drop-link 485 120 \
-      --background "assets/dmg-background.png" \
-      --disk-image-size 200 \
-      --no-internet-enable \
-      --overwrite \
-      "$DMG_PATH" \
-      "$STAGING_DIR" || true
+    CREATE_DMG_ARGS=(
+      --volname "$PROJECT_NAME"
+      --window-pos 200 120
+      --window-size 660 440
+      --icon-size 100
+      --icon "${PROJECT_NAME}.app" 175 105
+      --hide-extension "${PROJECT_NAME}.app"
+      --app-drop-link 485 105
+      --background "assets/dmg-background.png"
+      --disk-image-size 200
+      --no-internet-enable
+      --overwrite
+    )
+    if [ -f "$STAGING_DIR/${HELPER_SCRIPT_NAME}" ]; then
+        CREATE_DMG_ARGS+=(--icon "$HELPER_SCRIPT_NAME" 330 215)
+    fi
+    create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG_PATH" "$STAGING_DIR" || true
 fi
 
 # 如果 create-dmg 失败，使用 hdiutil 备用方案

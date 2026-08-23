@@ -65,17 +65,18 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ohmyangboy/PaperRss/releases/latest) 下载 `PaperRss-v1.3.0-beta.1.dmg`，打开后将 PaperRss 拖入 Applications 文件夹。
+从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹。
 
-当前 Release 没有 Apple 公证。若首次打开提示无法验证或应用已损坏，请在终端执行：
+由于当前为个人开源 Beta 版本（未加入 Apple 付费开发者公证），若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：
 
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app
-```
+1. **方法一（推荐）**：直接双击 DMG 安装包内的 `join-beta.command` 内测一键助手，按提示回车即可自动完成修复并打开；
+2. **方法二**：打开 macOS「系统设置」→「隐私与安全性」，向下滑动至“安全性”一栏，点击「仍要打开」；
+3. **方法三**：在终端手动执行清除隔离标记命令：
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/PaperRss.app
+   ```
 
-或者在点击完成后，到 系统 > 隐私与设置 > 仍要打开，在视图最下方点击后即可
-
-_由于PaperRss还在构建完善中，期待并感谢获得更多朋友的关注和反馈，后续会考虑处理Apple安装问题_
+_注：PaperRss 当前处于 Beta 测试阶段，后续产品功能稳定后会接入 Apple 官方公证签名。_
 
 ## 从源码构建
 

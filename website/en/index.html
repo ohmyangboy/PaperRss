@@ -85,12 +85,16 @@
         <p>The current release is not notarized by Apple. If macOS says the app cannot be opened or is damaged, choose either option below:</p>
         <div class="install-methods">
           <div class="install-method-item">
-            <strong>Option 1: Run terminal trust command (Recommended)</strong>
-            <div class="install-cmd">sudo xattr -rd com.apple.quarantine /Applications/PaperRss.app</div>
+            <strong>Option 1: Double-click the Beta Helper in DMG (Recommended)</strong>
+            <p class="install-subtext">Drag PaperRss to Applications, then double-click <code>join-beta.command</code> in the DMG window to automatically remove quarantine flags.</p>
           </div>
           <div class="install-method-item">
-            <strong>Option 2: Allow in macOS System Settings</strong>
-            <p class="install-subtext">Open System Settings → Privacy & Security, scroll down to the Security section and click "Open Anyway".</p>
+            <strong>Option 2: Approve via macOS System Settings</strong>
+            <p class="install-subtext">Open macOS "System Settings" → "Privacy & Security", scroll down to "Security", and click "Open Anyway".</p>
+          </div>
+          <div class="install-method-item">
+            <strong>Option 3: Run Command in Terminal</strong>
+            <div class="install-cmd">xattr -dr com.apple.quarantine /Applications/PaperRss.app</div>
           </div>
         </div>
         <div class="install-note">
