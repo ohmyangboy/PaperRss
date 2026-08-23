@@ -530,8 +530,88 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             return .ignore
         }
 
-        /// 鼠标点击激活栏：点击栏内任意位置 → 该栏 first responder，选中行立即变绿。
-        /// 永远 return event（不吞点击），让 List/WebKit 先完成自身的交互。
+        /// 判断鼠标点击位置是否处于顶部标题栏/工具栏的空白可拖拽区域。
+        /// 确保在排除红绿灯、阅读胶囊、刷新按钮等交互控件后，允许用户在三栏顶部任意空白处按住拖动窗口。
+        @MainActor
+        private func isTitlebarDraggableArea(at locationInWindow: CGPoint, in window: NSWindow) -> Bool {
+            guard !window.styleMask.contains(.fullScreen) else { return false }
+            guard window.attachedSheet == nil, NSApp.modalWindow == nil else { return false }
+
+            guard let contentView = window.contentView else { return false }
+            let windowHeight = contentView.bounds.height
+            let titlebarHeight: CGFloat = contentView.safeAreaInsets.top > 0 ? contentView.safeAreaInsets.top : 52
+
+            guard locationInWindow.y >= (windowHeight - titlebarHeight) && locationInWindow.y <= windowHeight else {
+                return false
+            }
+
+            // 1. 排除系统红绿灯按钮
+            let standardButtons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+            for buttonType in standardButtons {
+                if let button = window.standardWindowButton(buttonType), !button.isHidden {
+                    let rectInWindow = button.convert(button.bounds, to: nil)
+                    if rectInWindow.contains(locationInWindow) {
+                        return false
+                    }
+                }
+            }
+
+            // 2. 排除阅读工具胶囊 (ReaderCapsule)
+            if let capsuleHost = readerCapsuleHost, !capsuleHost.isHidden, capsuleHost.window === window {
+                let capsuleRect = capsuleHost.convert(capsuleHost.bounds, to: nil)
+                if capsuleRect.contains(locationInWindow) {
+                    return false
+                }
+            }
+
+            // 3. 排除已知交互按钮
+            if let refreshButton, !refreshButton.isHidden, refreshButton.window === window {
+                let rect = refreshButton.convert(refreshButton.bounds, to: nil)
+                if rect.contains(locationInWindow) {
+                    return false
+                }
+            }
+            if let markAllReadButton, !markAllReadButton.isHidden, markAllReadButton.window === window {
+                let rect = markAllReadButton.convert(markAllReadButton.bounds, to: nil)
+                if rect.contains(locationInWindow) {
+                    return false
+                }
+            }
+
+            // 4. 排除命中的所有 NSControl、NSTextView、NSScroller 交互控件
+            if let themeFrame = contentView.superview {
+                let point = themeFrame.convert(locationInWindow, from: nil)
+                if let hitView = themeFrame.hitTest(point) {
+                    var v: NSView? = hitView
+                    while let view = v {
+                        if view is NSControl || view is NSTextView || view is NSScroller {
+                            return false
+                        }
+                        v = view.superview
+                    }
+                }
+            }
+
+            return true
+        }
+
+        /// 处理双击顶部标题栏的 macOS 系统偏好行为（缩放/最大化或最小化窗口）
+        @MainActor
+        private func handleTitlebarDoubleClick(on window: NSWindow) {
+            let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+            switch action {
+            case "Minimize":
+                window.miniaturize(nil)
+            case "None":
+                break
+            default:
+                window.zoom(nil)
+            }
+        }
+
+        /// 鼠标点击监控：
+        /// 1. 激活栏：点击栏内任意位置 → 该栏 first responder，选中行立即变绿。
+        /// 2. 顶部空白拖拽：点击在三栏顶部标题栏/工具栏空白区域时，调用 performWindowDrag 拖动窗口，并支持双击缩放。
         private func setupMouseDownMonitor() {
             guard mouseDownMonitor == nil else { return }
             mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
@@ -554,6 +634,23 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 case .ignore:
                     break
                 }
+
+                let isDraggable = MainActor.assumeIsolated({
+                    self.isTitlebarDraggableArea(at: event.locationInWindow, in: window)
+                })
+
+                if isDraggable {
+                    if event.clickCount == 1 {
+                        window.performDrag(with: event)
+                        return nil
+                    } else if event.clickCount == 2 {
+                        MainActor.assumeIsolated {
+                            self.handleTitlebarDoubleClick(on: window)
+                        }
+                        return nil
+                    }
+                }
+
                 return event
             }
         }
