@@ -88,6 +88,9 @@ struct RootView: View {
                 if oldID != newID {
                     cancelNavigationConfirmation(dismissToast: true)
                 }
+                if let newID {
+                    scheduleNeighborPrefetch(from: newID)
+                }
             }
             .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
             .sheet(isPresented: $showsAddFolder) { AddFolderSheet(store: store) }
@@ -401,6 +404,15 @@ struct RootView: View {
     private enum AdjacentArticleDirection {
         case previous
         case next
+    }
+
+    /// 选中稳定后预取相邻文章，使 Space/nn/bb 切换始终命中内存缓存。
+    private func scheduleNeighborPrefetch(from entryID: String) {
+        store.scheduleNeighborPrefetch(
+            scope: currentTimelineScope,
+            currentItemID: entryID,
+            retainingIDs: retainedEntryListIDs.union([entryID])
+        )
     }
 
     private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {

@@ -18,7 +18,12 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("isInteractive: isDisplayedDocumentInteractive"))
         XCTAssertTrue(articleReader.contains("window.paperRssReaderInteractive === false"))
         XCTAssertTrue(articleReader.contains("guard parent.allowsNavigationWhenInactive else { return }"))
-        XCTAssertTrue(articleReader.contains("if isLoading || activeLoadEntryID != entry.id"))
+        XCTAssertTrue(articleReader.contains("if isLoading && !displaysMemoizedArticle"))
+        XCTAssertTrue(articleReader.contains("let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)"))
+        XCTAssertTrue(articleReader.contains("displaysMemoizedArticle = (memoizedPrepared != nil)"))
+        XCTAssertTrue(articleReader.contains("if let memoizedPrepared {"))
+        XCTAssertTrue(articleReader.contains("prepared = await store.prepareArticle(for: requestedEntry)"))
+        XCTAssertTrue(articleReader.contains("if memoizedPrepared == nil {"))
         XCTAssertTrue(articleReader.contains("if showsLoadingIndicator"))
         XCTAssertTrue(articleReader.contains("Task.sleep(nanoseconds: 150_000_000)"))
         XCTAssertFalse(articleReader.contains("hasPresentedDocument"))
@@ -37,5 +42,31 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertLessThan(identityCheck, translationInsertion)
         XCTAssertTrue(articleReader.contains("loadedText.htmlEscaped"))
         XCTAssertTrue(articleReader.contains("private var hasReaderContent: Bool { preparedArticle != nil }"))
+    }
+
+    func testMemoizedInstantSwitchAndNeighborPrefetchWiring() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let appStore = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/Core/AppStore.swift"),
+            encoding: .utf8
+        )
+        // prepareArticle 必须先查内存 LRU；取消的任务不写入缓存；
+        // 重抓与清空磁盘缓存时同步失效内存结果。
+        XCTAssertTrue(appStore.contains("if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint)"))
+        XCTAssertTrue(appStore.contains("if !Task.isCancelled,\n           prepared.source != .fallback,\n           generationAtStart == preparedArticleMemoryCache.generation {\n            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)\n        }"))
+        XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.invalidate(entryID: entry.id)"))
+        XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.removeAll()"))
+        XCTAssertTrue(appStore.contains("public func scheduleNeighborPrefetch("))
+        XCTAssertTrue(appStore.contains("guard !Task.isCancelled, let self else { return }"))
+
+        let rootView = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),
+            encoding: .utf8
+        )
+        // 选中变化即调度相邻预取，保证 Space/nn/bb 命中内存缓存
+        XCTAssertTrue(rootView.contains("if let newID {\n                    scheduleNeighborPrefetch(from: newID)\n                }"))
     }
 }

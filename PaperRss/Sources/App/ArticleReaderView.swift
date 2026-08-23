@@ -91,6 +91,10 @@ struct ArticleReaderView: View {
     @State private var parsedReaderEntryID: String?
     @State private var isLoading = true
     @State private var showsLoadingIndicator = false
+    /// 本次加载命中内存缓存：旧文档由 WebKit 保持绘制到新文档 commit，
+    /// 期间不得显示不透明 loading 遮罩（否则产生“内容→纸面→内容”的屏闪）。
+    /// isLoading 语义保持不变，供 onDocumentReady 握手使用。
+    @State private var displaysMemoizedArticle = false
     @State private var documentLoadFailed = false
     @State private var activeLoadEntryID: String?
     @State private var articleLoadSession = 0
@@ -211,7 +215,7 @@ struct ArticleReaderView: View {
                 readerBody
                     .zIndex(0)
             }
-            if isLoading || activeLoadEntryID != entry.id {
+            if isLoading && !displaysMemoizedArticle {
                 loadingOverlay
                     .zIndex(2)
             } else if documentLoadFailed {
@@ -273,6 +277,10 @@ struct ArticleReaderView: View {
             articleLoadSession += 1
             let requestedLoadSession = articleLoadSession
             activeLoadEntryID = requestedEntry.id
+            // 内存命中：跳过 loading 遮罩直接换页（WebKit 保持旧页直到新文档 commit）；
+            // 未命中：维持既有 loading 行为，150ms 后才显示文案。
+            let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)
+            displaysMemoizedArticle = (memoizedPrepared != nil)
             isLoading = true
             showsLoadingIndicator = false
             documentLoadFailed = false
@@ -284,15 +292,22 @@ struct ArticleReaderView: View {
             streamingSummary = nil
             store.markRead(requestedEntry)
 
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                guard articleLoadSession == requestedLoadSession,
-                      activeLoadEntryID == requestedEntry.id,
-                      isLoading else { return }
-                showsLoadingIndicator = true
+            if memoizedPrepared == nil {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard articleLoadSession == requestedLoadSession,
+                          activeLoadEntryID == requestedEntry.id,
+                          isLoading else { return }
+                    showsLoadingIndicator = true
+                }
             }
 
-            let prepared = await store.prepareArticle(for: requestedEntry)
+            let prepared: PreparedArticle
+            if let memoizedPrepared {
+                prepared = memoizedPrepared
+            } else {
+                prepared = await store.prepareArticle(for: requestedEntry)
+            }
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
             let loadedText = prepared.text.isEmpty ? requestedEntry.sourceText : prepared.text
@@ -391,6 +406,7 @@ struct ArticleReaderView: View {
                     guard isLoading, activeLoadEntryID == loadedEntryID else { return false }
                     isLoading = false
                     showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
                     requestVisibleTranslationsIfPossible()
                     return true
                 },
@@ -398,6 +414,7 @@ struct ArticleReaderView: View {
                     guard activeLoadEntryID == loadedEntryID else { return }
                     isLoading = false
                     showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
                     documentLoadFailed = true
                 },
                 summaryArtifact: effectiveSummaryArtifact,
@@ -463,6 +480,7 @@ struct ArticleReaderView: View {
                     guard isLoading, activeLoadEntryID == loadedEntryID else { return false }
                     isLoading = false
                     showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
                     requestVisibleTranslationsIfPossible()
                     return true
                 },
@@ -470,6 +488,7 @@ struct ArticleReaderView: View {
                     guard activeLoadEntryID == loadedEntryID else { return }
                     isLoading = false
                     showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
                     documentLoadFailed = true
                 },
                 summaryArtifact: effectiveSummaryArtifact,

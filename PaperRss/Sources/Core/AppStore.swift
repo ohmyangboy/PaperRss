@@ -85,6 +85,10 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var activeRefetchEntryIDs: Set<String> = []
     @Published public var llmConfiguration: LLMConfiguration = .default
 
+    /// 进程内已准备正文 LRU 缓存：命中时 Reader 可跳过 prepare 管线即时换页。
+    public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
+    private var neighborPrefetchTask: Task<Void, Never>?
+
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
@@ -1218,15 +1222,70 @@ public final class AppStore: ObservableObject {
 
     // MARK: - Article Preparation & Caches
 
-    /// 统一正文准备入口：每个 entry 返回同源绑定的 PreparedArticle，并在内容更新时写入本地缓存
+    /// 统一正文准备入口：每个 entry 返回同源绑定的 PreparedArticle，并在内容更新时写入本地缓存。
+    /// 内存 LRU 命中时零 IO、零解析直接返回，使顺序阅读切换即时完成。
     public func prepareArticle(for entry: Entry) async -> PreparedArticle {
+        let fingerprint = PreparedArticleMemoryCache.contentFingerprint(for: entry)
+        if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
+            return memoized
+        }
+        // 注：预取与阅读加载可能对同一 entry 并发准备（罕见且良性，内容一致，
+        // 后写者胜出）。刻意不做共享去重任务：非结构化 Task 会切断视图
+        // .task(id:) 的取消传播，导致快速切换无法中止在途网络请求。
+        let generationAtStart = preparedArticleMemoryCache.generation
         let cached = try? localProvider.fetchCache(entryID: entry.id)
         let feed = self.feed(for: entry)
         let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: cached, feed: feed)
         if let updatedCache, !Task.isCancelled {
             try? localProvider.saveCache(updatedCache)
         }
+        // 取消的任务可能产出兜底结果，不污染内存缓存；
+        // .fallback 表示本次未能产出真实正文（如网络瞬时失败），
+        // 不缓存以便下次访问重新尝试；
+        // 准备期间若发生失效（如重抓写入更好缓存），代数不匹配则放弃存储。
+        if !Task.isCancelled,
+           prepared.source != .fallback,
+           generationAtStart == preparedArticleMemoryCache.generation {
+            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)
+        }
         return prepared
+    }
+
+    /// 内存中是否已有该条目可立即展示的准备结果（仅查进程内缓存，不触发任何 IO）。
+    public func memoizedPreparedArticle(for entry: Entry) -> PreparedArticle? {
+        preparedArticleMemoryCache.article(
+            for: entry.id,
+            contentFingerprint: PreparedArticleMemoryCache.contentFingerprint(for: entry)
+        )
+    }
+
+    /// 阅读稳定后预取相邻文章，使顺序阅读的 Space/nn/bb 始终命中内存缓存。
+    /// 单飞任务：新的选择会取消上一次未开始的预取；已缓存的邻居零开销跳过；
+    /// 预取内部尊重取消标记，不会在用户快速连续切换时堆积网络请求。
+    public func scheduleNeighborPrefetch(
+        scope: TimelineScope,
+        currentItemID: String,
+        retainingIDs: Set<String>
+    ) {
+        neighborPrefetchTask?.cancel()
+        neighborPrefetchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let directions: [AdjacentTimelineDirection] = [.next, .previous]
+            for direction in directions {
+                guard !Task.isCancelled else { return }
+                let adjacent = self.fetchAdjacentItem(
+                    scope: scope,
+                    currentItemID: currentItemID,
+                    direction: direction,
+                    retainingIDs: retainingIDs
+                )
+                guard let neighborID = adjacent?.id,
+                      !self.preparedArticleMemoryCache.contains(neighborID),
+                      let neighbor = self.entry(id: neighborID) else { continue }
+                _ = await self.prepareArticle(for: neighbor)
+            }
+        }
     }
 
     /// 单篇重新拉取正文：忽略旧缓存重新评估，仅在新内容可用时覆盖。
@@ -1246,6 +1305,8 @@ public final class AppStore: ObservableObject {
         guard usable, let updatedCache else { return false }
 
         try? localProvider.saveCache(updatedCache)
+        // 重抓写入了更好的正文缓存行，内存 LRU 中的旧结果必须立即失效。
+        preparedArticleMemoryCache.invalidate(entryID: entry.id)
         articleRefreshSignal = ArticleRefreshSignal(entryID: entry.id, token: UUID())
         return true
     }
@@ -1254,6 +1315,7 @@ public final class AppStore: ObservableObject {
     /// VACUUM 可能耗时数秒，故在后台线程执行以免阻塞主线程 UI。
     public func clearArticleCaches() async throws -> Int {
         let provider = localProvider
+        preparedArticleMemoryCache.removeAll()
         return try await Task.detached(priority: .userInitiated) {
             try provider.clearAllCaches()
         }.value
@@ -1303,6 +1365,8 @@ public final class AppStore: ObservableObject {
                 repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
                 repaired.sourceURL = sourceURL
                 try? localProvider.saveCache(repaired)
+                // 修复写回改变了缓存行内容，内存 LRU 中的旧结果同步失效
+                preparedArticleMemoryCache.invalidate(entryID: entry.id)
             }
             return repairedHTML
         }
