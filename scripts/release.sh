@@ -130,10 +130,12 @@ cp -R "$APP_PATH" "$STAGING_DIR/"
 # 为何不再使用可双击执行的 .command 脚本：下载来的可执行脚本会被 Gatekeeper
 # 拦截并弹出「无法验证」对话框（即使用户右键也无法放行新版 macOS 的硬阻断）。
 # 文本文件不会被拦截，且终端里粘贴执行命令不经 LaunchServices / Gatekeeper 检查；
-# 命令同时清除 quarantine 与 provenance（macOS 15+ 的新污染标记）。
+# 命令先退出已运行的旧实例（否则 open 只会激活旧进程），再清除 quarantine 与
+# provenance（macOS 15+ 的新污染标记），最后按完整路径打开 /Applications 中的副本
+#（避免 open -a 按名称解析到其他位置的老副本）。
 INSTALL_TXT_NAME="INSTALL.txt"
 printf '%s\n' \
-    'xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open -a PaperRss' \
+    'pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"' \
     > "$STAGING_DIR/${INSTALL_TXT_NAME}"
 
 # 清除 staging 目录下所有文件的污点扩展属性（保证构建产物不带隔离标记）

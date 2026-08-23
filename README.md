@@ -74,7 +74,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 1. **方法一（推荐）**：先将 PaperRss 拖入 Applications；打开「终端」(Terminal.app)，执行以下命令即可自动清除隔离标记并启动（DMG 内的 `INSTALL.txt` 已包含该命令，双击打开复制即可）：
    ```bash
-   xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open -a PaperRss
+   pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"
    ```
 2. **方法二**：打开 macOS「系统设置」→「隐私与安全性」，向下滑动至“安全性”一栏，点击「仍要打开」。
 

@@ -74,7 +74,7 @@ As this is an open-source Beta release without paid Apple notarization, macOS ma
 
 1. **Option 1 (Recommended)**: Drag PaperRss into Applications first, then open macOS **Terminal** (Terminal.app) and run the command below — it removes quarantine flags and launches the app automatically. The same command is inside `INSTALL.txt` in the DMG — just double-click it and copy:
    ```bash
-   xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open -a PaperRss
+   pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"
    ```
 2. **Option 2**: Go to macOS **System Settings** → **Privacy & Security**, scroll down to the Security section, and click **Open Anyway**.
 
