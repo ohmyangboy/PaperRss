@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download Latest v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download Latest v1.3.0-beta.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -31,10 +31,11 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 ## Highlights
 
 - **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, and dependable three-column navigation.
+- **Rendering Engine & LaTeX Math**: Re-engineered article preparation pipeline with native MathJax typesetting and markdown formula shielding for technical articles.
 - **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
 - **Custom Model Integration**: Bring your own DeepSeek or OpenAI-compatible API keys, with customizable system prompts.
-- **Multi-Account Support**: Currently supports local accounts and FreshRSS synchronization.
+- **Multi-Account Support**: Supports local accounts and FreshRSS server synchronization.
 
 ## Screenshots
 

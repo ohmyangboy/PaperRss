@@ -12,7 +12,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
   [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -31,10 +31,11 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 ## 核心亮点
 
 - **沉浸式纸感阅读**：适合长文的衬线排版、明暗主题与稳定的三栏导航。
+- **渲染引擎与数学公式（LaTeX）**：重构富文本准备引擎，原生集成 MathJax 排版与公式防转义保护，完美呈现学术长文。
 - **按需 AI 摘要**：所有功能完全可以选用，如果你不喜欢AI，干掉它；或者在需要的时候按下V键
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
 - **自由模型接入**：支持自定义配置DeepSeek、OpenAI 兼容 API KEY，提供设置个性化prompt
-- **多账户接入**：目前支持本地账户、FreshRSS 服务
+- **多账户接入**：支持本地账户与 FreshRSS 服务，提供双向未读/星标同步。
 
 ## 真实界面
 
