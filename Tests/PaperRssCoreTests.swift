@@ -1046,6 +1046,8 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(I18N.localized("今天", language: .zhHans), "今天")
         XCTAssertEqual(I18N.localized("今天", language: .en), "Today")
         XCTAssertEqual(I18N.localized("添加订阅", language: .en), "Add Feed")
+        XCTAssertEqual(I18N.localized("慢读，深思", language: .zhHans), "慢读，深思")
+        XCTAssertEqual(I18N.localized("慢读，深思", language: .en), "Read slowly. Think deeply.")
         XCTAssertEqual(
             I18N.localizedFormat("%lld 个订阅", arguments: [3], language: .en),
             "3 Feeds"

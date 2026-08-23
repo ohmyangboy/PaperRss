@@ -117,6 +117,7 @@ public final class I18N: ObservableObject {
         "未启用": "Disabled",
         "等待同步": "Waiting for sync",
         "%lld 个订阅": "%lld Feeds",
-        "跟随系统": "System"
+        "跟随系统": "System",
+        "慢读，深思": "Read slowly. Think deeply."
     ]
 }

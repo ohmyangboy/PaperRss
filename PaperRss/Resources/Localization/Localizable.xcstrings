@@ -3666,6 +3666,16 @@
           }
         }
       }
+    },
+    "慢读，深思" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read slowly. Think deeply."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

@@ -662,7 +662,20 @@ struct RootView: View {
         ZStack {
             PaperSurface(kind: .page)
                 .ignoresSafeArea()
-            ContentUnavailableView(I18N.localized("选择一篇文章"), systemImage: "newspaper", description: Text(I18N.localized("从列表中打开文章开始阅读。")))
+            ContentUnavailableView {
+                Label {
+                    Text(I18N.localized("慢读，深思"))
+                        .font(.system(size: 17, weight: .medium, design: .serif))
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    PaperBrandIcon(size: 76)
+                        .padding(.bottom, 4)
+                }
+            } description: {
+                Text(I18N.localized("从列表中打开文章开始阅读。"))
+                    .font(.system(size: 13, design: .serif))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .ignoresSafeArea()
     }
