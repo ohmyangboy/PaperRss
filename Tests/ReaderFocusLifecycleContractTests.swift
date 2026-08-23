@@ -23,6 +23,11 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("displaysMemoizedArticle = (memoizedPrepared != nil)"))
         XCTAssertTrue(articleReader.contains("if let memoizedPrepared {"))
         XCTAssertTrue(articleReader.contains("prepared = await store.prepareArticle(for: requestedEntry)"))
+        // 连击合并与 markRead 延迟（macOS/iOS 双 coordinator 对称）
+        XCTAssertTrue(articleReader.contains("private var scheduledNavigationEntryID: String?"))
+        XCTAssertEqual(articleReader.components(separatedBy: "performDocumentLoad(entryID: requestedEntryID, in: webView)").count - 1, 2)
+        XCTAssertTrue(articleReader.contains("guard scheduledNavigationEntryID == entryID,\n                  parent.entry.id == entryID else { return }"))
+        XCTAssertTrue(articleReader.contains("Task { @MainActor in\n                store.markRead(requestedEntry)\n            }"))
         XCTAssertTrue(articleReader.contains("if memoizedPrepared == nil {"))
         XCTAssertTrue(articleReader.contains("if showsLoadingIndicator"))
         XCTAssertTrue(articleReader.contains("Task.sleep(nanoseconds: 150_000_000)"))

@@ -290,7 +290,11 @@ struct ArticleReaderView: View {
             failedBilingualParagraphIDs = [:]
             streamingBilingualTranslations = [:]
             streamingSummary = nil
-            store.markRead(requestedEntry)
+            // markRead 含同步 DB 写 + 侧栏聚合 + objectWillChange，
+            // 推迟到过渡帧之后执行，避免切换瞬间叠加额外渲染压力。
+            Task { @MainActor in
+                store.markRead(requestedEntry)
+            }
 
             if memoizedPrepared == nil {
                 Task { @MainActor in
@@ -4509,6 +4513,20 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 }
                 return
             }
+            // 连击合并：同一 runloop 内快速连续切换时只加载最终目标，
+            // 跳过中间文章的全文构建与 WebKit 导航（NetNewsWire 式无中间态）。
+            if scheduledNavigationEntryID == parent.entry.id { return }
+            scheduledNavigationEntryID = parent.entry.id
+            let requestedEntryID = parent.entry.id
+            DispatchQueue.main.async {
+                self.performDocumentLoad(entryID: requestedEntryID, in: webView)
+            }
+        }
+
+        private func performDocumentLoad(entryID: String, in webView: WKWebView) {
+            guard scheduledNavigationEntryID == entryID,
+                  parent.entry.id == entryID else { return }
+            scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,
@@ -4727,6 +4745,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         private var pendingScrollOffset: CGFloat?
         private var currentLoadGeneration = 0
+        /// 已排定待执行导航的目标条目；同 runloop 内被更新目标覆盖即作废。
+        private var scheduledNavigationEntryID: String?
         private var navigationLoads: [ObjectIdentifier: (entryID: String, signature: String, generation: Int)] = [:]
         private var failedLoadAttempts: [String: Int] = [:]
     }
@@ -4891,6 +4911,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var completedArticleKey: String?
         private var pendingContentOffset: CGPoint?
         private var currentLoadGeneration = 0
+        /// 已排定待执行导航的目标条目；同 runloop 内被更新目标覆盖即作废。
+        private var scheduledNavigationEntryID: String?
         private var navigationLoads: [ObjectIdentifier: (entryID: String, signature: String, generation: Int)] = [:]
         private var failedLoadAttempts: [String: Int] = [:]
         private var renderedTranslations: [String: String] = [:]
@@ -5180,6 +5202,20 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 }
                 return
             }
+            // 连击合并：同一 runloop 内快速连续切换时只加载最终目标，
+            // 跳过中间文章的全文构建与 WebKit 导航（NetNewsWire 式无中间态）。
+            if scheduledNavigationEntryID == parent.entry.id { return }
+            scheduledNavigationEntryID = parent.entry.id
+            let requestedEntryID = parent.entry.id
+            DispatchQueue.main.async {
+                self.performDocumentLoad(entryID: requestedEntryID, in: webView)
+            }
+        }
+
+        private func performDocumentLoad(entryID: String, in webView: WKWebView) {
+            guard scheduledNavigationEntryID == entryID,
+                  parent.entry.id == entryID else { return }
+            scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,
