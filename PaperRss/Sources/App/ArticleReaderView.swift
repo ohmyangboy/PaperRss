@@ -82,15 +82,23 @@ struct ArticleReaderView: View {
     var onFocusListView: () -> Void = {}
     var isZenMode: Bool = false
     var onToggleZenMode: () -> Void = {}
-    @State private var text = ""
-    @State private var html: String?
+    @State private var preparedArticle: PreparedArticle?
+    @State private var displayedEntry: Entry?
     /// Parsing a long document's paragraph structure is deliberately done once
     /// per article. The same stable index drives viewport translation requests
     /// and validation of returned translations.
     @State private var parsedReaderParagraphs: [ReaderParagraph] = []
-    @State private var articleBaseURL: URL?
+    @State private var parsedReaderEntryID: String?
     @State private var isLoading = true
+    @State private var showsLoadingIndicator = false
+    /// 本次加载命中内存缓存：旧文档由 WebKit 保持绘制到新文档 commit，
+    /// 期间不得显示不透明 loading 遮罩（否则产生“内容→纸面→内容”的屏闪）。
+    /// isLoading 语义保持不变，供 onDocumentReady 握手使用。
+    @State private var displaysMemoizedArticle = false
+    @State private var documentLoadFailed = false
     @State private var activeLoadEntryID: String?
+    @State private var articleLoadSession = 0
+    @State private var articleReloadToken = 0
     @State private var isSummaryExpanded = false
     @State private var visibleBilingualParagraphIDs: [String] = []
     @State private var pendingBilingualParagraphIDs: Set<String> = []
@@ -107,6 +115,16 @@ struct ArticleReaderView: View {
     @State private var activeTranslationTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+
+    private var text: String { preparedArticle?.text ?? "" }
+    private var html: String? { preparedArticle?.html }
+    private var isDisplayedDocumentInteractive: Bool {
+        !isLoading && !documentLoadFailed && activeLoadEntryID == entry.id && displayedEntry?.id == entry.id
+    }
+    private var canNavigateDisplayedDocument: Bool {
+        isDisplayedDocumentInteractive ||
+            (documentLoadFailed && activeLoadEntryID == entry.id && displayedEntry?.id == entry.id)
+    }
 
     private var effectiveSummaryArtifact: AIArtifact? {
         if let streaming = streamingSummary {
@@ -166,7 +184,7 @@ struct ArticleReaderView: View {
     }
 
     private var readerParagraphs: [ReaderParagraph] {
-        if !parsedReaderParagraphs.isEmpty {
+        if parsedReaderEntryID == displayedEntry?.id {
             return parsedReaderParagraphs
         }
         guard let html, !html.isEmpty else { return [] }
@@ -197,8 +215,11 @@ struct ArticleReaderView: View {
                 readerBody
                     .zIndex(0)
             }
-            if isLoading {
+            if isLoading && !displaysMemoizedArticle {
                 loadingOverlay
+                    .zIndex(2)
+            } else if documentLoadFailed {
+                documentLoadFailureOverlay
                     .zIndex(2)
             }
 
@@ -245,46 +266,79 @@ struct ArticleReaderView: View {
             guard let invocation else { return }
             handleReaderShortcut(invocation.action)
         }
-        .task(id: entry.id) {
+        .onChange(of: store.articleRefreshSignal) { _, signal in
+            guard let signal, signal.entryID == entry.id else { return }
+            articleReloadToken += 1
+        }
+        .task(id: "\(entry.id)-\(articleReloadToken)") {
             cancelBilingualTranslationLocal()
             store.dismissError()
             let requestedEntry = entry
+            articleLoadSession += 1
+            let requestedLoadSession = articleLoadSession
             activeLoadEntryID = requestedEntry.id
+            // 内存命中：跳过 loading 遮罩直接换页（WebKit 保持旧页直到新文档 commit）；
+            // 未命中：维持既有 loading 行为，150ms 后才显示文案。
+            let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)
+            displaysMemoizedArticle = (memoizedPrepared != nil)
             isLoading = true
+            showsLoadingIndicator = false
+            documentLoadFailed = false
             isSummaryExpanded = false
             visibleBilingualParagraphIDs = []
             pendingBilingualParagraphIDs = []
             failedBilingualParagraphIDs = [:]
             streamingBilingualTranslations = [:]
             streamingSummary = nil
-            parsedReaderParagraphs = []
-            store.markRead(requestedEntry)
+            // markRead 含同步 DB 写 + 侧栏聚合 + objectWillChange，
+            // 推迟到过渡帧之后执行，避免切换瞬间叠加额外渲染压力。
+            Task { @MainActor in
+                store.markRead(requestedEntry)
+            }
 
-            let loadedText: String
-            do {
-                loadedText = try await store.articleText(for: requestedEntry)
-            } catch is CancellationError {
-                return
-            } catch {
-                loadedText = requestedEntry.sourceText
-                store.dismissError()
+            if memoizedPrepared == nil {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard articleLoadSession == requestedLoadSession,
+                          activeLoadEntryID == requestedEntry.id,
+                          isLoading else { return }
+                    showsLoadingIndicator = true
+                }
+            }
+
+            let prepared: PreparedArticle
+            if let memoizedPrepared {
+                prepared = memoizedPrepared
+            } else {
+                prepared = await store.prepareArticle(for: requestedEntry)
             }
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
-            let rawHTML = store.articleHTML(for: requestedEntry)
-            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: rawHTML, articleTitle: requestedEntry.title)
+            let loadedText = prepared.text.isEmpty ? requestedEntry.sourceText : prepared.text
+            let sourceHTML: String
+            if prepared.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !loadedText.isEmpty {
+                sourceHTML = "<p>\(loadedText.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>"))</p>"
+            } else {
+                sourceHTML = prepared.html
+            }
+            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: sourceHTML, articleTitle: requestedEntry.title) ?? ""
             let parsedParagraphs: [ReaderParagraph] = await Task.detached(priority: .userInitiated) { () -> [ReaderParagraph] in
-                guard let loadedHTML, !loadedHTML.isEmpty else { return [] }
+                guard !loadedHTML.isEmpty else { return [] }
                 return ArticleExtractor.readerParagraphs(in: loadedHTML, title: requestedEntry.title)
             }.value
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
 
-            text = loadedText
-            html = loadedHTML
+            displayedEntry = requestedEntry
+            preparedArticle = PreparedArticle(
+                text: loadedText,
+                html: loadedHTML,
+                imageURLs: prepared.imageURLs,
+                baseURL: prepared.baseURL,
+                source: prepared.source,
+                features: prepared.features
+            )
             parsedReaderParagraphs = parsedParagraphs
-            articleBaseURL = store.articleSourceURL(for: requestedEntry)
-            isLoading = false
-            requestVisibleTranslationsIfPossible()
+            parsedReaderEntryID = requestedEntry.id
             if store.llmConfiguration.showsAISummary,
                store.llmConfiguration.automaticallyGenerateSummary,
                store.artifact(for: requestedEntry, kind: .summary) == nil,
@@ -301,33 +355,48 @@ struct ArticleReaderView: View {
         }
     }
 
-    private var hasReaderContent: Bool {
-        !(html?.isEmpty ?? true) || !text.isEmpty
-    }
+    private var hasReaderContent: Bool { preparedArticle != nil }
 
     private var loadingOverlay: some View {
         ZStack {
             PaperSurface(kind: .page)
-            VStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.small)
-                Text(I18N.localized("正在准备正文…"))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {}
+            if showsLoadingIndicator {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(I18N.localized("正在准备正文…"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var documentLoadFailureOverlay: some View {
+        ZStack {
+            PaperSurface(kind: .page)
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {}
+            Text(I18N.localized("正文显示失败，请切换文章后重试。"))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
         .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private var readerBody: some View {
         #if os(macOS)
-        if usesNativeHTMLScroller, let html {
+        if usesNativeHTMLScroller, let preparedArticle, let displayedEntry {
             ArticleHTMLView(
-                entry: entry,
-                feedTitle: store.feed(for: entry)?.title,
-                html: html,
-                baseURL: articleBaseURL,
+                entry: displayedEntry,
+                feedTitle: store.feed(for: displayedEntry)?.title,
+                article: preparedArticle,
+                loadSession: articleLoadSession,
                 contentTopInset: 84,
                 readerParagraphs: readerParagraphs,
                 inlineTranslations: bilingualSegments,
@@ -335,6 +404,23 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                isInteractive: isDisplayedDocumentInteractive,
+                allowsNavigationWhenInactive: documentLoadFailed,
+                onDocumentReady: { loadedEntryID in
+                    guard isLoading, activeLoadEntryID == loadedEntryID else { return false }
+                    isLoading = false
+                    showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
+                    requestVisibleTranslationsIfPossible()
+                    return true
+                },
+                onDocumentLoadFailed: { loadedEntryID in
+                    guard activeLoadEntryID == loadedEntryID else { return }
+                    isLoading = false
+                    showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
+                    documentLoadFailed = true
+                },
                 summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
@@ -349,8 +435,14 @@ struct ArticleReaderView: View {
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
                 onToggleSummary: toggleSummary,
-                onReaderShortcut: onReaderShortcut,
-                onSelectNextEntry: onSelectNextEntry,
+                onReaderShortcut: { action in
+                    guard canNavigateDisplayedDocument else { return }
+                    onReaderShortcut(action)
+                },
+                onSelectNextEntry: {
+                    guard canNavigateDisplayedDocument else { return }
+                    onSelectNextEntry()
+                },
                 onFocusListView: onFocusListView,
                 onAdjustFontSize: { action in
                     switch action {
@@ -373,12 +465,12 @@ struct ArticleReaderView: View {
             .padding(.leading, paperLeftMargin)
         }
         #else
-        if usesNativeHTMLScroller, let html {
+        if usesNativeHTMLScroller, let preparedArticle, let displayedEntry {
             ArticleHTMLView(
-                entry: entry,
-                feedTitle: store.feed(for: entry)?.title,
-                html: html,
-                baseURL: articleBaseURL,
+                entry: displayedEntry,
+                feedTitle: store.feed(for: displayedEntry)?.title,
+                article: preparedArticle,
+                loadSession: articleLoadSession,
                 contentTopInset: 64,
                 readerParagraphs: readerParagraphs,
                 inlineTranslations: bilingualSegments,
@@ -386,6 +478,23 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                isInteractive: isDisplayedDocumentInteractive,
+                allowsNavigationWhenInactive: documentLoadFailed,
+                onDocumentReady: { loadedEntryID in
+                    guard isLoading, activeLoadEntryID == loadedEntryID else { return false }
+                    isLoading = false
+                    showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
+                    requestVisibleTranslationsIfPossible()
+                    return true
+                },
+                onDocumentLoadFailed: { loadedEntryID in
+                    guard activeLoadEntryID == loadedEntryID else { return }
+                    isLoading = false
+                    showsLoadingIndicator = false
+                    displaysMemoizedArticle = false
+                    documentLoadFailed = true
+                },
                 summaryArtifact: effectiveSummaryArtifact,
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: activeAIStatus(for: .summary) != nil,
@@ -400,7 +509,10 @@ struct ArticleReaderView: View {
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
                 onToggleSummary: toggleSummary,
-                onSelectNextEntry: onSelectNextEntry,
+                onSelectNextEntry: {
+                    guard canNavigateDisplayedDocument else { return }
+                    onSelectNextEntry()
+                },
                 onFocusListView: onFocusListView,
                 onAdjustFontSize: { action in
                     switch action {
@@ -437,7 +549,7 @@ struct ArticleReaderView: View {
     }
 
     private var usesNativeHTMLScroller: Bool {
-        !(html?.isEmpty ?? true)
+        preparedArticle != nil
     }
 
     @ViewBuilder private var content: some View {
@@ -683,6 +795,7 @@ struct ArticleReaderView: View {
     }
 
     private func toggleBilingualTranslation() {
+        guard isDisplayedDocumentInteractive else { return }
         failedBilingualParagraphIDs.removeAll()
         pendingBilingualParagraphIDs.removeAll()
         let isActivating = !store.isBilingualActive(for: entry.id)
@@ -698,6 +811,12 @@ struct ArticleReaderView: View {
     }
 
     private func handleReaderShortcut(_ action: ReaderShortcutAction) {
+        if action == .previousArticle || action == .nextArticle {
+            guard canNavigateDisplayedDocument else { return }
+            onReaderShortcut(action)
+            return
+        }
+        guard isDisplayedDocumentInteractive else { return }
         switch action {
         case .toggleBilingual:
             toggleBilingualTranslation()
@@ -725,7 +844,7 @@ struct ArticleReaderView: View {
         case .toggleStar:
             store.toggleStar(currentEntry)
         case .previousArticle, .nextArticle:
-            onReaderShortcut(action)
+            break
         }
     }
 
@@ -749,6 +868,7 @@ struct ArticleReaderView: View {
     }
 
     private func generateSummary(force: Bool = false) {
+        guard isDisplayedDocumentInteractive else { return }
         let targetText = effectiveArticleText
         guard !targetText.isEmpty else {
             onShortcutFeedback(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
@@ -790,6 +910,9 @@ struct ArticleReaderView: View {
         _ request: ReaderSelectionRequest,
         onDelta: @escaping @Sendable (String) async -> Void
     ) async -> ReaderSelectionResponse {
+        guard isDisplayedDocumentInteractive else {
+            return ReaderSelectionResponse(text: "", isError: true)
+        }
         do {
             let result: String
             switch request.kind {
@@ -850,7 +973,8 @@ struct ArticleReaderView: View {
     }
 
     private func requestVisibleTranslationsIfPossible() {
-        guard readerMode == .bilingual,
+        guard isDisplayedDocumentInteractive,
+              readerMode == .bilingual,
               !text.isEmpty,
               !isAIRequestInFlight else { return }
 
@@ -1753,6 +1877,18 @@ th, td {
     animation: none;
   }
 }
+mjx-container[jax="SVG"][display="true"] {
+  display: block !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  max-width: 100% !important;
+  padding: 0.35em 0;
+  margin: 0.6em 0;
+}
+mjx-container[jax="SVG"]:not([display="true"]) {
+  display: inline-block !important;
+  vertical-align: middle;
+}
 """
 
 @MainActor
@@ -1761,6 +1897,70 @@ enum PaperReaderBridge {
     static let visibleParagraphsMessageName = "paperRssVisibleParagraphs"
     static let explainSelectionMessageName = "paperRssExplainSelection"
     static let askSelectionMessageName = "paperRssAskSelection"
+
+    static let translationSynchronizationScript = """
+    const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
+      .filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+    const anchor = visibleNodes[0] || null;
+    const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
+
+    const translationNodeID = id => "paper-rss-translation-" + id;
+    const makeTranslation = update => {
+      const aside = document.createElement("aside");
+      aside.id = translationNodeID(update.id);
+      aside.dataset.paperRssTranslationFor = update.id;
+
+      const label = document.createElement("span");
+      label.className = "paper-rss-translation-label";
+      label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
+      ["A", "文"].forEach(value => {
+        const chip = document.createElement("span");
+        chip.className = "paper-rss-language-chip";
+        chip.textContent = value;
+        chip.setAttribute("aria-hidden", "true");
+        label.appendChild(chip);
+      });
+      const paragraph = document.createElement("p");
+      const text = document.createElement("span");
+      text.className = "paper-rss-translation-text";
+      paragraph.append(label, text);
+      aside.append(paragraph);
+      return aside;
+    };
+
+    const applyUpdate = update => {
+      if (!update || !update.id) return;
+      const source = document.querySelector(
+        '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
+      );
+      if (!source) return;
+      let aside = document.getElementById(translationNodeID(update.id));
+      if (!aside) {
+        aside = makeTranslation(update);
+        source.insertAdjacentElement("afterend", aside);
+      }
+      aside.classList.toggle("is-loading", Boolean(update.isLoading));
+      aside.setAttribute("aria-label", update.isLoading
+        ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
+        : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
+      if (update.isLoading) aside.setAttribute("aria-live", "polite");
+      else aside.removeAttribute("aria-live");
+      const paragraph = aside.querySelector(".paper-rss-translation-text");
+      if (paragraph) paragraph.textContent = update.text || "";
+    };
+
+    removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
+    updates.forEach(applyUpdate);
+
+    if (anchor && anchorTop !== null) {
+      const delta = anchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+    }
+    """
+
     static var localizedSelectionLabels: [String: String] {
         [
             "explain": I18N.localized("解释所选文字"),
@@ -1848,6 +2048,13 @@ enum PaperReaderBridge {
             requestAnimationFrame(publishParagraphs);
           };
 
+          const refreshLayout = () => {
+            scheduleScroll();
+            scheduleParagraphs();
+            window.paperRssTOCRail?.refresh?.();
+          };
+          window.addEventListener("paperRssLayoutRefresh", refreshLayout);
+
           // IntersectionObserver 覆盖当前视口以及屏幕外 30% 的上下预加载缓冲区，
           // 支持用户快速滚动时的即时 AI 翻译预加载。
           const observer = new IntersectionObserver(entries => {
@@ -1903,8 +2110,7 @@ enum PaperReaderBridge {
               }
             }
           }, true);
-          scheduleScroll();
-          scheduleParagraphs();
+          refreshLayout();
         })();
         """,
         injectionTime: .atDocumentEnd,
@@ -3124,13 +3330,6 @@ enum PaperReaderBridge {
               removeAction();
               if (!hasEnabledAction(options)) dismissPopover();
             },
-            updateInlineTranslation(id, text) {
-              const el = document.getElementById("paper-rss-translation-" + id);
-              if (!el) return;
-              el.classList.remove("is-loading");
-              const span = el.querySelector(".paper-rss-translation-text");
-              if (span) span.textContent = text;
-            },
             append(id, text, kind) {
               if (!text) return;
               const body = activePopover?.dataset.explanationId === id ? activePopover.querySelector(".paper-rss-explanation-body") : null;
@@ -3263,6 +3462,9 @@ enum PaperReaderBridge {
 
             const action = actions[String(event.key || "").toLowerCase()];
             if (!action) return;
+            if (window.paperRssReaderInteractive === false &&
+                !(window.paperRssReaderNavigationEnabled === true &&
+                  (action === "previousArticle" || action === "nextArticle"))) return;
             if (isEditable(document.activeElement)) return;
 
             const selection = window.getSelection();
@@ -3287,6 +3489,8 @@ enum PaperReaderBridge {
         (() => {
           window.addEventListener("keydown", event => {
             if (event.key === " " || event.keyCode === 32) {
+              if (window.paperRssReaderInteractive === false &&
+                  window.paperRssReaderNavigationEnabled !== true) return;
               if (event.repeat) return;
               const active = document.activeElement;
               if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
@@ -3296,6 +3500,11 @@ enum PaperReaderBridge {
                 return;
               }
               event.preventDefault();
+
+              if (window.paperRssReaderInteractive === false) {
+                window.webkit?.messageHandlers?.\(nextArticleMessageName)?.postMessage({});
+                return;
+              }
 
               const scrollHeight = Math.max(
                 document.documentElement.scrollHeight,
@@ -3601,6 +3810,135 @@ enum PaperReaderBridge {
         forMainFrameOnly: true,
         in: .defaultClient
     )
+
+    private static var _cachedMathJaxSource: String?
+
+    public static func loadMathJaxBundleSource() -> String? {
+        if let cached = _cachedMathJaxSource {
+            return cached
+        }
+        // 1. 尝试从 App Bundle / Resources 加载
+        if let url = Bundle.main.url(forResource: "tex-mml-svg", withExtension: "js", subdirectory: "MathJax") ??
+                     Bundle.main.url(forResource: "tex-mml-svg", withExtension: "js") {
+            if let content = try? String(contentsOf: url, encoding: .utf8), !content.isEmpty {
+                _cachedMathJaxSource = content
+                return content
+            }
+        }
+        #if SWIFT_PACKAGE
+        if let moduleURL = Bundle.module.url(forResource: "tex-mml-svg", withExtension: "js", subdirectory: "Resources/MathJax") ??
+                           Bundle.module.url(forResource: "tex-mml-svg", withExtension: "js") {
+            if let content = try? String(contentsOf: moduleURL, encoding: .utf8), !content.isEmpty {
+                _cachedMathJaxSource = content
+                return content
+            }
+        }
+        #endif
+        // 2. 本地开发源码目录相对路径兜底
+        let localPath = "PaperRss/Resources/MathJax/tex-mml-svg.js"
+        if let text = try? String(contentsOfFile: localPath, encoding: .utf8), !text.isEmpty {
+            _cachedMathJaxSource = text
+            return text
+        }
+        return nil
+    }
+
+    public static func mathUserScripts(containsMath: Bool) -> [WKUserScript] {
+        guard containsMath else { return [] }
+        var scripts: [WKUserScript] = [mathConfigScript]
+        if let mathSource = loadMathJaxBundleSource() {
+            let libraryScript = WKUserScript(
+                source: mathSource,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true,
+                in: .defaultClient
+            )
+            scripts.append(libraryScript)
+        }
+        return scripts
+    }
+
+    static func installStandardUserScripts(in controller: WKUserContentController) {
+        controller.addUserScript(observerScript)
+        #if os(macOS)
+        controller.addUserScript(tocRailScript)
+        #endif
+        controller.addUserScript(selectionScript)
+        controller.addUserScript(imageRecoveryScript)
+        #if os(macOS)
+        controller.addUserScript(readerShortcutScript)
+        #endif
+        controller.addUserScript(spacebarScript)
+        controller.addUserScript(mediaFullscreenScript)
+        #if os(macOS)
+        controller.addUserScript(fontSizeScript)
+        #endif
+    }
+
+    static func synchronizeMathScripts(
+        in webView: WKWebView,
+        containsMath: Bool,
+        currentlyEnabled: Bool
+    ) -> Bool {
+        guard containsMath != currentlyEnabled else { return currentlyEnabled }
+
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        installStandardUserScripts(in: controller)
+        if containsMath {
+            for script in mathUserScripts(containsMath: true) {
+                controller.addUserScript(script)
+            }
+        }
+        return containsMath
+    }
+
+    static func isSameDocumentAnchor(_ url: URL, baseURL: URL?) -> Bool {
+        guard url.fragment != nil else { return false }
+        guard let baseURL else {
+            return url.scheme == nil || (url.scheme?.lowercased() == "about" && url.path == "blank")
+        }
+        guard
+              var targetComponents = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              var baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return false
+        }
+        targetComponents.fragment = nil
+        baseComponents.fragment = nil
+        return targetComponents.url == baseComponents.url
+    }
+
+    static let mathConfigScript = WKUserScript(
+        source: """
+        (() => {
+          if (window.MathJax) return;
+          window.MathJax = {
+            tex: {
+              inlineMath: [['\\\\(', '\\\\)'], ['$', '$']],
+              displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']],
+              processEscapes: true,
+              processEnvironments: true
+            },
+            svg: {
+              fontCache: 'local'
+            },
+            options: {
+              enableMenu: false
+            },
+            startup: {
+              pageReady: () => {
+                return (window.MathJax.startup?.defaultPageReady ? window.MathJax.startup.defaultPageReady() : Promise.resolve()).then(() => {
+                  window.dispatchEvent(new CustomEvent("paperRssLayoutRefresh"));
+                }).catch(() => {});
+              }
+            }
+          };
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
 }
 
 #if os(macOS)
@@ -3634,8 +3972,8 @@ private final class ArticleWebViewContainer: NSView {
 private struct ArticleHTMLView: NSViewRepresentable {
     let entry: Entry
     let feedTitle: String?
-    let html: String
-    let baseURL: URL?
+    let article: PreparedArticle
+    let loadSession: Int
     let contentTopInset: CGFloat
     let readerParagraphs: [ReaderParagraph]
     let inlineTranslations: [BilingualSegment]
@@ -3643,6 +3981,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    let isInteractive: Bool
+    let allowsNavigationWhenInactive: Bool
+    let onDocumentReady: (String) -> Bool
+    let onDocumentLoadFailed: (String) -> Void
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
     let isGeneratingSummary: Bool
@@ -3664,6 +4006,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var onAdjustFontSize: ((String) -> Void)? = nil
+
+    private var html: String { article.html }
+    private var baseURL: URL? { article.baseURL }
+    private var features: ArticleFeatures { article.features }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -3728,14 +4074,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient,
             name: "paperRssToggleSummary"
         )
-        configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.tocRailScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.readerShortcutScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.fontSizeScript)
+        PaperReaderBridge.installStandardUserScripts(in: configuration.userContentController)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.wantsLayer = true
@@ -3762,12 +4101,12 @@ private struct ArticleHTMLView: NSViewRepresentable {
         let webView = container.webView
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
+        context.coordinator.synchronizeInteractivity(in: webView)
+        guard isInteractive else { return }
         context.coordinator.synchronizeSummaryCard(in: webView)
         context.coordinator.synchronizeSelectionOptions(in: webView)
+        context.coordinator.restoreSelectionAnnotations(in: webView)
         webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
-        for segment in inlineTranslations {
-            context.coordinator.updateInlineTranslationInWebView(id: segment.id, translation: segment.translation)
-        }
     }
 
     static func dismantleNSView(_ container: ArticleWebViewContainer, coordinator: Coordinator) {
@@ -3814,6 +4153,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: ArticleHTMLView
         private var loadedArticleKey: String?
+        private var loadedDocumentIdentity: String?
+        private var loadedArticle: PreparedArticle?
+        private var observedLoadSession: Int?
+        private var completedArticleKey: String?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
         private struct SummaryRenderSignature: Equatable {
@@ -3828,17 +4171,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var selectionExplanationTask: Task<Void, Never>?
         private var activeSelectionExplanationID: String?
         private var pendingSelectionExplanationRequests: [ReaderSelectionRequest] = []
+        private var mathScriptsEnabled = false
         weak var webView: WKWebView?
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
-        }
-
-        func updateInlineTranslationInWebView(id: String, translation: String) {
-            guard renderedTranslations[id] != translation else { return }
-            renderedTranslations[id] = translation
-            let escaped = (try? String(data: JSONEncoder().encode(translation), encoding: .utf8)) ?? "\"\""
-            webView?.evaluateJavaScript("window.paperRssSelectionAssistant?.updateInlineTranslation('\(id)', \(escaped))")
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -4001,6 +4338,19 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if !parent.isInteractive {
+                guard parent.allowsNavigationWhenInactive else { return }
+                if message.name == PaperReaderBridge.nextArticleMessageName {
+                    parent.onSelectNextEntry()
+                } else if message.name == PaperReaderBridge.readerShortcutMessageName,
+                          let payload = message.body as? [String: Any],
+                          let rawAction = payload["action"] as? String,
+                          let action = ReaderShortcutAction(rawValue: rawAction),
+                          action == .previousArticle || action == .nextArticle {
+                    parent.onReaderShortcut(action)
+                }
+                return
+            }
             switch message.name {
             case PaperReaderBridge.scrollMessageName:
                 guard let offset = message.body as? Double else { return }
@@ -4098,19 +4448,68 @@ private struct ArticleHTMLView: NSViewRepresentable {
             )
         }
 
+        private func synchronizeMathScripts(in webView: WKWebView) {
+            mathScriptsEnabled = PaperReaderBridge.synchronizeMathScripts(
+                in: webView,
+                containsMath: parent.features.containsMath,
+                currentlyEnabled: mathScriptsEnabled
+            )
+        }
+
+        func synchronizeInteractivity(in webView: WKWebView) {
+            let value = parent.isInteractive ? "true" : "false"
+            let navigationValue = parent.allowsNavigationWhenInactive ? "true" : "false"
+            webView.evaluateJavaScript(
+                "window.paperRssReaderInteractive = \(value); window.paperRssReaderNavigationEnabled = \(navigationValue)",
+                in: nil,
+                in: .defaultClient
+            ) { _ in }
+        }
+
         func loadIfNeeded(into webView: WKWebView) {
-            let secureBaseURL = parent.baseURL.flatMap { url -> URL? in
-                guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) else { return nil }
-                return url
+            if observedLoadSession != parent.loadSession {
+                observedLoadSession = parent.loadSession
+                failedLoadAttempts.removeAll()
             }
-            let articleKey = "\(parent.entry.id)|\(secureBaseURL?.absoluteString ?? "")"
-            guard loadedArticleKey != articleKey else {
+            synchronizeInteractivity(in: webView)
+            synchronizeMathScripts(in: webView)
+            if loadedDocumentIdentity == parent.entry.id,
+               loadedArticle == parent.article,
+               let renderSignature = loadedArticleKey {
+                if failedLoadAttempts[renderSignature, default: 0] >= 2 {
+                    parent.onDocumentLoadFailed(parent.entry.id)
+                    return
+                }
+                if completedArticleKey == renderSignature {
+                    let entryID = parent.entry.id
+                    DispatchQueue.main.async {
+                        guard self.parent.entry.id == entryID,
+                              self.completedArticleKey == renderSignature else { return }
+                        guard self.parent.onDocumentReady(entryID) else { return }
+                        self.scrollToTop(in: webView)
+                    }
+                }
                 synchronizeContentTopInset(in: webView)
-                synchronizeTranslations(in: webView)
-                synchronizeSelectionOptions(in: webView)
+                if parent.isInteractive {
+                    synchronizeTranslations(in: webView)
+                    synchronizeSelectionOptions(in: webView)
+                }
                 return
             }
-            renderedSummarySignature = nil
+            // 连击合并：同一 runloop 内快速连续切换时只加载最终目标，
+            // 跳过中间文章的全文构建与 WebKit 导航（NetNewsWire 式无中间态）。
+            if scheduledNavigationEntryID == parent.entry.id { return }
+            scheduledNavigationEntryID = parent.entry.id
+            let requestedEntryID = parent.entry.id
+            DispatchQueue.main.async {
+                self.performDocumentLoad(entryID: requestedEntryID, in: webView)
+            }
+        }
+
+        private func performDocumentLoad(entryID: String, in webView: WKWebView) {
+            guard scheduledNavigationEntryID == entryID,
+                  parent.entry.id == entryID else { return }
+            scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,
@@ -4129,22 +4528,55 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
-            let document = Self.documentHTML(
-                body: readerHTML,
-                topInset: parent.contentTopInset,
+            let document = ReaderDocumentRenderer.renderDocument(
+                article: parent.article,
+                documentIdentity: parent.entry.id,
+                bodyHTML: readerHTML,
+                headerHTML: headerHTML,
+                topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                headerHTML: headerHTML
+                extraStyleCSS: paperArticleStyle
             )
-            loadedArticleKey = articleKey
+            renderedSummarySignature = nil
+            loadedArticleKey = document.renderSignature
+            loadedDocumentIdentity = parent.entry.id
+            loadedArticle = parent.article
+            completedArticleKey = nil
             renderedTranslations = initialTranslationState.translations
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
-            pendingScrollOffset = readerScrollView(in: webView)?.contentView.bounds.origin.y
-            webView.loadHTMLString(document, baseURL: secureBaseURL)
+            pendingScrollOffset = 0
+            currentLoadGeneration += 1
+            let generation = currentLoadGeneration
+            if let navigation = webView.loadHTMLString(document.html, baseURL: document.baseURL) {
+                navigationLoads[ObjectIdentifier(navigation)] = (
+                    entryID: parent.entry.id,
+                    signature: document.renderSignature,
+                    generation: generation
+                )
+            } else {
+                handleLoadFailure(
+                    entryID: parent.entry.id,
+                    signature: document.renderSignature,
+                    generation: generation,
+                    in: webView
+                )
+            }
             synchronizeSelectionOptions(in: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            let load = navigation.flatMap {
+                navigationLoads.removeValue(forKey: ObjectIdentifier($0))
+            }
             DispatchQueue.main.async {
+                guard let load,
+                      load.entryID == self.parent.entry.id,
+                      load.signature == self.loadedArticleKey,
+                      load.generation == self.currentLoadGeneration else { return }
+                self.completedArticleKey = load.signature
+                self.failedLoadAttempts.removeValue(forKey: load.signature)
+                guard self.parent.onDocumentReady(load.entryID) else { return }
+                self.synchronizeSelectionOptions(in: webView)
                 if let offset = self.pendingScrollOffset,
                    let scrollView = self.readerScrollView(in: webView) {
                     self.pendingScrollOffset = nil
@@ -4153,14 +4585,56 @@ private struct ArticleHTMLView: NSViewRepresentable {
                     self.parent.onScrollOffsetChange(max(0, offset))
                 }
                 self.synchronizeContentTopInset(in: webView)
-                self.synchronizeTranslations(in: webView)
-                self.synchronizeSummaryCard(in: webView)
-                self.synchronizeSelectionOptions(in: webView)
-                self.restoreSelectionAnnotations(in: webView)
+                self.synchronizeInteractivity(in: webView)
             }
         }
 
-        private func restoreSelectionAnnotations(in webView: WKWebView) {
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(navigation, in: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(navigation, in: webView)
+        }
+
+        private func handleNavigationFailure(_ navigation: WKNavigation?, in webView: WKWebView) {
+            guard let navigation,
+                  let load = navigationLoads.removeValue(forKey: ObjectIdentifier(navigation)) else { return }
+            handleLoadFailure(
+                entryID: load.entryID,
+                signature: load.signature,
+                generation: load.generation,
+                in: webView
+            )
+        }
+
+        private func handleLoadFailure(
+            entryID: String,
+            signature: String,
+            generation: Int,
+            in webView: WKWebView
+        ) {
+            guard signature == loadedArticleKey,
+                  generation == currentLoadGeneration else { return }
+            let attempts = failedLoadAttempts[signature, default: 0] + 1
+            failedLoadAttempts[signature] = attempts
+            if attempts == 1 {
+                loadedArticleKey = nil
+                DispatchQueue.main.async { self.loadIfNeeded(into: webView) }
+            } else {
+                parent.onDocumentLoadFailed(entryID)
+            }
+        }
+
+        private func scrollToTop(in webView: WKWebView) {
+            guard let scrollView = readerScrollView(in: webView) else { return }
+            pendingScrollOffset = nil
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            parent.onScrollOffsetChange(0)
+        }
+
+        func restoreSelectionAnnotations(in webView: WKWebView) {
             guard !parent.selectionAnnotations.isEmpty else { return }
             let items: [[String: Any]] = parent.selectionAnnotations.map {
                 [
@@ -4215,7 +4689,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             renderedPendingTranslationIDs = desired.pendingIDs
             Task { @MainActor in
                 _ = try? await webView.callAsyncJavaScript(
-                    Self.translationSynchronizationScript,
+                    PaperReaderBridge.translationSynchronizationScript,
                     arguments: ["updates": updates, "removals": removals],
                     in: nil,
                     contentWorld: .defaultClient
@@ -4237,6 +4711,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url {
+                if PaperReaderBridge.isSameDocumentAnchor(url, baseURL: parent.baseURL) {
+                    decisionHandler(.allow)
+                    return
+                }
                 if let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) {
                     NSWorkspace.shared.open(url)
                 }
@@ -4249,81 +4727,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         private var pendingScrollOffset: CGFloat?
-
-        private static let translationSynchronizationScript = """
-        const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
-          .filter(node => {
-            const rect = node.getBoundingClientRect();
-            return rect.bottom > 0 && rect.top < window.innerHeight;
-          });
-        const anchor = visibleNodes[0] || null;
-        const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
-
-        const translationNodeID = id => "paper-rss-translation-" + id;
-        const makeTranslation = update => {
-          const aside = document.createElement("aside");
-          aside.id = translationNodeID(update.id);
-          aside.dataset.paperRssTranslationFor = update.id;
-
-          const label = document.createElement("span");
-          label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
-          ["A", "文"].forEach(value => {
-            const chip = document.createElement("span");
-            chip.className = "paper-rss-language-chip";
-            chip.textContent = value;
-            chip.setAttribute("aria-hidden", "true");
-            label.appendChild(chip);
-          });
-          const paragraph = document.createElement("p");
-          const text = document.createElement("span");
-          text.className = "paper-rss-translation-text";
-          paragraph.append(label, text);
-          aside.append(paragraph);
-          return aside;
-        };
-
-        const applyUpdate = update => {
-          if (!update || !update.id) return;
-          const source = document.querySelector(
-            '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
-          );
-          if (!source) return;
-          let aside = document.getElementById(translationNodeID(update.id));
-          if (!aside) {
-            aside = makeTranslation(update);
-            source.insertAdjacentElement("afterend", aside);
-          }
-          aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading
-            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
-            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
-          if (update.isLoading) aside.setAttribute("aria-live", "polite");
-          else aside.removeAttribute("aria-live");
-          const paragraph = aside.querySelector(".paper-rss-translation-text");
-          if (paragraph) paragraph.textContent = update.text || "";
-        };
-
-        removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
-        updates.forEach(applyUpdate);
-
-        if (anchor && anchorTop !== null) {
-          const delta = anchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
-        }
-        """
-
-        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
-            return """
-            <!doctype html>
-            <html><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
-            </head><body>\(headerHTML)\(body)</body></html>
-            """
-        }
+        private var currentLoadGeneration = 0
+        /// 已排定待执行导航的目标条目；同 runloop 内被更新目标覆盖即作废。
+        private var scheduledNavigationEntryID: String?
+        private var navigationLoads: [ObjectIdentifier: (entryID: String, signature: String, generation: Int)] = [:]
+        private var failedLoadAttempts: [String: Int] = [:]
     }
 }
 #endif
@@ -4332,8 +4740,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
 private struct ArticleHTMLView: UIViewRepresentable {
     let entry: Entry
     let feedTitle: String?
-    let html: String
-    let baseURL: URL?
+    let article: PreparedArticle
+    let loadSession: Int
     let contentTopInset: CGFloat
     let readerParagraphs: [ReaderParagraph]
     let inlineTranslations: [BilingualSegment]
@@ -4341,6 +4749,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    let isInteractive: Bool
+    let allowsNavigationWhenInactive: Bool
+    let onDocumentReady: (String) -> Bool
+    let onDocumentLoadFailed: (String) -> Void
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
     let isGeneratingSummary: Bool
@@ -4360,6 +4772,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let onToggleSummary: () -> Void
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
+
+    private var html: String { article.html }
+    private var baseURL: URL? { article.baseURL }
+    private var features: ArticleFeatures { article.features }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -4410,11 +4826,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             contentWorld: .defaultClient,
             name: "paperRssToggleSummary"
         )
-        configuration.userContentController.addUserScript(PaperReaderBridge.observerScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.selectionScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.imageRecoveryScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.spacebarScript)
-        configuration.userContentController.addUserScript(PaperReaderBridge.mediaFullscreenScript)
+        PaperReaderBridge.installStandardUserScripts(in: configuration.userContentController)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -4432,8 +4844,13 @@ private struct ArticleHTMLView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
+        context.coordinator.synchronizeInteractivity(in: webView)
+        guard isInteractive else { return }
         context.coordinator.synchronizeSummaryCard(in: webView)
         context.coordinator.synchronizeSelectionOptions(in: webView)
+        context.coordinator.restoreSelectionAnnotations(in: webView)
+        // 与 macOS 对称：字号变化即时生效，无需等待下次导航重建文档
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -4473,7 +4890,16 @@ private struct ArticleHTMLView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: ArticleHTMLView
         private var loadedArticleKey: String?
+        private var loadedDocumentIdentity: String?
+        private var loadedArticle: PreparedArticle?
+        private var observedLoadSession: Int?
+        private var completedArticleKey: String?
         private var pendingContentOffset: CGPoint?
+        private var currentLoadGeneration = 0
+        /// 已排定待执行导航的目标条目；同 runloop 内被更新目标覆盖即作废。
+        private var scheduledNavigationEntryID: String?
+        private var navigationLoads: [ObjectIdentifier: (entryID: String, signature: String, generation: Int)] = [:]
+        private var failedLoadAttempts: [String: Int] = [:]
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
         private struct SummaryRenderSignature: Equatable {
@@ -4488,6 +4914,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var selectionExplanationTask: Task<Void, Never>?
         private var activeSelectionExplanationID: String?
         private var pendingSelectionExplanationRequests: [ReaderSelectionRequest] = []
+        private var mathScriptsEnabled = false
         weak var webView: WKWebView?
 
         init(parent: ArticleHTMLView) {
@@ -4623,6 +5050,12 @@ private struct ArticleHTMLView: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if !parent.isInteractive {
+                guard parent.allowsNavigationWhenInactive,
+                      message.name == PaperReaderBridge.nextArticleMessageName else { return }
+                parent.onSelectNextEntry()
+                return
+            }
             switch message.name {
             case PaperReaderBridge.scrollMessageName:
                 guard let offset = message.body as? Double else { return }
@@ -4706,19 +5139,68 @@ private struct ArticleHTMLView: UIViewRepresentable {
             )
         }
 
+        private func synchronizeMathScripts(in webView: WKWebView) {
+            mathScriptsEnabled = PaperReaderBridge.synchronizeMathScripts(
+                in: webView,
+                containsMath: parent.features.containsMath,
+                currentlyEnabled: mathScriptsEnabled
+            )
+        }
+
+        func synchronizeInteractivity(in webView: WKWebView) {
+            let value = parent.isInteractive ? "true" : "false"
+            let navigationValue = parent.allowsNavigationWhenInactive ? "true" : "false"
+            webView.evaluateJavaScript(
+                "window.paperRssReaderInteractive = \(value); window.paperRssReaderNavigationEnabled = \(navigationValue)",
+                in: nil,
+                in: .defaultClient
+            ) { _ in }
+        }
+
         func loadIfNeeded(into webView: WKWebView) {
-            let secureBaseURL = parent.baseURL.flatMap { url -> URL? in
-                guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) else { return nil }
-                return url
+            if observedLoadSession != parent.loadSession {
+                observedLoadSession = parent.loadSession
+                failedLoadAttempts.removeAll()
             }
-            let articleKey = "\(parent.entry.id)|\(secureBaseURL?.absoluteString ?? "")"
-            guard loadedArticleKey != articleKey else {
+            synchronizeInteractivity(in: webView)
+            synchronizeMathScripts(in: webView)
+            if loadedDocumentIdentity == parent.entry.id,
+               loadedArticle == parent.article,
+               let renderSignature = loadedArticleKey {
+                if failedLoadAttempts[renderSignature, default: 0] >= 2 {
+                    parent.onDocumentLoadFailed(parent.entry.id)
+                    return
+                }
+                if completedArticleKey == renderSignature {
+                    let entryID = parent.entry.id
+                    DispatchQueue.main.async {
+                        guard self.parent.entry.id == entryID,
+                              self.completedArticleKey == renderSignature else { return }
+                        guard self.parent.onDocumentReady(entryID) else { return }
+                        self.scrollToTop(in: webView)
+                    }
+                }
                 synchronizeContentTopInset(in: webView)
-                synchronizeTranslations(in: webView)
-                synchronizeSelectionOptions(in: webView)
+                if parent.isInteractive {
+                    synchronizeTranslations(in: webView)
+                    synchronizeSelectionOptions(in: webView)
+                }
                 return
             }
-            renderedSummarySignature = nil
+            // 连击合并：同一 runloop 内快速连续切换时只加载最终目标，
+            // 跳过中间文章的全文构建与 WebKit 导航（NetNewsWire 式无中间态）。
+            if scheduledNavigationEntryID == parent.entry.id { return }
+            scheduledNavigationEntryID = parent.entry.id
+            let requestedEntryID = parent.entry.id
+            DispatchQueue.main.async {
+                self.performDocumentLoad(entryID: requestedEntryID, in: webView)
+            }
+        }
+
+        private func performDocumentLoad(entryID: String, in webView: WKWebView) {
+            guard scheduledNavigationEntryID == entryID,
+                  parent.entry.id == entryID else { return }
+            scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
             let readerHTML = ArticleExtractor.insertingInlineTranslations(
                 into: parent.html,
@@ -4737,24 +5219,57 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
-            let document = Self.documentHTML(
-                body: readerHTML,
-                topInset: parent.contentTopInset,
+            let document = ReaderDocumentRenderer.renderDocument(
+                article: parent.article,
+                documentIdentity: parent.entry.id,
+                bodyHTML: readerHTML,
+                headerHTML: headerHTML,
+                topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                headerHTML: headerHTML
+                extraStyleCSS: paperArticleStyle
             )
-            loadedArticleKey = articleKey
+            renderedSummarySignature = nil
+            loadedArticleKey = document.renderSignature
+            loadedDocumentIdentity = parent.entry.id
+            loadedArticle = parent.article
+            completedArticleKey = nil
             renderedTranslations = initialTranslationState.translations
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
-            pendingContentOffset = webView.scrollView.contentOffset
-            webView.loadHTMLString(document, baseURL: secureBaseURL)
+            pendingContentOffset = .zero
+            currentLoadGeneration += 1
+            let generation = currentLoadGeneration
+            if let navigation = webView.loadHTMLString(document.html, baseURL: document.baseURL) {
+                navigationLoads[ObjectIdentifier(navigation)] = (
+                    entryID: parent.entry.id,
+                    signature: document.renderSignature,
+                    generation: generation
+                )
+            } else {
+                handleLoadFailure(
+                    entryID: parent.entry.id,
+                    signature: document.renderSignature,
+                    generation: generation,
+                    in: webView
+                )
+            }
             synchronizeSelectionOptions(in: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            let load = navigation.flatMap {
+                navigationLoads.removeValue(forKey: ObjectIdentifier($0))
+            }
             let offset = pendingContentOffset
-            pendingContentOffset = nil
             DispatchQueue.main.async {
+                guard let load,
+                      load.entryID == self.parent.entry.id,
+                      load.signature == self.loadedArticleKey,
+                      load.generation == self.currentLoadGeneration else { return }
+                self.completedArticleKey = load.signature
+                self.failedLoadAttempts.removeValue(forKey: load.signature)
+                self.pendingContentOffset = nil
+                guard self.parent.onDocumentReady(load.entryID) else { return }
+                self.synchronizeSelectionOptions(in: webView)
                 if let offset {
                     webView.scrollView.setContentOffset(offset, animated: false)
                     self.parent.onScrollOffsetChange(
@@ -4762,14 +5277,54 @@ private struct ArticleHTMLView: UIViewRepresentable {
                     )
                 }
                 self.synchronizeContentTopInset(in: webView)
-                self.synchronizeTranslations(in: webView)
-                self.synchronizeSummaryCard(in: webView)
-                self.synchronizeSelectionOptions(in: webView)
-                self.restoreSelectionAnnotations(in: webView)
+                self.synchronizeInteractivity(in: webView)
             }
         }
 
-        private func restoreSelectionAnnotations(in webView: WKWebView) {
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(navigation, in: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(navigation, in: webView)
+        }
+
+        private func handleNavigationFailure(_ navigation: WKNavigation?, in webView: WKWebView) {
+            guard let navigation,
+                  let load = navigationLoads.removeValue(forKey: ObjectIdentifier(navigation)) else { return }
+            handleLoadFailure(
+                entryID: load.entryID,
+                signature: load.signature,
+                generation: load.generation,
+                in: webView
+            )
+        }
+
+        private func handleLoadFailure(
+            entryID: String,
+            signature: String,
+            generation: Int,
+            in webView: WKWebView
+        ) {
+            guard signature == loadedArticleKey,
+                  generation == currentLoadGeneration else { return }
+            let attempts = failedLoadAttempts[signature, default: 0] + 1
+            failedLoadAttempts[signature] = attempts
+            if attempts == 1 {
+                loadedArticleKey = nil
+                DispatchQueue.main.async { self.loadIfNeeded(into: webView) }
+            } else {
+                parent.onDocumentLoadFailed(entryID)
+            }
+        }
+
+        private func scrollToTop(in webView: WKWebView) {
+            pendingContentOffset = nil
+            webView.scrollView.setContentOffset(.zero, animated: false)
+            parent.onScrollOffsetChange(0)
+        }
+
+        func restoreSelectionAnnotations(in webView: WKWebView) {
             guard !parent.selectionAnnotations.isEmpty else { return }
             let items: [[String: Any]] = parent.selectionAnnotations.map {
                 [
@@ -4824,7 +5379,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             renderedPendingTranslationIDs = desired.pendingIDs
             Task { @MainActor in
                 _ = try? await webView.callAsyncJavaScript(
-                    Self.translationSynchronizationScript,
+                    PaperReaderBridge.translationSynchronizationScript,
                     arguments: ["updates": updates, "removals": removals],
                     in: nil,
                     contentWorld: .defaultClient
@@ -4846,6 +5401,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url {
+                if PaperReaderBridge.isSameDocumentAnchor(url, baseURL: parent.baseURL) {
+                    decisionHandler(.allow)
+                    return
+                }
                 if let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme) {
                     UIApplication.shared.open(url)
                 }
@@ -4853,81 +5412,6 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 return
             }
             decisionHandler(navigationAction.navigationType == .other && navigationAction.targetFrame?.isMainFrame == true ? .allow : .cancel)
-        }
-
-        private static let translationSynchronizationScript = """
-        const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
-          .filter(node => {
-            const rect = node.getBoundingClientRect();
-            return rect.bottom > 0 && rect.top < window.innerHeight;
-          });
-        const anchor = visibleNodes[0] || null;
-        const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
-
-        const translationNodeID = id => "paper-rss-translation-" + id;
-        const makeTranslation = update => {
-          const aside = document.createElement("aside");
-          aside.id = translationNodeID(update.id);
-          aside.dataset.paperRssTranslationFor = update.id;
-
-          const label = document.createElement("span");
-          label.className = "paper-rss-translation-label";
-          label.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.translationLabel || "译文");
-          ["A", "文"].forEach(value => {
-            const chip = document.createElement("span");
-            chip.className = "paper-rss-language-chip";
-            chip.textContent = value;
-            chip.setAttribute("aria-hidden", "true");
-            label.appendChild(chip);
-          });
-          const paragraph = document.createElement("p");
-          const text = document.createElement("span");
-          text.className = "paper-rss-translation-text";
-          paragraph.append(label, text);
-          aside.append(paragraph);
-          return aside;
-        };
-
-        const applyUpdate = update => {
-          if (!update || !update.id) return;
-          const source = document.querySelector(
-            '[data-paper-rss-id="' + CSS.escape(update.id) + '"]'
-          );
-          if (!source) return;
-          let aside = document.getElementById(translationNodeID(update.id));
-          if (!aside) {
-            aside = makeTranslation(update);
-            source.insertAdjacentElement("afterend", aside);
-          }
-          aside.classList.toggle("is-loading", Boolean(update.isLoading));
-          aside.setAttribute("aria-label", update.isLoading
-            ? (window.paperRssSelectionOptions?.labels?.generatingTranslation || "正在生成译文")
-            : (window.paperRssSelectionOptions?.labels?.translationLabel || "译文"));
-          if (update.isLoading) aside.setAttribute("aria-live", "polite");
-          else aside.removeAttribute("aria-live");
-          const paragraph = aside.querySelector(".paper-rss-translation-text");
-          if (paragraph) paragraph.textContent = update.text || "";
-        };
-
-        removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
-        updates.forEach(applyUpdate);
-
-        if (anchor && anchorTop !== null) {
-          const delta = anchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
-        }
-        """
-
-        private static func documentHTML(body: String, topInset: CGFloat, fontSize: Int, headerHTML: String) -> String {
-            return """
-            <!doctype html>
-            <html><head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: blob:; style-src 'unsafe-inline'; font-src 'none'; media-src http: https: data: blob:; object-src 'none'; frame-src 'none'; connect-src 'none'; script-src 'none'; base-uri 'none'; form-action 'none'">
-            <style>:root { --paper-reader-top-inset: \(max(0, topInset))px; --paper-font-size: \(fontSize)px; }\(paperArticleStyle)</style>
-            </head><body>\(headerHTML)\(body)</body></html>
-            """
         }
     }
 }

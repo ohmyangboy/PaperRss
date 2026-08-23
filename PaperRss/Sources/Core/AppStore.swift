@@ -52,6 +52,17 @@ public struct AIRequestStatus: Sendable, Equatable {
     }
 }
 
+/// 单篇正文重新拉取完成后的失效信号，用于驱动阅读页自动重载。
+public struct ArticleRefreshSignal: Sendable, Equatable {
+    public let entryID: String
+    public let token: UUID
+
+    public init(entryID: String, token: UUID) {
+        self.entryID = entryID
+        self.token = token
+    }
+}
+
 @MainActor
 public final class AppStore: ObservableObject {
     @Published public var appLanguage: AppLanguage = I18N.shared.language {
@@ -62,6 +73,9 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var appTheme: AppTheme = .system
     @Published public private(set) var articleFontSize: Int = 17
 
+    /// Feed 图标仓库：行渲染经它同步查询已就绪图标，杜绝 AsyncImage 加载期闪烁。
+    public let iconStore = FeedIconStore()
+
     @Published public private(set) var feeds: [Feed] = []
     @Published public private(set) var customFolders: [String] = []
     @Published public private(set) var sidebarCounts: SidebarCounts = SidebarCounts()
@@ -70,7 +84,13 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var unreadEntryListItems: [EntryListItem] = []
     @Published public private(set) var starredEntryListItems: [EntryListItem] = []
     @Published public private(set) var timelineRevision: UInt64 = 0
+    @Published public private(set) var articleRefreshSignal: ArticleRefreshSignal?
+    @Published public private(set) var activeRefetchEntryIDs: Set<String> = []
     @Published public var llmConfiguration: LLMConfiguration = .default
+
+    /// 进程内已准备正文 LRU 缓存：命中时 Reader 可跳过 prepare 管线即时换页。
+    public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
+    private var neighborPrefetchTask: Task<Void, Never>?
 
     @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
@@ -164,6 +184,7 @@ public final class AppStore: ObservableObject {
     private let persistenceURL: URL
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
     private let llm = LLMService()
+    private let preparationEngine: ArticlePreparationEngine
     private var automaticRefreshTask: Task<Void, Never>?
 
     private enum PreferenceKey {
@@ -187,11 +208,13 @@ public final class AppStore: ObservableObject {
         persistenceURL: URL? = nil,
         credentialStore: CredentialStore? = nil,
         customSession: URLSession? = nil,
+        pageLoader: (any ArticlePageLoading)? = nil,
         feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil
     ) {
         let actualFetcher = feedFetcher ?? { try await FeedService.fetch($0) }
         self.feedFetcher = actualFetcher
         self.customSession = customSession
+        self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -287,6 +310,7 @@ public final class AppStore: ObservableObject {
     ) {
         self.feedFetcher = feedFetcher
         self.customSession = nil
+        self.preparationEngine = ArticlePreparationEngine()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1199,62 +1223,155 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    // MARK: - Article Caches & Details
+    // MARK: - Article Preparation & Caches
+
+    /// 统一正文准备入口：每个 entry 返回同源绑定的 PreparedArticle，并在内容更新时写入本地缓存。
+    /// 内存 LRU 命中时零 IO、零解析直接返回，使顺序阅读切换即时完成。
+    public func prepareArticle(for entry: Entry) async -> PreparedArticle {
+        let fingerprint = PreparedArticleMemoryCache.contentFingerprint(for: entry)
+        if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
+            return memoized
+        }
+        // 注：预取与阅读加载可能对同一 entry 并发准备（罕见且良性，内容一致，
+        // 后写者胜出）。刻意不做共享去重任务：非结构化 Task 会切断视图
+        // .task(id:) 的取消传播，导致快速切换无法中止在途网络请求。
+        let generationAtStart = preparedArticleMemoryCache.generation
+        let cached = try? localProvider.fetchCache(entryID: entry.id)
+        let feed = self.feed(for: entry)
+        let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: cached, feed: feed)
+        if let updatedCache, !Task.isCancelled {
+            try? localProvider.saveCache(updatedCache)
+        }
+        // 取消的任务可能产出兜底结果，不污染内存缓存；
+        // .fallback 表示本次未能产出真实正文（如网络瞬时失败），
+        // 不缓存以便下次访问重新尝试；
+        // 准备期间若发生失效（如重抓写入更好缓存），代数不匹配则放弃存储。
+        if !Task.isCancelled,
+           prepared.source != .fallback,
+           generationAtStart == preparedArticleMemoryCache.generation {
+            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)
+        }
+        return prepared
+    }
+
+    /// 内存中是否已有该条目可立即展示的准备结果（仅查进程内缓存，不触发任何 IO）。
+    public func memoizedPreparedArticle(for entry: Entry) -> PreparedArticle? {
+        preparedArticleMemoryCache.article(
+            for: entry.id,
+            contentFingerprint: PreparedArticleMemoryCache.contentFingerprint(for: entry)
+        )
+    }
+
+    /// 阅读稳定后预取相邻文章，使顺序阅读的 Space/nn/bb 始终命中内存缓存。
+    /// 单飞任务：新的选择会取消上一次未开始的预取；已缓存的邻居零开销跳过；
+    /// 预取内部尊重取消标记，不会在用户快速连续切换时堆积网络请求。
+    public func scheduleNeighborPrefetch(
+        scope: TimelineScope,
+        currentItemID: String,
+        retainingIDs: Set<String>
+    ) {
+        neighborPrefetchTask?.cancel()
+        neighborPrefetchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let directions: [AdjacentTimelineDirection] = [.next, .previous]
+            for direction in directions {
+                guard !Task.isCancelled else { return }
+                let adjacent = self.fetchAdjacentItem(
+                    scope: scope,
+                    currentItemID: currentItemID,
+                    direction: direction,
+                    retainingIDs: retainingIDs
+                )
+                guard let neighborID = adjacent?.id,
+                      !self.preparedArticleMemoryCache.contains(neighborID),
+                      let neighbor = self.entry(id: neighborID) else { continue }
+                _ = await self.prepareArticle(for: neighbor)
+            }
+        }
+    }
+
+    /// 单篇重新拉取正文：忽略旧缓存重新评估，仅在新内容可用时覆盖。
+    /// - 成功（`.feed`/`.web` 来源且产出非空缓存）→ 写库并发布 `articleRefreshSignal`，返回 `true`。
+    /// - 失败（回退兜底、无新内容）→ 保留旧缓存，返回 `false`。
+    public func refetchArticle(for entry: Entry) async -> Bool {
+        guard !activeRefetchEntryIDs.contains(entry.id) else { return false }
+        activeRefetchEntryIDs.insert(entry.id)
+        defer { activeRefetchEntryIDs.remove(entry.id) }
+
+        let feed = self.feed(for: entry)
+        let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: nil, feed: feed)
+
+        let usable = !prepared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && prepared.source != .fallback
+            && updatedCache != nil
+        guard usable, let updatedCache else { return false }
+
+        try? localProvider.saveCache(updatedCache)
+        // 重抓写入了更好的正文缓存行，内存 LRU 中的旧结果必须立即失效。
+        preparedArticleMemoryCache.invalidate(entryID: entry.id)
+        articleRefreshSignal = ArticleRefreshSignal(entryID: entry.id, token: UUID())
+        return true
+    }
+
+    /// 全量清除网页正文缓存并回收磁盘空间。返回删除的缓存行数。
+    /// VACUUM 可能耗时数秒，故在后台线程执行以免阻塞主线程 UI。
+    public func clearArticleCaches() async throws -> Int {
+        let provider = localProvider
+        preparedArticleMemoryCache.removeAll()
+        return try await Task.detached(priority: .userInitiated) {
+            try provider.clearAllCaches()
+        }.value
+    }
+
+    /// 当前网页正文缓存文章数与占用大小（供设置页「缓存数据」展示）。
+    public func articleCacheStats() throws -> ArticleCacheStats {
+        try localProvider.cacheStats()
+    }
+
+    /// 按条目 ID 重新拉取正文；条目不存在时返回 `false`。
+    public func refetchArticle(entryID: String) async -> Bool {
+        guard let entry = self.entry(id: entryID) else { return false }
+        return await refetchArticle(for: entry)
+    }
 
     public func cachedText(for entry: Entry) -> String? {
         (try? localProvider.fetchCache(entryID: entry.id))?.text
     }
 
     public func articleText(for entry: Entry) async throws -> String {
-        if let feedContent = preferredFeedContent(for: entry) {
-            return feedContent.text.isEmpty ? entry.sourceText : feedContent.text
-        }
-        if let cached = cachedText(for: entry) {
-            return cached
-        }
-        return try await fetchFullArticle(for: entry)
+        let prepared = await prepareArticle(for: entry)
+        return prepared.text.isEmpty ? entry.sourceText : prepared.text
     }
 
     public func articleHTML(for entry: Entry) -> String? {
-        if let feedContent = preferredFeedContent(for: entry) {
-            let existing = try? localProvider.fetchCache(entryID: entry.id)
-            let text = feedContent.text.isEmpty ? entry.sourceText : feedContent.text
-            if existing?.html != feedContent.html || existing?.text != text || existing?.imageURLs != feedContent.imageURLs || existing?.sourceURL != entry.url || existing?.isSanitized != true {
-                let cache = ArticleCache(
-                    entryID: entry.id,
-                    text: text,
-                    html: feedContent.html,
-                    imageURLs: feedContent.imageURLs,
-                    fetchedAt: existing?.fetchedAt ?? .now,
-                    sourceURL: entry.url,
-                    isSanitized: true
-                )
-                try? localProvider.saveCache(cache)
+        let feed = self.feed(for: entry)
+        if preparationEngine.isTwitterOrSelfContainedFeed(entry: entry, feed: feed) {
+            if let rawHTML = entry.contentHTML, !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return ArticleExtractor.content(from: rawHTML, baseURL: entry.url).html
             }
-            return feedContent.html
         }
 
         if let cache = try? localProvider.fetchCache(entryID: entry.id), let html = cache.html, !html.isEmpty {
-            if cache.isSanitized {
-                let sourceURL = cache.sourceURL ?? entry.url
-                var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
-                if let sourceHTML = entry.contentHTML {
-                    repairedHTML = ArticleExtractor.repairingCollapsedWhitespaceImageURLs(
-                        in: repairedHTML,
-                        sourceHTML: sourceHTML,
-                        baseURL: sourceURL
-                    )
-                }
-                if repairedHTML != html {
-                    var repaired = cache
-                    repaired.html = repairedHTML
-                    repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
-                    repaired.sourceURL = sourceURL
-                    try? localProvider.saveCache(repaired)
-                }
-                return repairedHTML
+            let sourceURL = cache.sourceURL ?? entry.url
+            var repairedHTML = ArticleExtractor.sanitizedHTML(html, baseURL: sourceURL)
+            if let sourceHTML = entry.contentHTML {
+                repairedHTML = ArticleExtractor.repairingCollapsedWhitespaceImageURLs(
+                    in: repairedHTML,
+                    sourceHTML: sourceHTML,
+                    baseURL: sourceURL
+                )
             }
-            return ArticleExtractor.sanitizedHTML(html, baseURL: cache.sourceURL ?? entry.url)
+            if repairedHTML != html && cache.isSanitized {
+                var repaired = cache
+                repaired.html = repairedHTML
+                repaired.imageURLs = ArticleExtractor.imageURLs(from: repairedHTML, baseURL: sourceURL)
+                repaired.sourceURL = sourceURL
+                try? localProvider.saveCache(repaired)
+                // 修复写回改变了缓存行内容，内存 LRU 中的旧结果同步失效
+                preparedArticleMemoryCache.invalidate(entryID: entry.id)
+            }
+            return repairedHTML
         }
         return entry.contentHTML.map { ArticleExtractor.sanitizedHTML($0, baseURL: entry.url) }
     }
@@ -1272,31 +1389,8 @@ public final class AppStore: ObservableObject {
     }
 
     public func fetchFullArticle(for entry: Entry) async throws -> String {
-        let fallback = entry.sourceText
-        guard let url = entry.url else { return fallback }
-        var cache = try await ArticleExtractor.extract(from: url)
-        cache.entryID = entry.id
-        cache.isSanitized = true
-        try? localProvider.saveCache(cache)
-        return cache.text
-    }
-
-    private func preferredFeedContent(for entry: Entry) -> ArticleExtractor.Content? {
-        guard let rawHTML = entry.contentHTML,
-              !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-
-        let entryHost = entry.url?.host?.lowercased() ?? ""
-        let isTwitterStatus = entryHost == "x.com" || entryHost == "www.x.com" || entryHost == "twitter.com" || entryHost == "www.twitter.com"
-
-        let feedURL = feed(for: entry)?.feedURL
-        let feedHost = feedURL?.host?.lowercased() ?? ""
-        let feedPath = feedURL?.path.lowercased() ?? ""
-        let isTwitterRoute = feedPath.contains("/twitter/") || feedPath.hasPrefix("/twitter") || feedPath.contains("/x/")
-        let isRSSHub = feedHost.contains("rsshub")
-
-        guard isTwitterRoute || isTwitterStatus || isRSSHub else { return nil }
-
-        return ArticleExtractor.content(from: rawHTML, baseURL: entry.url)
+        let prepared = await prepareArticle(for: entry)
+        return prepared.text.isEmpty ? entry.sourceText : prepared.text
     }
 
     // MARK: - AI Artifacts

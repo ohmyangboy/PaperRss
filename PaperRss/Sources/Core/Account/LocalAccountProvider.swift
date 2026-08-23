@@ -342,6 +342,23 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         }
     }
 
+    /// 全量清除网页正文提取缓存并回收磁盘空间。返回删除的缓存行数。
+    /// VACUUM 仅为空间回收优化，失败不影响「已清除」的结果语义（尽力而为）。
+    public func clearAllCaches() throws -> Int {
+        let count = try database.write { db in
+            try self.cacheRepository.deleteAllCaches(in: db)
+        }
+        try? database.vacuum()
+        return count
+    }
+
+    /// 当前网页正文缓存文章数与占用大小。
+    public func cacheStats() throws -> ArticleCacheStats {
+        try database.read { db in
+            try self.cacheRepository.cacheStats(in: db)
+        }
+    }
+
     public func fetchArtifact(entryID: String, kind: AIArtifactKind, isCompleteOnly: Bool = false) throws -> AIArtifact? {
         try database.read { db in
             try self.artifactRepository.fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, in: db)

@@ -2379,6 +2379,16 @@
         }
       }
     },
+    "正文显示失败，请切换文章后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The article could not be displayed. Switch articles and try again."
+          }
+        }
+      }
+    },
     "正文字号" : {
       "localizations" : {
         "en" : {
@@ -2778,6 +2788,116 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Refresh Now"
+          }
+        }
+      }
+    },
+    "已缓存 %lld 篇文章，大小 %.1f MB" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cached %lld articles, %.1f MB"
+          }
+        }
+      }
+    },
+    "已清除 %lld 条缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cleared %lld caches"
+          }
+        }
+      }
+    },
+    "拉取失败，已保留原内容" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fetch failed, kept existing content"
+          }
+        }
+      }
+    },
+    "正在清除…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clearing…"
+          }
+        }
+      }
+    },
+    "正文已更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content Updated"
+          }
+        }
+      }
+    },
+    "缓存数据" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache Data"
+          }
+        }
+      }
+    },
+    "清除" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear"
+          }
+        }
+      }
+    },
+    "清除失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Failed"
+          }
+        }
+      }
+    },
+    "清除网页正文缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Article Cache"
+          }
+        }
+      }
+    },
+    "网页正文缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article Cache"
+          }
+        }
+      }
+    },
+    "重新拉取正文" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refetch Article"
           }
         }
       }

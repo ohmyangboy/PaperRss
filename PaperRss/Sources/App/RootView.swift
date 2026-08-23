@@ -62,6 +62,7 @@ struct RootView: View {
             .tint(PaperTheme.accent)
             .accentColor(PaperTheme.accent)
             .preferredColorScheme(store.appTheme.colorScheme)
+            .environmentObject(store.iconStore)
             .task {
                 #if os(iOS)
                 BackgroundRefresh.schedule(interval: store.refreshInterval)
@@ -70,6 +71,12 @@ struct RootView: View {
                 // 处理，并尊重"启动时刷新"开关——此前 startAutomaticRefresh
                 // 从未被调用，设置里的刷新间隔选项完全不生效。
                 store.startAutomaticRefresh()
+                // 冷启动图标预热：等懒行渲染时已是内存/磁盘命中，首帧即图。
+                store.iconStore.warmUp(feeds: store.feeds)
+            }
+            .onChange(of: store.feeds) { _, feeds in
+                // 订阅列表变化（同步、增删源）后重新预热，覆盖新增 feed。
+                store.iconStore.warmUp(feeds: feeds)
             }
             .onReceive(navigation.$request.compactMap { $0 }) { request in
                 guard request.destination == .unread else { return }
@@ -87,6 +94,9 @@ struct RootView: View {
             .onChange(of: selectedEntryID) { oldID, newID in
                 if oldID != newID {
                     cancelNavigationConfirmation(dismissToast: true)
+                }
+                if let newID {
+                    scheduleNeighborPrefetch(from: newID)
                 }
             }
             .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
@@ -148,7 +158,8 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
-                autoScrollTrigger: autoScrollTrigger
+                autoScrollTrigger: autoScrollTrigger,
+                onFeedback: { showToast($0) }
             )
                 .ignoresSafeArea(),
             detail: detailContent
@@ -197,7 +208,8 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
-                autoScrollTrigger: autoScrollTrigger
+                autoScrollTrigger: autoScrollTrigger,
+                onFeedback: { showToast($0) }
             )
         } detail: {
             detailContent
@@ -399,6 +411,15 @@ struct RootView: View {
     private enum AdjacentArticleDirection {
         case previous
         case next
+    }
+
+    /// 选中稳定后预取相邻文章，使 Space/nn/bb 切换始终命中内存缓存。
+    private func scheduleNeighborPrefetch(from entryID: String) {
+        store.scheduleNeighborPrefetch(
+            scope: currentTimelineScope,
+            currentItemID: entryID,
+            retainingIDs: retainedEntryListIDs.union([entryID])
+        )
     }
 
     private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {
@@ -1012,7 +1033,7 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func remoteFeedRow(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
-        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id))
+        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .contextMenu {
@@ -1120,13 +1141,13 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func feedRow(_ feed: Feed, inFolder: Bool = false) -> some View {
-        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id))
+        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .draggable(selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 ? selectedFeedIDs.map(\.uuidString).joined(separator: ",") : feed.id.uuidString) {
                 HStack(spacing: 6) {
                     if let iconURL = feed.iconURL {
-                        FeedFaviconView(iconURL: iconURL, title: feed.title, size: 14)
+                        FeedFaviconView(feedID: feed.id, iconURL: iconURL, title: feed.title, size: 14)
                     } else {
                         Image(systemName: "dot.radiowaves.left.and.right")
                             .foregroundStyle(PaperTheme.accent)
@@ -1309,27 +1330,29 @@ private struct SidebarView: View {
     }
 }
 
+/// Feed 图标视图。与旧 AsyncImage 实现的关键差异：
+/// 图标经 `FeedIconStore` 同步查询，首帧即命中内存/磁盘缓存，不存在加载期占位态；
+/// 字母徽章只出现在"该 feed 确定无图标"或"首次预热尚未完成"的帧，
+/// 且失败记忆保证坏 URL 不会反复进入"徽章→图→徽章"的闪烁循环。
 private struct FeedFaviconView: View {
+    let feedID: UUID
     let iconURL: URL?
     let title: String
     var size: CGFloat = 16
 
+    @EnvironmentObject private var icons: FeedIconStore
+
     var body: some View {
-        if let iconURL {
-            AsyncImage(url: iconURL) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: size, height: size)
-                        .clipShape(RoundedRectangle(cornerRadius: size > 15 ? 4 : 3, style: .continuous))
-                default:
-                    fallbackBadge
-                }
-            }
+        if let image = icons.cachedImage(feedID: feedID) {
+            Image(decorative: image, scale: 2)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size > 15 ? 4 : 3, style: .continuous))
         } else {
+            // 兜底期间顺带补发预热（store 内有 in-flight 与失败窗去重，代价为零）。
             fallbackBadge
+                .onAppear { icons.warmUp(feedID: feedID, iconURL: iconURL) }
         }
     }
 
@@ -1347,19 +1370,21 @@ private struct SidebarRow: View {
     let systemImage: String
     let iconURL: URL?
     let count: Int
+    var feedID: UUID?
 
-    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0) {
+    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil) {
         self.title = title
         self.systemImage = systemImage
         self.iconURL = iconURL
         self.count = count
+        self.feedID = feedID
     }
 
     var body: some View {
         HStack(spacing: 8) {
             Group {
-                if let iconURL {
-                    FeedFaviconView(iconURL: iconURL, title: title, size: 16)
+                if let iconURL, let feedID {
+                    FeedFaviconView(feedID: feedID, iconURL: iconURL, title: title, size: 16)
                 } else {
                     Image(systemName: systemImage)
                         .symbolRenderingMode(.monochrome)
@@ -1445,6 +1470,7 @@ private struct EntryListView: View {
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
     var autoScrollTrigger: UUID
+    var onFeedback: (String) -> Void = { _ in }
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
@@ -1486,6 +1512,8 @@ private struct EntryListView: View {
         loadedEntries = firstPage
         hasMore = (firstPage.count == pageSize)
         isLoadingPage = false
+        // 切换订阅源后首屏预热：行渲染前图标已就绪，避免整列闪兜底徽章。
+        store.iconStore.warmUp(items: firstPage)
     }
 
     private func loadNextPage() {
@@ -1504,6 +1532,8 @@ private struct EntryListView: View {
         } else {
             loadedEntries.append(contentsOf: freshItems)
             hasMore = (page.count == pageSize)
+            // 滚动加载下一页时预热新页涉及的 feed。
+            store.iconStore.warmUp(items: freshItems)
         }
         isLoadingPage = false
     }
@@ -1518,6 +1548,8 @@ private struct EntryListView: View {
         )
         loadedEntries = refreshed
         hasMore = (refreshed.count >= totalCount)
+        // 刷新后的列表可能引入新 feed，幂等预热（store 内自动去重）。
+        store.iconStore.warmUp(items: refreshed)
     }
 
     /// 将当前选择范围在数据库中的全部未读文章标记为已读。
@@ -1585,6 +1617,16 @@ private struct EntryListView: View {
                                 store.toggleStar(entryID: entry.id)
                                 patchEntryState(entryID: entry.id, isStarred: nextStarred)
                             }
+                            Divider()
+                            Button {
+                                Task {
+                                    let ok = await store.refetchArticle(entryID: entry.id)
+                                    onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
+                                }
+                            } label: {
+                                Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
+                            }
+                            .disabled(store.activeRefetchEntryIDs.contains(entry.id))
                         }
                         .onAppear {
                             if entry.id == loadedEntries.last?.id {
@@ -1869,7 +1911,7 @@ private struct EntryRow: View {
 
                 // 最下行：左侧为 [icon、name] 与 [source]，右侧为 [日期]
                 HStack(alignment: .center, spacing: 6) {
-                    FeedFaviconView(iconURL: entry.feedIconURL, title: entry.sourceTitle, size: 14)
+                    FeedFaviconView(feedID: entry.feedID, iconURL: entry.feedIconURL, title: entry.sourceTitle, size: 14)
                     Text(entry.sourceTitle)
                         .lineLimit(1)
 

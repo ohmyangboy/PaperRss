@@ -1,7 +1,7 @@
 # PaperRss 技术架构
 
-> 文档状态：当前实现说明  
-> 核对日期：2026-08-14  
+> 文档状态：当前实现说明
+> 核对日期：2026-08-21
 > 适用范围：PaperRss macOS 主产品、共享 Core、仓库内网站与发布链路
 
 本文描述当前仓库已经实现的结构和运行边界。`docs/drafts/` 与 `docs/research/` 中的方案不是实现证据；代码、配置、脚本和运行结果与本文冲突时，以可执行事实为准并同步修正文档。
@@ -27,7 +27,8 @@ flowchart LR
     LLM --> ModelAPI["OpenAI 兼容 API"]
     Cloud --> CloudKit["CloudKit 私有数据库"]
 
-    Store --> JSON["library.json"]
+    Store --> SQLite["GRDB / library.sqlite"]
+    Store -. legacy migration .-> JSON["library.json"]
     Store --> Defaults["UserDefaults"]
 ```
 
@@ -71,7 +72,7 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 ## 3. 状态与数据模型
 
-`AppDatabase` 是本地阅读库的可编码快照：
+正常运行期的主存储是 GRDB/SQLite。`AppDatabase` 继续作为测试、兼容解码和历史 JSON 迁移使用的可编码快照，而不是运行期主数据库：
 
 | 数据 | 作用 | 关键稳定性 |
 | --- | --- | --- |
@@ -88,9 +89,9 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 ### 阅读库
 
-- `AppStore` 在用户 Application Support 下维护 `PaperRss/library.json`。
-- 每次变更形成完整 `AppDatabase` 快照；`DatabasePersistenceWriter` actor 在后台使用递增 revision 串行写入，过期写入被丢弃，文件通过原子替换落盘。
-- JSON 日期使用 ISO 8601，键排序保持稳定；模型解码使用默认值兼容旧版本。
+- `AppStore` 在用户 Application Support 下使用 `PaperRss/library.sqlite` 作为运行期主库，通过 GRDB repository 读写 Feed、Entry、阅读状态、正文缓存、账号和 AI 产物。
+- 历史 `library.json` 只作为旧版本迁移来源；迁移路径保留兼容解码和备份，不继续承担正常运行期写入。
+- Feed 刷新和合并在数据库 transaction 内更新文章、条件请求元数据和阅读状态投影。
 - Feed 删除会同步清理本地 Entry、正文缓存和阅读状态，并把需要跨设备传播的 AI 结果压缩为 tombstone。
 
 ### 偏好与凭据
@@ -112,15 +113,24 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 自动刷新由 `AppStore` 内部 Task 驱动，支持启动刷新与固定间隔；iOS 源码另有 `BGAppRefreshTask` 调度分支。
 
-### 5.2 正文获取与安全渲染
+### 5.2 Reader Engine：正文获取、规范化与安全渲染
 
-1. Feed 正文足够长时直接清洗并缓存；短正文且存在文章 URL 时，再抓取最多约 4 MB 网页内容。
-2. `ArticleExtractor` 按常见正文容器选择内容，删除脚本、样式、表单、iframe 等执行或噪音节点，仅重建允许的标签和属性。
-3. 远程资源只接受 HTTP/HTTPS；图片、音视频属性会被归一化，首两张图片 eager load，其余 lazy load。
-4. 清洗后的 HTML 与纯文本写入 `ArticleCache`。历史未清洗缓存会在读取时重新清洗并迁移。
-5. `ArticleReaderView` 生成带严格 CSP 的完整文档后交给 WKWebView；页面自身 `script-src` 为 `none`，交互脚本由原生端注入隔离的 WebKit content world。
+1. **统一格式规范化（Markup Normalization）**：
+   - 由 `ArticleMarkupNormalizer` 统一处理原生 HTML、XML/JSON 转义 HTML、Markdown、Markdown+HTML 混合内容。
+   - 使用基于 quote-aware 的线性扫描器与标签栈保护已有 HTML 块，普通内联文本支持 `swift-markdown` AST 规范化，不破坏外层容器结构。
+2. **异步准备引擎（`ArticlePreparationEngine`）**：
+   - 统一评估 Feed、本地 `ArticleCache` 与网页抓取候选质量。
+   - 强 Feed（不少于 600 字或 200 字带图）直接采用，0 网页请求；弱 Feed 最多抓取 1 次并在明显改善时替换。
+   - 统一输出严格同源的 `PreparedArticle`（包含 `text`、`html`、`imageURLs`、`baseURL`、`source` 与 `features`），杜绝各字段分散决策。
+3. **通用容器评分与媒体管线**：
+   - `ArticleExtractor` 通过标签栈扫描平衡容器，结合语义标签与词元打分，零站点硬编码。
+   - 提取 `data-original`、`data-src`、`srcset` 恢复高清图片；前 2 张图片使用 `loading="eager"`，其余使用 `loading="lazy"`，并注入 `decoding="async"`。
+4. **权威文档渲染与严格 CSP**：
+   - 由 `ReaderDocumentRenderer` 统一组装 HTML 文档，内置严格 CSP (`script-src 'none'`) 并注入 `--paper-reader-top-inset` 与 `--paper-font-size` 排版变量。
+5. **条件公式运行时（MathJax 4.1.2）**：
+   - `ArticleMathDetector` 精准识别 TeX (`\(...\)`, `\[...\]`, `$$...$$`, `$ ... $`) 与 MathML，排除价格数字与代码块变量。
+   - 仅当 `features.containsMath == true` 时注入特权本地 MathJax 运行时，普通文章零读取、零解析、零执行。
 
-RSSHub Twitter/X 路由是显式例外：优先使用 Feed 中已提供的紧凑正文，避免抓取动态网页壳。
 
 ### 5.3 阅读器 Bridge
 
@@ -183,7 +193,7 @@ CloudKit 同步代码已经存在，但设置页明确标记为“同步功能�
 ## 9. 已知架构边界
 
 - `AppStore` 同时承担状态、业务用例和副作用编排，是当前最主要的集中点；新增远程账号或不同同步语义时，应先建立独立服务边界，避免继续扩大主状态对象。
-- 阅读库采用全量 JSON 快照，后台 revision writer 缓解主线程阻塞，但超大文章库仍会受到编码、文件尺寸与 Cloud Asset 全量同步成本限制。
+- 阅读库已使用 GRDB/SQLite；历史 JSON 仅用于迁移。CloudKit 仍采用单 Asset 全量载荷，因此同步规模仍受全量编码与合并成本限制。
 - 正文提取器基于规则和正则白名单，而不是完整浏览器 DOM/Readability 引擎；复杂或依赖客户端渲染的网站可能退化到 Feed 正文或打开原网页。
 - OPML 模型当前只往返订阅 URL，导出不会保留 PaperRss 文件夹结构。
 - `ArticleReaderView` 同时包含 SwiftUI、HTML/CSS、JavaScript 和双平台 Coordinator，是跨层变更风险最高的模块。

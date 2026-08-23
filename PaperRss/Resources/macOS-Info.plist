@@ -12,11 +12,14 @@
     <string>public.app-category.news</string>
     <key>NSAppTransportSecurity</key>
     <dict>
-        <!-- RSS feeds are user-entered URLs and may be legacy HTTP endpoints.
-             LLMService still rejects HTTP API endpoints by policy. -->
+        <!-- RSS feeds are user-entered URLs and may be legacy HTTP endpoints
+             (including self-hosted RSSHub instances reachable by bare IP over
+             port 1200). LLMService still rejects HTTP API endpoints by policy.
+             Keep NSAllowsArbitraryLoads as the ONLY ATS key: pairing it with
+             NSAllowsLocalNetworking (or NSAllowsArbitraryLoadsInWebContent)
+             makes App Transport Security reject cleartext HTTP to IP-address
+             hosts, which is exactly what breaks those user-configured feeds. -->
         <key>NSAllowsArbitraryLoads</key>
-        <true/>
-        <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
 </dict>
