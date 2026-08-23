@@ -73,6 +73,9 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var appTheme: AppTheme = .system
     @Published public private(set) var articleFontSize: Int = 17
 
+    /// Feed 图标仓库：行渲染经它同步查询已就绪图标，杜绝 AsyncImage 加载期闪烁。
+    public let iconStore = FeedIconStore()
+
     @Published public private(set) var feeds: [Feed] = []
     @Published public private(set) var customFolders: [String] = []
     @Published public private(set) var sidebarCounts: SidebarCounts = SidebarCounts()
