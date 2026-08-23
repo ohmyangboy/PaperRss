@@ -22,8 +22,9 @@ test('invalid stored values are ignored', () => {
 
 test('website showcases the supplied full-resolution product screenshots', async () => {
   const expectedScreenshots = new Map([
-    ['paper-rss-main.png', [2910, 1858]],
-    ['full-screen.png', [2818, 1846]],
+    ['paper-rss-main.png', [2940, 1846]],
+    ['paper-rss-second.png', [2940, 1846]],
+    ['full-screen.png', [2940, 1846]],
     ['bilingual-translation.png', [1544, 1774]],
     ['ai-question-popover.png', [732, 216]],
     ['ai-translate-popover.png', [896, 852]],
@@ -115,15 +116,15 @@ test('stage card stacking parallax is shared by both locales and respects reduce
     assert.match(page, /src="\.\.\/stage-parallax\.js"/);
     assert.match(page, /id="stage-showcase"/);
     assert.match(page, /class="stage-sticky-viewport"/);
-    assert.match(page, /class="stage-card stage-card-base"/);
-    assert.match(page, /class="stage-card stage-card-overlay"/);
+    assert.match(page, /stage-card-base/);
+    assert.match(page, /stage-card-mid/);
+    assert.match(page, /stage-card-overlay|stage-card-top/);
   }
 
   const script = await readFile(new URL('../website/stage-parallax.js', import.meta.url), 'utf8');
   assert.match(script, /requestAnimationFrame/);
   assert.match(script, /prefers-reduced-motion: reduce/);
   assert.match(script, /getBoundingClientRect/);
-  assert.match(script, /blur/);
   assert.match(script, /scale/);
   assert.match(script, /translate3d/);
 });

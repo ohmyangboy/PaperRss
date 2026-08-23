@@ -3,7 +3,7 @@
   const jsonUrl = new URL('github-stars.json', scriptUrl).href;
 
   function formatStars(count) {
-    if (typeof count !== 'number' || isNaN(count) || count < 0) {
+    if (typeof count !== 'number' || isNaN(count) || count <= 0) {
       return '';
     }
     if (count >= 1000) {
@@ -14,9 +14,13 @@
 
   function applyStars(formattedCount) {
     if (!formattedCount) return;
-    const starElements = document.querySelectorAll('.gh-star-count');
-    starElements.forEach((el) => {
+    const starCounts = document.querySelectorAll('.gh-star-count');
+    const starBadges = document.querySelectorAll('.gh-star-badge');
+    starCounts.forEach((el) => {
       el.textContent = formattedCount;
+    });
+    starBadges.forEach((badge) => {
+      badge.classList.add('is-visible');
     });
   }
 
@@ -34,6 +38,6 @@
       }
     })
     .catch(() => {
-      // Keep static HTML fallback on error, never overwrite with 0
+      // Keep hidden if fetch fails or no valid stars count
     });
 })();

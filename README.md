@@ -42,6 +42,8 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ![PaperRss 三栏主界面](assets/screenshots/paper-rss-main.png)
 
+![PaperRss 沉浸阅读视图](assets/screenshots/paper-rss-second.png)
+
 ![PaperRss 全屏沉浸阅读](assets/screenshots/full-screen.png)
 
 ### AI 全文摘要

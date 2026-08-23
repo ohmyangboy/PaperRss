@@ -97,11 +97,10 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
     func makeNSViewController(context: Context) -> NSSplitViewController {
         let splitVC = PaperSplitViewController()
-        splitVC.onLayout = { [weak coordinator = context.coordinator] in
+        splitVC.onLayout = { [weak coordinator = context.coordinator, weak splitVC] in
             MainActor.assumeIsolated {
-                if let window = splitVC.view.window {
-                    coordinator?.removeTitlebarBlur(from: window)
-                }
+                guard let window = splitVC?.view.window else { return }
+                coordinator?.layoutDidChange(for: window)
             }
         }
 
@@ -255,10 +254,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var markAllReadButton: NSButton?
         nonisolated(unsafe) private var eventMonitor: Any?
         nonisolated(unsafe) private var mouseDownMonitor: Any?
+        nonisolated(unsafe) private var fullScreenChromeTimer: DispatchSourceTimer?
         private(set) var activeColumnIndex: Int = 1
         var didInitializeFocus = false
-        nonisolated(unsafe) private var blurCleanupTimer: DispatchSourceTimer?
-
         init(actions: ToolbarActions) {
             self.actions = actions
             super.init()
@@ -277,7 +275,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             if let monitor = mouseDownMonitor {
                 NSEvent.removeMonitor(monitor)
             }
-            blurCleanupTimer?.cancel()
+            fullScreenChromeTimer?.cancel()
         }
 
         private func setupLocalKeyMonitor() {
@@ -708,51 +706,45 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             window.toolbar = toolbar
             window.titleVisibility = .hidden
             
-            removeTitlebarBlur(from: window)
+            reconcileWindowChrome(for: window)
             DispatchQueue.main.async { [weak self, weak window] in
                 if let window {
                     MainActor.assumeIsolated {
-                        self?.removeTitlebarBlur(from: window)
+                        self?.reconcileWindowChrome(for: window)
                     }
                 }
             }
 
             let center = NotificationCenter.default
-            let fullScreenNotifications: [Notification.Name] = [
+            // 事件驱动重同步：全屏进出 + 遮挡状态变化（覆盖切换 Space、睡眠唤醒、
+            // 折叠侧边栏时系统重建全屏辅助窗口的场景）。
+            // 注意：不要监听 didUpdateNotification 等高频通知并在其中遍历视图树——
+            // 全屏期间这些通知每帧触发，会造成滚动卡顿。
+            let chromeNotifications: [Notification.Name] = [
                 NSWindow.willEnterFullScreenNotification,
                 NSWindow.didEnterFullScreenNotification,
+                NSWindow.didChangeOcclusionStateNotification,
                 NSWindow.willExitFullScreenNotification,
-                NSWindow.didExitFullScreenNotification,
-                NSWindow.didResizeNotification,
-                NSWindow.didEndLiveResizeNotification
+                NSWindow.didExitFullScreenNotification
             ]
-            for name in fullScreenNotifications {
+            for name in chromeNotifications {
                 center.addObserver(
                     forName: name,
                     object: window,
                     queue: .main
-                ) { [weak self, weak window] _ in
-                    guard let window = window else { return }
-                    MainActor.assumeIsolated {
-                        self?.removeTitlebarBlur(from: window)
-                        self?.startBlurCleanupTimer(for: window)
-                    }
-                }
-            }
-
-            // 全局监听所有窗口出现/更新，捕捉全屏时系统动态创建的浮动工具栏窗口
-            for noteName in [NSWindow.didBecomeKeyNotification, NSWindow.didUpdateNotification] {
-                center.addObserver(
-                    forName: noteName,
-                    object: nil,
-                    queue: .main
                 ) { [weak self, weak window] note in
-                    guard let mainWindow = window else { return }
-                    guard let appearedWindow = note.object as? NSWindow, appearedWindow !== mainWindow else { return }
-                    let className = String(describing: type(of: appearedWindow))
-                    if className.contains("Toolbar") || className.contains("Titlebar") || className.contains("FullScreen") {
-                        MainActor.assumeIsolated {
-                            self?.removeTitlebarBlur(from: mainWindow)
+                    guard let window = window else { return }
+                    let name = note.name
+                    MainActor.assumeIsolated {
+                        switch name {
+                        case NSWindow.willEnterFullScreenNotification:
+                            self?.beginFullScreenChromeTracking(for: window)
+                        case NSWindow.didExitFullScreenNotification, NSWindow.willExitFullScreenNotification:
+                            self?.stopFullScreenChromeTracking()
+                            self?.removePaperOverlays(around: window)
+                            self?.restoreMainWindowTitlebarBackground(window)
+                        default:
+                            self?.scheduleFullScreenChromeSync(for: window)
                         }
                     }
                 }
@@ -761,76 +753,295 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             toolbarConfigured = true
         }
 
-        /// 启动一个高频定时器，每 100ms 调用一次 removeTitlebarBlur，持续 3 秒后自动停止。
-        /// 解决退出全屏时系统异步多次重建 Titlebar 导致 NSVisualEffectView 反复出现的问题。
-        private func startBlurCleanupTimer(for window: NSWindow) {
-            blurCleanupTimer?.cancel()
-            var remaining = 30 // 30 次 × 100ms = 3 秒
+        /// 进入全屏动画一开始就开启高频（8ms）有界监听，抢在辅助窗口首个白色
+        /// 绘制帧之前插入背板。背板一旦就位立即停止；最多持续 ~1.2s 兜底。
+        private func beginFullScreenChromeTracking(for window: NSWindow) {
+            reconcileWindowChrome(for: window)
+            fullScreenChromeTimer?.cancel()
+            var remaining = 150
             let timer = DispatchSource.makeTimerSource(queue: .main)
-            timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+            timer.schedule(deadline: .now(), repeating: .milliseconds(8))
             timer.setEventHandler { [weak self, weak window] in
-                guard let self = self, let window = window else {
+                guard let self, let window else {
                     timer.cancel()
                     return
                 }
-                self.removeTitlebarBlur(from: window)
+                if self.companionOverlayInstalled(around: window) {
+                    timer.cancel()
+                    self.fullScreenChromeTimer = nil
+                    return
+                }
+                MainActor.assumeIsolated {
+                    self.reconcileWindowChrome(for: window)
+                }
                 remaining -= 1
                 if remaining <= 0 {
                     timer.cancel()
-                    self.blurCleanupTimer = nil
+                    self.fullScreenChromeTimer = nil
                 }
             }
             timer.resume()
-            blurCleanupTimer = timer
+            fullScreenChromeTimer = timer
         }
 
-        fileprivate func removeTitlebarBlur(from window: NSWindow) {
+        private func stopFullScreenChromeTracking() {
+            fullScreenChromeTimer?.cancel()
+            fullScreenChromeTimer = nil
+        }
+
+        /// 任一辅助窗口的标题栏容器内已插入背板即视为就位。
+        private func companionOverlayInstalled(around mainWindow: NSWindow) -> Bool {
+            for companion in fullScreenCompanionWindows(of: mainWindow) {
+                guard let contentView = companion.contentView else { continue }
+                var themeFrame: NSView = contentView
+                while let superview = themeFrame.superview { themeFrame = superview }
+                guard let container = firstDescendant(of: themeFrame, className: "NSTitlebarContainerView") else { continue }
+                if container.subviews.contains(where: { $0 is PaperChromeBackdropView }) { return true }
+            }
+            return false
+        }
+
+        /// 全屏工具栏辅助窗口由 AppKit 异步创建，且会被系统随时重建
+        /// （见 Ghostty #9600 分析）。这里用「即时同步 + 进入全屏后有限次延迟补偿」
+        /// 覆盖重建时机。退出全屏时清理背板防止残留。
+        private func scheduleFullScreenChromeSync(for window: NSWindow) {
+            reconcileWindowChrome(for: window)
+            if window.styleMask.contains(.fullScreen) {
+                // 密集的早期补偿，配合 viewDidLayout 钩子把背板在首个白条帧前就位
+                for delay in [0.05, 0.15, 0.35, 0.6] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak window] in
+                        guard let window else { return }
+                        MainActor.assumeIsolated {
+                            self?.reconcileWindowChrome(for: window)
+                        }
+                    }
+                }
+            } else {
+                removePaperOverlays(around: window)
+                restoreMainWindowTitlebarBackground(window)
+            }
+        }
+
+        /// 进入/处于全屏期间的分割视图布局会持续触发，正是辅助窗口被创建并布局的
+        /// 第一时间。在这里做“只针对辅助窗口”的轻量同步（不碰主窗口），让背板在
+        /// 白条首个绘制帧之前就位，消除闪现。窗口模式下此钩子直接返回，零开销。
+        func layoutDidChange(for window: NSWindow) {
+            guard window.styleMask.contains(.fullScreen) else { return }
+            hideMainWindowTitlebarBackground(window)
+            for companion in fullScreenCompanionWindows(of: window) {
+                neutralizeFullScreenCompanion(companion)
+            }
+        }
+
+        /// 主窗口标题栏 chrome（透明、纸张底色）+ 中和全屏辅助窗口的白条背景。
+        /// 进入全屏时额外隐藏主窗口自身的 NSTitlebarBackgroundView，消除进入动画
+        /// 初始瞬间（辅助窗口尚未覆盖时）露出的白色条带。
+        fileprivate func reconcileWindowChrome(for window: NSWindow) {
+            applyMainWindowChrome(window)
+            if window.styleMask.contains(.fullScreen) {
+                hideMainWindowTitlebarBackground(window)
+            } else {
+                restoreMainWindowTitlebarBackground(window)
+            }
+            for companion in fullScreenCompanionWindows(of: window) {
+                neutralizeFullScreenCompanion(companion)
+            }
+        }
+
+        /// 主窗口自身的标题栏容器定位：contentView 上溯到 themeFrame，再找标题栏容器。
+        private func titlebarContainer(in window: NSWindow) -> NSView? {
+            guard let contentView = window.contentView else { return nil }
+            var themeFrame: NSView = contentView
+            while let superview = themeFrame.superview { themeFrame = superview }
+            return firstDescendant(of: themeFrame, className: "NSTitlebarContainerView")
+        }
+
+        /// 只切换主窗口标题栏背景这一棵叶子视图的显隐。
+        /// NSTitlebarBackgroundView 纯背景、不含任何按钮；隐藏它让纸张色窗口底色透出，
+        /// 消除进入全屏瞬间的白色闪现。绝不触碰工具栏按钮宿主或其它视图，
+        /// 因此不会造成此前“工具栏消失”的回归。
+        private func hideMainWindowTitlebarBackground(_ window: NSWindow) {
+            guard let container = titlebarContainer(in: window) else { return }
+            firstDescendant(of: container, className: "NSTitlebarBackgroundView")?.isHidden = true
+        }
+
+        private func restoreMainWindowTitlebarBackground(_ window: NSWindow) {
+            guard let container = titlebarContainer(in: window) else { return }
+            firstDescendant(of: container, className: "NSTitlebarBackgroundView")?.isHidden = false
+        }
+
+        private func applyMainWindowChrome(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
-            // 窗口背景不能保持透明:透明会让我 NSSplitView 的分割线矩形
+            // 窗口背景不能保持透明:透明会让 NSSplitView 的分割线矩形
             // (约 1pt 宽,位于列表栏与阅读器栏之间)直接透出窗口背后的内容,
             // 在阅读器左缘形成一条可见缝隙。三个栏目的 PaperSurface 已覆盖
-            // 全部内容区域,这里用纸张色填满分割线即可,并跟随外观切换明暗。
+            // 全部内容区域,这里用纸张色填满分割线即可;动态颜色跟随明暗外观切换。
             window.backgroundColor = NSColor(name: nil) { appearance in
                 let scheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
                 return NSColor(PaperTheme.surface(.page, scheme: scheme))
             }
             window.isOpaque = true
 
-            guard let themeFrame = window.contentView?.superview else { return }
-
-            func hideVisualEffects(in view: NSView) {
-                if let effectView = view as? NSVisualEffectView {
-                    effectView.isHidden = true
-                    effectView.state = .inactive
-                    effectView.alphaValue = 0
-                }
-                for subview in view.subviews {
-                    hideVisualEffects(in: subview)
-                }
-            }
-
             // 主窗口：仅隐去标题栏/工具栏容器中的 NSVisualEffectView，保留 contentView (应用内容)
-            for subview in themeFrame.subviews {
-                if subview !== window.contentView {
+            if let themeFrame = window.contentView?.superview {
+                for subview in themeFrame.subviews where subview !== window.contentView {
                     hideVisualEffects(in: subview)
                 }
             }
-            
-            // 全屏窗口：处理 macOS 进入全屏时创建的浮动工具栏与标题栏辅助窗口
-            for appWindow in NSApp.windows where appWindow !== window {
-                let className = String(describing: type(of: appWindow))
-                if className.contains("Toolbar") || className.contains("Titlebar") || className.contains("FullScreen") {
-                    appWindow.titlebarAppearsTransparent = true
-                    appWindow.titlebarSeparatorStyle = .none
-                    appWindow.backgroundColor = .clear
-                    appWindow.isOpaque = false
-                    if let toolbarThemeFrame = appWindow.contentView?.superview {
-                        hideVisualEffects(in: toolbarThemeFrame)
-                    } else if let contentView = appWindow.contentView {
-                        hideVisualEffects(in: contentView)
-                    }
+        }
+
+        /// 找出主窗口的全屏工具栏辅助窗口。
+        /// 判定链（参照 macterm PR #59 / Ghostty TerminalWindow.titlebarContainer 的成熟做法）：
+        /// childWindows → titlebarAccessoryViewControllers 所在窗口 → 遍历 NSApp.windows，
+        /// 类名精确匹配 NSToolbarFullScreenWindow，并以 parent/child/同屏/frame 相交校验归属，
+        /// 保证多显示器、多全屏窗口时不误伤其他空间的辅助窗口。
+        private func fullScreenCompanionWindows(of mainWindow: NSWindow) -> [NSWindow] {
+            var candidates: [NSWindow] = []
+            if let children = mainWindow.childWindows {
+                candidates.append(contentsOf: children)
+            }
+            for accessory in mainWindow.titlebarAccessoryViewControllers {
+                if let accessoryWindow = accessory.view.window {
+                    candidates.append(accessoryWindow)
                 }
+            }
+            candidates.append(contentsOf: NSApp.windows)
+
+            var seen = Set<ObjectIdentifier>()
+            return candidates.filter { candidate in
+                guard candidate !== mainWindow else { return false }
+                guard Self.isFullScreenToolbarWindow(candidate) else { return false }
+                guard seen.insert(ObjectIdentifier(candidate)).inserted else { return false }
+                return isFullScreenCompanion(candidate, of: mainWindow)
+            }
+        }
+
+        /// 类名匹配：精确名为主，特征匹配（Toolbar + Full）兜底 macOS 版本差异；
+        /// 误伤由 isFullScreenCompanion 的 parent/child/同屏/frame 归属校验兜底。
+        nonisolated private static func isFullScreenToolbarWindow(_ window: NSWindow) -> Bool {
+            let name = String(describing: type(of: window))
+            if name == "NSToolbarFullScreenWindow" || name == "NSToolbarFullscreenWindow" {
+                return true
+            }
+            return name.contains("Toolbar") && name.contains("Full")
+        }
+
+        private func isFullScreenCompanion(_ candidate: NSWindow, of mainWindow: NSWindow) -> Bool {
+            if candidate.parent === mainWindow { return true }
+            if mainWindow.childWindows?.contains(where: { $0 === candidate }) == true { return true }
+            if let screen = mainWindow.screen, let candidateScreen = candidate.screen {
+                return screen === candidateScreen
+            }
+            if let screen = mainWindow.screen {
+                return candidate.frame.intersects(screen.frame)
+            }
+            if let candidateScreen = candidate.screen {
+                return mainWindow.frame.intersects(candidateScreen.frame)
+            }
+            return candidate.frame.intersects(mainWindow.frame)
+        }
+
+        /// 全屏白条只改颜色、不做隐藏（实机验证过的安全策略）：
+        /// 1. 辅助窗口底色设为纸张色并声明不透明——覆盖窗口级白底；
+        /// 2. 在标题栏容器的白色背景视图之上、按钮宿主之下插入纸张色背板——
+        ///    覆盖 NSTitlebarBackgroundView 的白色绘制，且不隐藏、不遮挡任何系统视图；
+        /// 3. 仅缺失两个锚点之一时安全跳过：最坏情况白条保留，绝不影响按钮。
+        private func neutralizeFullScreenCompanion(_ window: NSWindow) {
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
+            window.backgroundColor = NSColor(name: nil) { appearance in
+                let scheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+                return NSColor(PaperTheme.surface(.page, scheme: scheme))
+            }
+            window.isOpaque = true
+
+            guard let contentView = window.contentView else { return }
+            var themeFrame: NSView = contentView
+            while let superview = themeFrame.superview { themeFrame = superview }
+            // 只隐藏辅助窗口内的模糊材质（玻璃效果），不触碰任何按钮宿主
+            hideVisualEffects(in: themeFrame)
+
+            guard let container = firstDescendant(of: themeFrame, className: "NSTitlebarContainerView") else { return }
+            installPaperOverlay(in: container)
+        }
+
+        private func installPaperOverlay(in container: NSView) {
+            let titlebarView = firstDescendant(of: container, className: "NSTitlebarView")
+            let backgroundView = firstDescendant(of: container, className: "NSTitlebarBackgroundView")
+
+            // 已存在：仅在下一次同步时强制维持正确层级（AppKit 动画期间可能重排）
+            if let existing = container.subviews.first(where: { $0 is PaperChromeBackdropView }) {
+                if let titlebarView {
+                    container.addSubview(existing, positioned: .below, relativeTo: titlebarView)
+                } else if let backgroundView {
+                    container.addSubview(existing, positioned: .above, relativeTo: backgroundView)
+                }
+                return
+            }
+
+            let overlay = PaperChromeBackdropView(frame: container.bounds)
+            overlay.autoresizingMask = [.width, .height]
+
+            if let titlebarView {
+                // 首选：置于按钮宿主之下（背景视图是更早的兄弟，自然被覆盖）
+                container.addSubview(overlay, positioned: .below, relativeTo: titlebarView)
+            } else if let backgroundView {
+                // 兜底：背景视图之上
+                container.addSubview(overlay, positioned: .above, relativeTo: backgroundView)
+            } else {
+                // 两个锚点都找不到：不插入任何视图，保持现状
+                return
+            }
+        }
+
+        /// 退出全屏后清理背板，防止容器迁移到主窗口时残留。
+        private func removePaperOverlays(around mainWindow: NSWindow) {
+            var roots: [NSView] = []
+            if let contentView = mainWindow.contentView {
+                var themeFrame: NSView = contentView
+                while let superview = themeFrame.superview { themeFrame = superview }
+                roots.append(themeFrame)
+            }
+            for candidate in NSApp.windows {
+                guard let contentView = candidate.contentView else { continue }
+                var themeFrame: NSView = contentView
+                while let superview = themeFrame.superview { themeFrame = superview }
+                roots.append(themeFrame)
+            }
+            for root in roots {
+                removePaperOverlaysRecursively(in: root)
+            }
+        }
+
+        private func removePaperOverlaysRecursively(in view: NSView) {
+            for subview in Array(view.subviews) {
+                if subview is PaperChromeBackdropView {
+                    subview.removeFromSuperview()
+                } else {
+                    removePaperOverlaysRecursively(in: subview)
+                }
+            }
+        }
+
+        private func firstDescendant(of view: NSView, className: String) -> NSView? {
+            if String(describing: type(of: view)) == className { return view }
+            for subview in view.subviews {
+                if let found = firstDescendant(of: subview, className: className) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        private func hideVisualEffects(in view: NSView) {
+            if let effectView = view as? NSVisualEffectView {
+                effectView.isHidden = true
+                effectView.state = .inactive
+                effectView.alphaValue = 0
+            }
+            for subview in view.subviews {
+                hideVisualEffects(in: subview)
             }
         }
 
@@ -1171,6 +1382,32 @@ extension NSToolbarItem.Identifier {
     static let paperEntryListTitle = NSToolbarItem.Identifier("com.paperrss.toolbar.entryListTitle")
     static let paperMarkAllRead = NSToolbarItem.Identifier("com.paperrss.toolbar.markAllRead")
     static let paperReaderCapsule = NSToolbarItem.Identifier("com.paperrss.toolbar.readerCapsule")
+}
+
+/// 全屏工具栏辅助窗口内的纸张色背板。
+/// 只做两件事：以页面背景色填充、跟随明暗外观刷新；不参与命中测试，绝不遮挡按钮。
+@MainActor
+final class PaperChromeBackdropView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        wantsLayer = true
+        updateBackdropColor()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackdropColor()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func updateBackdropColor() {
+        let scheme: ColorScheme = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.backgroundColor = NSColor(PaperTheme.surface(.page, scheme: scheme)).cgColor
+        CATransaction.commit()
+    }
 }
 
 @MainActor

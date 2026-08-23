@@ -20,16 +20,33 @@ test('website/github-stars.js removes client-side GitHub API, localStorage, and 
 test('website/github-stars.js fetches local github-stars.json and updates UI elements', async () => {
   const scriptContent = await readFile(new URL('../website/github-stars.js', import.meta.url), 'utf8');
 
-  const elements = [
-    { textContent: '16' },
-    { textContent: '16' },
+  const countElements = [
+    { textContent: '' },
+    { textContent: '' },
+  ];
+  const badgeElements = [
+    {
+      classList: {
+        classes: new Set(),
+        add(cls) { this.classes.add(cls); },
+        contains(cls) { return this.classes.has(cls); },
+      },
+    },
+    {
+      classList: {
+        classes: new Set(),
+        add(cls) { this.classes.add(cls); },
+        contains(cls) { return this.classes.has(cls); },
+      },
+    },
   ];
   let requestedUrl = null;
 
   const mockContext = {
     document: {
       querySelectorAll: (selector) => {
-        if (selector === '.gh-star-count') return elements;
+        if (selector === '.gh-star-count') return countElements;
+        if (selector === '.gh-star-badge') return badgeElements;
         return [];
       },
       currentScript: {
@@ -58,19 +75,31 @@ test('website/github-stars.js fetches local github-stars.json and updates UI ele
   await new Promise((r) => setTimeout(r, 20));
 
   assert.equal(requestedUrl, 'https://paperrss.com/github-stars.json');
-  assert.equal(elements[0].textContent, '1.5k');
-  assert.equal(elements[1].textContent, '1.5k');
+  assert.equal(countElements[0].textContent, '1.5k');
+  assert.equal(countElements[1].textContent, '1.5k');
+  assert.equal(badgeElements[0].classList.contains('is-visible'), true);
+  assert.equal(badgeElements[1].classList.contains('is-visible'), true);
 });
 
-test('website/github-stars.js keeps static fallback when JSON fetch fails', async () => {
+test('website/github-stars.js keeps badge hidden when JSON fetch fails', async () => {
   const scriptContent = await readFile(new URL('../website/github-stars.js', import.meta.url), 'utf8');
 
-  const elements = [{ textContent: '16' }];
+  const countElements = [{ textContent: '' }];
+  const badgeElements = [
+    {
+      classList: {
+        classes: new Set(),
+        add(cls) { this.classes.add(cls); },
+        contains(cls) { return this.classes.has(cls); },
+      },
+    },
+  ];
 
   const mockContext = {
     document: {
       querySelectorAll: (selector) => {
-        if (selector === '.gh-star-count') return elements;
+        if (selector === '.gh-star-count') return countElements;
+        if (selector === '.gh-star-badge') return badgeElements;
         return [];
       },
       currentScript: {
@@ -94,8 +123,9 @@ test('website/github-stars.js keeps static fallback when JSON fetch fails', asyn
 
   await new Promise((r) => setTimeout(r, 20));
 
-  // Must retain static HTML fallback '16' and never overwrite with 0 or empty
-  assert.equal(elements[0].textContent, '16');
+  // Must keep badge hidden and not display any static fallback count
+  assert.equal(badgeElements[0].classList.contains('is-visible'), false);
+  assert.equal(countElements[0].textContent, '');
 });
 
 test('website/github-stars.json contains valid build-time data structure', async () => {

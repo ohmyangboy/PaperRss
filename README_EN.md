@@ -42,7 +42,7 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 
 ![PaperRss main window](assets/screenshots/paper-rss-main.png)
 
-
+![PaperRss reading view](assets/screenshots/paper-rss-second.png)
 
 ![PaperRss full-screen reading](assets/screenshots/full-screen.png)
 
