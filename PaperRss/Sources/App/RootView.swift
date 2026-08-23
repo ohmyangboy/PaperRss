@@ -436,12 +436,12 @@ struct RootView: View {
         switch direction {
         case .previous:
             confirmationKey = .previousArticle
-            prompt = I18N.shared.localized("再次按下 B 查看上一篇")
+            prompt = I18N.shared.localized("再次按下 K 查看上一篇")
             boundaryMessage = I18N.shared.localized("已经是列表第一篇")
             adjacentDir = .previous
         case .next:
             confirmationKey = .nextArticle
-            prompt = I18N.shared.localized("再次按下 N 查看下一篇")
+            prompt = I18N.shared.localized("再次按下 J 查看下一篇")
             boundaryMessage = I18N.shared.localized("列表已经阅读完毕")
             adjacentDir = .next
         }
@@ -469,15 +469,30 @@ struct RootView: View {
     }
 
     private func dispatchReaderShortcut(_ action: ReaderShortcutAction) {
-        guard selectedEntryID != nil else { return }
+        guard let entryID = selectedEntryID else { return }
         switch action {
         case .previousArticle:
             requestAdjacentArticle(.previous)
         case .nextArticle:
             requestAdjacentArticle(.next)
-        case .toggleBilingual, .showSummary, .toggleStar:
-            cancelNavigationConfirmation(dismissToast: true)
+        case .toggleBilingual:
+            let prompt = I18N.shared.localized("再按一次 C 切换对照翻译")
+            guard confirmNavigation(.toggleBilingual, entryID: entryID, prompt: prompt) else { return }
             readerShortcutInvocation = ReaderShortcutInvocation(action: action)
+        case .showSummary:
+            let prompt = I18N.shared.localized("再按一次 V 查看 AI 摘要")
+            guard confirmNavigation(.showSummary, entryID: entryID, prompt: prompt) else { return }
+            readerShortcutInvocation = ReaderShortcutInvocation(action: action)
+        case .toggleStar:
+            let prompt = I18N.shared.localized("再按一次 M 切换收藏")
+            guard confirmNavigation(.toggleStar, entryID: entryID, prompt: prompt) else { return }
+            readerShortcutInvocation = ReaderShortcutInvocation(action: action)
+        case .toggleFullScreen:
+            let prompt = I18N.shared.localized("再按一次 F 切换禅模式")
+            guard confirmNavigation(.toggleFullScreen, entryID: entryID, prompt: prompt) else { return }
+            withAnimation {
+                isZenMode.toggle()
+            }
         }
     }
 

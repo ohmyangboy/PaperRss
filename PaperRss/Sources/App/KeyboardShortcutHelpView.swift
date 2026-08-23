@@ -41,11 +41,12 @@ struct KeyboardShortcutHelpView: View {
                 id: "reader",
                 title: localized("文章阅读", "Article Reading"),
                 shortcuts: [
-                    shortcut("reader-translate", ["C"], "切换对照翻译", "开启或关闭逐段对照翻译。"),
-                    shortcut("reader-summary", ["V"], "查看 AI 摘要", "优先显示已有摘要；没有缓存时开始生成。"),
-                    shortcut("reader-previous", ["B", "B"], "查看上一篇", "在当前列表中再次按 B 确认，不循环。"),
-                    shortcut("reader-next", ["N", "N"], "查看下一篇", "在当前列表中再次按 N 确认，不循环。"),
-                    shortcut("reader-star", ["M"], "切换收藏", "收藏或取消收藏当前文章。"),
+                    shortcut("reader-translate", ["C", "C"], "切换对照翻译", "在当前文章中再次按 C 确认切换。"),
+                    shortcut("reader-summary", ["V", "V"], "查看 AI 摘要", "在当前文章中再次按 V 确认，优先显示已有摘要；没有缓存时开始生成。"),
+                    shortcut("reader-previous", ["K", "K"], "查看上一篇", "在当前列表中再次按 K 确认，不循环。"),
+                    shortcut("reader-next", ["J", "J"], "查看下一篇", "在当前列表中再次按 J 确认，不循环。"),
+                    shortcut("reader-star", ["M", "M"], "切换收藏", "在当前文章中再次按 M 确认收藏或取消收藏。"),
+                    shortcut("reader-fullscreen", ["F", "F"], "切换禅模式", "在当前文章中再次按 F 确认进入或退出沉浸禅模式。"),
                     shortcut("reader-space", ["Space"], "向下阅读", "滚动正文；到达底部后再次按空格切换下一篇。")
                 ]
             ),

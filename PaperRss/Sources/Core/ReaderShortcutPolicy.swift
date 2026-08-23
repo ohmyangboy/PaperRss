@@ -6,6 +6,7 @@ public enum ReaderShortcutAction: String, CaseIterable, Sendable, Equatable {
     case previousArticle
     case nextArticle
     case toggleStar
+    case toggleFullScreen
 }
 
 public struct ReaderShortcutInvocation: Sendable, Equatable, Identifiable {
@@ -43,9 +44,10 @@ public enum ReaderShortcutPolicy {
         switch key {
         case "c": return .toggleBilingual
         case "v": return .showSummary
-        case "b": return .previousArticle
-        case "n": return .nextArticle
+        case "k": return .previousArticle
+        case "j": return .nextArticle
         case "m": return .toggleStar
+        case "f": return .toggleFullScreen
         default: return nil
         }
     }
@@ -75,6 +77,10 @@ public struct ReaderNavigationConfirmation: Sendable {
         case spaceNextArticle
         case previousArticle
         case nextArticle
+        case toggleBilingual
+        case showSummary
+        case toggleStar
+        case toggleFullScreen
     }
 
     public enum Result: Sendable, Equatable {

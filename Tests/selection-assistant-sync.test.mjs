@@ -48,9 +48,9 @@ test('updating options dismisses stale selection UI', () => {
   );
 });
 
-test('reader toolbar keeps the character bubble translation icon', () => {
+test('reader toolbar uses unified translation bubble icon', () => {
   assert.ok(
-    /toolbarSymbol\([\s\S]*?"character\.bubble\.fill" : "character\.bubble"/.test(source),
-    'the toolbar must keep the original character bubble icon'
+    /translationToolbarIcon/.test(source),
+    'the toolbar must use dedicated translation icon'
   );
 });

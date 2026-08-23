@@ -40,13 +40,21 @@ class FakeElement {
     this.children = [];
     this.parentNode = null;
     this.dataset = {};
-    this.style = { display: '', height: '' };
+    this.style = { display: '', height: '', width: '', opacity: '', transform: '', top: '', right: '' };
     this.classList = new FakeClassList();
     this.attributes = new Map();
     this.listeners = new Map();
     this.capturedPointerId = null;
     this.absoluteTop = 0;
     this.rectHeight = 30;
+  }
+
+  get className() {
+    return this.getAttribute('class') ?? '';
+  }
+
+  set className(value) {
+    this.setAttribute('class', value);
   }
 
   appendChild(child) {
@@ -67,7 +75,9 @@ class FakeElement {
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
     if (name === 'id') this.id = String(value);
-    if (name === 'class') this.className = String(value);
+    if (name === 'class') {
+      String(value).split(/\s+/).forEach((c) => c && this.classList.add(c));
+    }
   }
 
   getAttribute(name) { return this.attributes.get(name) ?? null; }
@@ -497,7 +507,7 @@ test('dynamic mutations can disable and restore the rail without duplicate DOM o
   const firstRail = runRail(fixture);
   fixture.mutationObserver.trigger([{ target: fixture.document.body }]);
   const rebuiltRail = fixture.document.querySelector('#paper-rss-toc-rail');
-  assert.notEqual(rebuiltRail, firstRail);
+  assert.equal(rebuiltRail, firstRail, 'identical structure reuses DOM without flicker');
   assert.equal(fixture.document.querySelectorAll('#paper-rss-toc-rail').length, 1);
 
   fixture.document.scrollHeight = 1000;
@@ -586,7 +596,7 @@ test('heading preview skips wrapper containers and uses the first visible leaf b
   assert.doesNotMatch(excerpt, /Wrapper text should not be used/);
 });
 
-test('hover preview waits 150ms, shows current DOM title and excerpt, and stays within a narrow viewport', () => {
+test('hover preview waits 40ms, shows current DOM title and excerpt, and stays within a narrow viewport', () => {
   const fixture = makeFixture();
   fixture.window.innerWidth = 400;
   const paragraph = addPreviewParagraph(fixture, 180);
@@ -594,7 +604,7 @@ test('hover preview waits 150ms, shows current DOM title and excerpt, and stays 
   const button = rail.querySelectorAll('[data-paper-toc-button]')[0];
   button.dispatchEvent({ type: 'mouseenter', relatedTarget: null });
   assert.equal(fixture.document.querySelector('#paper-rss-toc-preview'), null);
-  fixture.window.advanceTime(149);
+  fixture.window.advanceTime(39);
   assert.equal(fixture.document.querySelector('#paper-rss-toc-preview'), null);
   fixture.window.advanceTime(1);
   const card = fixture.document.querySelector('#paper-rss-toc-preview');
@@ -726,7 +736,7 @@ test('any rail hit target captures drag, maps rail position continuously, and su
   rail.dispatchEvent({ type: 'pointermove', target: hitTarget, pointerId: 7, clientY: 500 });
   assert.equal(fixture.window.scrollCalls.length, callsBeforeSecondButtonMove + 1);
   assert.equal(fixture.window.scrollCalls.at(-1).top, 1600);
-  assert.equal(buttons[1].getAttribute('aria-current'), 'true');
+  assert.equal(buttons[buttons.length - 1].getAttribute('aria-current'), 'true');
   rail.dispatchEvent({ type: 'pointerup', target: hitTarget, pointerId: 7, clientY: 500 });
   assert.equal(hitTarget.capturedPointerId, null);
   const callsAfterDrag = fixture.window.scrollCalls.length;
@@ -804,3 +814,203 @@ test('TOC rail floats in on scroll or right edge hover and automatically fades o
   fixture.window.advanceTime(600);
   assert.equal(rail.classList.contains('is-visible'), false, 'blurring button allows rail to fade out');
 });
+
+test('TOC buttons do not have native title attributes and preview aligns vertically with active button', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  assert.ok(buttons.length > 0);
+
+  // 1. Ensure no native title attribute to prevent ugly browser tooltip
+  buttons.forEach(button => {
+    assert.ok(!button.title || button.title === '', 'button must not have native title attribute');
+  });
+
+  // 2. Hovering button 1 reveals preview and positions it vertically centered with button 1
+  buttons[0].absoluteTop = 150;
+  buttons[0].rectHeight = 14;
+  buttons[0].dispatchEvent({ type: 'mouseenter' });
+  fixture.window.advanceTime(150);
+
+  const preview = fixture.document.querySelector('#paper-rss-toc-preview');
+  assert.ok(preview, 'preview card should be mounted');
+  assert.match(preview.style.top, /px$/, 'preview card should have dynamically calculated pixel top');
+  const initialTop = preview.style.top;
+
+  // 3. Hovering button 2 reuses the same preview DOM node and updates style.top smoothly
+  if (buttons.length > 1) {
+    buttons[1].absoluteTop = 300;
+    buttons[1].rectHeight = 14;
+    buttons[1].dispatchEvent({ type: 'mouseenter' });
+    fixture.window.advanceTime(150);
+    const updatedPreview = fixture.document.querySelector('#paper-rss-toc-preview');
+    assert.equal(updatedPreview, preview, 'preview node must be reused in-place for smooth following');
+    assert.notEqual(updatedPreview.style.top, initialTop, 'preview top must update to follow button 2');
+  }
+
+  // 4. Verify style contains pop animation and smooth top transition, without initial top: 50%
+  const style = fixture.document.querySelector('#paper-rss-toc-rail-style');
+  assert.ok(style);
+  assert.match(style.textContent, /animation:\s*paper-toc-preview-pop/);
+  assert.match(style.textContent, /transition:\s*top/);
+  assert.doesNotMatch(style.textContent, /#paper-rss-toc-preview\s*\{[^}]*top:\s*50%/);
+});
+
+test('short articles activate custom floating scrollbar with zero layout shift and proper styles', () => {
+  const fixture = makeFixture();
+  // Reduce height so TOC is not enabled
+  fixture.document.scrollHeight = 1200;
+  fixture.document.documentElement.scrollHeight = 1200;
+  fixture.document.body.scrollHeight = 1200;
+
+  runRail(fixture);
+
+  assert.equal(fixture.document.querySelector('#paper-rss-toc-rail'), null, 'TOC rail should not be present');
+  const scrollbar = fixture.document.querySelector('#paper-rss-floating-scrollbar');
+  assert.ok(scrollbar, 'Floating scrollbar container must be present when TOC is inactive');
+  const thumb = scrollbar.querySelector('.paper-floating-thumb');
+  assert.ok(thumb, 'Floating scrollbar thumb must be present');
+
+  const style = fixture.document.querySelector('#paper-rss-toc-rail-style');
+  assert.ok(style);
+  assert.match(style.textContent, /scrollbar-width:\s*none/);
+  assert.match(style.textContent, /#paper-rss-floating-scrollbar/);
+  assert.match(style.textContent, /\.paper-floating-thumb/);
+
+  // Check paperArticleStyle in ArticleReaderView source also contains scrollbar-width: none and overscroll-behavior: none
+  assert.match(source, /html\s*\{\s*background:\s*transparent;\s*scrollbar-width:\s*none;\s*overscroll-behavior:\s*none;/);
+});
+
+test('floating scrollbar updates opacity and geometry on scroll, hover, and pointer drag', () => {
+  const fixture = makeFixture();
+  fixture.document.scrollHeight = 1600;
+  fixture.document.documentElement.scrollHeight = 1600;
+  fixture.document.body.scrollHeight = 1600;
+
+  runRail(fixture);
+
+  const scrollbar = fixture.document.querySelector('#paper-rss-floating-scrollbar');
+  const thumb = scrollbar.querySelector('.paper-floating-thumb');
+
+  assert.equal(thumb.style.opacity, '0', 'thumb opacity should be idle/0 initially');
+
+  // 1. Scrolling reveals thumb with scrolling opacity (0.18)
+  fixture.document.dispatchEvent({ type: 'scroll' });
+  assert.equal(thumb.style.opacity, '0.18', 'scrolling should set thumb opacity to 0.18');
+  assert.notEqual(thumb.style.height, '', 'thumb height should be calculated');
+
+  // Fade out after 800ms
+  fixture.window.advanceTime(800);
+  assert.equal(thumb.style.opacity, '0', 'thumb should fade out after scrolling stops');
+
+  // 2. Hovering near right edge (within 12px) sets hover opacity (0.28)
+  fixture.document.dispatchEvent({ type: 'pointermove', clientX: 892 }); // innerWidth 900
+  assert.equal(thumb.style.opacity, '0.28', 'pointer near right edge should set hover opacity 0.28');
+
+  // Pointer moves away
+  fixture.document.dispatchEvent({ type: 'pointermove', clientX: 500 });
+  fixture.window.advanceTime(300);
+  assert.equal(thumb.style.opacity, '0', 'thumb should fade out when pointer leaves edge');
+
+  // 3. Pointer drag on thumb sets dragging opacity (0.36) and scrolls
+  thumb.dispatchEvent({ type: 'pointerdown', clientY: 100, pointerId: 5, button: 0, preventDefault() {}, stopPropagation() {} });
+  assert.equal(thumb.style.opacity, '0.36', 'dragging sets opacity to 0.36');
+
+  thumb.dispatchEvent({ type: 'pointermove', clientY: 200, pointerId: 5 });
+  assert.ok(fixture.window.scrollCalls.length > 0, 'dragging thumb should invoke window.scrollTo');
+
+  thumb.dispatchEvent({ type: 'pointerup', pointerId: 5 });
+  fixture.window.advanceTime(500);
+  assert.equal(thumb.style.opacity, '0', 'releasing drag should fade out thumb');
+});
+
+test('mutual exclusion: activating TOC hides floating scrollbar and reverting restores it', () => {
+  const fixture = makeFixture();
+  // 1. Initially long article with 3 anchors -> TOC active
+  const rail = runRail(fixture);
+  assert.ok(rail);
+  assert.equal(fixture.document.documentElement.classList.contains('paper-toc-rail-active'), true);
+
+  // 2. Dynamically shorten article -> TOC deactivated, floating scrollbar activated
+  fixture.document.scrollHeight = 1000;
+  fixture.document.documentElement.scrollHeight = 1000;
+  fixture.document.body.scrollHeight = 1000;
+  fixture.window.paperRssTOCRail.refresh();
+
+  assert.equal(fixture.document.querySelector('#paper-rss-toc-rail'), null, 'TOC rail destroyed');
+  assert.equal(fixture.document.documentElement.classList.contains('paper-toc-rail-active'), false);
+  const scrollbar = fixture.document.querySelector('#paper-rss-floating-scrollbar');
+  assert.ok(scrollbar, 'floating scrollbar created when TOC deactivates');
+  assert.equal(scrollbar.style.display, '', 'floating scrollbar displayed');
+
+  // 3. Dynamically lengthen article -> TOC active again, floating scrollbar hidden
+  fixture.document.scrollHeight = 2400;
+  fixture.document.documentElement.scrollHeight = 2400;
+  fixture.document.body.scrollHeight = 2400;
+  fixture.window.paperRssTOCRail.refresh();
+
+  assert.ok(fixture.document.querySelector('#paper-rss-toc-rail'), 'TOC rail restored');
+  assert.equal(scrollbar.style.display, 'none', 'floating scrollbar hidden when TOC activates');
+});
+
+test('re-rendering TOC rail with identical anchors preserves DOM instance and is-visible state without flickering', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  rail.classList.add('is-visible');
+  const originalRail = fixture.document.querySelector('#paper-rss-toc-rail');
+  assert.ok(originalRail);
+
+  // Trigger refresh with same anchors
+  fixture.window.paperRssTOCRail.refresh();
+  const currentRail = fixture.document.querySelector('#paper-rss-toc-rail');
+
+  assert.equal(currentRail, originalRail, 'DOM node should be preserved and in-place reconciled');
+  assert.equal(currentRail.classList.contains('is-visible'), true, 'is-visible must stay active without drop');
+});
+
+test('scrolling to document bottom activates the last TOC anchor regardless of anchor layout spacing', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  assert.ok(buttons.length >= 3);
+
+  // Scroll to bottom (scrollHeight 2400, innerHeight 800 -> scrollTop 1600)
+  fixture.window.scrollY = 1595;
+  fixture.document.dispatchEvent({ type: 'scroll' });
+
+  // The last button must be current
+  const lastButton = buttons[buttons.length - 1];
+  assert.equal(lastButton.classList.contains('is-current'), true, 'last TOC button must be active at document bottom');
+});
+
+test('dragging rail highlights the anchor directly corresponding to mouse pointer position', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  assert.ok(buttons.length >= 3);
+
+  // Pointerdown at bottom quarter of rail (e.g. clientY corresponds to ratio 0.8)
+  rail.rectHeight = 100;
+  rail.absoluteTop = 200;
+  rail.dispatchEvent({
+    type: 'pointerdown',
+    button: 0,
+    clientY: 285, // ratio = 85 / 100 = 0.85
+    pointerId: 1
+  });
+
+  const expectedIndex = Math.floor(0.85 * buttons.length);
+  assert.equal(
+    buttons[expectedIndex].classList.contains('is-current'),
+    true,
+    'anchor matching the pointer position must be highlighted on drag'
+  );
+});
+
+test('spacebarScript strictly clamps scroll to bottom and prevents default on repeat to stop overscroll bounce', () => {
+  assert.match(source, /const isAtBottom = scrollTop >= \(maxScrollTop - 4\);/);
+  assert.match(source, /window\.scrollTo\(\{\s*top:\s*targetTop,\s*behavior:\s*"smooth"/);
+  assert.match(source, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
+});
+
+

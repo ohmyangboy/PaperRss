@@ -76,9 +76,10 @@ test('every bare reader key publishes its native action and consumes the event',
   const mappings = {
     C: 'toggleBilingual',
     V: 'showSummary',
-    B: 'previousArticle',
-    N: 'nextArticle',
-    M: 'toggleStar'
+    K: 'previousArticle',
+    J: 'nextArticle',
+    M: 'toggleStar',
+    F: 'toggleFullScreen'
   };
 
   for (const [key, action] of Object.entries(mappings)) {
@@ -148,7 +149,7 @@ test('Help menu opens a dedicated window documenting every current shortcut', ()
   assert.match(helpSource, /openWindow\(id: KeyboardShortcutHelpWindow\.id\)/);
 
   for (const shortcut of [
-    '["C"]', '["V"]', '["B", "B"]', '["N", "N"]', '["M"]', '["Space"]',
+    '["C", "C"]', '["V", "V"]', '["K", "K"]', '["J", "J"]', '["M", "M"]', '["F", "F"]', '["Space"]',
     '["←"]', '["→"]', '["⌘", "⇧", "R"]', '["⌘", "+"]',
     '["⌘", "−"]', '["⌘", "0"]', '["⌘", "/"]'
   ]) {

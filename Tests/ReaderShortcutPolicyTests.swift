@@ -5,9 +5,13 @@ final class ReaderShortcutPolicyTests: XCTestCase {
     func testBareReaderKeysMapToTheirArticleActions() {
         XCTAssertEqual(ReaderShortcutPolicy.action(for: "c"), .toggleBilingual)
         XCTAssertEqual(ReaderShortcutPolicy.action(for: "V"), .showSummary)
-        XCTAssertEqual(ReaderShortcutPolicy.action(for: "b"), .previousArticle)
-        XCTAssertEqual(ReaderShortcutPolicy.action(for: "N"), .nextArticle)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "k"), .previousArticle)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "K"), .previousArticle)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "j"), .nextArticle)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "J"), .nextArticle)
         XCTAssertEqual(ReaderShortcutPolicy.action(for: "m"), .toggleStar)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "F"), .toggleFullScreen)
+        XCTAssertEqual(ReaderShortcutPolicy.action(for: "f"), .toggleFullScreen)
     }
 
     func testModifiedRepeatedAndUnknownKeysStayWithTheCurrentResponder() {

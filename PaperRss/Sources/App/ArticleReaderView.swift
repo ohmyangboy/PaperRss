@@ -729,14 +729,11 @@ struct ArticleReaderView: View {
     }
 
     private var floatingCapsuleToolbar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button(action: toggleBilingualTranslation) {
-                toolbarSymbol(
-                    readerMode == .bilingual ? "character.bubble.fill" : "character.bubble",
-                    isActive: readerMode == .bilingual
-                )
+                translationToolbarIcon(isActive: readerMode == .bilingual)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .disabled(text.isEmpty)
             .accessibilityLabel("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
             .help("\(I18N.shared.localized(readerMode == .bilingual ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
@@ -746,7 +743,7 @@ struct ArticleReaderView: View {
             } label: {
                 toolbarSymbol(currentEntry.isRead ? "envelope.open" : "envelope", isActive: false)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel(I18N.shared.localized(currentEntry.isRead ? "标为未读" : "标为已读"))
             .help(I18N.shared.localized(currentEntry.isRead ? "标为未读" : "标为已读"))
 
@@ -755,7 +752,7 @@ struct ArticleReaderView: View {
             } label: {
                 toolbarSymbol(currentEntry.isStarred ? "star.fill" : "star", isActive: currentEntry.isStarred)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏文章"))
             .help(I18N.shared.localized(currentEntry.isStarred ? "取消收藏" : "收藏文章"))
             
@@ -767,22 +764,41 @@ struct ArticleReaderView: View {
                     isActive: isZenMode
                 )
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel(I18N.shared.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
             .help(I18N.shared.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
     }
 
+    private func translationToolbarIcon(isActive: Bool) -> some View {
+        ZStack {
+            Image(systemName: isActive ? "bubble.left.fill" : "bubble.left")
+                .font(.system(size: 16.5, weight: .regular))
+            
+            Text("文")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(isActive ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
+                .offset(x: 0.2, y: -1.6)
+        }
+        .offset(y: 0.8)
+        .symbolRenderingMode(.monochrome)
+        .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+        .frame(width: 28, height: 28)
+        .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+        .contentShape(Circle())
+    }
+
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
         Image(systemName: name)
-            .symbolRenderingMode(.hierarchical)
+            .symbolRenderingMode(.monochrome)
+            .font(.system(size: 13.5, weight: .regular))
             .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
-            .frame(width: 29, height: 29)
+            .frame(width: 28, height: 28)
             .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
             .contentShape(Circle())
     }
@@ -808,7 +824,7 @@ struct ArticleReaderView: View {
     }
 
     private func handleReaderShortcut(_ action: ReaderShortcutAction) {
-        if action == .previousArticle || action == .nextArticle {
+        if action == .previousArticle || action == .nextArticle || action == .toggleFullScreen {
             guard canNavigateDisplayedDocument else { return }
             onReaderShortcut(action)
             return
@@ -840,7 +856,7 @@ struct ArticleReaderView: View {
             }
         case .toggleStar:
             store.toggleStar(currentEntry)
-        case .previousArticle, .nextArticle:
+        case .previousArticle, .nextArticle, .toggleFullScreen:
             break
         }
     }
@@ -1197,7 +1213,6 @@ private enum PaperReaderHeaderBuilder {
         """
 
         let titleText = I18N.localized("Ai摘要").htmlEscaped
-        let cardTitleAttr = "title=\"\(I18N.localized("AI 摘要").htmlEscaped) (V)\" aria-keyshortcuts=\"V\""
 
         if let summary = summaryArtifact, !summary.content.isEmpty {
             let formattedContent = formatSimpleMarkdown(summary.content)
@@ -1222,7 +1237,7 @@ private enum PaperReaderHeaderBuilder {
                 }
                 statusFooter = """
                 <div class="paper-summary-status">
-                  \(noticeHTML)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true" title="V" aria-keyshortcuts="V">\(I18N.localized("重新生成").htmlEscaped)</button>
+                  \(noticeHTML)<button class="paper-summary-action-btn" data-paper-action="generateSummary" data-paper-force="true">\(I18N.localized("重新生成").htmlEscaped)</button>
                 </div>
                 """
             }
@@ -1240,13 +1255,13 @@ private enum PaperReaderHeaderBuilder {
             let actionIcon = isSummaryExpanded ? chevronDownSVG : chevronRightSVG
 
             return """
-            <div class="paper-summary-card paper-summary-collapse \(isSummaryExpanded ? "is-expanded" : "is-collapsed")" id="paper-summary-card" data-paper-action="toggleSummary" \(cardTitleAttr)>
+            <div class="paper-summary-card paper-summary-collapse \(isSummaryExpanded ? "is-expanded" : "is-collapsed")" id="paper-summary-card" data-paper-action="toggleSummary">
               <div class="paper-summary-header">
                 <div class="paper-summary-header-left">
                   <span class="paper-summary-title">\(titleText)</span>
                   \(headerSubtextHTML)
                 </div>
-                <button class="paper-summary-ai-btn" data-paper-action="toggleSummary" title="V" aria-keyshortcuts="V">
+                <button class="paper-summary-ai-btn" data-paper-action="toggleSummary">
                   \(actionIcon)
                 </button>
               </div>
@@ -1259,7 +1274,7 @@ private enum PaperReaderHeaderBuilder {
         } else if isGeneratingSummary {
             let msg = aiStatusMessage ?? I18N.localized("正在生成，完成后会自动显示。")
             return """
-            <div class="paper-summary-card paper-summary-collapse generating" id="paper-summary-card" \(cardTitleAttr)>
+            <div class="paper-summary-card paper-summary-collapse generating" id="paper-summary-card">
               <div class="paper-summary-header">
                 <div class="paper-summary-header-left">
                   <span class="paper-summary-title">\(titleText)</span>
@@ -1281,14 +1296,14 @@ private enum PaperReaderHeaderBuilder {
             } ?? ""
             let placeholderText = I18N.localized("尚未生成，点击后发送正文生成摘要").htmlEscaped
             return """
-            <div class="paper-summary-card paper-summary-collapse ungenerated" id="paper-summary-card" data-paper-action="generateSummary" data-paper-force="false" \(cardTitleAttr)>
+            <div class="paper-summary-card paper-summary-collapse ungenerated" id="paper-summary-card" data-paper-action="generateSummary" data-paper-force="false">
               \(errNotice)
               <div class="paper-summary-header">
                 <div class="paper-summary-header-left">
                   <span class="paper-summary-title">\(titleText)</span>
                   <span class="paper-summary-subtext">\(placeholderText)</span>
                 </div>
-                <button class="paper-summary-ai-btn" data-paper-action="generateSummary" data-paper-force="false" title="V" aria-keyshortcuts="V">
+                <button class="paper-summary-ai-btn" data-paper-action="generateSummary" data-paper-force="false">
                   \(chevronRightSVG)
                 </button>
               </div>
@@ -1332,8 +1347,20 @@ private let paperArticleStyle = """
     --paper-card: rgba(48, 45, 40, .97);
   }
 }
-html { background: transparent; }
+html {
+  background: transparent;
+  scrollbar-width: none;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+}
+html::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
 body {
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
   max-width: 820px;
   margin: 0 auto 42px auto;
   padding-left: 32px;
@@ -2306,24 +2333,57 @@ enum PaperReaderBridge {
             return { title, excerpt: blocks[0] ? textOf(blocks[0]) : anchor.excerpt || "" };
           };
 
-          const showPreview = anchor => {
-            closePreview();
+          const showPreview = (anchor, buttonElement) => {
             showRail();
             const content = previewContent(anchor);
+            const index = state.anchors.indexOf(anchor);
+            const targetButton = buttonElement || (index >= 0 ? state.buttons[index] : null);
+            const vh = viewportHeight();
+            let clampedTop = vh / 2;
+            if (targetButton && typeof targetButton.getBoundingClientRect === "function") {
+              const btnRect = targetButton.getBoundingClientRect();
+              const btnCenterY = (btnRect.top || 0) + ((btnRect.height || 14) / 2);
+              const cardHalfH = (state.preview?.offsetHeight || 80) / 2;
+              clampedTop = Math.max(16 + cardHalfH, Math.min(vh - 16 - cardHalfH, btnCenterY));
+            }
+
+            // 如果已有 preview 卡片，直接复用 DOM 节点，原地更新内容并触发平滑位移跟随
+            if (state.preview && state.preview.parentNode) {
+              const titleEl = state.preview.querySelector(".paper-toc-preview-title");
+              let excerptEl = state.preview.querySelector(".paper-toc-preview-excerpt");
+              if (titleEl) titleEl.textContent = content.title;
+              if (content.excerpt) {
+                if (!excerptEl) {
+                  excerptEl = document.createElement("div");
+                  excerptEl.classList.add("paper-toc-preview-excerpt");
+                  state.preview.appendChild(excerptEl);
+                }
+                excerptEl.textContent = content.excerpt;
+              } else if (excerptEl) {
+                excerptEl.remove();
+              }
+              state.preview.style.top = clampedTop + "px";
+              return;
+            }
+
+            // 初次创建卡片：先赋好计算后的 top 坐标再挂载，确保纯原地浮现，绝不从 50% 飞跃
             const card = document.createElement("aside");
             card.id = "paper-rss-toc-preview";
             card.classList.add("paper-toc-preview");
             card.style.width = Math.min(360, Math.max(0, (window.innerWidth || 0) - 64)) + "px";
             card.style.right = "48px";
+            card.style.top = clampedTop + "px";
             card.setAttribute("data-paper-toc-preview", "true");
             const title = document.createElement("div");
             title.classList.add("paper-toc-preview-title");
             title.textContent = content.title;
-            const excerpt = document.createElement("div");
-            excerpt.classList.add("paper-toc-preview-excerpt");
-            excerpt.textContent = content.excerpt;
             card.appendChild(title);
-            if (content.excerpt) card.appendChild(excerpt);
+            if (content.excerpt) {
+              const excerpt = document.createElement("div");
+              excerpt.classList.add("paper-toc-preview-excerpt");
+              excerpt.textContent = content.excerpt;
+              card.appendChild(excerpt);
+            }
             card.addEventListener("mouseenter", () => {
               if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
               state.closeTimer = null;
@@ -2339,15 +2399,20 @@ enum PaperReaderBridge {
             state.preview = card;
           };
 
-          const schedulePreview = anchor => {
+          const schedulePreview = (anchor, buttonElement) => {
             if (state.hoverTimer !== null) window.clearTimeout(state.hoverTimer);
             if (state.closeTimer !== null) window.clearTimeout(state.closeTimer);
             state.closeTimer = null;
             state.hoveredElement = anchor.element;
+            // 浮窗处于打开状态时，0ms 立即切换跟随，鼠标移到哪立刻显示到哪，绝无滞后；初次呼出 40ms
+            if (state.preview && state.preview.parentNode) {
+              showPreview(anchor, buttonElement);
+              return;
+            }
             state.hoverTimer = window.setTimeout(() => {
               state.hoverTimer = null;
-              if (state.hoveredElement === anchor.element) showPreview(anchor);
-            }, 150);
+              if (state.hoveredElement === anchor.element) showPreview(anchor, buttonElement);
+            }, 40);
           };
 
           const isLongLeaf = node => {
@@ -2475,6 +2540,7 @@ enum PaperReaderBridge {
 
           const updateActive = () => {
             if (!state.anchors.length) return;
+            if (state.dragging) return;
             if (state.hoveredIndex !== null && state.hoveredIndex >= 0 && state.hoveredIndex < state.buttons.length) {
               return;
             }
@@ -2489,11 +2555,27 @@ enum PaperReaderBridge {
                 return;
               }
             }
+
+            const sTop = currentScrollTop();
+            const vHeight = viewportHeight();
+            const dHeight = documentHeight();
+
+            // 触底判定：当页面滚动到接近最底部（剩余小于 24px）时，强制高亮最后一格，解决底部内容不足一屏导致最后一格不高亮的问题
+            if (dHeight > vHeight && (sTop + vHeight) >= (dHeight - 24)) {
+              const lastIndex = state.anchors.length - 1;
+              state.buttons.forEach((button, index) => {
+                const active = index === lastIndex;
+                button.classList.toggle("is-current", active);
+                button.setAttribute("aria-current", active ? "true" : "false");
+              });
+              return;
+            }
+
             const offset = visualFocusOffset();
-            const threshold = currentScrollTop() + offset + 8;
+            const threshold = sTop + offset + 8;
             let activeIndex = 0;
             state.anchors.forEach((anchor, index) => {
-              const absoluteTop = anchor.element.getBoundingClientRect().top + currentScrollTop();
+              const absoluteTop = anchor.element.getBoundingClientRect().top + sTop;
               if (absoluteTop <= threshold) activeIndex = index;
             });
             state.buttons.forEach((button, index) => {
@@ -2543,7 +2625,19 @@ enum PaperReaderBridge {
             const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
             const range = Math.max(0, documentHeight() - viewportHeight());
             window.scrollTo({ top: range * ratio, behavior: "auto" });
-            updateActive();
+
+            // 拖动期间：高亮位置精准跟随鼠标按住的条目
+            if (state.buttons.length > 0) {
+              const activeIndex = Math.min(
+                state.buttons.length - 1,
+                Math.max(0, Math.floor(ratio * state.buttons.length))
+              );
+              state.buttons.forEach((button, index) => {
+                const active = index === activeIndex;
+                button.classList.toggle("is-current", active);
+                button.setAttribute("aria-current", active ? "true" : "false");
+              });
+            }
           };
 
           const dragTargetForEvent = event =>
@@ -2565,6 +2659,23 @@ enum PaperReaderBridge {
             state.suppressClick = false;
             dismissPreview();
             target.setPointerCapture?.(event.pointerId);
+
+            // 按下一瞬间直接更新高亮条目，不触发多余滚动
+            const rail = state.rail;
+            const rect = rail?.getBoundingClientRect?.();
+            const clientY = Number(event.clientY);
+            if (rect && Number.isFinite(clientY) && rect.height && state.buttons.length > 0) {
+              const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+              const activeIndex = Math.min(
+                state.buttons.length - 1,
+                Math.max(0, Math.floor(ratio * state.buttons.length))
+              );
+              state.buttons.forEach((button, index) => {
+                const active = index === activeIndex;
+                button.classList.toggle("is-current", active);
+                button.setAttribute("aria-current", active ? "true" : "false");
+              });
+            }
           };
 
           const moveDrag = event => {
@@ -2596,13 +2707,161 @@ enum PaperReaderBridge {
             scheduleHide(1000);
           };
 
+          const showScrollbarThumb = (opacity, animated = true) => {
+            if (!state.scrollbarThumb || state.rail || root.classList.contains("paper-toc-rail-active")) return;
+            if (state.scrollbarFadeTimer !== null) {
+              window.clearTimeout(state.scrollbarFadeTimer);
+              state.scrollbarFadeTimer = null;
+            }
+            state.scrollbarThumb.classList.remove("is-fading-out");
+            state.scrollbarThumb.style.opacity = String(opacity);
+          };
+
+          const scheduleScrollbarFadeOut = (delay = 800) => {
+            if (!state.scrollbarThumb || state.scrollbarHovered || state.scrollbarDragging) return;
+            if (state.scrollbarFadeTimer !== null) window.clearTimeout(state.scrollbarFadeTimer);
+            state.scrollbarFadeTimer = window.setTimeout(() => {
+              state.scrollbarFadeTimer = null;
+              if (!state.scrollbarThumb || state.scrollbarHovered || state.scrollbarDragging) return;
+              state.scrollbarThumb.classList.add("is-fading-out");
+              state.scrollbarThumb.style.opacity = "0";
+            }, delay);
+          };
+
+          const ensureScrollbar = () => {
+            if (state.scrollbar) return;
+            ensureStyle();
+            const scrollbar = document.createElement("div");
+            scrollbar.id = "paper-rss-floating-scrollbar";
+            scrollbar.setAttribute("aria-hidden", "true");
+
+            const thumb = document.createElement("div");
+            thumb.className = "paper-floating-thumb";
+            thumb.setAttribute("aria-hidden", "true");
+            thumb.style.opacity = "0";
+
+            thumb.addEventListener("mouseenter", () => {
+              state.scrollbarHovered = true;
+              showScrollbarThumb(0.28, true);
+            });
+
+            thumb.addEventListener("mouseleave", () => {
+              state.scrollbarHovered = false;
+              if (!state.scrollbarDragging) {
+                scheduleScrollbarFadeOut(300);
+              }
+            });
+
+            thumb.addEventListener("pointerdown", event => {
+              if (event.button !== undefined && event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              state.scrollbarDragging = true;
+              state.scrollbarDragStartY = event.clientY;
+              state.scrollbarDragStartScrollY = currentScrollTop();
+              state.scrollbarDragPointerId = event.pointerId;
+              thumb.setPointerCapture?.(event.pointerId);
+              showScrollbarThumb(0.36, true);
+            });
+
+            thumb.addEventListener("pointermove", event => {
+              if (!state.scrollbarDragging || state.scrollbarDragPointerId !== event.pointerId) return;
+              const deltaY = event.clientY - state.scrollbarDragStartY;
+              const availableTravel = state.scrollbarData?.availableTravel || 1;
+              const scrollableH = state.scrollbarData?.scrollableH || 0;
+              const deltaProgress = deltaY / Math.max(1, availableTravel);
+              const targetScrollY = state.scrollbarDragStartScrollY + (deltaProgress * scrollableH);
+              const clampedY = Math.max(0, Math.min(scrollableH, targetScrollY));
+              window.scrollTo({ top: clampedY, behavior: "auto" });
+            });
+
+            const endScrollbarDrag = event => {
+              if (!state.scrollbarDragging || (state.scrollbarDragPointerId !== null && state.scrollbarDragPointerId !== event.pointerId)) return;
+              state.scrollbarDragging = false;
+              state.scrollbarDragPointerId = null;
+              thumb.releasePointerCapture?.(event.pointerId);
+              if (!state.scrollbarHovered) {
+                scheduleScrollbarFadeOut(500);
+              } else {
+                showScrollbarThumb(0.28, true);
+              }
+            };
+
+            thumb.addEventListener("pointerup", endScrollbarDrag);
+            thumb.addEventListener("pointercancel", endScrollbarDrag);
+
+            scrollbar.appendChild(thumb);
+            root.appendChild(scrollbar);
+            state.scrollbar = scrollbar;
+            state.scrollbarThumb = thumb;
+          };
+
+          const syncScrollbarGeometry = () => {
+            if (state.rail || root.classList.contains("paper-toc-rail-active")) {
+              if (state.scrollbar) state.scrollbar.style.display = "none";
+              return;
+            }
+            ensureScrollbar();
+            if (!state.scrollbar || !state.scrollbarThumb) return;
+            state.scrollbar.style.display = "";
+
+            const viewportH = viewportHeight();
+            const documentH = Math.max(viewportH, documentHeight());
+            const scrollableH = documentH - viewportH;
+            const usableTrackH = Math.max(1, viewportH - 12);
+
+            if (usableTrackH <= 0 || scrollableH <= 1) {
+              state.scrollbarThumb.style.display = "none";
+              return;
+            }
+
+            const visibleRatio = Math.max(0.01, Math.min(1, viewportH / documentH));
+            const rawThumbH = usableTrackH * visibleRatio;
+            const thumbH = Math.max(24, Math.min(usableTrackH, rawThumbH));
+            const availableTravel = Math.max(0, usableTrackH - thumbH);
+            const scrollProgress = Math.max(0, Math.min(1, currentScrollTop() / scrollableH));
+            const thumbY = 6 + (scrollProgress * availableTravel);
+
+            state.scrollbarData = { availableTravel, scrollableH };
+            state.scrollbarThumb.style.display = "";
+            state.scrollbarThumb.style.height = thumbH.toFixed(1) + "px";
+            state.scrollbarThumb.style.transform = `translateY(${thumbY.toFixed(1)}px)`;
+          };
+
           const ensureStyle = () => {
             if (document.getElementById("paper-rss-toc-rail-style")) return;
             const style = document.createElement("style");
             style.id = "paper-rss-toc-rail-style";
             style.textContent = `
-              html.paper-toc-rail-active { scrollbar-width: none; }
-              html.paper-toc-rail-active::-webkit-scrollbar { width: 0; height: 0; }
+              html {
+                scrollbar-width: none;
+                overscroll-behavior: none;
+                overscroll-behavior-y: none;
+              }
+              html::-webkit-scrollbar { width: 0; height: 0; display: none; }
+              html.paper-toc-rail-active {
+                scrollbar-width: none;
+                overscroll-behavior: none;
+                overscroll-behavior-y: none;
+              }
+              html.paper-toc-rail-active::-webkit-scrollbar { width: 0; height: 0; display: none; }
+              #paper-rss-floating-scrollbar {
+                position: fixed; z-index: 10000; right: 0; top: 0; bottom: 0;
+                width: 12px; pointer-events: none; user-select: none; box-sizing: border-box;
+              }
+              html.paper-toc-rail-active #paper-rss-floating-scrollbar {
+                display: none !important;
+              }
+              #paper-rss-floating-scrollbar .paper-floating-thumb {
+                position: absolute; right: 2.5px; top: 0; width: 4.5px; min-height: 24px;
+                border-radius: 2.25px; background: var(--paper-ink);
+                opacity: 0; pointer-events: auto; box-sizing: border-box;
+                will-change: transform, opacity;
+                transition: opacity .12s ease-out;
+              }
+              #paper-rss-floating-scrollbar .paper-floating-thumb.is-fading-out {
+                transition: opacity .28s cubic-bezier(.16, 1, .3, 1);
+              }
               #paper-rss-toc-rail {
                 position: fixed; z-index: 10000; right: 8px; top: 50%;
                 transform: translateY(-50%); width: 34px; min-height: 42px;
@@ -2631,13 +2890,20 @@ enum PaperReaderBridge {
                 width: 8px; background: rgba(45, 45, 45, .78);
               }
               #paper-rss-toc-preview {
-                position: fixed; z-index: 10001; top: 50%; transform: translateY(-50%);
+                position: fixed; z-index: 10001; right: 48px;
+                transform: translateY(-50%);
                 box-sizing: border-box; max-width: calc(100vw - 64px);
                 max-height: min(280px, calc(100vh - 24px)); overflow: hidden;
                 padding: 12px 14px; border: .5px solid var(--paper-rule);
                 border-radius: 12px; color: var(--paper-ink);
                 background: var(--paper-card); box-shadow: 0 10px 26px rgba(35, 31, 25, .16);
                 pointer-events: auto; user-select: text; font: 13px/1.48 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+                animation: paper-toc-preview-pop .10s cubic-bezier(0, 0, .2, 1) both;
+                transition: top .08s cubic-bezier(0, 0, .2, 1);
+              }
+              @keyframes paper-toc-preview-pop {
+                from { opacity: 0; transform: translateY(-50%) scale(0.97); }
+                to { opacity: 1; transform: translateY(-50%) scale(1); }
               }
               #paper-rss-toc-preview .paper-toc-preview-title {
                 display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
@@ -2653,6 +2919,7 @@ enum PaperReaderBridge {
               }
               @media (prefers-reduced-motion: reduce) {
                 #paper-rss-toc-rail { transition: none; }
+                #paper-rss-toc-preview { transition: none; }
               }
             `;
             document.head.appendChild(style);
@@ -2661,7 +2928,7 @@ enum PaperReaderBridge {
 
           const buildRail = () => {
             const previousHoverElement = state.hoveredElement;
-            clearRail();
+            const wasVisible = state.rail ? state.rail.classList.contains("is-visible") : false;
             const title = document.querySelector(".paper-header-title");
             const titleText = textOf(title);
             const bodyHeadings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"))
@@ -2702,11 +2969,35 @@ enum PaperReaderBridge {
             const candidateCount = anchors.length;
             const enabled = height > viewport * 2 && candidateCount >= 3;
             if (!enabled) {
+              clearRail();
               state.hoveredElement = null;
+              syncScrollbarGeometry();
               return;
             }
-            state.anchors = compressAnchors(anchors);
+            const newAnchors = compressAnchors(anchors);
+
+            // In-place reconciliation: 如果已有 rail 且锚点未变，直接就地更新，避免任何 DOM 销毁重建闪烁
+            const canReuse = state.rail &&
+              state.anchors.length === newAnchors.length &&
+              state.anchors.every((a, idx) => a.element === newAnchors[idx].element && a.label === newAnchors[idx].label);
+
+            if (canReuse) {
+              state.anchors = newAnchors;
+              state.rail.style.height = Math.min(Math.max(42, state.anchors.length * 14), Math.min(viewportHeight() * .45, 280)) + "px";
+              updateActive();
+              const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
+              if (preservedAnchor && state.preview) {
+                const preservedIndex = state.anchors.indexOf(preservedAnchor);
+                setHoverPeak(preservedIndex);
+                showPreview(preservedAnchor, state.buttons[preservedIndex]);
+              }
+              return;
+            }
+
+            clearRail();
+            state.anchors = newAnchors;
             ensureStyle();
+            if (state.scrollbar) state.scrollbar.style.display = "none";
             const rail = document.createElement("nav");
             rail.id = "paper-rss-toc-rail";
             rail.setAttribute("aria-label", currentRailLabel());
@@ -2720,7 +3011,6 @@ enum PaperReaderBridge {
               button.dataset.paperTocLabel = anchor.label;
               button.dataset.paperTocExcerpt = anchor.excerpt || "";
               button.type = "button";
-              button.title = anchor.label;
               button.setAttribute("aria-label", anchor.label);
               button.setAttribute("aria-current", "false");
               const line = document.createElement("span");
@@ -2750,7 +3040,7 @@ enum PaperReaderBridge {
               button.addEventListener("blur", () => scheduleHide(600));
               button.addEventListener("mouseenter", () => {
                 setHoverPeak(index);
-                schedulePreview(anchor);
+                schedulePreview(anchor, button);
               });
               button.addEventListener("mouseleave", schedulePreviewClose);
               rail.appendChild(button);
@@ -2777,12 +3067,15 @@ enum PaperReaderBridge {
             root.appendChild(rail);
             state.rail = rail;
             root.classList.add("paper-toc-rail-active");
+            if (wasVisible || state.mouseNear || state.railHovered) {
+              rail.classList.add("is-visible");
+            }
             updateActive();
             const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
             if (preservedAnchor) {
               const preservedIndex = state.anchors.indexOf(preservedAnchor);
               setHoverPeak(preservedIndex);
-              showPreview(preservedAnchor);
+              showPreview(preservedAnchor, state.buttons[preservedIndex]);
             }
           };
 
@@ -2795,43 +3088,75 @@ enum PaperReaderBridge {
             });
           };
           const onScroll = () => {
-            wakeRail(1400);
-            window.requestAnimationFrame(updateActive);
+            if (state.rail) {
+              wakeRail(1400);
+              window.requestAnimationFrame(updateActive);
+            } else {
+              syncScrollbarGeometry();
+              if (!state.scrollbarHovered && !state.scrollbarDragging) {
+                showScrollbarThumb(0.18, false);
+                scheduleScrollbarFadeOut(800);
+              }
+            }
           };
-          const onResize = refresh;
+          const onResize = () => {
+            syncScrollbarGeometry();
+            refresh();
+          };
           const onWheel = () => {
-            wakeRail(1400);
-            if (state.navigatingAnchor) {
-              state.navigatingAnchor = null;
-              if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
-              state.navigatingTimer = null;
-              updateActive();
+            if (state.rail) {
+              wakeRail(1400);
+              if (state.navigatingAnchor) {
+                state.navigatingAnchor = null;
+                if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+                state.navigatingTimer = null;
+                updateActive();
+              }
+            } else {
+              syncScrollbarGeometry();
+              if (!state.scrollbarHovered && !state.scrollbarDragging) {
+                showScrollbarThumb(0.18, false);
+                scheduleScrollbarFadeOut(800);
+              }
             }
           };
           const onPointerMove = event => {
             const clientX = Number(event?.clientX);
             if (!Number.isFinite(clientX)) return;
             const windowWidth = Number(window.innerWidth || document.documentElement.clientWidth || 0);
-            const nearEdge = windowWidth > 0 && clientX >= windowWidth - 64;
-            if (nearEdge) {
-              state.mouseNear = true;
-              if (state.hideTimer !== null) {
-                window.clearTimeout(state.hideTimer);
-                state.hideTimer = null;
+            if (state.rail) {
+              const nearEdge = windowWidth > 0 && clientX >= windowWidth - 64;
+              if (nearEdge) {
+                state.mouseNear = true;
+                if (state.hideTimer !== null) {
+                  window.clearTimeout(state.hideTimer);
+                  state.hideTimer = null;
+                }
+                showRail();
+              } else if (state.mouseNear) {
+                state.mouseNear = false;
+                scheduleHide(600);
               }
-              showRail();
-            } else if (state.mouseNear) {
-              state.mouseNear = false;
-              scheduleHide(600);
+            } else {
+              const nearScrollbarEdge = windowWidth > 0 && clientX >= windowWidth - 12;
+              if (nearScrollbarEdge) {
+                if (!state.scrollbarHovered && !state.scrollbarDragging) {
+                  showScrollbarThumb(0.28, true);
+                }
+              } else if (!state.scrollbarHovered && !state.scrollbarDragging && !state.scrollbarFadeTimer) {
+                scheduleScrollbarFadeOut(300);
+              }
             }
           };
           const onKeyDown = event => {
             if (event.key === "Escape") dismissPreview();
           };
           state.refresh = refresh;
+          state.syncScrollbarGeometry = syncScrollbarGeometry;
           state.destroy = () => {
             if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
             if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
+            if (state.scrollbarFadeTimer !== null) window.clearTimeout(state.scrollbarFadeTimer);
             state.observer?.disconnect();
             state.resizeObserver?.disconnect();
             document.removeEventListener("scroll", onScroll, { capture: true });
@@ -2840,6 +3165,9 @@ enum PaperReaderBridge {
             window.removeEventListener("resize", onResize);
             window.removeEventListener("wheel", onWheel, { capture: true });
             clearRail();
+            state.scrollbar?.remove();
+            state.scrollbar = null;
+            state.scrollbarThumb = null;
             state.style?.remove();
             if (window.paperRssTOCRail === state) delete window.paperRssTOCRail;
           };
@@ -2855,7 +3183,11 @@ enum PaperReaderBridge {
                 const node = m.target;
                 const el = (node && node.nodeType === 1) ? node : (node ? node.parentElement : null);
                 if (!el || typeof el.closest !== "function") return false;
-                return el.closest('#paper-summary-card') || el.closest('.paper-selection-popover');
+                return el.closest('#paper-summary-card') ||
+                       el.closest('.paper-selection-popover') ||
+                       el.closest('#paper-rss-toc-rail') ||
+                       el.closest('#paper-rss-toc-preview') ||
+                       el.closest('#paper-rss-floating-scrollbar');
               });
               if (!shouldIgnore) {
                 refresh();
@@ -3443,9 +3775,10 @@ enum PaperReaderBridge {
           const actions = {
             c: "toggleBilingual",
             v: "showSummary",
-            b: "previousArticle",
-            n: "nextArticle",
-            m: "toggleStar"
+            k: "previousArticle",
+            j: "nextArticle",
+            m: "toggleStar",
+            f: "toggleFullScreen"
           };
 
           const isEditable = element => {
@@ -3491,9 +3824,6 @@ enum PaperReaderBridge {
         (() => {
           window.addEventListener("keydown", event => {
             if (event.key === " " || event.keyCode === 32) {
-              if (window.paperRssReaderInteractive === false &&
-                  window.paperRssReaderNavigationEnabled !== true) return;
-              if (event.repeat) return;
               const active = document.activeElement;
               if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
                 return;
@@ -3501,10 +3831,18 @@ enum PaperReaderBridge {
               if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
                 return;
               }
+
+              // 关键：首位阻止默认行为，杜绝 WebKit 原生 Space 键连续冲量撞底引发的橡皮筋拉扯
               event.preventDefault();
+              event.stopPropagation();
+
+              if (window.paperRssReaderInteractive === false &&
+                  window.paperRssReaderNavigationEnabled !== true) return;
 
               if (window.paperRssReaderInteractive === false) {
-                window.webkit?.messageHandlers?.\(nextArticleMessageName)?.postMessage({});
+                if (!event.repeat) {
+                  window.webkit?.messageHandlers?.\(nextArticleMessageName)?.postMessage({});
+                }
                 return;
               }
 
@@ -3514,16 +3852,19 @@ enum PaperReaderBridge {
               );
               const clientHeight = window.innerHeight;
               const scrollTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-              const isAtBottom = (scrollTop + clientHeight) >= (scrollHeight - 6);
+              const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+              const isAtBottom = scrollTop >= (maxScrollTop - 4);
 
               if (isAtBottom) {
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(nextArticleMessageName)) {
+                // 触底时：严禁发起任何滚动！单次按键（非长按连续触发）才发送切篇消息
+                if (!event.repeat && window.webkit?.messageHandlers?.\(nextArticleMessageName)) {
                   window.webkit.messageHandlers.\(nextArticleMessageName).postMessage({});
                 }
               } else {
                 const pageDistance = Math.max(120, clientHeight * 0.382);
-                window.scrollBy({
-                  top: pageDistance,
+                const targetTop = Math.min(maxScrollTop, scrollTop + pageDistance);
+                window.scrollTo({
+                  top: targetTop,
                   behavior: "smooth"
                 });
               }
@@ -5493,12 +5834,9 @@ struct ReaderCapsuleToolbar: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button(action: onToggleBilingual) {
-                toolbarSymbol(
-                    isBilingualActive ? "character.bubble.fill" : "character.bubble",
-                    isActive: isBilingualActive
-                )
+                translationToolbarIcon(isActive: isBilingualActive)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
@@ -5529,13 +5867,31 @@ struct ReaderCapsuleToolbar: View {
             .accessibilityLabel(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
             .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
         }
-        .padding(.horizontal, 8)
-        .frame(width: 140, height: 28)
+        .padding(.horizontal, 6)
+        .frame(height: 28)
+    }
+
+    private func translationToolbarIcon(isActive: Bool) -> some View {
+        ZStack {
+            Image(systemName: isActive ? "bubble.left.fill" : "bubble.left")
+                .font(.system(size: 16, weight: .medium))
+            
+            Text("文")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(isActive ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
+                .offset(x: 0.2, y: -1.5)
+        }
+        .offset(y: 0.6)
+        .symbolRenderingMode(.monochrome)
+        .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+        .frame(width: 28, height: 26)
+        .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+        .contentShape(Circle())
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
         Image(systemName: name)
-            .symbolRenderingMode(.hierarchical)
+            .symbolRenderingMode(.monochrome)
             .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
             .font(.system(size: 13, weight: .medium))
             .frame(width: 28, height: 26)
