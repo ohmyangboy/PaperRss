@@ -665,11 +665,11 @@ struct RootView: View {
             ContentUnavailableView {
                 Label {
                     Text(I18N.localized("慢读，深思"))
-                        .font(.system(size: 17, weight: .medium, design: .serif))
+                        .font(.system(size: 18, weight: .medium, design: .serif))
                         .foregroundStyle(.secondary)
                 } icon: {
-                    PaperBrandIcon(size: 76)
-                        .padding(.bottom, 4)
+                    PaperBrandIcon(width: 78)
+                        .padding(.bottom, 6)
                 }
             } description: {
                 Text(I18N.localized("从列表中打开文章开始阅读。"))
