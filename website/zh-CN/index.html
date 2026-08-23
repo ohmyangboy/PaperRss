@@ -14,6 +14,7 @@
   <script src="../scramble-title.js" defer></script>
   <script src="../stage-parallax.js" defer></script>
   <script src="../github-stars.js" defer></script>
+  <script src="../install-copy.js" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -95,16 +96,17 @@
         <p>当前 Release 尚未配置 Apple 付费开发者公证签名。若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：</p>
         <div class="install-methods">
           <div class="install-method-item">
-            <strong>方式一：双击 DMG 内部的内测助手（推荐）</strong>
-            <p class="install-subtext">先将应用拖入 Applications，直接双击 DMG 镜像中的 <code>join-beta.command</code> 即可自动清除隔离标记并打开。</p>
+            <strong>方式一：终端一键命令（推荐）</strong>
+            <p class="install-subtext">先将 PaperRss 拖入 Applications。打开 Mac 自带的「终端」(Terminal.app)，点击下方「复制命令」粘贴到终端并按回车，即可自动清除隔离标记并启动：</p>
+            <div class="install-cmd-row">
+              <div class="install-cmd" id="install-cmd-text">xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2&gt;/dev/null; open -a PaperRss</div>
+              <button class="install-cmd-copy" type="button" data-copy-target="install-cmd-text">复制命令</button>
+            </div>
+            <p class="install-subtext">💡 DMG 镜像内的 <code>INSTALL.txt</code> 也包含这条命令，双击打开即可复制，无需手动输入。</p>
           </div>
           <div class="install-method-item">
             <strong>方式二：通过系统设置手动放行</strong>
             <p class="install-subtext">打开 Mac「系统设置」→「隐私与安全性」，向下滑动至“安全性”一栏，点击「仍要打开」即可。</p>
-          </div>
-          <div class="install-method-item">
-            <strong>方式三：终端手动执行命令</strong>
-            <div class="install-cmd">xattr -dr com.apple.quarantine /Applications/PaperRss.app</div>
           </div>
         </div>
         <div class="install-note">

@@ -72,14 +72,13 @@ Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangb
 
 As this is an open-source Beta release without paid Apple notarization, macOS may show a "damaged" or "cannot be opened" warning on first launch. You can resolve this using any of the following options:
 
-1. **Option 1 (Recommended)**: Double-click `join-beta.command` inside the DMG image to automatically remove the quarantine flag;
-2. **Option 2**: Go to macOS **System Settings** → **Privacy & Security**, scroll down to the Security section, and click **Open Anyway**;
-3. **Option 3**: Run the following command in Terminal:
+1. **Option 1 (Recommended)**: Drag PaperRss into Applications first, then open macOS **Terminal** (Terminal.app) and run the command below — it removes quarantine flags and launches the app automatically. The same command is inside `INSTALL.txt` in the DMG — just double-click it and copy:
    ```bash
-   xattr -dr com.apple.quarantine /Applications/PaperRss.app
+   xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open -a PaperRss
    ```
+2. **Option 2**: Go to macOS **System Settings** → **Privacy & Security**, scroll down to the Security section, and click **Open Anyway**.
 
-_As PaperRss is actively being refined, we welcome and appreciate your feedback and interest. Official Apple notarization will be considered in future releases._
+_As PaperRss is actively being refined, we welcome and appreciate your feedback and interest. Official Apple notarization will be considered in future releases. Note: the old `join-beta.command` helper in previous DMGs was blocked by a "cannot be verified" Gatekeeper dialog on newer macOS; it has been removed in favor of the Terminal command flow above._
 
 ## Build from Source
 

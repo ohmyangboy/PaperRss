@@ -101,10 +101,10 @@ let badgeFont = NSFont.systemFont(ofSize: 12, weight: .bold)
 drawText("按住拖拽安装 ➔", font: badgeFont, color: .white, at: NSRect(x: 255, y: 386, width: 150, height: 18), alignment: .center)
 
 
-// 3. Helper Script Hint Label (Above the script icon)
-let helperHintFont = NSFont.systemFont(ofSize: 11, weight: .medium)
-let helperHintColor = NSColor(calibratedRed: 0.40, green: 0.42, blue: 0.45, alpha: 1.0)
-drawText("▼ 首次打开双击运行下方内测助手", font: helperHintFont, color: helperHintColor, at: NSRect(x: 180, y: 246, width: 300, height: 16), alignment: .center)
+// 3. Install File Hint Label (Above the INSTALL.txt icon)
+let helperHintFont = NSFont.systemFont(ofSize: 11, weight: .bold)
+let helperHintColor = NSColor(calibratedRed: 0.22, green: 0.45, blue: 0.35, alpha: 1.0)
+drawText("▼ 双击 INSTALL.txt 复制命令，粘贴到「终端」回车运行", font: helperHintFont, color: helperHintColor, at: NSRect(x: 130, y: 246, width: 400, height: 16), alignment: .center)
 
 
 // 4. Bottom Beta Notice Card (Width=590, Height=106, Left=35, Bottom Y=16)
@@ -138,11 +138,11 @@ let subColor = NSColor(calibratedRed: 0.55, green: 0.55, blue: 0.55, alpha: 1.0)
 
 drawText("⚠️ 打开若提示“已损坏”或“无法打开”（未加入 Apple 付费公证）：", font: titleFont, color: titleColor, at: NSRect(x: 50, y: 96, width: 560, height: 18))
 
-drawText("1. 请先将左侧 PaperRss 拖入 Applications，再双击运行上方的【join-beta.command】内测助手；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 74, width: 560, height: 16))
+drawText("1. 请先将左侧 PaperRss 拖入 Applications；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 74, width: 560, height: 16))
 
-drawText("2. 或在 macOS「系统设置 > 隐私与安全性」底部点击「仍要打开」；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 54, width: 560, height: 16))
+drawText("2. 打开「终端」(Terminal.app)，将上方 INSTALL.txt 中的命令复制粘贴并回车；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 54, width: 560, height: 16))
 
-drawText("3. 终端手动备用命令：xattr -dr com.apple.quarantine /Applications/PaperRss.app", font: subFont, color: subColor, at: NSRect(x: 50, y: 28, width: 560, height: 15))
+drawText("3. 备用：或在「系统设置 > 隐私与安全性」底部点击「仍要打开」", font: subFont, color: subColor, at: NSRect(x: 50, y: 28, width: 560, height: 15))
 
 NSGraphicsContext.restoreGraphicsState()
 

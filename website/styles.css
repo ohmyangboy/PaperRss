@@ -831,6 +831,41 @@ body {
   overflow-x: auto;
 }
 
+.install-cmd-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.install-cmd-row .install-cmd {
+  flex: 1;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.install-cmd-copy {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-cobalt);
+  border: none;
+  border-radius: 6px;
+  padding: 0 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.install-cmd-copy:hover {
+  background: #1e40af;
+}
+
+.install-cmd-copy.copied {
+  background: #15803d;
+}
+
 .install-note {
   margin-top: 1.5rem;
   padding-top: 1.25rem;

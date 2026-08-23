@@ -126,12 +126,18 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp -R "$APP_PATH" "$STAGING_DIR/"
 
-HELPER_SCRIPT_NAME="join-beta.command"
-HELPER_SRC="./scripts/${HELPER_SCRIPT_NAME}"
-if [ -f "$HELPER_SRC" ]; then
-    cp "$HELPER_SRC" "$STAGING_DIR/"
-    chmod +x "$STAGING_DIR/${HELPER_SCRIPT_NAME}"
-fi
+# 写入一键修复命令文本文件。
+# 为何不再使用可双击执行的 .command 脚本：下载来的可执行脚本会被 Gatekeeper
+# 拦截并弹出「无法验证」对话框（即使用户右键也无法放行新版 macOS 的硬阻断）。
+# 文本文件不会被拦截，且终端里粘贴执行命令不经 LaunchServices / Gatekeeper 检查；
+# 命令同时清除 quarantine 与 provenance（macOS 15+ 的新污染标记）。
+INSTALL_TXT_NAME="INSTALL.txt"
+printf '%s\n' \
+    'xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open -a PaperRss' \
+    > "$STAGING_DIR/${INSTALL_TXT_NAME}"
+
+# 清除 staging 目录下所有文件的污点扩展属性（保证构建产物不带隔离标记）
+xattr -cr "$STAGING_DIR" 2>/dev/null || true
 
 if command -v create-dmg &> /dev/null; then
     echo "💡 使用 create-dmg 制作 UI 镜像..."
@@ -148,8 +154,8 @@ if command -v create-dmg &> /dev/null; then
       --no-internet-enable
       --overwrite
     )
-    if [ -f "$STAGING_DIR/${HELPER_SCRIPT_NAME}" ]; then
-        CREATE_DMG_ARGS+=(--icon "$HELPER_SCRIPT_NAME" 330 215)
+    if [ -f "$STAGING_DIR/${INSTALL_TXT_NAME}" ]; then
+        CREATE_DMG_ARGS+=(--icon "$INSTALL_TXT_NAME" 330 215)
     fi
     create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG_PATH" "$STAGING_DIR" || true
 fi

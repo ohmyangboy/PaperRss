@@ -14,6 +14,7 @@
   <script src="../scramble-title.js" defer></script>
   <script src="../stage-parallax.js" defer></script>
   <script src="../github-stars.js" defer></script>
+  <script src="../install-copy.js" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -89,16 +90,17 @@
         <p>The current release is not notarized by Apple. If macOS says the app cannot be opened or is damaged, choose either option below:</p>
         <div class="install-methods">
           <div class="install-method-item">
-            <strong>Option 1: Double-click the Beta Helper in DMG (Recommended)</strong>
-            <p class="install-subtext">Drag PaperRss to Applications, then double-click <code>join-beta.command</code> in the DMG window to automatically remove quarantine flags.</p>
+            <strong>Option 1: One-liner Terminal Command (Recommended)</strong>
+            <p class="install-subtext">Drag PaperRss into Applications first. Open macOS "Terminal" (Terminal.app), click "Copy command", paste it into Terminal, and press Return — it removes quarantine flags and launches the app automatically:</p>
+            <div class="install-cmd-row">
+              <div class="install-cmd" id="install-cmd-text">xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2&gt;/dev/null; open -a PaperRss</div>
+              <button class="install-cmd-copy" type="button" data-copy-target="install-cmd-text" data-copied-label="Copied ✓" data-fail-label="Copy failed">Copy command</button>
+            </div>
+            <p class="install-subtext">💡 The same command is also inside <code>INSTALL.txt</code> in the DMG — double-click it and copy, no typing required.</p>
           </div>
           <div class="install-method-item">
             <strong>Option 2: Approve via macOS System Settings</strong>
             <p class="install-subtext">Open macOS "System Settings" → "Privacy & Security", scroll down to "Security", and click "Open Anyway".</p>
-          </div>
-          <div class="install-method-item">
-            <strong>Option 3: Run Command in Terminal</strong>
-            <div class="install-cmd">xattr -dr com.apple.quarantine /Applications/PaperRss.app</div>
           </div>
         </div>
         <div class="install-note">
