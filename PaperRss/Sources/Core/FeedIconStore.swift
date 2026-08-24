@@ -22,10 +22,14 @@ public final class FeedIconStore: ObservableObject {
     private var memoryImages: [UUID: CGImage] = [:]
     /// 低内存 flush 后保留的最后已知图标，避免可见单元格被清空。
     private var lastKnownImages: [UUID: CGImage] = [:]
+    /// 当前内存图标对应的 URL。Feed 元数据刷新后，必须允许新 URL 替换旧图。
+    private var loadedURLByFeedID: [UUID: URL] = [:]
     var iconURLByFeedID: [UUID: URL] = [:]
     /// 失败记忆：absoluteURL → 最后失败时间。重试窗内的 URL 不再发起任何 I/O。
     var failures: [String: Date] = [:]
     private(set) var inFlightFeedIDs = Set<UUID>()
+    /// 每个 Feed 当前实际在加载的 URL；旧 URL 完成时不能清理或覆盖新请求。
+    private var inFlightURLByFeedID: [UUID: URL] = [:]
     private var persistTask: Task<Void, Never>?
 
     private let directory: URL
@@ -86,11 +90,16 @@ public final class FeedIconStore: ObservableObject {
             scheduleIndexPersist()
         }
 
-        guard cachedImage(feedID: feedID) == nil,
-              !inFlightFeedIDs.contains(feedID),
+        // 不能只看 cachedImage：这里可能是旧 URL 的最后已知图标。
+        // URL 改变后应保留旧图作为过渡，同时继续加载新的图标。
+        guard loadedURLByFeedID[feedID] != iconURL,
+              inFlightURLByFeedID[feedID] != iconURL,
               !isBlockedByFailure(iconURL)
         else { return }
 
+        // URL 变化时覆盖记录，但不取消旧任务；旧任务完成后会因 URL 不匹配
+        // 被丢弃，避免取消 URLSession 任务造成不必要的竞态。
+        inFlightURLByFeedID[feedID] = iconURL
         inFlightFeedIDs.insert(feedID)
         let session = session
         let directory = directory
@@ -126,11 +135,20 @@ public final class FeedIconStore: ObservableObject {
     // MARK: - 完成回填（主线程）
 
     private func completeWarmup(feedID: UUID, url: URL, result: IconLoadResult) {
+        // 同一个 Feed 的旧 URL 可能晚于新 URL 完成。它不再拥有该 Feed
+        // 的 in-flight 槽位，也不能覆盖新图标或清理新请求的状态。
+        guard inFlightURLByFeedID[feedID] == url else { return }
+        inFlightURLByFeedID.removeValue(forKey: feedID)
         inFlightFeedIDs.remove(feedID)
+
+        // URL 在请求期间再次变化时，结果只作为过期结果丢弃。
+        guard iconURLByFeedID[feedID] == url else { return }
+
         switch result {
         case .success(let image):
             memoryImages[feedID] = image
             lastKnownImages[feedID] = image
+            loadedURLByFeedID[feedID] = url
             revision += 1
         case .failure(let error):
             if !error.isTransient {

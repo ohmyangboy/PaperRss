@@ -81,6 +81,42 @@ final class FeedIconStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdatedIconURLSupersedesAnInFlightOlderRequest() async throws {
+        let store = makeStore()
+        let fallbackPNG = tempRoot.appendingPathComponent("fallback.png")
+        let avatarPNG = tempRoot.appendingPathComponent("avatar.png")
+        try makePNGData(red: 200).write(to: fallbackPNG)
+        try makePNGData(red: 40).write(to: avatarPNG)
+
+        let feedID = UUID()
+        store.warmUp(feedID: feedID, iconURL: fallbackPNG)
+        // 模拟新 Feed 首次渲染先登记默认 favicon，随后刷新结果返回用户头像。
+        // 两次调用之间没有让出主 actor，因此旧 URL 必然仍处于 in-flight。
+        store.warmUp(feedID: feedID, iconURL: avatarPNG)
+
+        for _ in 0..<200 where !store.inFlightFeedIDs.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let avatarDiskFile = FeedIconStore.diskFileURL(
+            for: avatarPNG,
+            in: tempRoot.appendingPathComponent("icons")
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: avatarDiskFile.path),
+            "更新后的头像 URL 不应被旧的 in-flight 请求吞掉"
+        )
+
+        guard let actual = store.cachedImage(feedID: feedID),
+              let expected = FeedIconStore.decodeIcon(from: try Data(contentsOf: avatarPNG)),
+              let actualData = actual.dataProvider?.data as Data?,
+              let expectedData = expected.dataProvider?.data as Data? else {
+            return XCTFail("更新后的用户头像应成为当前图标")
+        }
+        XCTAssertEqual(actualData, expectedData)
+    }
+
+    @MainActor
     func testDiskCacheSurvivesAcrossInstancesWithoutNetwork() async throws {
         let iconsDir = tempRoot.appendingPathComponent("icons")
         let sourcePNG = tempRoot.appendingPathComponent("source.png")
