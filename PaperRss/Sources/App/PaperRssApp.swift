@@ -70,6 +70,9 @@ struct PaperRssApp: App {
             KeyboardShortcutHelpCommands()
             #endif
         }
+        #if os(macOS)
+        .defaultSize(width: 1280, height: 800)
+        #endif
 
         #if os(macOS)
         Window(I18N.localized("键盘快捷键", englishFallback: "Keyboard Shortcuts"), id: KeyboardShortcutHelpWindow.id) {
