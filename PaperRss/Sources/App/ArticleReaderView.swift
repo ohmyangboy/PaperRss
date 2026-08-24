@@ -770,9 +770,22 @@ struct ArticleReaderView: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background { readerToolbarCapsuleBackground }
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
+    }
+
+    @ViewBuilder
+    private var readerToolbarCapsuleBackground: some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            Capsule().fill(.ultraThinMaterial)
+        } else {
+            Capsule().fill(PaperTheme.surface(.page, scheme: colorScheme).opacity(0.96))
+        }
+        #else
+        Capsule().fill(.ultraThinMaterial)
+        #endif
     }
 
     private func translationToolbarIcon(isActive: Bool) -> some View {

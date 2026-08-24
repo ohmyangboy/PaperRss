@@ -252,6 +252,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var markAllReadButton: NSButton?
+        private var zenRemovedToolbarItemIndexes: [NSToolbarItem.Identifier: Int] = [:]
         nonisolated(unsafe) private var eventMonitor: Any?
         nonisolated(unsafe) private var mouseDownMonitor: Any?
         nonisolated(unsafe) private var fullScreenChromeTimer: DispatchSourceTimer?
@@ -1173,6 +1174,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 toolbar.centeredItemIdentifier = isZenMode ? .paperReaderCapsule : nil
             }
 
+            syncLegacyToolbarItemVisibility(in: toolbar, isZenMode: isZenMode)
+
             for item in toolbar.items {
                 if item.itemIdentifier == .paperReaderCapsule {
                     if #available(macOS 15.0, *) {
@@ -1189,6 +1192,40 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             if !isZenMode {
                 syncHeaderState()
+            }
+        }
+
+        /// `NSMenuToolbarItem` 与 `NSTrackingSeparatorToolbarItem` 没有可供旧系统
+        /// 隐藏的自定义 view，且不能可靠响应 `NSToolbarItem.isHidden`。
+        /// 禅模式期间移除这些结构项，退出时按原索引恢复。
+        private func syncLegacyToolbarItemVisibility(in toolbar: NSToolbar, isZenMode: Bool) {
+            let structuralIdentifiers: Set<NSToolbarItem.Identifier> = [
+                .paperAddMenu,
+                .paperSidebarTracker,
+                .paperTimelineTracker,
+            ]
+
+            if isZenMode {
+                let removals = toolbar.items.enumerated().compactMap { index, item in
+                    structuralIdentifiers.contains(item.itemIdentifier)
+                        ? (index: index, identifier: item.itemIdentifier)
+                        : nil
+                }
+                for removal in removals {
+                    zenRemovedToolbarItemIndexes[removal.identifier] = removal.index
+                }
+                for removal in removals.sorted(by: { $0.index > $1.index }) {
+                    let index = removal.index
+                    toolbar.removeItem(at: index)
+                }
+            } else {
+                let restorations = zenRemovedToolbarItemIndexes.sorted { $0.value < $1.value }
+                for (identifier, insertionIndex) in restorations where !toolbar.items.contains(where: {
+                    $0.itemIdentifier == identifier
+                }) {
+                    toolbar.insertItem(withItemIdentifier: identifier, at: min(insertionIndex, toolbar.items.count))
+                }
+                zenRemovedToolbarItemIndexes.removeAll()
             }
         }
 
