@@ -801,6 +801,10 @@ body {
   margin-top: 1.25rem;
 }
 
+.install-method-item {
+  min-width: 0;
+}
+
 .install-method-item strong {
   display: block;
   font-family: var(--font-serif);
@@ -829,6 +833,25 @@ body {
   border-radius: 6px;
   margin-top: 0.4rem;
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+.install-cmd::-webkit-scrollbar {
+  height: 6px;
+}
+
+.install-cmd::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.install-cmd::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.install-cmd::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
 }
 
 .install-cmd-row {
@@ -836,10 +859,12 @@ body {
   align-items: stretch;
   gap: 0.5rem;
   margin-top: 0.4rem;
+  max-width: 100%;
 }
 
 .install-cmd-row .install-cmd {
   flex: 1;
+  min-width: 0;
   margin-top: 0;
   white-space: nowrap;
 }
@@ -982,5 +1007,9 @@ body {
 
   .stage-cards-wrapper {
     gap: 1.75rem !important;
+  }
+
+  .install-box {
+    padding: 1.25rem 1rem;
   }
 }
