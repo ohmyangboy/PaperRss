@@ -270,22 +270,53 @@ else
         RELEASE_BODY=$(git log -n 1 --format=%b 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
     fi
 
-    if [ -n "$RELEASE_BODY" ]; then
+    # 如果 commit body 已经包含双语分割线（---），直接采用
+    if [[ "$RELEASE_BODY" == *"---"* ]]; then
+        RELEASE_NOTES="$RELEASE_BODY"
+    elif [ -n "$RELEASE_BODY" ]; then
+        # 组装标准精简双语 Release Notes 结构
+        if [ "$IS_PRERELEASE" = "true" ]; then
+            ZH_SUMMARY="本次 Beta 是针对近期优化与问题修复的预发布版本，可选升级，建议升级。"
+            EN_SUMMARY="This Beta is a prerelease update focusing on recent improvements and bug fixes (optional but recommended)."
+        else
+            ZH_SUMMARY="本次发布包含多项功能改进与稳定性优化，推荐所有用户升级。"
+            EN_SUMMARY="This release includes stability improvements and feature updates; recommended for all users."
+        fi
+
         RELEASE_NOTES=$(cat <<EOF
-🎉 PaperRss ${TAG_NAME}
+${ZH_SUMMARY}
 
 ### 🌟 本次更新要点
 ${RELEASE_BODY}
 
-### 📝 变更明细
+---
+
+${EN_SUMMARY}
+
+### 🌟 Highlights & Changelog
 ${CHANGELOG}
 EOF
 )
     else
-        RELEASE_NOTES=$(cat <<EOF
-🎉 PaperRss ${TAG_NAME}
+        if [ "$IS_PRERELEASE" = "true" ]; then
+            ZH_SUMMARY="本次 Beta 是针对近期优化与问题修复的预发布版本，可选升级，建议升级。"
+            EN_SUMMARY="This Beta is a prerelease update focusing on recent improvements and bug fixes (optional but recommended)."
+        else
+            ZH_SUMMARY="本次发布包含多项功能改进与稳定性优化，推荐所有用户升级。"
+            EN_SUMMARY="This release includes stability improvements and feature updates; recommended for all users."
+        fi
 
-### 📝 本次变更明细
+        RELEASE_NOTES=$(cat <<EOF
+${ZH_SUMMARY}
+
+### 🌟 本次更新要点
+${CHANGELOG}
+
+---
+
+${EN_SUMMARY}
+
+### 🌟 Highlights & Changelog
 ${CHANGELOG}
 EOF
 )

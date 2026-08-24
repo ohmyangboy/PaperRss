@@ -24,6 +24,9 @@ Agent行为核心原则在 全局的(Global rule)[/Users/yangbukun/.gemini/GEMIN
   2. **Tier 2 (Web / 治理 / 脚本)**：如果只是官网的修改，则不需要进行脚本校验。Web 改动执行 `./scripts/verify.sh --web`；脚本或治理改动强制执行语法/针对性脚本校验（严禁以 `--web` 替代 shell 脚本验证）；免拉起 GUI 进程。
   3. **Tier 3 (App 视图 / 系统桥接 / 视觉交互)**：凡涉及 `PaperRss/Sources/App/`（如 SwiftUI 布局、主题色彩、Toolbar、侧边栏、快捷键、系统 Dock 联动及 `ArticleReaderView` 容器桥接），**必须完成相关自动化测试、macOS 宿主编译构建、执行 `./scripts/dev.sh` 启动真实 macOS 进程并进行实际交互观察**。若 Agent 环境无法真正点击或观察真实 GUI 交互，必须明确声明“Manual UI verification required”，严禁仅凭 dev.sh 进程拉起即宣称交互已验证通过。
 - 发布全链路：遵守SemVer版本规范(`vX.Y.Z-beta.N`）；发布需涵盖测试、构建、产物、ChangeLog、官网和README状态同步、Tag/Release 及线上验证全链路闭环。
+- Release 说明规范：
+  1. **结构精简**：只保留「一句话发布概要（说明版本类型与升级建议）」与「更新要点（分类/分点列出解决的问题、优化与新功能）」，语言简练利落，不添加冗余营销套话。
+  2. **双语格式**：必须提供中英文两部分，上方为整块中文，中间以 `---` 分割，下方为整块英文。
 - PaperRss对标业界最佳实践，参考netnewsware、freshRSS等优秀的开源实践
 
 ## 工程边界
