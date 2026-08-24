@@ -662,20 +662,11 @@ struct RootView: View {
         ZStack {
             PaperSurface(kind: .page)
                 .ignoresSafeArea()
-            ContentUnavailableView {
-                Label {
-                    Text(I18N.localized("慢读，深思"))
-                        .font(.system(size: 18, weight: .medium, design: .serif))
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    PaperBrandIcon(width: 78)
-                        .padding(.bottom, 6)
-                }
-            } description: {
-                Text(I18N.localized("从列表中打开文章开始阅读。"))
-                    .font(.system(size: 13, design: .serif))
-                    .foregroundStyle(.tertiary)
-            }
+            PaperEmptyState(
+                title: I18N.localized("慢读，深思"),
+                description: I18N.localized("从列表中打开文章开始阅读。"),
+                showsBrandIcon: true
+            )
         }
         .ignoresSafeArea()
     }
@@ -813,21 +804,19 @@ private struct SidebarView: View {
         .overlay {
             let hasAnyAccount = store.isAccountEnabled("local-default") || !freshRSSAccounts.isEmpty
             if !hasAnyAccount {
-                ContentUnavailableView {
-                    Label(I18N.localized("未启用任何账号"), systemImage: "person.crop.circle.badge.xmark")
-                } description: {
-                    Text(I18N.localized("请前往“设置 -> 账号”启用本地或 FreshRSS 订阅账号。"))
-                }
-                .padding()
+                PaperEmptyState(
+                    title: I18N.localized("未启用任何账号"),
+                    description: I18N.localized("请前往“设置 -> 账号”启用本地或 FreshRSS 订阅账号。"),
+                    systemImage: "person.crop.circle.badge.xmark"
+                )
             } else if (store.isAccountEnabled("local-default") ? store.feeds.isEmpty : true) && freshRSSAccounts.allSatisfy({ store.rootFeeds(for: $0.id).isEmpty && store.folders(for: $0.id).isEmpty }) {
-                ContentUnavailableView {
-                    Label(I18N.localized("还没有订阅"), systemImage: "dot.radiowaves.left.and.right")
-                } description: {
-                    Text(I18N.localized("添加一个 RSS 地址，或导入 OPML 文件。"))
-                } actions: {
-                    Button(I18N.localized("添加订阅")) { showsAddFeed = true }
-                }
-                .padding()
+                PaperEmptyState(
+                    title: I18N.localized("还没有订阅"),
+                    description: I18N.localized("添加一个 RSS 地址，或导入 OPML 文件。"),
+                    systemImage: "dot.radiowaves.left.and.right",
+                    actionTitle: I18N.localized("添加订阅"),
+                    action: { showsAddFeed = true }
+                )
             }
         }
         .onChange(of: store.accounts) {
@@ -1746,14 +1735,14 @@ private struct EntryListView: View {
             #endif
             .overlay {
                 if loadedEntries.isEmpty && !isLoadingPage {
-                    ContentUnavailableView(
-                        "没有文章",
-                        systemImage: "text.line.first.and.arrowtriangle.forward",
-                        description: Text(I18N.shared.localized(
+                    PaperEmptyState(
+                        title: I18N.localized("没有文章"),
+                        description: I18N.shared.localized(
                             store.feeds.isEmpty
                                 ? "添加订阅后，这里会显示文章。"
                                 : "切换到其他分类，或等待下一次订阅更新。"
-                        ))
+                        ),
+                        systemImage: "text.line.first.and.arrowtriangle.forward"
                     )
                 }
             }

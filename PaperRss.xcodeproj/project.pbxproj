@@ -253,6 +253,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 11;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = LGKLTGNTY2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PaperRss/Resources/macOS-Info.plist";

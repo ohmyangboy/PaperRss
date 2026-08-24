@@ -91,6 +91,8 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     private let preferences: UserDefaults
     private let notificationCenter: UNUserNotificationCenter
     private var cancellables: Set<AnyCancellable> = []
+    private weak var application: NSApplication?
+    private var hasStarted = false
     private var dockBadgeView: DockUnreadBadgeView?
 
     init(
@@ -107,7 +109,12 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         feedNotificationsEnabled = false
         preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
         super.init()
+    }
 
+    func start(application: NSApplication) {
+        guard !hasStarted else { return }
+        self.application = application
+        hasStarted = true
         notificationCenter.delegate = self
         observeStore()
         updateDockBadge()
@@ -142,6 +149,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
 
     private func observeStore() {
         store.$sidebarCounts
+            .dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.updateDockBadge()
@@ -151,7 +159,8 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         store.$latestRefreshOutcome
             .compactMap { $0 }
             .sink { [weak self] outcome in
-                let appWasActive = NSApp.isActive
+                guard let self, let application = self.application else { return }
+                let appWasActive = application.isActive
                 Task { [weak self] in
                     await self?.deliverNotification(for: outcome, appWasActive: appWasActive)
                 }
@@ -168,12 +177,13 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     private func updateDockBadge() {
+        guard let application else { return }
         let unreadCount = store.sidebarCounts.allUnread
         let label = FeedAttentionPolicy.dockBadgeLabel(
             unreadCount: unreadCount,
             enabled: dockBadgeEnabled
         )
-        let dockTile = NSApp.dockTile
+        let dockTile = application.dockTile
         dockTile.badgeLabel = nil
 
         guard let label else {
@@ -184,7 +194,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         }
 
         let badgeView = dockBadgeView ?? DockUnreadBadgeView(
-            icon: NSApp.applicationIconImage,
+            icon: application.applicationIconImage,
             label: label,
             size: dockTile.size
         )
@@ -203,10 +213,11 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     private func openUnreadFromNotification() {
+        guard let application else { return }
         navigation.openUnread()
-        NSApp.activate(ignoringOtherApps: true)
+        application.activate(ignoringOtherApps: true)
         let settingsWindowIdentifier = NSUserInterfaceItemIdentifier("com_apple_SwiftUI_Settings_window")
-        let mainWindow = NSApp.windows.first {
+        let mainWindow = application.windows.first {
             $0.canBecomeMain
                 && !($0 is NSPanel)
                 && $0.identifier != settingsWindowIdentifier

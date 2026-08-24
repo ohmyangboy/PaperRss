@@ -742,7 +742,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                         case NSWindow.didExitFullScreenNotification, NSWindow.willExitFullScreenNotification:
                             self?.stopFullScreenChromeTracking()
                             self?.removePaperOverlays(around: window)
-                            self?.restoreMainWindowTitlebarBackground(window)
+                            self?.syncMainWindowTitlebarBackground(for: window)
                         default:
                             self?.scheduleFullScreenChromeSync(for: window)
                         }
@@ -818,7 +818,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
             } else {
                 removePaperOverlays(around: window)
-                restoreMainWindowTitlebarBackground(window)
+                syncMainWindowTitlebarBackground(for: window)
             }
         }
 
@@ -838,11 +838,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 初始瞬间（辅助窗口尚未覆盖时）露出的白色条带。
         fileprivate func reconcileWindowChrome(for window: NSWindow) {
             applyMainWindowChrome(window)
-            if window.styleMask.contains(.fullScreen) {
-                hideMainWindowTitlebarBackground(window)
-            } else {
-                restoreMainWindowTitlebarBackground(window)
-            }
+            syncMainWindowTitlebarBackground(for: window)
             for companion in fullScreenCompanionWindows(of: window) {
                 neutralizeFullScreenCompanion(companion)
             }
@@ -870,9 +866,25 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             firstDescendant(of: container, className: "NSTitlebarBackgroundView")?.isHidden = false
         }
 
+        /// 全屏始终隐藏系统白色背景；窗口态仅在 macOS 14–25 隐藏纯背景叶子，
+        /// 让 Paper 窗口底色透出。macOS 26+ 恢复背景叶子，由逐控件玻璃路径处理。
+        private func syncMainWindowTitlebarBackground(for window: NSWindow) {
+            if window.styleMask.contains(.fullScreen) {
+                hideMainWindowTitlebarBackground(window)
+            } else if #available(macOS 26.0, *) {
+                restoreMainWindowTitlebarBackground(window)
+            } else {
+                hideMainWindowTitlebarBackground(window)
+            }
+        }
+
         private func applyMainWindowChrome(_ window: NSWindow) {
-            window.titlebarAppearsTransparent = true
-            window.titlebarSeparatorStyle = .none
+            if #available(macOS 26.0, *) {
+                applyLiquidGlassWindowChrome(window)
+            } else {
+                applyLegacyPaperNavbarChrome(window)
+            }
+
             // 窗口背景不能保持透明:透明会让 NSSplitView 的分割线矩形
             // (约 1pt 宽,位于列表栏与阅读器栏之间)直接透出窗口背后的内容,
             // 在阅读器左缘形成一条可见缝隙。三个栏目的 PaperSurface 已覆盖
@@ -882,6 +894,13 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 return NSColor(PaperTheme.surface(.page, scheme: scheme))
             }
             window.isOpaque = true
+        }
+
+        /// Tahoe 及后续系统由 AppKit 为工具栏控件提供 Liquid Glass。
+        /// 保持纸张延伸到标题栏，并只移除旧式整栏模糊层，避免双重材质。
+        private func applyLiquidGlassWindowChrome(_ window: NSWindow) {
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
 
             // 主窗口：仅隐去标题栏/工具栏容器中的 NSVisualEffectView，保留 contentView (应用内容)
             if let themeFrame = window.contentView?.superview {
@@ -889,6 +908,13 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     hideVisualEffects(in: subview)
                 }
             }
+        }
+
+        /// macOS 14–25 没有逐控件 Liquid Glass。顶部 navbar 不使用系统整栏
+        /// 灰色材质，改为透出窗口的 Paper 页面色，保持三栏纸张背景连续。
+        private func applyLegacyPaperNavbarChrome(_ window: NSWindow) {
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
         }
 
         /// 找出主窗口的全屏工具栏辅助窗口。

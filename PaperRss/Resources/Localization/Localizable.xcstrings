@@ -1,6 +1,146 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "DeepSeek OpenAI 兼容接口" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek OpenAI-Compatible Endpoint"
+          }
+        }
+      }
+    },
+    "OpenAI 兼容接口" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI-Compatible Endpoint"
+          }
+        }
+      }
+    },
+    "PaperRss 支持多账号并行与按需启用。本地订阅与 FreshRSS 远端订阅相互隔离，禁用账号不会删除本地数据或凭据。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PaperRss supports multiple independently enabled accounts. Local subscriptions and FreshRSS subscriptions remain isolated, and disabling an account does not delete local data or credentials."
+          }
+        }
+      }
+    },
+    "再按一次 C 切换对照翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press C again to toggle bilingual translation"
+          }
+        }
+      }
+    },
+    "再按一次 F 切换禅模式" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press F again to toggle Focus Mode"
+          }
+        }
+      }
+    },
+    "再按一次 M 切换收藏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press M again to toggle star"
+          }
+        }
+      }
+    },
+    "再按一次 V 查看 AI 摘要" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press V again to view the AI summary"
+          }
+        }
+      }
+    },
+    "当前账号" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current Accounts"
+          }
+        }
+      }
+    },
+    "本机" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local"
+          }
+        }
+      }
+    },
+    "本机独立存储与离线阅读" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On-device storage and offline reading"
+          }
+        }
+      }
+    },
+    "管理本地与 FreshRSS 订阅账号及双向状态同步" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage local and FreshRSS accounts with two-way state sync"
+          }
+        }
+      }
+    },
+    "我的 Mac" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My Mac"
+          }
+        }
+      }
+    },
+    "我的 Mac (本地账号)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My Mac (Local Account)"
+          }
+        }
+      }
+    },
+    "用于翻译、总结和解读文章" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For translation, summarization, and article analysis"
+          }
+        }
+      }
+    },
     "(移出文件夹)" : {
       "localizations" : {
         "en" : {

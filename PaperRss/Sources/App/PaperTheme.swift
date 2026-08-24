@@ -141,3 +141,47 @@ struct PaperHeaderSurface: View {
         .allowsHitTesting(false)
     }
 }
+
+struct PaperEmptyState: View {
+    let title: String
+    let description: String
+    var systemImage: String? = nil
+    var showsBrandIcon = false
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if showsBrandIcon {
+                PaperBrandIcon(width: 78)
+                    .padding(.bottom, 6)
+            } else if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 36, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+
+            Text(title)
+                .font(.system(size: 18, weight: .medium, design: .serif))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Text(description)
+                .font(.system(size: 13, design: .serif))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: 240)
+        .padding(20)
+        .accessibilityElement(children: .contain)
+    }
+}

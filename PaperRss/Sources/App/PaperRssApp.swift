@@ -26,7 +26,9 @@ struct PaperRssApp: App {
             RootView(store: store, navigation: navigation)
                 #if os(macOS)
                 .onAppear {
-                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    let application = NSApplication.shared
+                    attention.start(application: application)
+                    application.activate(ignoringOtherApps: true)
                 }
                 #endif
         }

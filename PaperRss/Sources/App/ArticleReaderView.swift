@@ -780,7 +780,7 @@ struct ArticleReaderView: View {
             Image(systemName: isActive ? "bubble.left.fill" : "bubble.left")
                 .font(.system(size: 16.5, weight: .regular))
             
-            Text("文")
+            Text(I18N.shared.isEnglish ? "A" : "文")
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(isActive ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
                 .offset(x: 0.2, y: -1.6)
@@ -1212,7 +1212,7 @@ private enum PaperReaderHeaderBuilder {
         </svg>
         """
 
-        let titleText = I18N.localized("Ai摘要").htmlEscaped
+        let titleText = I18N.localized("AI 摘要").htmlEscaped
 
         if let summary = summaryArtifact, !summary.content.isEmpty {
             let formattedContent = formatSimpleMarkdown(summary.content)
@@ -5989,7 +5989,7 @@ struct ReaderCapsuleToolbar: View {
             Image(systemName: isActive ? "bubble.left.fill" : "bubble.left")
                 .font(.system(size: 16, weight: .medium))
             
-            Text("文")
+            Text(I18N.shared.isEnglish ? "A" : "文")
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(isActive ? AnyShapeStyle(Color.white) : AnyShapeStyle(.primary))
                 .offset(x: 0.2, y: -1.5)

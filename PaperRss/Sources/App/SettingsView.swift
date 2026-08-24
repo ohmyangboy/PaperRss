@@ -798,7 +798,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("名称", description: "用于识别这组 AI 配置") {
-                    TextField(I18N.localized("例如：DeepSeek"), text: $configuration.providerName)
+                    TextField(I18N.localized("例如：DeepSeek"), text: localizedProviderNameBinding)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 340)
                 }
@@ -806,7 +806,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow("描述") {
-                    TextField(I18N.localized("例如：个人阅读助手"), text: $configuration.providerDescription)
+                    TextField(I18N.localized("例如：个人阅读助手"), text: localizedProviderDescriptionBinding)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 340)
                 }
@@ -1442,6 +1442,44 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
+    }
+
+    /// 内置默认文案属于产品界面，但字段本身允许用户编辑。读取时只翻译精确
+    /// 匹配的内置值；写入时原样保存，避免语言切换覆盖自定义配置或迁移数据。
+    private var localizedProviderNameBinding: Binding<String> {
+        Binding(
+            get: { localizedBuiltInProviderName(configuration.providerName) },
+            set: { configuration.providerName = $0 }
+        )
+    }
+
+    private var localizedProviderDescriptionBinding: Binding<String> {
+        Binding(
+            get: { localizedBuiltInProviderDescription(configuration.providerDescription) },
+            set: { configuration.providerDescription = $0 }
+        )
+    }
+
+    private func localizedBuiltInProviderName(_ value: String) -> String {
+        switch value {
+        case "OpenAI 兼容接口":
+            I18N.localized("OpenAI 兼容接口")
+        case "DeepSeek":
+            value
+        default:
+            value
+        }
+    }
+
+    private func localizedBuiltInProviderDescription(_ value: String) -> String {
+        switch value {
+        case "用于翻译、总结和解读文章":
+            I18N.localized("用于翻译、总结和解读文章")
+        case "DeepSeek OpenAI 兼容接口":
+            I18N.localized("DeepSeek OpenAI 兼容接口")
+        default:
+            value
+        }
     }
 
     private var actionBar: some View {
