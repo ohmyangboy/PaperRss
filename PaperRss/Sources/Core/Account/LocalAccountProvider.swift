@@ -231,48 +231,64 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
     public func applyRefreshResult(
         _ taskResult: SingleFeedRefreshResult
     ) throws -> (updated: Bool, newUnreadEntries: [Entry]) {
+        return try database.write { db in
+            try self.applyRefreshResult(taskResult, in: db)
+        }
+    }
+
+    /// 将单次抓取结果合并入 SQLite writer queue，绝不占用调用方的 MainActor。
+    public func applyRefreshResultAsync(
+        _ taskResult: SingleFeedRefreshResult
+    ) async throws -> (updated: Bool, newUnreadEntries: [Entry]) {
+        try await database.writeAsync { db in
+            try self.applyRefreshResult(taskResult, in: db)
+        }
+    }
+
+    private func applyRefreshResult(
+        _ taskResult: SingleFeedRefreshResult,
+        in db: Database
+    ) throws -> (updated: Bool, newUnreadEntries: [Entry]) {
         let feedIDString = taskResult.feedID.uuidString
         let now = Date().timeIntervalSince1970
 
-        return try database.write { db in
-            guard let existing = try self.feedRepository.fetchFeed(id: feedIDString, in: db),
-                  !existing.isDeleted else {
-                return (false, [])
-            }
+        guard let existing = try feedRepository.fetchFeed(id: feedIDString, in: db),
+              !existing.isDeleted else {
+            return (false, [])
+        }
 
-            switch taskResult.result {
-            case let .success(.notModified(etag, lastModified)):
-                try self.feedRepository.updateFeedMetadata(
-                    feedID: feedIDString,
-                    etag: etag,
-                    lastModified: lastModified,
-                    lastRefreshedAt: now,
-                    in: db
-                )
-                return (false, [])
+        switch taskResult.result {
+        case let .success(.notModified(etag, lastModified)):
+            try feedRepository.updateFeedMetadata(
+                feedID: feedIDString,
+                etag: etag,
+                lastModified: lastModified,
+                lastRefreshedAt: now,
+                in: db
+            )
+            return (false, [])
 
-            case let .success(.updated(parsed, etag, lastModified)):
-                try self.feedRepository.updateFeedMetadata(
-                    feedID: feedIDString,
-                    title: parsed.title,
-                    siteURL: parsed.siteURL?.absoluteString,
-                    storedIconURL: parsed.iconURL?.absoluteString ?? existing.storedIconURL,
-                    etag: etag,
-                    lastModified: lastModified,
-                    lastRefreshedAt: now,
-                    in: db
-                )
-                let newUnreads = try self.articleRepository.mergeParsedEntries(
-                    accountID: self.accountID,
-                    feedID: feedIDString,
-                    parsedEntries: parsed.entries,
-                    in: db
-                )
-                return (true, newUnreads)
+        case let .success(.updated(parsed, etag, lastModified)):
+            try feedRepository.updateFeedMetadata(
+                feedID: feedIDString,
+                title: parsed.title,
+                siteURL: parsed.siteURL?.absoluteString,
+                storedIconURL: parsed.iconURL?.absoluteString ?? existing.storedIconURL,
+                etag: etag,
+                lastModified: lastModified,
+                lastRefreshedAt: now,
+                in: db
+            )
+            let newUnreads = try articleRepository.mergeParsedEntries(
+                accountID: accountID,
+                feedID: feedIDString,
+                parsedEntries: parsed.entries,
+                in: db
+            )
+            return (true, newUnreads)
 
-            case .failure:
-                return (false, [])
-            }
+        case .failure:
+            return (false, [])
         }
     }
 
@@ -398,15 +414,65 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
 
     public func importOPML(_ data: Data) throws -> [UUID] {
         let urls = OPMLService.importURLs(data: data)
-        var newFeedIDs: [UUID] = []
-        let existingFeeds = try fetchFeeds()
-        let existingFeedURLs = Set(existingFeeds.map(\.feedURL))
-
-        for url in urls where !existingFeedURLs.contains(url) {
-            let title = url.host ?? url.absoluteString
-            let feed = try addFeed(title: title, feedURL: url)
-            newFeedIDs.append(feed.id)
+        return try database.write { db in
+            try importOPMLURLs(urls, in: db)
         }
+    }
+
+    /// 在数据库 writer queue 批量导入 OPML，避免 300 个订阅逐条占用 MainActor。
+    public func importOPMLAsync(_ data: Data) async throws -> [UUID] {
+        let urls = OPMLService.importURLs(data: data)
+        return try await database.writeAsync { db in
+            try self.importOPMLURLs(urls, in: db)
+        }
+    }
+
+    private func importOPMLURLs(_ urls: [URL], in db: Database) throws -> [UUID] {
+        var newFeedIDs: [UUID] = []
+        var seenURLs = Set<String>()
+        let now = Date().timeIntervalSince1970
+        var nextSortOrder = (try Int.fetchOne(
+            db,
+            sql: "SELECT MAX(sort_order) FROM feeds WHERE account_id = ?;",
+            arguments: [accountID]
+        )) ?? 0
+
+        for url in urls where seenURLs.insert(url.absoluteString).inserted {
+            let feedURLString = url.absoluteString
+            let title = url.host ?? feedURLString
+            if var existing = try feedRepository.fetchFeedByURL(
+                accountID: accountID,
+                feedURL: feedURLString,
+                includeDeleted: true,
+                in: db
+            ) {
+                guard existing.isDeleted else { continue }
+                existing.isDeleted = false
+                existing.updatedAt = now
+                if !title.isEmpty { existing.title = title }
+                try feedRepository.saveFeed(existing, in: db)
+                if let id = UUID(uuidString: existing.id) {
+                    newFeedIDs.append(id)
+                }
+                continue
+            }
+
+            nextSortOrder += 1
+            let id = UUID()
+            try feedRepository.saveFeed(
+                FeedRecord(
+                    id: id.uuidString,
+                    accountID: accountID,
+                    title: title,
+                    feedURL: feedURLString,
+                    updatedAt: now,
+                    sortOrder: nextSortOrder
+                ),
+                in: db
+            )
+            newFeedIDs.append(id)
+        }
+
         return newFeedIDs
     }
 

@@ -118,6 +118,15 @@ echo "✅ App 编译成功: $APP_PATH"
 echo "💿 3/5 正在制作 DMG 镜像包: ${DMG_PATH}..."
 rm -f "$DMG_PATH"
 
+# create-dmg 在 Finder 已经打开镜像、但无法正常卸载时，会留下一个已经完成
+# 背景图与 .DS_Store 配置的可写中间镜像。先清理同版本的旧中间产物，避免
+# 失败重试时误拾取上一次构建的镜像。
+for previous_temp_dmg in "$DIST_DIR"/rw*."$DMG_NAME"; do
+    if [ -f "$previous_temp_dmg" ]; then
+        rm -f "$previous_temp_dmg"
+    fi
+done
+
 echo "🎨 正在生成 DMG 安装包背景图..."
 swift scripts/generate_dmg_background.swift
 
@@ -159,7 +168,37 @@ if command -v create-dmg &> /dev/null; then
     if [ -f "$STAGING_DIR/${INSTALL_TXT_NAME}" ]; then
         CREATE_DMG_ARGS+=(--icon "$INSTALL_TXT_NAME" 330 215)
     fi
-    create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG_PATH" "$STAGING_DIR" || true
+
+    # AppleScript 美化成功后，Finder 偶尔会持有卷，导致 create-dmg 只在最后
+    # detach 阶段返回失败。不要因此丢弃已经写入背景图/图标位置的中间镜像。
+    set +e
+    create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG_PATH" "$STAGING_DIR"
+    CREATE_DMG_STATUS=$?
+    set -e
+
+    if [ ! -f "$DMG_PATH" ]; then
+        CUSTOM_DMG_TEMP=$(find "$DIST_DIR" -maxdepth 1 -type f -name "rw*.${DMG_NAME}" -print | head -n 1)
+        if [ -n "$CUSTOM_DMG_TEMP" ]; then
+            CUSTOM_DMG_DEVICE=$(hdiutil info | awk -v image="$CUSTOM_DMG_TEMP" '
+                index($0, "image-path      : " image) == 1 { found=1; next }
+                found && $1 ~ /^\/dev\/disk/ { print $1; exit }
+            ')
+
+            if [ -n "$CUSTOM_DMG_DEVICE" ]; then
+                echo "⚠️ Finder 占用美化后的中间镜像，正在强制卸载 ${CUSTOM_DMG_DEVICE} 并保留其布局..."
+                hdiutil detach -force "$CUSTOM_DMG_DEVICE" >/dev/null 2>&1 || true
+            fi
+
+            if hdiutil convert "$CUSTOM_DMG_TEMP" -format UDZO -o "$DMG_PATH" -ov; then
+                echo "✅ 已从 create-dmg 美化中间镜像完成压缩，保留自定义背景与拖拽布局。"
+                rm -f "$CUSTOM_DMG_TEMP"
+            else
+                echo "⚠️ 美化中间镜像压缩失败，将使用原生 DMG fallback。" >&2
+            fi
+        elif [ "$CREATE_DMG_STATUS" -ne 0 ]; then
+            echo "⚠️ create-dmg 未生成可复用的中间镜像，将使用原生 DMG fallback。" >&2
+        fi
+    fi
 fi
 
 # 如果 create-dmg 失败，使用 hdiutil 备用方案

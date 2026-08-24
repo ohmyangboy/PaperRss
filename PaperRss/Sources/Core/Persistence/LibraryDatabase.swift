@@ -65,6 +65,23 @@ public final class LibraryDatabase: Sendable {
         try dbPool.write(block)
     }
 
+    /// 在 GRDB writer queue 异步执行事务。
+    ///
+    /// 调用方通常位于 MainActor。同步 `write` 会把整个 SQLite 事务
+    /// 直接压在主线程上；刷新、导入等批量路径必须使用这个入口。
+    func writeAsync<T: Sendable>(
+        _ block: @escaping @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await dbPool.write(block)
+    }
+
+    /// 在 GRDB reader queue 异步执行查询，避免批量状态快照阻塞主线程。
+    func readAsync<T: Sendable>(
+        _ block: @escaping @Sendable (Database) throws -> T
+    ) async throws -> T {
+        try await dbPool.read(block)
+    }
+
     /// 回收 SQLite 磁盘空间。`VACUUM` 无法运行在事务内，
     /// 因此必须走 `writeWithoutTransaction` 而非 `write`。
     func vacuum() throws {

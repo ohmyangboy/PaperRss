@@ -92,7 +92,9 @@ public final class AppStore: ObservableObject {
     public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
     private var neighborPrefetchTask: Task<Void, Never>?
 
-    @Published public private(set) var refreshProgress: (current: Int, total: Int)? = nil
+    /// 兼容旧调用方的进度值，但不再作为 AppStore 的发布属性。
+    /// 刷新进度属于刷新状态模块，不能让每个 feed 完成都使三栏失效。
+    public private(set) var refreshProgress: (current: Int, total: Int)? = nil
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
     @Published public private(set) var latestRefreshOutcome: FeedRefreshOutcome?
@@ -186,6 +188,13 @@ public final class AppStore: ObservableObject {
     private let llm = LLMService()
     private let preparationEngine: ArticlePreparationEngine
     private var automaticRefreshTask: Task<Void, Never>?
+    /// 当前刷新轮次中已经启动的本地 Feed 抓取任务。删除 Feed 时主动取消对应任务，
+    /// 避免用户已经丢弃订阅后仍被旧网络请求拖住 Loading。
+    private var activeRefreshFeedTasks: [UUID: Task<LocalAccountProvider.SingleFeedRefreshResult, Never>] = [:]
+    /// 本轮刷新中被删除的 Feed。即使迟到结果已经离开网络层，也不得再进入 merge。
+    private var invalidatedRefreshFeedIDs = Set<UUID>()
+    /// 刷新进行中发生删除时，延后完整快照重建，避免与 Loading 收尾争抢 MainActor。
+    private var stateReloadPendingAfterRefresh = false
 
     private enum PreferenceKey {
         static let refreshInterval = "PaperRss.refreshInterval"
@@ -391,14 +400,17 @@ public final class AppStore: ObservableObject {
         var newFeedsByAccount: [String: [Feed]] = [:]
         var newFoldersByAccount: [String: [String]] = [:]
 
+        let allFeedRecords = (try? libraryDatabase.read { db in
+            try FeedRecord.fetchAll(db)
+        }) ?? []
+        let accountIDByFeedID = Dictionary(
+            uniqueKeysWithValues: allFeedRecords.map { ($0.id, $0.accountID) }
+        )
         if let allFeeds = try? libraryDatabase.read({ db in
             try self.localProvider.feedRepository.fetchAllFeedModels(accountID: nil, in: db)
         }) {
             for feed in allFeeds {
-                // 通过 DB 查询所属 account_id
-                let accID = (try? libraryDatabase.read { db in
-                    try FeedRecord.filter(Column("id") == feed.id.uuidString).fetchOne(db)?.accountID
-                }) ?? "local-default"
+                let accID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
                 newFeedsByAccount[accID, default: []].append(feed)
             }
         }
@@ -453,6 +465,103 @@ public final class AppStore: ObservableObject {
         }
         self.accountSyncStates = syncStates
         self.timelineRevision &+= 1
+    }
+
+    /// 异步构造刷新后的 UI 快照。所有 SQLite 读取都在 GRDB reader queue 执行，
+    /// MainActor 只负责最后一次性提交已完成的值，避免刷新尾部再次阻塞三栏。
+    private func reloadStateAsync() async {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
+        let limit = Self.defaultTimelineLimit
+        let database = libraryDatabase
+        let feedRepository = localProvider.feedRepository
+        let timelineQueryService = localProvider.timelineQueryService
+
+        let fetchedAccounts = (try? await database.readAsync { db in
+            try AccountRecord.order(Column("created_at").asc).fetchAll(db)
+        }) ?? []
+
+        let allFeedRecords = (try? await database.readAsync { db in
+            try FeedRecord.fetchAll(db)
+        }) ?? []
+        let accountIDByFeedID = Dictionary(
+            uniqueKeysWithValues: allFeedRecords.map { ($0.id, $0.accountID) }
+        )
+        let allFeeds = (try? await database.readAsync { db in
+            try feedRepository.fetchAllFeedModels(accountID: nil, in: db)
+        }) ?? []
+        var newFeedsByAccount: [String: [Feed]] = [:]
+        for feed in allFeeds {
+            let accountID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
+            newFeedsByAccount[accountID, default: []].append(feed)
+        }
+
+        let allFolders = (try? await database.readAsync { db in
+            try feedRepository.fetchAllFolders(accountID: nil, in: db)
+        }) ?? []
+        var newFoldersByAccount: [String: [String]] = [:]
+        for folder in allFolders {
+            newFoldersByAccount[folder.accountID, default: []].append(folder.name)
+        }
+
+        async let sidebarCountsResult = try? timelineQueryService.fetchSidebarCountsAsync(startOfDayTimestamp: startOfDay)
+        async let allItemsResult = try? timelineQueryService.fetchListItemsAsync(scope: .all, limit: limit)
+        async let todayItemsResult = try? timelineQueryService.fetchListItemsAsync(
+            scope: .today(startOfDayTimestamp: startOfDay),
+            limit: limit
+        )
+        async let unreadItemsResult = try? timelineQueryService.fetchListItemsAsync(scope: .unread, limit: limit)
+        async let starredItemsResult = try? timelineQueryService.fetchListItemsAsync(scope: .starred, limit: limit)
+        let (resolvedSidebarCounts, resolvedAllItems, resolvedTodayItems, resolvedUnreadItems, resolvedStarredItems) = await (
+            sidebarCountsResult,
+            allItemsResult,
+            todayItemsResult,
+            unreadItemsResult,
+            starredItemsResult
+        )
+
+        let syncStateRecords = (try? await database.readAsync { db in
+            try AccountSyncStateRecord.fetchAll(db)
+        }) ?? []
+        let syncStates = Dictionary(uniqueKeysWithValues: syncStateRecords.map { ($0.accountID, $0) })
+
+        accounts = fetchedAccounts
+        feedsByAccount = newFeedsByAccount
+        foldersByAccount = newFoldersByAccount
+        feeds = newFeedsByAccount["local-default"] ?? []
+        customFolders = newFoldersByAccount["local-default"] ?? []
+        sidebarCounts = resolvedSidebarCounts ?? SidebarCounts()
+        entryListItems = resolvedAllItems ?? []
+        todayEntryListItems = resolvedTodayItems ?? []
+        unreadEntryListItems = resolvedUnreadItems ?? []
+        starredEntryListItems = resolvedStarredItems ?? []
+        cachedEntryLookup.removeAll(keepingCapacity: true)
+        accountSyncStates = syncStates
+
+        for account in fetchedAccounts where account.type == AccountType.freshRSS.rawValue {
+            if account.isEnabled,
+               let urlStr = account.endpointURL,
+               let url = URL(string: urlStr),
+               let username = account.username {
+                let provider = FreshRSSAccountProvider(
+                    accountID: account.id,
+                    endpointURL: url,
+                    username: username,
+                    database: database,
+                    credentialStore: credentialStore,
+                    session: customSession
+                )
+                Task { [syncCoordinator] in
+                    await syncCoordinator.registerProvider(provider)
+                }
+            } else {
+                Task { [syncCoordinator] in
+                    await syncCoordinator.unregisterProvider(accountID: account.id)
+                }
+            }
+        }
+
+        timelineRevision &+= 1
     }
 
     public var enabledAccounts: [AccountRecord] {
@@ -726,8 +835,9 @@ public final class AppStore: ObservableObject {
     }
 
     public func removeFeed(_ feed: Feed) {
-        try? localProvider.deleteFeed(feedID: feed.id)
-        reloadState()
+        guard deleteFeedAndInvalidateRefresh(feed.id) else { return }
+        publishDeletedFeedState([feed.id])
+        scheduleAsyncStateReload()
     }
 
     public func deleteFeed(_ feed: Feed) {
@@ -735,21 +845,88 @@ public final class AppStore: ObservableObject {
     }
 
     public func deleteFeeds(_ feedsToDelete: [Feed]) {
+        var deletedIDs = Set<UUID>()
         for feed in feedsToDelete {
-            try? localProvider.deleteFeed(feedID: feed.id)
+            if deleteFeedAndInvalidateRefresh(feed.id) {
+                deletedIDs.insert(feed.id)
+            }
         }
-        reloadState()
+        publishDeletedFeedState(deletedIDs)
+        scheduleAsyncStateReload()
     }
 
     public func deleteFeeds(_ ids: Set<UUID>) {
+        var deletedIDs = Set<UUID>()
         for id in ids {
-            try? localProvider.deleteFeed(feedID: id)
+            if deleteFeedAndInvalidateRefresh(id) {
+                deletedIDs.insert(id)
+            }
         }
-        reloadState()
+        publishDeletedFeedState(deletedIDs)
+        scheduleAsyncStateReload()
     }
 
     public func deleteFeeds(_ ids: [UUID]) {
         deleteFeeds(Set(ids))
+    }
+
+    @discardableResult
+    private func deleteFeedAndInvalidateRefresh(_ feedID: UUID) -> Bool {
+        do {
+            try localProvider.deleteFeed(feedID: feedID)
+            invalidatedRefreshFeedIDs.insert(feedID)
+            activeRefreshFeedTasks[feedID]?.cancel()
+            return true
+        } catch {
+            // 保持原有删除 API 的静默失败语义；删除未成功时不取消刷新任务。
+            return false
+        }
+    }
+
+    /// 先同步移除可见投影，让删除按钮立即反馈；完整计数和多账号快照在后台重建。
+    private func publishDeletedFeedState(_ feedIDs: Set<UUID>) {
+        guard !feedIDs.isEmpty else { return }
+
+        feedsByAccount = feedsByAccount.mapValues { feeds in
+            feeds.filter { !feedIDs.contains($0.id) }
+        }
+        feeds.removeAll { feedIDs.contains($0.id) }
+
+        let removedItems = entryListItems.filter { feedIDs.contains($0.feedID) }
+        let removedEntryIDs = Set(removedItems.map(\.id))
+        let removedTodayUnreadCount = todayEntryListItems.filter {
+            feedIDs.contains($0.feedID) && !$0.isRead
+        }.count
+        let removedStarredCount = starredEntryListItems.filter { feedIDs.contains($0.feedID) }.count
+        let removedUnreadCount = feedIDs.reduce(0) { $0 + (sidebarCounts.unreadByFeed[$1] ?? 0) }
+
+        entryListItems.removeAll { feedIDs.contains($0.feedID) }
+        todayEntryListItems.removeAll { feedIDs.contains($0.feedID) }
+        unreadEntryListItems.removeAll { feedIDs.contains($0.feedID) }
+        starredEntryListItems.removeAll { feedIDs.contains($0.feedID) }
+        for entryID in removedEntryIDs {
+            cachedEntryLookup.removeValue(forKey: entryID)
+        }
+
+        var nextCounts = sidebarCounts
+        nextCounts.allUnread = max(0, nextCounts.allUnread - removedUnreadCount)
+        nextCounts.todayUnread = max(0, nextCounts.todayUnread - removedTodayUnreadCount)
+        nextCounts.starred = max(0, nextCounts.starred - removedStarredCount)
+        for feedID in feedIDs {
+            nextCounts.unreadByFeed.removeValue(forKey: feedID)
+        }
+        sidebarCounts = nextCounts
+        timelineRevision &+= 1
+    }
+
+    private func scheduleAsyncStateReload() {
+        guard !isRefreshing else {
+            stateReloadPendingAfterRefresh = true
+            return
+        }
+        Task { @MainActor [weak self] in
+            await self?.reloadStateAsync()
+        }
     }
 
     public func reorderRootFeeds(orderedIDs: [UUID]) {
@@ -817,9 +994,9 @@ public final class AppStore: ObservableObject {
     }
 
     public func importOPML(_ data: Data) async {
-        let newFeedIDs = (try? localProvider.importOPML(data)) ?? []
+        let newFeedIDs = (try? await localProvider.importOPMLAsync(data)) ?? []
         guard !newFeedIDs.isEmpty else { return }
-        reloadState()
+        await reloadStateAsync()
         await refresh(feedIDs: newFeedIDs, origin: .subscriptionManagement)
     }
 
@@ -838,12 +1015,25 @@ public final class AppStore: ObservableObject {
         guard !isRefreshing else { return nil }
         let startedAt = Date.now
         isRefreshing = true
-        defer { isRefreshing = false }
+        invalidatedRefreshFeedIDs.removeAll(keepingCapacity: true)
+        defer {
+            for task in activeRefreshFeedTasks.values {
+                task.cancel()
+            }
+            activeRefreshFeedTasks.removeAll(keepingCapacity: true)
+            invalidatedRefreshFeedIDs.removeAll(keepingCapacity: true)
+            isRefreshing = false
+            if stateReloadPendingAfterRefresh {
+                stateReloadPendingAfterRefresh = false
+                scheduleAsyncStateReload()
+            }
+        }
         refreshStatus = .refreshing
 
         var failures: [String] = []
         var updatedFeeds = 0
         var newUnreadEntries: [Entry] = []
+        var shouldReloadLocalSnapshot = false
 
         // 1. 本地源抓取（指定局部源或全局本地源）
         let targetFeeds: [Feed]
@@ -855,46 +1045,58 @@ public final class AppStore: ObservableObject {
             targetFeeds = []
         }
 
-        let total = targetFeeds.count
-        refreshProgress = (0, total)
-        defer { refreshProgress = nil }
-
         let maxConcurrency = 6
         let provider = self.localProvider
-        var completedCount = 0
 
         await withTaskGroup(of: LocalAccountProvider.SingleFeedRefreshResult.self) { group in
             var feedIndex = 0
+            var activeTaskCount = 0
 
-            while feedIndex < targetFeeds.count && feedIndex < maxConcurrency {
+            while feedIndex < targetFeeds.count && activeTaskCount < maxConcurrency {
                 let feed = targetFeeds[feedIndex]
                 feedIndex += 1
-                group.addTask {
+                guard !invalidatedRefreshFeedIDs.contains(feed.id) else { continue }
+                let fetchTask = Task.detached { [provider] in
                     await provider.fetchSingleFeed(feed: feed)
+                }
+                activeRefreshFeedTasks[feed.id] = fetchTask
+                activeTaskCount += 1
+                group.addTask {
+                    await fetchTask.value
                 }
             }
 
             while let taskResult = await group.next() {
-                completedCount += 1
-                refreshProgress = (completedCount, total)
+                activeTaskCount -= 1
+                activeRefreshFeedTasks.removeValue(forKey: taskResult.feedID)
 
-                do {
-                    let outcome = try provider.applyRefreshResult(taskResult)
-                    if outcome.updated { updatedFeeds += 1 }
-                    newUnreadEntries.append(contentsOf: outcome.newUnreadEntries)
-                } catch {
-                    failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                // 删除动作已经使本轮 Feed 失效：不计失败、不写数据库、不生成通知。
+                if !invalidatedRefreshFeedIDs.contains(taskResult.feedID) {
+                    shouldReloadLocalSnapshot = true
+                    do {
+                        let outcome = try await provider.applyRefreshResultAsync(taskResult)
+                        if outcome.updated { updatedFeeds += 1 }
+                        newUnreadEntries.append(contentsOf: outcome.newUnreadEntries)
+                    } catch {
+                        failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                    }
+
+                    if case let .failure(error) = taskResult.result {
+                        failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                    }
                 }
 
-                if case let .failure(error) = taskResult.result {
-                    failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
-                }
-
-                if feedIndex < targetFeeds.count {
+                while feedIndex < targetFeeds.count && activeTaskCount < maxConcurrency {
                     let feed = targetFeeds[feedIndex]
                     feedIndex += 1
-                    group.addTask {
+                    guard !invalidatedRefreshFeedIDs.contains(feed.id) else { continue }
+                    let fetchTask = Task.detached { [provider] in
                         await provider.fetchSingleFeed(feed: feed)
+                    }
+                    activeRefreshFeedTasks[feed.id] = fetchTask
+                    activeTaskCount += 1
+                    group.addTask {
+                        await fetchTask.value
                     }
                 }
             }
@@ -918,7 +1120,7 @@ public final class AppStore: ObservableObject {
             }
 
             // 重新载入全量状态，确保成功账号的数据即刻生效
-            reloadState()
+            await reloadStateAsync()
 
             // 提取远端同步产生的新未读文章
             let currentUnreads = self.unreadEntryListItems.map(\.id)
@@ -928,9 +1130,14 @@ public final class AppStore: ObservableObject {
                     newUnreadEntries.append(entry)
                 }
             }
+        } else {
+            // 局部刷新没有远端账号同步，需要在所有异步 merge 完成后只重载一次。
+            // 如果本轮唯一的 Feed 已在刷新期间删除，删除动作本身已经同步了 UI；
+            // 跳过一次昂贵的全量快照，避免无效刷新继续占住 Loading。
+            if shouldReloadLocalSnapshot {
+                await reloadStateAsync()
+            }
         }
-
-        reloadState()
 
         let finishedAt = Date.now
         var reportedEntryIDs: Set<String> = []
@@ -958,10 +1165,16 @@ public final class AppStore: ObservableObject {
             if reportErrors { lastError = message }
         }
 
-        let minimumIndicatorDuration: TimeInterval = 1.2
-        let remainingDuration = minimumIndicatorDuration - Date.now.timeIntervalSince(startedAt)
-        if remainingDuration > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
+        // 如果本轮所有本地目标都已被删除，网络任务已经取消，Loading 不应再额外等待
+        // 固定的最短展示时长。仍有其它 Feed 未失效时保留最短时长，避免正常刷新闪烁。
+        let hasNonInvalidatedTarget = targetFeeds.contains { !invalidatedRefreshFeedIDs.contains($0.id) }
+        let shouldKeepMinimumIndicator = invalidatedRefreshFeedIDs.isEmpty || hasNonInvalidatedTarget
+        if shouldKeepMinimumIndicator {
+            let minimumIndicatorDuration: TimeInterval = 1.2
+            let remainingDuration = minimumIndicatorDuration - Date.now.timeIntervalSince(startedAt)
+            if remainingDuration > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remainingDuration * 1_000_000_000))
+            }
         }
 
         return outcome

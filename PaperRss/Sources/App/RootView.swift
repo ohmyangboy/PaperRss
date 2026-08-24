@@ -1360,16 +1360,29 @@ private struct FeedFaviconView: View {
     @EnvironmentObject private var icons: FeedIconStore
 
     var body: some View {
-        if let image = icons.cachedImage(feedID: feedID) {
+        FeedFaviconContent(
+            title: title,
+            size: size,
+            state: icons.state(for: feedID)
+        )
+        .onAppear { icons.warmUp(feedID: feedID, iconURL: iconURL) }
+    }
+}
+
+private struct FeedFaviconContent: View {
+    let title: String
+    let size: CGFloat
+    @ObservedObject var state: FeedIconState
+
+    var body: some View {
+        if let image = state.image {
             Image(decorative: image, scale: 2)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size > 15 ? 4 : 3, style: .continuous))
         } else {
-            // 兜底期间顺带补发预热（store 内有 in-flight 与失败窗去重，代价为零）。
             fallbackBadge
-                .onAppear { icons.warmUp(feedID: feedID, iconURL: iconURL) }
         }
     }
 

@@ -199,6 +199,8 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let accountID: String
     public let accountType: String
     public let accountDisplayName: String
+    /// 在投影构造时计算一次，避免 SwiftUI 每次重绘行时重复执行正则。
+    public let summaryIsVisible: Bool
 
     public var accountSourceBadge: String {
         if accountType == AccountType.local.rawValue || accountID == "local-default" {
@@ -211,7 +213,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     }
 
     public var isSummaryVisible: Bool {
-        Self.shouldShowSummary(title: title, summary: summaryPreview)
+        summaryIsVisible
     }
 
     public static func shouldShowSummary(title: String, summary: String) -> Bool {
@@ -258,7 +260,8 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         isStarred: Bool = false,
         accountID: String = "local-default",
         accountType: String = AccountType.local.rawValue,
-        accountDisplayName: String = "Local"
+        accountDisplayName: String = "Local",
+        summaryIsVisible: Bool? = nil
     ) {
         self.id = id
         self.feedID = feedID
@@ -273,6 +276,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         self.accountID = accountID
         self.accountType = accountType
         self.accountDisplayName = accountDisplayName
+        self.summaryIsVisible = summaryIsVisible ?? Self.shouldShowSummary(title: title, summary: summaryPreview)
     }
 
     public init(entry: Entry, sourceTitle: String, feedIconURL: URL? = nil, previewCharacterLimit: Int = 240, accountID: String = "local-default", accountType: String = AccountType.local.rawValue, accountDisplayName: String = "Local") {
@@ -289,6 +293,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         self.accountID = accountID
         self.accountType = accountType
         self.accountDisplayName = accountDisplayName
+        summaryIsVisible = Self.shouldShowSummary(title: title, summary: summaryPreview)
     }
 }
 

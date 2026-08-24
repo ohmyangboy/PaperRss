@@ -72,6 +72,16 @@ public final class TimelineQueryService: Sendable {
         }
     }
 
+    /// 异步读取 Sidebar 聚合，避免刷新结束时在 MainActor 同步执行 SQL。
+    public func fetchSidebarCountsAsync(
+        accountID: String? = nil,
+        startOfDayTimestamp: Double
+    ) async throws -> SidebarCounts {
+        try await database.readAsync { db in
+            try self.fetchSidebarCounts(accountID: accountID, startOfDayTimestamp: startOfDayTimestamp, in: db)
+        }
+    }
+
     public func fetchSidebarCounts(
         accountID: String? = nil,
         startOfDayTimestamp: Double,
@@ -185,6 +195,19 @@ public final class TimelineQueryService: Sendable {
     ) throws -> [EntryListItem] {
         try database.read { db in
             try fetchListItems(accountID: accountID, scope: scope, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
+        }
+    }
+
+    /// 异步读取有界 timeline 投影，供批量刷新完成后的状态快照使用。
+    public func fetchListItemsAsync(
+        accountID: String? = nil,
+        scope: TimelineScope,
+        retainingIDs: Set<String> = [],
+        limit: Int? = nil,
+        offset: Int = 0
+    ) async throws -> [EntryListItem] {
+        try await database.readAsync { db in
+            try self.fetchListItems(accountID: accountID, scope: scope, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
         }
     }
 

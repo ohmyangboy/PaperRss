@@ -8,16 +8,30 @@ import CryptoKit
 /// 架构对标 NetNewsWire 的 IconImageCache / FaviconDownloader：
 /// - `cachedImage(feedID:)` 是纯内存字典查询（主线程、同步、绝不触发 I/O），
 ///   视图首帧即可命中，从根本上消除 AsyncImage 加载期占位徽章的闪烁；
-/// - `warmUp(feedID:iconURL:)` 按 内存 → 磁盘 → 网络 逐层回填，完成后经
-///   `revision` 通知视图做一次替换；
+/// - `warmUp(feedID:iconURL:)` 按 内存 → 磁盘 → 网络 逐层回填，完成后只通过对应
+///   `FeedIconState` 通知该 Feed 的视图做一次替换；
 /// - 图标字节持久化在 Caches 目录（可再生缓存，一 URL 一文件），索引与失败记录
 ///   在 init 时同步载入内存（体量 KB 级，无感知）；
 /// - 非瞬时失败进入失败记忆（5 天重试窗），对永远拿不到图标的 feed 稳定显示
 ///   兜底徽章而非反复重试闪烁。
 @MainActor
+public final class FeedIconState: ObservableObject {
+    @Published public private(set) var image: CGImage?
+
+    fileprivate init(image: CGImage?) {
+        self.image = image
+    }
+
+    fileprivate func setImage(_ image: CGImage?) {
+        self.image = image
+    }
+}
+
+@MainActor
 public final class FeedIconStore: ObservableObject {
-    /// 图标变为可用时递增；订阅方据此在可用那一帧完成一次替换。
-    @Published public private(set) var revision: UInt64 = 0
+    /// 兼容旧诊断/测试的计数，不再是 ObservableObject 的全局发布源。
+    /// 每个 Feed 的 UI 更新通过 `FeedIconState` 定向传播。
+    public private(set) var revision: UInt64 = 0
 
     private var memoryImages: [UUID: CGImage] = [:]
     /// 低内存 flush 后保留的最后已知图标，避免可见单元格被清空。
@@ -30,6 +44,10 @@ public final class FeedIconStore: ObservableObject {
     private(set) var inFlightFeedIDs = Set<UUID>()
     /// 每个 Feed 当前实际在加载的 URL；旧 URL 完成时不能清理或覆盖新请求。
     private var inFlightURLByFeedID: [UUID: URL] = [:]
+    private var iconStates: [UUID: FeedIconState] = [:]
+    private var pendingWarmups: [UUID: URL] = [:]
+    private var activeWarmupCount = 0
+    private let maxConcurrentWarmups = 6
     private var persistTask: Task<Void, Never>?
 
     private let directory: URL
@@ -73,6 +91,16 @@ public final class FeedIconStore: ObservableObject {
         memoryImages[feedID] ?? lastKnownImages[feedID]
     }
 
+    /// 返回只属于一个 Feed 的可观察状态，避免任意图标完成时刷新全部可见行。
+    public func state(for feedID: UUID) -> FeedIconState {
+        if let state = iconStates[feedID] {
+            return state
+        }
+        let state = FeedIconState(image: cachedImage(feedID: feedID))
+        iconStates[feedID] = state
+        return state
+    }
+
     /// 该 feed 是否已有确定的图标来源（含尚未拉取成功的）。
     public func hasIconSource(feedID: UUID) -> Bool {
         iconURLByFeedID[feedID] != nil
@@ -94,19 +122,14 @@ public final class FeedIconStore: ObservableObject {
         // URL 改变后应保留旧图作为过渡，同时继续加载新的图标。
         guard loadedURLByFeedID[feedID] != iconURL,
               inFlightURLByFeedID[feedID] != iconURL,
+              pendingWarmups[feedID] != iconURL,
               !isBlockedByFailure(iconURL)
         else { return }
 
-        // URL 变化时覆盖记录，但不取消旧任务；旧任务完成后会因 URL 不匹配
+        // URL 变化时覆盖排队记录，但不取消旧任务；旧任务完成后会因 URL 不匹配
         // 被丢弃，避免取消 URLSession 任务造成不必要的竞态。
-        inFlightURLByFeedID[feedID] = iconURL
-        inFlightFeedIDs.insert(feedID)
-        let session = session
-        let directory = directory
-        Task { [weak self] in
-            let result = await Self.loadIcon(url: iconURL, directory: directory, session: session)
-            self?.completeWarmup(feedID: feedID, url: iconURL, result: result)
-        }
+        pendingWarmups[feedID] = iconURL
+        pumpWarmups()
     }
 
     /// 文章列表页预取：按 feedID 去重后批量预热。
@@ -124,6 +147,26 @@ public final class FeedIconStore: ObservableObject {
         }
     }
 
+    private func pumpWarmups() {
+        while activeWarmupCount < maxConcurrentWarmups,
+              let (feedID, url) = pendingWarmups.first {
+            pendingWarmups.removeValue(forKey: feedID)
+            guard !isBlockedByFailure(url),
+                  loadedURLByFeedID[feedID] != url,
+                  inFlightURLByFeedID[feedID] != url else { continue }
+
+            activeWarmupCount += 1
+            inFlightURLByFeedID[feedID] = url
+            inFlightFeedIDs.insert(feedID)
+            let session = session
+            let directory = directory
+            Task { [weak self] in
+                let result = await Self.loadIcon(url: url, directory: directory, session: session)
+                self?.completeWarmup(feedID: feedID, url: url, result: result)
+            }
+        }
+    }
+
     // MARK: - 内存压力
 
     /// 清空热缓存但保留最后已知图标：flush 后可见单元格依然有图可画。
@@ -135,6 +178,9 @@ public final class FeedIconStore: ObservableObject {
     // MARK: - 完成回填（主线程）
 
     private func completeWarmup(feedID: UUID, url: URL, result: IconLoadResult) {
+        activeWarmupCount = max(0, activeWarmupCount - 1)
+        defer { pumpWarmups() }
+
         // 同一个 Feed 的旧 URL 可能晚于新 URL 完成。它不再拥有该 Feed
         // 的 in-flight 槽位，也不能覆盖新图标或清理新请求的状态。
         guard inFlightURLByFeedID[feedID] == url else { return }
@@ -149,6 +195,7 @@ public final class FeedIconStore: ObservableObject {
             memoryImages[feedID] = image
             lastKnownImages[feedID] = image
             loadedURLByFeedID[feedID] = url
+            state(for: feedID).setImage(image)
             revision += 1
         case .failure(let error):
             if !error.isTransient {
