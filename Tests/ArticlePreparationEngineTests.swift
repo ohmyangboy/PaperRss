@@ -28,6 +28,43 @@ final class ArticlePreparationEngineTests: XCTestCase {
 
     let defaultFeedID = UUID()
 
+    private func legacyCorruptedMathCache(entryID: String, url: URL, revision: Int = 0) -> ArticleCache {
+        let prose = String(repeating: "旧缓存正文包含完整背景、实验过程与结论，用于确保它会被判断为高质量缓存。", count: 25)
+        let html = """
+        <article>
+          <p>\(prose)</p>
+          <p>An MCE skill $s \\in \\mathcal{S}$ defines a context function.</p>
+          <div><p>$$
+          \\text{Inner: }c_s^<em>=\\arg\\max_{c_s}J_\\text{train}(c_s;s)\\quad
+          \\text{Outer: }s^</em>=\\arg\\max_{s\\in\\mathcal{S}}J_\\text{val}(c_s^*)
+          $$</p></div>
+        </article>
+        """
+        return ArticleCache(
+            entryID: entryID,
+            text: prose,
+            html: html,
+            fetchedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            sourceURL: url,
+            isSanitized: true,
+            normalizationRevision: revision
+        )
+    }
+
+    private func cleanMathPage() -> String {
+        let prose = String(repeating: "新网页正文提供完整背景、实验过程、证据与结论。", count: 30)
+        return """
+        <html><body><article class="article-content">
+          <p>\(prose)</p>
+          <p>An MCE skill $s \\in \\mathcal{S}$ defines a context function.</p>
+          <div>$$
+          \\text{Inner: }c_s^*=\\arg\\max_{c_s}J_\\text{train}(c_s;s)\\quad
+          \\text{Outer: }s^*=\\arg\\max_{s\\in\\mathcal{S}}J_\\text{val}(c_s^*)
+          $$</div>
+        </article></body></html>
+        """
+    }
+
     // MARK: - 1. Strong Feed: 0 Web Requests
 
 
@@ -328,6 +365,112 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertEqual(prepared.source, .cache)
         XCTAssertNotNil(updatedCache, "旧版未清洗缓存规范化后应当产生 1 次缓存回写")
         XCTAssertEqual(updatedCache?.isSanitized, true)
+    }
+
+    func testLegacyCorruptedMathCacheForegroundRefreshesAndUpgradesRevision() async {
+        let loader = MockPageLoader()
+        let url = URL(string: "https://example.com/legacy-math")!
+        loader.responseMap[url] = cleanMathPage()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let cache = legacyCorruptedMathCache(entryID: "legacy-math", url: url)
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "Legacy math",
+            url: url,
+            publishedAt: .now,
+            summary: ""
+        )
+
+        let result = await engine.prepare(
+            entry: entry,
+            cached: cache,
+            policy: .foregroundRefresh
+        )
+
+        XCTAssertEqual(loader.requestCount, 1)
+        XCTAssertEqual(result.prepared.source, .web)
+        XCTAssertEqual(result.cacheState, .current)
+        XCTAssertEqual(result.updatedCache?.normalizationRevision, ArticleCache.currentNormalizationRevision)
+        XCTAssertGreaterThan(result.updatedCache?.fetchedAt ?? .distantPast, cache.fetchedAt)
+        XCTAssertTrue(result.prepared.html.contains("c_s^*="))
+        XCTAssertTrue(result.prepared.html.contains("s^*="))
+        XCTAssertFalse(result.prepared.html.contains("<em>"))
+    }
+
+    func testLegacyCorruptedMathCacheNetworkFailureRemainsRetryableFallback() async {
+        let loader = MockPageLoader()
+        let url = URL(string: "https://example.com/legacy-math-offline")!
+        loader.errorMap[url] = URLError(.notConnectedToInternet)
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let cache = legacyCorruptedMathCache(entryID: "legacy-math-offline", url: url)
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "Legacy math offline",
+            url: url,
+            publishedAt: .now,
+            summary: ""
+        )
+
+        let first = await engine.prepare(entry: entry, cached: cache, policy: .foregroundRefresh)
+        let second = await engine.prepare(entry: entry, cached: cache, policy: .foregroundRefresh)
+
+        XCTAssertEqual(loader.requestCount, 2, "旧缓存失败后不得被标记为已升级，下一次打开必须能重试")
+        XCTAssertEqual(first.prepared.source, .cache)
+        XCTAssertEqual(first.cacheState, .staleFallback)
+        XCTAssertNil(first.updatedCache)
+        XCTAssertEqual(second.cacheState, .staleFallback)
+        XCTAssertNil(second.updatedCache)
+    }
+
+    func testLegacyCorruptedMathCacheLocalOnlyUsesFallbackWithoutNetworkOrWrite() async {
+        let loader = MockPageLoader()
+        let url = URL(string: "https://example.com/legacy-math-prefetch")!
+        loader.responseMap[url] = cleanMathPage()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let cache = legacyCorruptedMathCache(entryID: "legacy-math-prefetch", url: url)
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "Legacy math prefetch",
+            url: url,
+            publishedAt: .now,
+            summary: ""
+        )
+
+        let result = await engine.prepare(entry: entry, cached: cache, policy: .localOnly)
+
+        XCTAssertEqual(loader.requestCount, 0)
+        XCTAssertEqual(result.prepared.source, .cache)
+        XCTAssertEqual(result.cacheState, .staleFallback)
+        XCTAssertNil(result.updatedCache)
+    }
+
+    func testCurrentRevisionCacheWithMarkupInsideFormulaStillRefreshes() async {
+        let loader = MockPageLoader()
+        let url = URL(string: "https://example.com/current-corrupted-math")!
+        loader.responseMap[url] = cleanMathPage()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let cache = legacyCorruptedMathCache(
+            entryID: "current-corrupted-math",
+            url: url,
+            revision: ArticleCache.currentNormalizationRevision
+        )
+        let entry = Entry(
+            id: cache.entryID,
+            feedID: defaultFeedID,
+            title: "Current corrupted math",
+            url: url,
+            publishedAt: .now,
+            summary: ""
+        )
+
+        let result = await engine.prepare(entry: entry, cached: cache, policy: .foregroundRefresh)
+
+        XCTAssertEqual(loader.requestCount, 1)
+        XCTAssertEqual(result.cacheState, .current)
+        XCTAssertFalse(result.prepared.html.contains("<em>"))
     }
 
     func testHighQualityCacheWinsOverShorterStrongFeed() async {

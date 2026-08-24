@@ -306,11 +306,12 @@ public final class AppStore: ObservableObject {
     public init(
         testDatabase: AppDatabase,
         feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
-        credentialStore: CredentialStore? = nil
+        credentialStore: CredentialStore? = nil,
+        pageLoader: (any ArticlePageLoading)? = nil
     ) {
         self.feedFetcher = feedFetcher
         self.customSession = nil
-        self.preparationEngine = ArticlePreparationEngine()
+        self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1227,7 +1228,10 @@ public final class AppStore: ObservableObject {
 
     /// 统一正文准备入口：每个 entry 返回同源绑定的 PreparedArticle，并在内容更新时写入本地缓存。
     /// 内存 LRU 命中时零 IO、零解析直接返回，使顺序阅读切换即时完成。
-    public func prepareArticle(for entry: Entry) async -> PreparedArticle {
+    public func prepareArticle(
+        for entry: Entry,
+        policy: ArticlePreparationPolicy = .foregroundRefresh
+    ) async -> PreparedArticle {
         let fingerprint = PreparedArticleMemoryCache.contentFingerprint(for: entry)
         if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
             return memoized
@@ -1238,16 +1242,36 @@ public final class AppStore: ObservableObject {
         let generationAtStart = preparedArticleMemoryCache.generation
         let cached = try? localProvider.fetchCache(entryID: entry.id)
         let feed = self.feed(for: entry)
-        let (prepared, updatedCache) = await preparationEngine.prepare(entry: entry, cached: cached, feed: feed)
-        if let updatedCache, !Task.isCancelled {
-            try? localProvider.saveCache(updatedCache)
+        let result = await preparationEngine.prepare(
+            entry: entry,
+            cached: cached,
+            feed: feed,
+            policy: policy
+        )
+        let prepared = result.prepared
+        var permitsMemoryCaching = true
+        if let updatedCache = result.updatedCache, !Task.isCancelled {
+            do {
+                try localProvider.saveCache(updatedCache)
+                if result.didRefreshCache {
+                    preparedArticleMemoryCache.invalidate(entryID: entry.id)
+                    articleRefreshSignal = ArticleRefreshSignal(entryID: entry.id, token: UUID())
+                }
+            } catch {
+                // 保留本次已准备正文供前台显示；磁盘未升级时下次打开仍会重试。
+                if result.didRefreshCache {
+                    permitsMemoryCaching = false
+                }
+            }
         }
         // 取消的任务可能产出兜底结果，不污染内存缓存；
         // .fallback 表示本次未能产出真实正文（如网络瞬时失败），
         // 不缓存以便下次访问重新尝试；
         // 准备期间若发生失效（如重抓写入更好缓存），代数不匹配则放弃存储。
         if !Task.isCancelled,
+           permitsMemoryCaching,
            prepared.source != .fallback,
+           result.cacheState == .current,
            generationAtStart == preparedArticleMemoryCache.generation {
             preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)
         }
@@ -1286,7 +1310,7 @@ public final class AppStore: ObservableObject {
                 guard let neighborID = adjacent?.id,
                       !self.preparedArticleMemoryCache.contains(neighborID),
                       let neighbor = self.entry(id: neighborID) else { continue }
-                _ = await self.prepareArticle(for: neighbor)
+                _ = await self.prepareArticle(for: neighbor, policy: .localOnly)
             }
         }
     }
@@ -2088,4 +2112,3 @@ extension JSONDecoder {
         return decoder
     }()
 }
-

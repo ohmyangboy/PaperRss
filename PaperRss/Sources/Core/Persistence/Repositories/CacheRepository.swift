@@ -72,7 +72,8 @@ public final class CacheRepository: Sendable {
             imageURLs: imageURLs,
             fetchedAt: Date(timeIntervalSince1970: record.fetchedAt),
             sourceURL: sourceURL,
-            isSanitized: record.isSanitized
+            isSanitized: record.isSanitized,
+            normalizationRevision: record.normalizationRevision
         )
     }
 
@@ -86,7 +87,8 @@ public final class CacheRepository: Sendable {
             imageUrlsJSON: imageUrlsJSON,
             fetchedAt: cache.fetchedAt.timeIntervalSince1970,
             sourceURL: cache.sourceURL?.absoluteString,
-            isSanitized: cache.isSanitized
+            isSanitized: cache.isSanitized,
+            normalizationRevision: cache.normalizationRevision
         )
         try saveCache(record, in: db)
     }

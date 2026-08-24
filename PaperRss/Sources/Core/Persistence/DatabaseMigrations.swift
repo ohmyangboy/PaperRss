@@ -303,6 +303,14 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v4-add-article-cache-normalization-revision") { db in
+            guard try db.tableExists("article_caches") else { return }
+            try db.execute(sql: """
+            ALTER TABLE article_caches
+            ADD COLUMN normalization_revision INTEGER NOT NULL DEFAULT 0;
+            """)
+        }
+
         return migrator
     }
 }

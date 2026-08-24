@@ -106,6 +106,8 @@ final class DatabaseSchemaTests: XCTestCase {
             let cachesDict = Dictionary(uniqueKeysWithValues: cachesColumns.map { ($0.name, $0) })
             XCTAssertEqual(cachesDict["item_id"]?.pk, 1)
             XCTAssertEqual(cachesDict["image_urls_json"]?.type.uppercased(), "TEXT")
+            XCTAssertEqual(cachesDict["normalization_revision"]?.type.uppercased(), "INTEGER")
+            XCTAssertEqual(cachesDict["normalization_revision"]?.notnull, 1)
 
             // 7. ai_artifacts
             let aiColumns = try ColumnInfo.fetchAll(db, sql: "PRAGMA table_info(ai_artifacts);")
@@ -120,6 +122,37 @@ final class DatabaseSchemaTests: XCTestCase {
             XCTAssertEqual(syncDict["account_id"]?.pk, 1)
             XCTAssertNil(syncDict["cursor"], "v1 不得私自添加未定义 cursor")
             XCTAssertNil(syncDict["token"], "v1 不得私自添加 token")
+        }
+    }
+
+    func testV4MigrationPreservesLegacyCacheAndMarksRevisionZero() throws {
+        let legacyURL = temporaryDirectoryURL.appendingPathComponent("legacy-v3.sqlite")
+        let pool = try DatabasePool(path: legacyURL.path)
+        let migrator = DatabaseMigrations.migrator
+        try migrator.migrate(pool, upTo: "v3-normalize-local-item-external-identity")
+        try pool.write { db in
+            try db.execute(sql: """
+            INSERT INTO accounts (id, type, display_name, created_at, updated_at)
+            VALUES ('local-default', 'local', 'Local', 1, 1);
+            INSERT INTO feeds (id, account_id, title, feed_url, updated_at)
+            VALUES ('feed-1', 'local-default', 'Feed', 'https://example.com/feed', 1);
+            INSERT INTO items (id, account_id, external_id, feed_id, created_at, updated_at)
+            VALUES ('item-1', 'local-default', 'item-1', 'feed-1', 1, 1);
+            INSERT INTO article_caches (item_id, text, html, fetched_at, is_sanitized)
+            VALUES ('item-1', 'legacy body', '<p>legacy body</p>', 1, 1);
+            """)
+        }
+
+        try migrator.migrate(pool)
+
+        try pool.read { db in
+            let row = try Row.fetchOne(db, sql: """
+                SELECT text, html, normalization_revision
+                FROM article_caches WHERE item_id = 'item-1';
+                """)
+            XCTAssertEqual(row?["text"] as String?, "legacy body")
+            XCTAssertEqual(row?["html"] as String?, "<p>legacy body</p>")
+            XCTAssertEqual(row?["normalization_revision"] as Int?, 0)
         }
     }
 

@@ -66,11 +66,12 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         // prepareArticle 必须先查内存 LRU；取消的任务不写入缓存；
         // 重抓与清空磁盘缓存时同步失效内存结果。
         XCTAssertTrue(appStore.contains("if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint)"))
-        XCTAssertTrue(appStore.contains("if !Task.isCancelled,\n           prepared.source != .fallback,\n           generationAtStart == preparedArticleMemoryCache.generation {\n            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)\n        }"))
+        XCTAssertTrue(appStore.contains("if !Task.isCancelled,\n           permitsMemoryCaching,\n           prepared.source != .fallback,\n           result.cacheState == .current,\n           generationAtStart == preparedArticleMemoryCache.generation {\n            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)\n        }"))
         XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.invalidate(entryID: entry.id)"))
         XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.removeAll()"))
         XCTAssertTrue(appStore.contains("public func scheduleNeighborPrefetch("))
         XCTAssertTrue(appStore.contains("guard !Task.isCancelled, let self else { return }"))
+        XCTAssertTrue(appStore.contains("prepareArticle(for: neighbor, policy: .localOnly)"))
 
         let rootView = try String(
             contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),

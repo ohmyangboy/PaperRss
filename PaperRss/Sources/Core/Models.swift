@@ -293,6 +293,8 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
 }
 
 public struct ArticleCache: Codable, Hashable, Sendable {
+    public static let currentNormalizationRevision = 1
+
     public var entryID: String
     public var text: String
     public var html: String?
@@ -300,8 +302,18 @@ public struct ArticleCache: Codable, Hashable, Sendable {
     public var fetchedAt: Date
     public var sourceURL: URL?
     public var isSanitized: Bool
+    public var normalizationRevision: Int
 
-    public init(entryID: String, text: String, html: String? = nil, imageURLs: [URL] = [], fetchedAt: Date = .now, sourceURL: URL? = nil, isSanitized: Bool = false) {
+    public init(
+        entryID: String,
+        text: String,
+        html: String? = nil,
+        imageURLs: [URL] = [],
+        fetchedAt: Date = .now,
+        sourceURL: URL? = nil,
+        isSanitized: Bool = false,
+        normalizationRevision: Int = ArticleCache.currentNormalizationRevision
+    ) {
         self.entryID = entryID
         self.text = text
         self.html = html
@@ -309,9 +321,12 @@ public struct ArticleCache: Codable, Hashable, Sendable {
         self.fetchedAt = fetchedAt
         self.sourceURL = sourceURL
         self.isSanitized = isSanitized
+        self.normalizationRevision = normalizationRevision
     }
 
-    private enum CodingKeys: String, CodingKey { case entryID, text, html, imageURLs, fetchedAt, sourceURL, isSanitized }
+    private enum CodingKeys: String, CodingKey {
+        case entryID, text, html, imageURLs, fetchedAt, sourceURL, isSanitized, normalizationRevision
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -322,6 +337,7 @@ public struct ArticleCache: Codable, Hashable, Sendable {
         fetchedAt = try container.decodeIfPresent(Date.self, forKey: .fetchedAt) ?? .distantPast
         sourceURL = try container.decodeIfPresent(URL.self, forKey: .sourceURL)
         isSanitized = try container.decodeIfPresent(Bool.self, forKey: .isSanitized) ?? false
+        normalizationRevision = try container.decodeIfPresent(Int.self, forKey: .normalizationRevision) ?? 0
     }
 }
 

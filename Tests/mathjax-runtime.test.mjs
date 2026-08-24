@@ -12,6 +12,7 @@ const mathjaxDir = path.join(projectRoot, "PaperRss", "Resources", "MathJax");
 const scriptPath = path.join(mathjaxDir, "tex-mml-svg.js");
 const licensePath = path.join(mathjaxDir, "LICENSE");
 const readerSourcePath = path.join(projectRoot, "PaperRss", "Sources", "App", "ArticleReaderView.swift");
+const configPath = path.join(mathjaxDir, "paper-rss-config.js");
 
 describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
   it("MathJax 4.1.2 files exist and match exact SHA-256 checksums", () => {
@@ -22,7 +23,7 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
     const scriptHash = crypto.createHash("sha256").update(scriptBuffer).digest("hex");
     assert.equal(
       scriptHash,
-      "01717984f5715d5ab5f3067e78b9f35a7554d9dfc6205106c39fb6a0285a1cb3",
+      "4fca13718f906c404bb98c6fba642ab7c1ffe545d91aa102b3aa6a231884dda3",
       "tex-mml-svg.js SHA-256 hash must match documented release"
     );
 
@@ -35,6 +36,16 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
     );
   });
 
+  it("Offline WKWebView configuration disables unpackaged SRE workers", () => {
+    const config = fs.readFileSync(configPath, "utf8");
+    assert.match(config, /file:\/\/\/__paper_rss_mathjax__/);
+    assert.match(config, /enableSpeech:\s*false/);
+    assert.match(config, /enableBraille:\s*false/);
+    assert.match(config, /enrich:\s*false/);
+    assert.match(config, /font:\s*['"]mathjax-tex['"]/);
+    assert.ok(!/https?:\/\//.test(config), "MathJax configuration must not introduce a remote runtime path");
+  });
+
   it("MathJax bundle does not contain dynamic remote CDN loading endpoints", () => {
     const scriptText = fs.readFileSync(scriptPath, "utf8");
     assert.ok(!scriptText.includes("cdn.jsdelivr.net/npm/mathjax"), "Must not contain jsdelivr CDN endpoint");
@@ -44,7 +55,7 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
 
   it("MathJax 4.1.2 bundle is a self-contained offline component", () => {
     const scriptText = fs.readFileSync(scriptPath, "utf8");
-    assert.ok(scriptText.length > 1_500_000, "MathJax combined bundle must be full standalone bundle");
+    assert.ok(scriptText.length > 2_200_000, "MathJax TeX-font combined bundle must be full standalone bundle");
     assert.ok(scriptText.includes("MathJax"), "Bundle must define MathJax namespace");
   });
 
@@ -77,9 +88,24 @@ describe("MathJax 4.1.2 Offline Runtime Integrity and Safety", () => {
     const factoryEnd = source.indexOf("static func installStandardUserScripts", factoryStart);
     const userScriptFactory = source.slice(factoryStart, factoryEnd);
     assert.ok(!userScriptFactory.includes("loadMathJaxBundleSource"), "mathUserScripts 不得注入 MathJax bundle");
+
+    const injectorStart = source.indexOf("static func injectMathJaxRuntime(in webView: WKWebView) async throws");
+    const injectorEnd = source.indexOf("static func isSameDocumentAnchor", injectorStart);
+    const injector = source.slice(injectorStart, injectorEnd);
+    assert.ok(injectorStart >= 0, "Bridge 必须提供共享的异步 MathJax 注入器");
+    assert.match(injector, /loadMathJaxConfigSource\(\)/);
+    assert.match(injector, /evaluateJavaScript\(configSource\)/);
+    assert.match(injector, /evaluateJavaScript\(runtimeSource\)/);
+    assert.match(injector, /MathJax\?\.startup\?\.promise/);
+    assert.match(injector, /await startup/);
+    assert.match(injector, /querySelectorAll\(['"]mjx-container['"]\)/);
+    assert.match(injector, /contentWorld:\s*\.page/);
+
     for (const coordinator of [macOSCoordinator, iOSCoordinator]) {
       assert.match(coordinator, /injectMathJaxRuntimeIfNeeded\(in: webView\)/);
-      assert.match(coordinator, /loadMathJaxBundleSource\(\)/);
+      assert.match(coordinator, /PaperReaderBridge\.injectMathJaxRuntime\(in: webView\)/);
+      assert.match(coordinator, /mathInjectionAttempts/);
+      assert.match(coordinator, /lastMathInjectionKey = injectionKey/);
     }
   });
 

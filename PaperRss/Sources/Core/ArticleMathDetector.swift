@@ -171,6 +171,55 @@ public enum ArticleMathDetector: Sendable {
         return false
     }
 
+    /// 检测普通 TeX 定界符内部是否被插入 HTML 标签。MathJax 的 TeX 输入要求
+    /// 定界符与公式文本处于同一文本结构；除换行标签和注释外的 HTML 会切断公式。
+    public static func containsUnsupportedMarkupInsideFormula(in content: String) -> Bool {
+        guard !content.isEmpty else { return false }
+
+        let blockPatterns = [
+            #"(?s)\$\$.*?\$\$"#,
+            #"(?s)\\\[.*?\\\]"#,
+            #"(?s)\\\(.*?\\\)"#
+        ]
+
+        for pattern in blockPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(content.startIndex..., in: content)
+            for match in regex.matches(in: content, range: range) {
+                guard let formulaRange = Range(match.range, in: content) else { continue }
+                if containsUnsupportedTag(in: String(content[formulaRange])) {
+                    return true
+                }
+            }
+        }
+
+        let inlinePattern = #"(?<!\\|\w)\$([^$\r\n]+?)\$(?!\w)"#
+        if let regex = try? NSRegularExpression(pattern: inlinePattern) {
+            let range = NSRange(content.startIndex..., in: content)
+            for match in regex.matches(in: content, range: range) {
+                guard let formulaRange = Range(match.range, in: content),
+                      let innerRange = Range(match.range(at: 1), in: content) else { continue }
+                let formula = String(content[formulaRange])
+                guard containsUnsupportedTag(in: formula) else { continue }
+                let textOnlyInner = String(content[innerRange])
+                    .replacingOccurrences(of: #"(?is)<[^>]+>"#, with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !isPriceOrCurrency(textOnlyInner) && isMathExpression(textOnlyInner) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private static func containsUnsupportedTag(in formula: String) -> Bool {
+        let stripped = formula
+            .replacingOccurrences(of: #"(?is)<!--.*?-->"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?is)</?(?:br|wbr)\b[^>]*>"#, with: "", options: .regularExpression)
+        return stripped.range(of: #"(?is)</?[a-z][^>]*>"#, options: .regularExpression) != nil
+    }
+
     private static func isPriceOrCurrency(_ text: String) -> Bool {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if cleaned.isEmpty { return true }

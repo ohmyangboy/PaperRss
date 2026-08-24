@@ -504,6 +504,12 @@ final class PaperRssCoreTests: XCTestCase {
         let cache = try JSONDecoder().decode(ArticleCache.self, from: data)
 
         XCTAssertFalse(cache.isSanitized)
+        XCTAssertEqual(cache.normalizationRevision, 0)
+    }
+
+    func testNewArticleCacheUsesCurrentNormalizationRevision() {
+        let cache = ArticleCache(entryID: "current", text: "Body")
+        XCTAssertEqual(cache.normalizationRevision, ArticleCache.currentNormalizationRevision)
     }
 
     func testChunkerPreservesParagraphOrder() {
@@ -828,7 +834,7 @@ final class PaperRssCoreTests: XCTestCase {
             }
         }
 
-        let store = AppStore()
+        let store = AppStore(testDatabase: .empty) { _ in fatalError("Unused in test") }
         let config = LLMConfiguration.deepSeek
         _ = store.saveLLMConfiguration(config, apiKey: "")
 
@@ -873,7 +879,7 @@ final class PaperRssCoreTests: XCTestCase {
 
     @MainActor
     func testTwitterStatusEntryUsesFeedContentDirectly() async throws {
-        let store = AppStore()
+        let store = AppStore(testDatabase: .empty) { _ in fatalError("Unused in test") }
         let entry = Entry(
             id: "twitter-item-1",
             feedID: UUID(),
@@ -944,7 +950,19 @@ final class PaperRssCoreTests: XCTestCase {
 
     @MainActor
     func testArticleFontSizeAdjustmentsAndClamping() {
-        let store = AppStore()
+        let defaults = UserDefaults.standard
+        let key = "PaperRss.articleFontSize"
+        let previousValue = defaults.object(forKey: key)
+        defaults.removeObject(forKey: key)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let store = AppStore(testDatabase: .empty) { _ in fatalError("Unused in test") }
         XCTAssertEqual(store.articleFontSize, 17)
 
         store.increaseArticleFontSize()

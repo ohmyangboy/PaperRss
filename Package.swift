@@ -40,6 +40,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
             exclude: [
+                "MathJaxWebKitProbe.swift",
                 "mathjax-runtime.test.mjs",
                 "reader-shortcuts.test.mjs",
                 "reader-toc.test.mjs",

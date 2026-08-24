@@ -17,8 +17,8 @@ final class ArticleMathRuntimeTests: XCTestCase {
         let scriptDigest = SHA256.hash(data: scriptData).compactMap { String(format: "%02x", $0) }.joined()
         XCTAssertEqual(
             scriptDigest,
-            "01717984f5715d5ab5f3067e78b9f35a7554d9dfc6205106c39fb6a0285a1cb3",
-            "MathJax 4.1.2 tex-mml-svg.js SHA-256 必须精确匹配官方包校验和"
+            "4fca13718f906c404bb98c6fba642ab7c1ffe545d91aa102b3aa6a231884dda3",
+            "MathJax 4.1.2 tex-mml-svg-mathjax-tex.js SHA-256 必须精确匹配官方包校验和"
         )
 
         let licenseData = try Data(contentsOf: licenseURL)

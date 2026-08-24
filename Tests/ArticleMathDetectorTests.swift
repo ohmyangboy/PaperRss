@@ -45,6 +45,23 @@ final class ArticleMathDetectorTests: XCTestCase {
         XCTAssertFalse(ArticleMathDetector.containsMath(in: escapedPrice), "转义美元符绝不能被误判为公式")
     }
 
+    func testDetectsUnsupportedMarkupInsideRealFormulasOnly() {
+        let corruptedDisplay = #"<div>$$c_s^<em>*=x</em> \quad s^*=y$$</div>"#
+        XCTAssertTrue(ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: corruptedDisplay))
+
+        let corruptedInline = #"<p>Formula $c_s^<em>*=x</em>$ is invalid.</p>"#
+        XCTAssertTrue(ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: corruptedInline))
+
+        let allowedBreaks = #"<div>$$x + y<br><!-- layout --><wbr>= z$$</div>"#
+        XCTAssertFalse(ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: allowedBreaks))
+
+        let pricesWithEmphasis = #"<p>Pay $50 <em>today</em> or $100 next month.</p>"#
+        XCTAssertFalse(
+            ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: pricesWithEmphasis),
+            "两个货币金额之间的正文标签不得被误判为损坏公式"
+        )
+    }
+
     // MARK: - 4. Code Blocks Exclusion
 
     func testIgnoresShellVariablesInsideCodeBlocks() {

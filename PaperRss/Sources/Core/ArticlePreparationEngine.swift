@@ -1,5 +1,34 @@
 import Foundation
 
+public enum ArticlePreparationPolicy: Sendable {
+    case foregroundRefresh
+    case localOnly
+}
+
+public enum ArticlePreparationCacheState: Sendable, Equatable {
+    case current
+    case staleFallback
+}
+
+public struct ArticlePreparationResult: Sendable {
+    public let prepared: PreparedArticle
+    public let updatedCache: ArticleCache?
+    public let cacheState: ArticlePreparationCacheState
+    public let didRefreshCache: Bool
+
+    init(
+        prepared: PreparedArticle,
+        updatedCache: ArticleCache?,
+        cacheState: ArticlePreparationCacheState,
+        didRefreshCache: Bool = false
+    ) {
+        self.prepared = prepared
+        self.updatedCache = updatedCache
+        self.cacheState = cacheState
+        self.didRefreshCache = didRefreshCache
+    }
+}
+
 /// 负责将 Feed 原始内容、本地缓存以及可选的网页抓取候选进行统一评估与择优，
 /// 输出严格同源绑定的 `PreparedArticle`，并计算是否需要无多余回写缓存。
 public final class ArticlePreparationEngine: Sendable {
@@ -16,11 +45,109 @@ public final class ArticlePreparationEngine: Sendable {
         cached: ArticleCache?,
         feed: Feed? = nil
     ) async -> (prepared: PreparedArticle, updatedCache: ArticleCache?) {
+        let result = await prepare(
+            entry: entry,
+            cached: cached,
+            feed: feed,
+            policy: .foregroundRefresh
+        )
+        return (result.prepared, result.updatedCache)
+    }
+
+    /// 带显式网络策略的正文准备入口。前台阅读允许惰性升级旧缓存；相邻预取
+    /// 只能使用本地候选，且旧缓存结果不得被视为当前管线产物。
+    public func prepare(
+        entry: Entry,
+        cached: ArticleCache?,
+        feed: Feed? = nil,
+        policy: ArticlePreparationPolicy
+    ) async -> ArticlePreparationResult {
         // 1. 准备 Feed 候选
         let feedCandidate = prepareFeedCandidate(for: entry, feed: feed)
 
         // 2. 准备 Cache 候选
         let cacheCandidate = prepareCacheCandidate(cached, entry: entry)
+        let cacheNeedsRefresh = cached.map(cacheRequiresRefresh) ?? false
+
+        // 相邻文章预取严格保持本地：旧缓存可作为离线兜底展示，但不得升级、
+        // 回写或触发网页请求，也不能被上层写入 PreparedArticleMemoryCache。
+        if policy == .localOnly {
+            if let cacheCandidate {
+                return ArticlePreparationResult(
+                    prepared: cacheCandidate.toPreparedArticle(),
+                    updatedCache: nil,
+                    cacheState: cacheNeedsRefresh ? .staleFallback : .current
+                )
+            }
+            if let feedCandidate {
+                return ArticlePreparationResult(
+                    prepared: feedCandidate.toPreparedArticle(),
+                    updatedCache: nil,
+                    cacheState: .current
+                )
+            }
+            return ArticlePreparationResult(
+                prepared: makeFallbackArticle(for: entry),
+                updatedCache: nil,
+                cacheState: .current
+            )
+        }
+
+        // 旧 revision 或公式定界符内夹入 HTML 的缓存不能继续命中高质量快路。
+        // 保留它作为离线兜底，同时用当前管线最多重抓一次网页正文。
+        if cacheNeedsRefresh {
+            let bestLocal = pickBestLocal(feedCandidate, cacheCandidate)
+            if Task.isCancelled {
+                return staleFallback(bestLocal: bestLocal, entry: entry)
+            }
+
+            if let entryURL = entry.url {
+                do {
+                    if let page = try await pageLoader.loadPage(for: entryURL),
+                       !page.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !Task.isCancelled,
+                       let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL),
+                       webCandidate.quality.isUsableCache,
+                       !ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: webCandidate.html) {
+                        let prepared = webCandidate.toPreparedArticle()
+                        return ArticlePreparationResult(
+                            prepared: prepared,
+                            updatedCache: computeCacheUpdate(
+                                existing: cached,
+                                prepared: prepared,
+                                entryID: entry.id,
+                                refreshed: true
+                            ),
+                            cacheState: .current,
+                            didRefreshCache: true
+                        )
+                    }
+                } catch {
+                    // 网络失败时保留旧缓存，不提升 revision，下一次前台打开继续重试。
+                }
+            }
+
+            // 无网页 URL 时，仅允许明显更强的 Feed 替代旧缓存；否则继续离线兜底。
+            if entry.url == nil,
+               let feedCandidate,
+               feedCandidate.quality.isStrong,
+               cacheCandidate.map({ isStrongFeedSignificantlyBetter(feedCandidate, than: $0) }) ?? true {
+                let prepared = feedCandidate.toPreparedArticle()
+                return ArticlePreparationResult(
+                    prepared: prepared,
+                    updatedCache: computeCacheUpdate(
+                        existing: cached,
+                        prepared: prepared,
+                        entryID: entry.id,
+                        refreshed: true
+                    ),
+                    cacheState: .current,
+                    didRefreshCache: true
+                )
+            }
+
+            return staleFallback(bestLocal: bestLocal, entry: entry)
+        }
 
         // 3. 高质量缓存优先，避免用较短的新 Feed 覆盖已经抓取到的完整正文。
         if let cacheCandidate,
@@ -28,14 +155,14 @@ public final class ArticlePreparationEngine: Sendable {
            !isStrongFeedSignificantlyBetter(feedCandidate, than: cacheCandidate) {
             let prepared = cacheCandidate.toPreparedArticle()
             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
-            return (prepared, cacheUpdate)
+            return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
         }
 
         // 4. 强 Feed 候选直接采用，0 网页请求。
         if let feedCandidate, feedCandidate.quality.isStrong {
             let prepared = feedCandidate.toPreparedArticle()
             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
-            return (prepared, cacheUpdate)
+            return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
         }
 
         // 选取当前最佳本地候选
@@ -44,7 +171,8 @@ public final class ArticlePreparationEngine: Sendable {
         // 5. 本地候选较弱，若存在目标 URL 则尝试最多抓取 1 次网页
         if let entryURL = entry.url {
             if Task.isCancelled {
-                return cancelOrFallback(bestLocal: bestLocal, entry: entry)
+                let fallback = cancelOrFallback(bestLocal: bestLocal, entry: entry)
+                return ArticlePreparationResult(prepared: fallback.0, updatedCache: fallback.1, cacheState: .current)
             }
 
             do {
@@ -52,7 +180,8 @@ public final class ArticlePreparationEngine: Sendable {
                    !page.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
 
                     if Task.isCancelled {
-                        return cancelOrFallback(bestLocal: bestLocal, entry: entry)
+                        let fallback = cancelOrFallback(bestLocal: bestLocal, entry: entry)
+                        return ArticlePreparationResult(prepared: fallback.0, updatedCache: fallback.1, cacheState: .current)
                     }
 
                     if let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL) {
@@ -61,12 +190,12 @@ public final class ArticlePreparationEngine: Sendable {
                             if isSignificantlyBetter(webCandidate.quality, than: bestLocal.quality) {
                                 let prepared = webCandidate.toPreparedArticle()
                                 let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
-                                return (prepared, cacheUpdate)
+                                return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
                             }
                         } else if webCandidate.quality.charCount >= 100 {
                             let prepared = webCandidate.toPreparedArticle()
                             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
-                            return (prepared, cacheUpdate)
+                            return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
                         }
                     }
                 }
@@ -76,17 +205,22 @@ public final class ArticlePreparationEngine: Sendable {
         }
 
         if Task.isCancelled {
-            return cancelOrFallback(bestLocal: bestLocal, entry: entry)
+            let fallback = cancelOrFallback(bestLocal: bestLocal, entry: entry)
+            return ArticlePreparationResult(prepared: fallback.0, updatedCache: fallback.1, cacheState: .current)
         }
 
         // 6. 回退到最佳本地候选或通用兜底
         if let bestLocal {
             let prepared = bestLocal.toPreparedArticle()
             let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
-            return (prepared, cacheUpdate)
+            return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
         }
 
-        return (makeFallbackArticle(for: entry), nil)
+        return ArticlePreparationResult(
+            prepared: makeFallbackArticle(for: entry),
+            updatedCache: nil,
+            cacheState: .current
+        )
     }
 
     // MARK: - Internal Candidate Model & Helpers
@@ -339,10 +473,12 @@ public final class ArticlePreparationEngine: Sendable {
     private func computeCacheUpdate(
         existing: ArticleCache?,
         prepared: PreparedArticle,
-        entryID: String
+        entryID: String,
+        refreshed: Bool = false
     ) -> ArticleCache? {
         if let existing,
            existing.isSanitized,
+           existing.normalizationRevision == ArticleCache.currentNormalizationRevision,
            existing.text == prepared.text,
            existing.html == prepared.html,
            existing.imageURLs == prepared.imageURLs,
@@ -356,9 +492,29 @@ public final class ArticlePreparationEngine: Sendable {
             text: prepared.text,
             html: prepared.html,
             imageURLs: prepared.imageURLs,
-            fetchedAt: existing?.fetchedAt ?? .now,
+            fetchedAt: refreshed ? .now : (existing?.fetchedAt ?? .now),
             sourceURL: prepared.baseURL,
-            isSanitized: true
+            isSanitized: true,
+            normalizationRevision: ArticleCache.currentNormalizationRevision
+        )
+    }
+
+    private func cacheRequiresRefresh(_ cache: ArticleCache) -> Bool {
+        if cache.normalizationRevision < ArticleCache.currentNormalizationRevision {
+            return true
+        }
+        guard let html = cache.html else { return false }
+        return ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: html)
+    }
+
+    private func staleFallback(
+        bestLocal: ArticleCandidate?,
+        entry: Entry
+    ) -> ArticlePreparationResult {
+        ArticlePreparationResult(
+            prepared: bestLocal?.toPreparedArticle() ?? makeFallbackArticle(for: entry),
+            updatedCache: nil,
+            cacheState: .staleFallback
         )
     }
 

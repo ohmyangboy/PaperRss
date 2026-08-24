@@ -4155,6 +4155,35 @@ enum PaperReaderBridge {
     )
 
     private static var _cachedMathJaxSource: String?
+    private static var _cachedMathJaxConfigSource: String?
+
+    static func loadMathJaxConfigSource() -> String? {
+        if let cached = _cachedMathJaxConfigSource {
+            return cached
+        }
+        if let url = Bundle.main.url(forResource: "paper-rss-config", withExtension: "js", subdirectory: "MathJax") ??
+                     Bundle.main.url(forResource: "paper-rss-config", withExtension: "js"),
+           let content = try? String(contentsOf: url, encoding: .utf8),
+           !content.isEmpty {
+            _cachedMathJaxConfigSource = content
+            return content
+        }
+        #if SWIFT_PACKAGE
+        if let moduleURL = Bundle.module.url(forResource: "paper-rss-config", withExtension: "js", subdirectory: "Resources/MathJax") ??
+                           Bundle.module.url(forResource: "paper-rss-config", withExtension: "js"),
+           let content = try? String(contentsOf: moduleURL, encoding: .utf8),
+           !content.isEmpty {
+            _cachedMathJaxConfigSource = content
+            return content
+        }
+        #endif
+        let localPath = "PaperRss/Resources/MathJax/paper-rss-config.js"
+        if let content = try? String(contentsOfFile: localPath, encoding: .utf8), !content.isEmpty {
+            _cachedMathJaxConfigSource = content
+            return content
+        }
+        return nil
+    }
 
     public static func loadMathJaxBundleSource() -> String? {
         if let cached = _cachedMathJaxSource {
@@ -4231,6 +4260,52 @@ enum PaperReaderBridge {
         return containsMath
     }
 
+    /// 在页面世界中严格串行完成配置、运行时求值和首次排版。只有
+    /// startup.promise 完成且页面实际生成公式节点时才返回成功。
+    @MainActor
+    static func injectMathJaxRuntime(in webView: WKWebView) async throws -> Int {
+        guard let configSource = loadMathJaxConfigSource(),
+              let runtimeSource = loadMathJaxBundleSource() else {
+            throw NSError(
+                domain: "PaperRss.MathJax",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "MathJax runtime resource is unavailable"]
+            )
+        }
+
+        let hasStartup = (try await webView.evaluateJavaScript(
+            "Boolean(window.MathJax?.startup?.promise)"
+        ) as? Bool) ?? false
+        if !hasStartup {
+            _ = try await webView.evaluateJavaScript(configSource)
+            _ = try await webView.evaluateJavaScript(runtimeSource)
+        }
+        let value = try await webView.callAsyncJavaScript(
+            """
+            const startup = window.MathJax?.startup?.promise;
+            if (!startup) {
+              throw new Error("MathJax startup promise is unavailable");
+            }
+            await startup;
+            const renderedCount = document.querySelectorAll('mjx-container').length;
+            window.dispatchEvent(new CustomEvent("paperRssLayoutRefresh"));
+            return renderedCount;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        let renderedCount = (value as? NSNumber)?.intValue ?? 0
+        guard renderedCount > 0 else {
+            throw NSError(
+                domain: "PaperRss.MathJax",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "MathJax completed without rendering formulas"]
+            )
+        }
+        return renderedCount
+    }
+
     static func isSameDocumentAnchor(_ url: URL, baseURL: URL?) -> Bool {
         guard url.fragment != nil else { return false }
         guard let baseURL else {
@@ -4247,32 +4322,7 @@ enum PaperReaderBridge {
     }
 
     static let mathConfigScript = WKUserScript(
-        source: """
-        (() => {
-          if (window.MathJax) return;
-          window.MathJax = {
-            tex: {
-              inlineMath: [['\\\\(', '\\\\)'], ['$', '$']],
-              displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']],
-              processEscapes: true,
-              processEnvironments: true
-            },
-            svg: {
-              fontCache: 'local'
-            },
-            options: {
-              enableMenu: false
-            },
-            startup: {
-              pageReady: () => {
-                return (window.MathJax.startup?.defaultPageReady ? window.MathJax.startup.defaultPageReady() : Promise.resolve()).then(() => {
-                  window.dispatchEvent(new CustomEvent("paperRssLayoutRefresh"));
-                }).catch(() => {});
-              }
-            }
-          };
-        })();
-        """,
+        source: loadMathJaxConfigSource() ?? "",
         injectionTime: .atDocumentStart,
         forMainFrameOnly: true,
         in: .defaultClient
@@ -4791,30 +4841,36 @@ private struct ArticleHTMLView: NSViewRepresentable {
             )
         }
 
-        /// 已注入 TeX 运行时的文档键（entryID|renderSignature），避免同文档重复求值。
+        /// 已注入 TeX 运行时的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
         private var lastMathInjectionKey: String?
+        private var mathInjectionAttempts: [String: Int] = [:]
 
         /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
         /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
         private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
             guard parent.features.containsMath else { return }
-            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")"
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
             guard lastMathInjectionKey != injectionKey else { return }
-            guard let runtimeSource = PaperReaderBridge.loadMathJaxBundleSource() else { return }
-            lastMathInjectionKey = injectionKey
-            // 按序执行：配置脚本幂等（window.MathJax 已定义则早退）→ 运行时 → 就绪校验
-            webView.evaluateJavaScript(PaperReaderBridge.mathConfigScript.source, completionHandler: nil)
-            webView.evaluateJavaScript(runtimeSource) { _, error in
-                if let error {
-                    print("[PaperRss][MathJax] runtime evaluation failed: \(error.localizedDescription)")
+            let attempt = (mathInjectionAttempts[injectionKey] ?? 0) + 1
+            guard attempt <= 2 else { return }
+            mathInjectionAttempts = [injectionKey: attempt]
+
+            Task { @MainActor [weak self, weak webView] in
+                guard let self, let webView else { return }
+                do {
+                    _ = try await PaperReaderBridge.injectMathJaxRuntime(in: webView)
+                    guard injectionKey == "\(self.parent.entry.id)|\(self.loadedArticleKey ?? "")|\(self.currentLoadGeneration)" else { return }
+                    self.lastMathInjectionKey = injectionKey
+                    self.mathInjectionAttempts.removeValue(forKey: injectionKey)
+                } catch {
+                    guard injectionKey == "\(self.parent.entry.id)|\(self.loadedArticleKey ?? "")|\(self.currentLoadGeneration)" else { return }
+                    if attempt < 2 {
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        self.injectMathJaxRuntimeIfNeeded(in: webView)
+                    } else {
+                        print("[PaperRss][MathJax] runtime evaluation failed after retry: \(error.localizedDescription)")
+                    }
                 }
-            }
-            webView.evaluateJavaScript("typeof MathJax !== 'undefined'") { value, _ in
-                #if DEBUG
-                if (value as? Bool) != true {
-                    print("[PaperRss][MathJax] runtime not defined after injection")
-                }
-                #endif
             }
         }
 
@@ -5515,30 +5571,36 @@ private struct ArticleHTMLView: UIViewRepresentable {
             )
         }
 
-        /// 已注入 TeX 运行时的文档键（entryID|renderSignature），避免同文档重复求值。
+        /// 已注入 TeX 运行时的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
         private var lastMathInjectionKey: String?
+        private var mathInjectionAttempts: [String: Int] = [:]
 
         /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
         /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
         private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
             guard parent.features.containsMath else { return }
-            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")"
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
             guard lastMathInjectionKey != injectionKey else { return }
-            guard let runtimeSource = PaperReaderBridge.loadMathJaxBundleSource() else { return }
-            lastMathInjectionKey = injectionKey
-            // 按序执行：配置脚本幂等（window.MathJax 已定义则早退）→ 运行时 → 就绪校验
-            webView.evaluateJavaScript(PaperReaderBridge.mathConfigScript.source, completionHandler: nil)
-            webView.evaluateJavaScript(runtimeSource) { _, error in
-                if let error {
-                    print("[PaperRss][MathJax] runtime evaluation failed: \(error.localizedDescription)")
+            let attempt = (mathInjectionAttempts[injectionKey] ?? 0) + 1
+            guard attempt <= 2 else { return }
+            mathInjectionAttempts = [injectionKey: attempt]
+
+            Task { @MainActor [weak self, weak webView] in
+                guard let self, let webView else { return }
+                do {
+                    _ = try await PaperReaderBridge.injectMathJaxRuntime(in: webView)
+                    guard injectionKey == "\(self.parent.entry.id)|\(self.loadedArticleKey ?? "")|\(self.currentLoadGeneration)" else { return }
+                    self.lastMathInjectionKey = injectionKey
+                    self.mathInjectionAttempts.removeValue(forKey: injectionKey)
+                } catch {
+                    guard injectionKey == "\(self.parent.entry.id)|\(self.loadedArticleKey ?? "")|\(self.currentLoadGeneration)" else { return }
+                    if attempt < 2 {
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        self.injectMathJaxRuntimeIfNeeded(in: webView)
+                    } else {
+                        print("[PaperRss][MathJax] runtime evaluation failed after retry: \(error.localizedDescription)")
+                    }
                 }
-            }
-            webView.evaluateJavaScript("typeof MathJax !== 'undefined'") { value, _ in
-                #if DEBUG
-                if (value as? Bool) != true {
-                    print("[PaperRss][MathJax] runtime not defined after injection")
-                }
-                #endif
             }
         }
 

@@ -388,6 +388,118 @@ final class AppFeatureRegressionTests: XCTestCase {
         XCTAssertEqual(fetchedArtifact?.content, "这是一篇测试文章的核心摘要总结。")
     }
 
+    func testStaleMathFallbackIsNotMemoizedAndForegroundOpenRetries() async throws {
+        let loader = MockPageLoader()
+        let articleURL = URL(string: "https://read.com/article/legacy-math")!
+        loader.errorMap[articleURL] = URLError(.notConnectedToInternet)
+        let retryingStore = AppStore(
+            testDatabase: .empty,
+            feedFetcher: { _ in FeedFetchResult.notModified(etag: nil, lastModified: nil) },
+            pageLoader: loader
+        )
+        let feed = try retryingStore.localProvider.addFeed(
+            title: "公式源",
+            feedURL: URL(string: "https://read.com/math.xml")!
+        )
+        let inserted = try retryingStore.libraryDatabase.write { db in
+            try retryingStore.localProvider.articleRepository.mergeParsedEntries(
+                feedID: feed.id.uuidString,
+                parsedEntries: [
+                    ParsedFeedEntry(
+                        id: "legacy-math-retry",
+                        title: "Legacy math retry",
+                        author: nil,
+                        url: articleURL,
+                        publishedAt: .now,
+                        summary: "短摘要",
+                        contentHTML: "<p>短摘要</p>"
+                    )
+                ],
+                in: db
+            )
+        }
+        let entryID = try XCTUnwrap(inserted.first?.id)
+        let body = String(repeating: "旧缓存仍可供离线阅读，但不能阻止下一次前台恢复。", count: 30)
+        try retryingStore.localProvider.saveCache(
+            ArticleCache(
+                entryID: entryID,
+                text: body,
+                html: "<article><p>\(body)</p><div>$$c_s^<em>*=x</em>$$</div></article>",
+                sourceURL: articleURL,
+                isSanitized: true,
+                normalizationRevision: 0
+            )
+        )
+        retryingStore.reloadState()
+        let entry = try XCTUnwrap(retryingStore.entry(id: entryID))
+
+        _ = await retryingStore.prepareArticle(for: entry)
+        XCTAssertNil(retryingStore.memoizedPreparedArticle(for: entry))
+        _ = await retryingStore.prepareArticle(for: entry)
+
+        XCTAssertEqual(loader.requestCount, 2)
+        XCTAssertNil(retryingStore.memoizedPreparedArticle(for: entry))
+        XCTAssertEqual(try retryingStore.localProvider.fetchCache(entryID: entryID)?.normalizationRevision, 0)
+    }
+
+    func testSuccessfulStaleMathRecoveryInvalidatesMemoryAndPublishesRefreshSignal() async throws {
+        let loader = MockPageLoader()
+        let articleURL = URL(string: "https://read.com/article/recovered-math")!
+        let recoveredBody = String(repeating: "恢复后的完整正文保留公式结构。", count: 50)
+        loader.responseMap[articleURL] =
+            "<article><p>\(recoveredBody)</p><div>$$c_s^*=x\\quad s^*=y$$</div></article>"
+        let recoveryStore = AppStore(
+            testDatabase: .empty,
+            feedFetcher: { _ in FeedFetchResult.notModified(etag: nil, lastModified: nil) },
+            pageLoader: loader
+        )
+        let feed = try recoveryStore.localProvider.addFeed(
+            title: "公式恢复源",
+            feedURL: URL(string: "https://read.com/recovered.xml")!
+        )
+        let inserted = try recoveryStore.libraryDatabase.write { db in
+            try recoveryStore.localProvider.articleRepository.mergeParsedEntries(
+                feedID: feed.id.uuidString,
+                parsedEntries: [
+                    ParsedFeedEntry(
+                        id: "successful-math-recovery",
+                        title: "Successful math recovery",
+                        author: nil,
+                        url: articleURL,
+                        publishedAt: .now,
+                        summary: "短摘要",
+                        contentHTML: "<p>短摘要</p>"
+                    )
+                ],
+                in: db
+            )
+        }
+        let entryID = try XCTUnwrap(inserted.first?.id)
+        try recoveryStore.localProvider.saveCache(
+            ArticleCache(
+                entryID: entryID,
+                text: String(repeating: "旧缓存", count: 250),
+                html: "<article><p>旧缓存</p><div>$$c_s^<em>*=x</em>$$</div></article>",
+                sourceURL: articleURL,
+                isSanitized: true,
+                normalizationRevision: 0
+            )
+        )
+        recoveryStore.reloadState()
+        let entry = try XCTUnwrap(recoveryStore.entry(id: entryID))
+
+        let prepared = await recoveryStore.prepareArticle(for: entry)
+
+        XCTAssertEqual(loader.requestCount, 1)
+        XCTAssertTrue(prepared.html.contains("c_s^*=x"))
+        XCTAssertNil(recoveryStore.memoizedPreparedArticle(for: entry))
+        XCTAssertEqual(recoveryStore.articleRefreshSignal?.entryID, entryID)
+        XCTAssertEqual(
+            try recoveryStore.localProvider.fetchCache(entryID: entryID)?.normalizationRevision,
+            ArticleCache.currentNormalizationRevision
+        )
+    }
+
     // MARK: - 6. 时间线多作用域与分页查询回归 (Timeline Scopes & Pagination)
 
     func testTimelineScopesAndPaginationRegression() async throws {
