@@ -1014,22 +1014,6 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertNotNil(store.feeds.first(where: { $0.id == feed3.id }))
     }
 
-    @MainActor
-    func testIgnoredVersionStateManagement() throws {
-        let database = AppDatabase(feeds: [], entries: [], articleCaches: [:], readingStates: [:], artifacts: [], llmConfiguration: .default)
-        let store = AppStore(testDatabase: database) { _ in fatalError("Unused in test") }
-
-        XCTAssertNil(store.ignoredVersion)
-
-        // Ignore v2.0.0
-        store.ignoreVersion("v2.0.0")
-        XCTAssertEqual(store.ignoredVersion, "2.0.0")
-
-        // Clear ignored version
-        store.clearIgnoredVersion()
-        XCTAssertNil(store.ignoredVersion)
-    }
-
     func testAppLanguageResolvesEnglishAndChineseFallbackFromSystemPreference() {
         XCTAssertEqual(
             AppLanguage.system.resolvedLocalization(preferredLanguages: ["en-US", "zh-Hans"]),

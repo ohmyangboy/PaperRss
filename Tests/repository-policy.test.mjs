@@ -154,6 +154,7 @@ test('agent assets do not contain absolute user-directory symlinks', async () =>
 
 test('release script generates version-focused notes without repetitive marketing copy', async () => {
   const releaseScript = await readRepoFile('scripts/release.sh');
+  const publishScript = await readRepoFile('scripts/sparkle/publish_release.sh');
 
   assert.doesNotMatch(
     releaseScript,
@@ -166,13 +167,62 @@ test('release script generates version-focused notes without repetitive marketin
     'scripts/release.sh must not contain hardcoded marketing slogans',
   );
   assert.match(
-    releaseScript,
-    /--notes-file|--notes/,
-    'scripts/release.sh must support custom notes flags',
+    publishScript,
+    /--notes-file|--title/,
+    'publish chain must support custom release notes/title flags',
   );
   assert.match(
     releaseScript,
-    /COMMITS_RANGE=/,
-    'scripts/release.sh must dynamically scope changelog to relevant commits',
+    /publish_release\.sh/,
+    'release.sh publish 子命令必须委托受审计的发布编排器（默认 dry-run）',
   );
+});
+
+test('update pipeline keeps Sparkle as the single authority and bans legacy update paths', async () => {
+  const sources = ['PaperRss/Sources/App', 'PaperRss/Sources/AppUpdateSupport'];
+  for (const dir of sources) {
+    const entries = [];
+    async function walk(p) {
+      for (const e of await readdir(fromRoot(p), { withFileTypes: true })) {
+        const rel = `${p}/${e.name}`;
+        if (e.isDirectory()) await walk(rel);
+        else if (e.name.endsWith('.swift')) entries.push({ rel, text: await readRepoFile(rel) });
+      }
+    }
+    await walk(dir);
+    assert.ok(entries.length > 0);
+
+    for (const { rel, text } of entries) {
+      assert.doesNotMatch(
+        text,
+        /SPUStandardUpdaterController|SPUStandardUserDriver/,
+        `${rel} 禁止绑定 Sparkle 标准 UI（ADR-0001：唯一入口是左下角胶囊）`,
+      );
+      assert.doesNotMatch(text, /UpdateCheckService/, `${rel} 旧 GitHub 检查器已由 Sparkle 取代`);
+      assert.doesNotMatch(text, /ignoredVersion|ignoreVersion\(/, `${rel} 不允许永久忽略版本`);
+      assert.doesNotMatch(text, /ScheduledUpdateReminder/, `${rel} 右上角通知条形态已被否决`);
+    }
+  }
+
+  // 胶囊是唯一入口：RootView 只挂载一次
+  const rootView = await readRepoFile('PaperRss/Sources/App/RootView.swift');
+  assert.match(rootView, /UpdateCapsule\(/);
+  assert.equal((rootView.match(/UpdateCapsule\(/g) || []).length, 1);
+
+  // 生产 Info.plist 不允许硬编码 feed/公钥（构建期注入，缺键 fail-closed）
+  for (const plist of ['PaperRss/Resources/macOS-Info.plist', 'PaperRss/Resources/iOS-Info.plist']) {
+    const text = await readRepoFile(plist);
+    assert.doesNotMatch(text, /SUFeedURL|SUBetaFeedURL|SUPublicEDKey/, `${plist} 更新配置必须构建期注入`);
+  }
+
+  // Package.swift 锁定 Sparkle 版本并排除 node 契约测试
+  const packageSwift = await readRepoFile('Package.swift');
+  assert.match(packageSwift, /sparkle-project\/Sparkle\.git", exact: "2\.\d+\.\d+"/);
+  for (const t of ['sparkle-release.test.mjs','sparkle-release-gates.test.mjs','sparkle-publish-dry-run.test.mjs']) {
+    assert.match(packageSwift, new RegExp(`"${t.replace(/\./g,'\\.')}"`));
+  }
+
+  // 凭据文件不入库
+  const gitignore = await readRepoFile('.gitignore');
+  assert.match(gitignore, /release\.env/);
 });

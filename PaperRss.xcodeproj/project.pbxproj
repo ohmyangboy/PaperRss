@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000032 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* GRDB */; };
 		A10000000000000000000033 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* GRDB */; };
+		A20000000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000051 /* Sparkle */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A10000000000000000000042 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000041 /* Markdown */; };
 		A10000000000000000000043 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000041 /* Markdown */; };
 /* End PBXBuildFile section */
@@ -48,6 +49,7 @@
 			files = (
 				A10000000000000000000032 /* GRDB in Frameworks */,
 				A10000000000000000000042 /* Markdown in Frameworks */,
+				A20000000000000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +104,7 @@
 			packageProductDependencies = (
 				A10000000000000000000031 /* GRDB */,
 				A10000000000000000000041 /* Markdown */,
+				A20000000000000000000051 /* Sparkle */,
 			);
 			productName = PaperRss;
 			productReference = A10000000000000000000003 /* PaperRss.app */;
@@ -161,6 +164,7 @@
 			packageReferences = (
 				A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				A10000000000000000000040 /* XCRemoteSwiftPackageReference "swift-markdown" */,
+				A20000000000000000000050 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			productRefGroup = A10000000000000000000002 /* Products */;
 			projectDirPath = "";
@@ -385,6 +389,14 @@
 				version = 0.8.0;
 			};
 		};
+		A20000000000000000000050 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -392,6 +404,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
 			productName = GRDB;
+		};
+		A20000000000000000000051 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A20000000000000000000050 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		A10000000000000000000041 /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;

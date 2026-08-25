@@ -155,8 +155,6 @@ public final class AppStore: ObservableObject {
         activeBilingualRequest = nil
     }
 
-    @Published public private(set) var updateStatus: UpdateCheckStatus = .idle
-    @Published public private(set) var ignoredVersion: String?
     @Published public private(set) var activeBilingualEntryIDs: Set<String> = []
 
     public func isBilingualActive(for entryID: String) -> Bool {
@@ -201,7 +199,6 @@ public final class AppStore: ObservableObject {
         static let refreshOnLaunch = "PaperRss.refreshOnLaunch"
         static let appTheme = "PaperRss.appTheme"
         static let articleFontSize = "PaperRss.articleFontSize"
-        static let ignoredVersion = "PaperRss.ignoredVersion"
         static let llmConfiguration = "PaperRss.llmConfiguration"
     }
 
@@ -281,7 +278,6 @@ public final class AppStore: ObservableObject {
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
         articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
-        ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
 
         if let data = preferences.data(forKey: PreferenceKey.llmConfiguration),
            let savedConfig = try? JSONDecoder().decode(LLMConfiguration.self, from: data) {
@@ -304,10 +300,6 @@ public final class AppStore: ObservableObject {
         if migrationSucceededOrNotNeeded {
             try? localProvider.ensureAccountExists()
             reloadState()
-        }
-
-        Task { [weak self] in
-            await self?.checkForUpdates(isUserInitiated: false)
         }
     }
 
@@ -372,7 +364,6 @@ public final class AppStore: ObservableObject {
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
         articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
-        ignoredVersion = preferences.string(forKey: PreferenceKey.ignoredVersion)
         llmConfiguration = testDatabase.llmConfiguration
 
         if migrationSucceededOrNotNeeded {
@@ -2193,19 +2184,6 @@ public final class AppStore: ObservableObject {
     public func decreaseArticleFontSize() { setArticleFontSize(articleFontSize - 1) }
     public func resetArticleFontSize() { setArticleFontSize(17) }
 
-    public func ignoreVersion(_ version: String) {
-        let clean = version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        guard ignoredVersion != clean else { return }
-        ignoredVersion = clean
-        UserDefaults.standard.set(clean, forKey: PreferenceKey.ignoredVersion)
-    }
-
-    public func clearIgnoredVersion() {
-        guard ignoredVersion != nil else { return }
-        ignoredVersion = nil
-        UserDefaults.standard.removeObject(forKey: PreferenceKey.ignoredVersion)
-    }
-
     public func startAutomaticRefresh() {
         guard automaticRefreshTask == nil else { return }
         automaticRefreshTask = Task { @MainActor [weak self] in
@@ -2243,20 +2221,6 @@ public final class AppStore: ObservableObject {
         guard automaticRefreshTask != nil else { return }
         stopAutomaticRefresh()
         startAutomaticRefresh()
-    }
-
-    public func checkForUpdates(isUserInitiated: Bool) async {
-        updateStatus = .checking
-        do {
-            let result = try await UpdateCheckService.checkForUpdates()
-            if result.hasUpdate, let release = result.release, release.version != ignoredVersion {
-                updateStatus = .hasUpdate(release: release, checkedAt: .now)
-            } else {
-                updateStatus = .upToDate(checkedAt: .now)
-            }
-        } catch {
-            updateStatus = .failed(message: error.localizedDescription)
-        }
     }
 
     // MARK: - Compatibility Property for Tests

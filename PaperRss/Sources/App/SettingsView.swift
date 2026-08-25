@@ -7,6 +7,11 @@ import UIKit
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
+#if os(macOS)
+#if SWIFT_PACKAGE
+import PaperRssUpdateSupport
+#endif
+#endif
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case appearance
@@ -66,6 +71,7 @@ struct SettingsView: View {
     @ObservedObject var store: AppStore
     #if os(macOS)
     @ObservedObject var attention: MacSystemAttentionController
+    @ObservedObject var updateCoordinator: UpdateCoordinator
     #endif
     @State private var selectedSection: SettingsSection = SettingsSection.allCases.first ?? .appearance
     @State private var configuration = LLMConfiguration.default
@@ -248,15 +254,6 @@ struct SettingsView: View {
                     .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.85))
 
                 Spacer(minLength: 0)
-
-                if section == .about && store.updateStatus.hasNewVersion {
-                    Text(I18N.localized("NEW"))
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.orange, in: Capsule())
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -551,7 +548,7 @@ struct SettingsView: View {
 
                         Button(I18N.shared.localized("前往 PayPal")) {
                             if let url = URL(string: "https://paypal.me/ohmyangboy") {
-                                UpdateCheckService.openURL(url)
+                                AppInfo.openURL(url)
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -607,7 +604,7 @@ struct SettingsView: View {
                 ) {
                     Button {
                         if let url = URL(string: "https://github.com/ohmyangboy/PaperRss/issues") {
-                            UpdateCheckService.openURL(url)
+                            AppInfo.openURL(url)
                         }
                     } label: {
                         HStack(spacing: 4) {
@@ -626,7 +623,7 @@ struct SettingsView: View {
                 ) {
                     Button {
                         if let url = URL(string: "https://github.com/ohmyangboy") {
-                            UpdateCheckService.openURL(url)
+                            AppInfo.openURL(url)
                         }
                     } label: {
                         HStack(spacing: 4) {
@@ -1094,7 +1091,7 @@ struct SettingsView: View {
                             .background(PaperTheme.accent.opacity(0.12), in: Capsule())
                     }
 
-                    Text("Version \(UpdateCheckService.currentVersion) (Build \(UpdateCheckService.currentBuild))")
+                    Text("Version \(AppInfo.currentVersion) (Build \(AppInfo.currentBuild))")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1129,7 +1126,7 @@ struct SettingsView: View {
                     description: "https://github.com/ohmyangboy/PaperRss"
                 ) {
                     Button {
-                        UpdateCheckService.openURL(UpdateCheckService.githubRepositoryURL)
+                        AppInfo.openURL(AppInfo.githubRepositoryURL)
                     } label: {
                         HStack(spacing: 4) {
                             Text(I18N.shared.localized("前往 GitHub", "Open GitHub"))
@@ -1142,43 +1139,41 @@ struct SettingsView: View {
 
             settingsGroup(
                 I18N.shared.localized("软件更新", "Software Update"),
-                footer: I18N.shared.localized("应用启动时会自动在后台检查 Release 更新；您也可以随时点击右侧按钮手动检查。")
+                footer: I18N.shared.localized("应用会在每天首次启动或回到前台时自动检查更新；您也可以随时手动检查。更新经数字签名验证后安装。")
             ) {
                 settingsRow(
                     I18N.shared.localized("当前版本状态", "Current Version Status"),
                     description: updateStatusDescription
                 ) {
-                    if store.updateStatus.isChecking {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else if case let .hasUpdate(release, _) = store.updateStatus {
-                        Button {
-                            UpdateCheckService.openURL(release.htmlURL)
-                        } label: {
-                            Label(I18N.shared.localized("下载新版本", "Download New Release"), systemImage: "arrow.down.circle.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else {
-                        Button {
-                            Task {
-                                await store.checkForUpdates(isUserInitiated: true)
-                            }
-                        } label: {
-                            Text(I18N.shared.localized("检查更新", "Check for Updates"))
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                    updateStatusControls
                 }
 
-                if case let .hasUpdate(release, _) = store.updateStatus, let body = release.body, !body.isEmpty {
+                #if os(macOS)
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow(
+                    I18N.shared.localized("更新通道", "Update Channel"),
+                    description: I18N.shared.localized("Beta 通道可提前体验新功能，可能不够稳定。", "The Beta channel offers early access to new features and may be less stable.")
+                ) {
+                    Picker(I18N.shared.localized("通道", "Channel"), selection: channelBinding) {
+                        Text(I18N.shared.localized("Stable 稳定版", "Stable")).tag(UpdateChannel.stable)
+                        Text(I18N.shared.localized("Beta 抢先版", "Beta")).tag(UpdateChannel.beta)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                    .disabled(!updateCoordinator.canChangeChannel)
+                }
+                #endif
+
+                if let notes = activeReleaseNotes, !notes.isEmpty {
                     Divider().padding(.horizontal, 18).opacity(0.35)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(I18N.shared.localizedFormat("新版本更新说明 (%@)", release.tagName))
+                        Text(I18N.shared.localizedFormat("新版本更新说明 (%@)", activeReleaseVersion))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
 
-                        Text(body)
+                        Text(notes)
                             .font(.footnote)
                             .foregroundStyle(.primary)
                             .lineLimit(8)
@@ -1193,20 +1188,135 @@ struct SettingsView: View {
         }
     }
 
+    #if os(macOS)
+    @ViewBuilder
+    private var updateStatusControls: some View {
+        do {
+            let coordinator = updateCoordinator
+            switch coordinator.state {
+            case .checking:
+                ProgressView()
+                    .controlSize(.small)
+            case .downloading:
+                ProgressView()
+                    .controlSize(.small)
+            case .preparing:
+                ProgressView()
+                    .controlSize(.small)
+            case let .readyToInstall(release):
+                Button {
+                    coordinator.installAndRelaunch()
+                } label: {
+                    Label(I18N.shared.localized("重启并安装 %@", release.displayVersion), systemImage: "power.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+            case let .updateAvailable(release):
+                Button {
+                    coordinator.beginDownload()
+                } label: {
+                    Label(
+                        I18N.shared.localizedFormat("下载更新 %@", release.displayVersion),
+                        systemImage: "arrow.down.circle.fill"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+            case .failed:
+                Button(I18N.shared.localized("重试检查", "Retry Check")) {
+                    coordinator.checkForUpdates()
+                }
+                .buttonStyle(.bordered)
+            default:
+                Button(I18N.shared.localized("检查更新", "Check for Updates")) {
+                    coordinator.checkForUpdates()
+                }
+                .buttonStyle(.bordered)
+                .disabled(coordinator.state.isActiveSession)
+            }
+        }
+    }
+
+    private var channelBinding: Binding<UpdateChannel> {
+        Binding<UpdateChannel>(
+            get: { updateCoordinator.channel },
+            set: { updateCoordinator.selectChannel($0) }
+        )
+    }
+    #endif
+
+    private var activeReleaseNotes: String? {
+        #if os(macOS)
+        let coordinator = updateCoordinator
+        switch coordinator.state {
+        case let .updateAvailable(release):
+            return release.releaseNotes
+        case let .downloading(progress):
+            return progress.release.releaseNotes
+        case let .preparing(preparation):
+            return preparation.release.releaseNotes
+        case let .readyToInstall(release):
+            return release.releaseNotes
+        default:
+            return nil
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    private var activeReleaseVersion: String {
+        #if os(macOS)
+        let coordinator = updateCoordinator
+        switch coordinator.state {
+        case let .updateAvailable(release):
+            return release.displayVersion
+        case let .downloading(progress):
+            return progress.release.displayVersion
+        case let .preparing(preparation):
+            return preparation.release.displayVersion
+        case let .readyToInstall(release):
+            return release.displayVersion
+        default:
+            return ""
+        }
+        #else
+        return ""
+        #endif
+    }
+
     private var updateStatusDescription: String {
-        switch store.updateStatus {
+        #if os(macOS)
+        let coordinator = updateCoordinator
+        switch coordinator.state {
         case .idle:
             return I18N.shared.localized("尚未检查", "Not checked yet")
         case .checking:
-            return I18N.shared.localized("正在连接 GitHub 检查 Release 更新…", "Checking GitHub for updates...")
+            return I18N.shared.localized("正在检查更新…", "Checking for updates...")
         case let .upToDate(checkedAt):
             let timeString = DateFormatter.localizedString(from: checkedAt, dateStyle: .none, timeStyle: .short)
             return I18N.shared.localizedFormat("已是最新版本（上次检查：%@）", timeString)
-        case let .hasUpdate(release, _):
-            return I18N.shared.localizedFormat("发现新版本：%@", release.tagName)
-        case let .failed(message):
-            return I18N.shared.localizedFormat("检查更新失败：%@", message)
+        case let .updateAvailable(release):
+            return I18N.shared.localizedFormat("发现新版本：%@", release.displayVersion)
+        case let .downloading(progress):
+            if let fraction = progress.fractionCompleted {
+                return I18N.shared.localizedFormat("正在下载更新：%lld%%", Int((fraction * 100).rounded()))
+            }
+            return I18N.shared.localized("正在下载更新…", "Downloading update…")
+        case let .preparing(preparation):
+            return I18N.shared.localizedFormat("正在准备更新：%lld%%", Int((preparation.fractionCompleted * 100).rounded()))
+        case let .readyToInstall(release):
+            return I18N.shared.localizedFormat("更新 %@ 已就绪，重启即可完成安装。", release.displayVersion)
+        case let .installing(release):
+            return I18N.shared.localizedFormat("正在安装更新 %@…", release.displayVersion)
+        case .relaunching:
+            return I18N.shared.localized("正在重启以完成安装…", "Relaunching to finish installation…")
+        case let .deferredUntilQuit(release):
+            return I18N.shared.localizedFormat("更新 %@ 将在退出应用时自动安装。", release.displayVersion)
+        case let .failed(failure):
+            return I18N.shared.localizedFormat("检查更新失败：%@", failure.message)
         }
+        #else
+        return I18N.shared.localized("此构建不支持应用内更新。", "In-app updates are unavailable in this build.")
+        #endif
     }
 
     @ViewBuilder

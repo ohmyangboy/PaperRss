@@ -1,350 +1,256 @@
 #!/bin/bash
-set -e
+# release.sh — PaperRss App Store 外发布流水线（唯一编排入口）
+#
+# 子命令:
+#   build   --version <X.Y.Z[-beta.N]> --build <N> [--channel stable|beta]
+#           [--skip-notarization] [--allow-dirty] [--no-tests] [--force]
+#   verify  --manifest <release-manifest.json>
+#   publish --manifest <release-manifest.json> …（默认 dry-run；--execute 见门禁）
+#
+# 门禁输出 [PASS]/[FAIL]，任一签名、公证、Staple、Gatekeeper 校验失败立即终止。
+# 配置经环境变量或 scripts/sparkle/release.env（不入库）；脚本不回显任何变量值。
+set -Eeuo pipefail
 
-# 确保脚本在项目根目录下运行
-CDPATH= cd "$(dirname "$0")/.."
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SPARKLE="$ROOT_DIR/scripts/sparkle"
+cd "$ROOT_DIR"
 
-# 1. 参数解析
-LOCAL_ONLY=false
-VERSION=""
-NOTES_TEXT=""
-NOTES_FILE=""
+pass()  { echo "[PASS] $*"; }
+fail()  { echo "[FAIL] $*" >&2; exit 1; }
+warn()  { echo "[WARN] $*"; }
+step()  { echo ""; echo "━━━ $* ━━━"; }
 
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --local|--dmg-only)
-            LOCAL_ONLY=true
-            shift
-            ;;
-        --notes)
-            NOTES_TEXT="$2"
-            shift 2
-            ;;
-        --notes-file)
-            NOTES_FILE="$2"
-            shift 2
-            ;;
-        *)
-            if [ -z "$VERSION" ]; then
-                VERSION="$1"
-            fi
-            shift
-            ;;
+usage() {
+  sed -n '2,12p' "$0"
+  exit "${1:-0}"
+}
+
+CMD="${1:-}"
+[[ -n "$CMD" ]] || usage 1
+shift
+case "$CMD" in
+  build|verify|publish) ;;
+  *) fail "未知子命令: ${CMD}（可用: build / verify / publish）" ;;
+esac
+
+# ── 配置装载：环境变量优先，其次 release.env（gitignored）───────────────
+if [[ -f "$SPARKLE/release.env" ]]; then
+  # 只接受 KEY=VALUE 行；不 eval，杜绝注入
+  while IFS='=' read -r k v; do
+    [[ -z "$k" || "$k" == \#* ]] && continue
+    case "$k" in
+      PAPERRSS_TEAM_ID|PAPERRSS_NOTARY_PROFILE|PAPERRSS_SIGNING_ACCOUNT|\
+      PAPERRSS_SUPUBLIC_ED_KEY|PAPERRSS_APPCAST_BASE_URL|PAPERRSS_PUBLISH_REPO|\
+      PAPERRSS_APPCAST_REPO|PAPERRSS_APPCAST_BRANCH)
+        if [[ -z "${!k:-}" ]]; then printf -v "$k" '%s' "$v"; fi ;;
     esac
-done
-
-# 2. 环境准备
-if [ -d "/Applications/Xcode-beta.app/Contents/Developer" ]; then
-    export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
-else
-    export DEVELOPER_DIR="$(xcode-select -p)"
+  done < <(grep -v '^\s*$' "$SPARKLE/release.env" || true)
 fi
+PAPERRSS_APPCAST_BASE_URL="${PAPERRSS_APPCAST_BASE_URL:-https://ohmyangboy.github.io/PaperRss/appcast}"
 
-echo "🔧 开发者环境: $DEVELOPER_DIR"
+# ══════════════════════════ build ══════════════════════════
+if [[ "$CMD" == "build" ]]; then
+  VERSION="" BUILD="" CHANNEL="stable" FORCE=false ALLOW_DIRTY=false NO_TESTS=false SKIP_NOTARIZATION=false
+  OUTPUT_ROOT=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --version) VERSION="${2:-}"; shift 2 ;;
+      --build) BUILD="${2:-}"; shift 2 ;;
+      --channel) CHANNEL="${2:-}"; shift 2 ;;
+      --force) FORCE=true; shift ;;
+      --allow-dirty) ALLOW_DIRTY=true; shift ;;
+      --no-tests) NO_TESTS=true; shift ;;
+      --skip-notarization) SKIP_NOTARIZATION=true; shift ;;
+      --output-root) OUTPUT_ROOT="${2:-}"; shift 2 ;;
+      *) fail "build: 未知参数 $1" ;;
+    esac
+  done
 
-echo "🌐 正在检查官网目录状态..."
-WEBSITE_CHANGES=$(git status --porcelain -- website/)
-if [ -n "$WEBSITE_CHANGES" ]; then
-    echo "⚠️ 提示: website/ 存在未提交变更。请确保发布前提交官网变更以便 GitHub Actions 自动更新 Pages："
-    echo "$WEBSITE_CHANGES"
-fi
+  # [GATE 0] 环境预检
+  step "[GATE 0] 环境预检"
+  [[ -n "$VERSION" ]] || fail "缺少 --version"
+  [[ -n "$BUILD" ]]  || fail "缺少 --build"
+  [[ "$CHANNEL" == "stable" || "$CHANNEL" == "beta" ]] || fail "--channel 必须是 stable|beta"
+  CLEAN_VERSION=${VERSION#v}
+  [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]] \
+    || fail "版本号不符合 SemVer vX.Y.Z[-stage.N]: $VERSION"
+  [[ "$BUILD" =~ ^[0-9]+$ ]] || fail "--build 必须是纯数字"
 
-if [ "$LOCAL_ONLY" = "false" ]; then
-    # 检查 GitHub CLI 所需工具
-    if ! command -v gh &> /dev/null; then
-        echo "❌ 错误: 未安装 GitHub CLI ('gh')。请先通过 brew install gh 安装。"
-        exit 1
-    fi
+  for tool in xcodebuild node git plutil ditto hdiutil codesign spctl; do
+    command -v "$tool" >/dev/null 2>&1 || fail "缺少工具: $tool"
+  done
+  command -v create-dmg >/dev/null 2>&1 && HAVE_CREATE_DMG=true || HAVE_CREATE_DMG=false
 
-    if ! gh auth status &> /dev/null; then
-        echo "❌ 错误: gh 未登录，请先运行 'gh auth login'。"
-        exit 1
-    fi
-fi
+  if [[ "$SKIP_NOTARIZATION" != true ]]; then
+    for var in PAPERRSS_TEAM_ID PAPERRSS_NOTARY_PROFILE PAPERRSS_SUPUBLIC_ED_KEY; do
+      [[ -n "${!var:-}" ]] || fail "缺少 ${var}（检查环境或 scripts/sparkle/release.env）"
+    done
+    NOTARY_SET=yes
+  else
+    warn "公证已跳过：产物仅限本机演练，禁止对外分发"
+    NOTARY_SET=skipped
+    [[ -n "${PAPERRSS_TEAM_ID:-}" ]] || fail "Developer ID 导出仍需 PAPERRSS_TEAM_ID"
+    [[ -n "${PAPERRSS_SUPUBLIC_ED_KEY:-}" ]] || fail "仍需 PAPERRSS_SUPUBLIC_ED_KEY（SUPublicEDKey 注入）"
+  fi
+  security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application" \
+    || fail "钥匙串中没有 Developer ID Application 证书"
 
-# 3. 版本号处理
-PROJECT_NAME="PaperRss"
-
-if [ -z "$VERSION" ]; then
-    echo "🔍 未传递版本号，从 Xcode 项目配置中提取 MARKETING_VERSION..."
-    VERSION=$(xcodebuild -project "${PROJECT_NAME}.xcodeproj" -scheme "$PROJECT_NAME" -showBuildSettings 2>/dev/null | grep -E "MARKETING_VERSION =" | head -n1 | awk -F '=' '{print $2}' | tr -d ' ')
-fi
-
-if [ -z "$VERSION" ]; then
-    echo "❌ 无法获取版本号！请指定版本号，例如: ./scripts/release.sh 0.1.0"
-    exit 1
-fi
-
-TAG_NAME="v${VERSION}"
-DMG_NAME="${PROJECT_NAME}-${TAG_NAME}.dmg"
-DIST_DIR="./dist"
-DMG_PATH="${DIST_DIR}/${DMG_NAME}"
-
-IS_PRERELEASE=false
-if [[ "$VERSION" =~ (beta|alpha|rc) ]]; then
-    IS_PRERELEASE=true
-fi
-
-if [ "$LOCAL_ONLY" = "true" ]; then
-    echo "📦 准备本地 DMG 打包: ${DMG_NAME}"
-elif [ "$IS_PRERELEASE" = "true" ]; then
-    echo "📦 准备 Beta / 预发布版本: ${TAG_NAME} (Prerelease)"
-else
-    echo "📦 准备正式发布版本: ${TAG_NAME}"
-fi
-
-# 3. 运行单元测试
-echo "🧪 1/5 正在运行单元测试..."
-swift test
-
-# 4. 构建与导出 App
-echo "🏗️ 2/5 正在编译打包 App..."
-./scripts/archive.sh macOS
-
-APP_PATH="${DIST_DIR}/export/${PROJECT_NAME}.app"
-if [ ! -d "$APP_PATH" ]; then
-    # 回退尝试 xcarchive 中的 App 路径
-    APP_PATH="${DIST_DIR}/${PROJECT_NAME}.xcarchive/Products/Applications/${PROJECT_NAME}.app"
-fi
-
-if [ ! -d "$APP_PATH" ]; then
-    echo "❌ 找不到编译导出的 ${PROJECT_NAME}.app，打包终止！"
-    exit 1
-fi
-
-echo "✅ App 编译成功: $APP_PATH"
-
-# 5. 打包 DMG
-echo "💿 3/5 正在制作 DMG 镜像包: ${DMG_PATH}..."
-rm -f "$DMG_PATH"
-
-# create-dmg 在 Finder 已经打开镜像、但无法正常卸载时，会留下一个已经完成
-# 背景图与 .DS_Store 配置的可写中间镜像。先清理同版本的旧中间产物，避免
-# 失败重试时误拾取上一次构建的镜像。
-for previous_temp_dmg in "$DIST_DIR"/rw*."$DMG_NAME"; do
-    if [ -f "$previous_temp_dmg" ]; then
-        rm -f "$previous_temp_dmg"
-    fi
-done
-
-echo "🎨 正在生成 DMG 安装包背景图..."
-swift scripts/generate_dmg_background.swift
-
-STAGING_DIR="${DIST_DIR}/dmg_staging"
-rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR"
-cp -R "$APP_PATH" "$STAGING_DIR/"
-
-# 写入一键修复命令文本文件。
-# 为何不再使用可双击执行的 .command 脚本：下载来的可执行脚本会被 Gatekeeper
-# 拦截并弹出「无法验证」对话框（即使用户右键也无法放行新版 macOS 的硬阻断）。
-# 文本文件不会被拦截，且终端里粘贴执行命令不经 LaunchServices / Gatekeeper 检查；
-# 命令先退出已运行的旧实例（否则 open 只会激活旧进程），再清除 quarantine 与
-# provenance（macOS 15+ 的新污染标记），最后按完整路径打开 /Applications 中的副本
-#（避免 open -a 按名称解析到其他位置的老副本）。
-INSTALL_TXT_NAME="INSTALL.txt"
-printf '%s\n' \
-    'pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"' \
-    > "$STAGING_DIR/${INSTALL_TXT_NAME}"
-
-# 清除 staging 目录下所有文件的污点扩展属性（保证构建产物不带隔离标记）
-xattr -cr "$STAGING_DIR" 2>/dev/null || true
-
-if command -v create-dmg &> /dev/null; then
-    echo "💡 使用 create-dmg 制作 UI 镜像..."
-    CREATE_DMG_ARGS=(
-      --volname "$PROJECT_NAME"
-      --window-pos 200 120
-      --window-size 660 440
-      --icon-size 100
-      --icon "${PROJECT_NAME}.app" 175 105
-      --hide-extension "${PROJECT_NAME}.app"
-      --app-drop-link 485 105
-      --background "assets/dmg-background.png"
-      --disk-image-size 200
-      --no-internet-enable
-      --overwrite
-    )
-    if [ -f "$STAGING_DIR/${INSTALL_TXT_NAME}" ]; then
-        CREATE_DMG_ARGS+=(--icon "$INSTALL_TXT_NAME" 330 215)
-    fi
-
-    # AppleScript 美化成功后，Finder 偶尔会持有卷，导致 create-dmg 只在最后
-    # detach 阶段返回失败。不要因此丢弃已经写入背景图/图标位置的中间镜像。
-    set +e
-    create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG_PATH" "$STAGING_DIR"
-    CREATE_DMG_STATUS=$?
-    set -e
-
-    if [ ! -f "$DMG_PATH" ]; then
-        CUSTOM_DMG_TEMP=$(find "$DIST_DIR" -maxdepth 1 -type f -name "rw*.${DMG_NAME}" -print | head -n 1)
-        if [ -n "$CUSTOM_DMG_TEMP" ]; then
-            CUSTOM_DMG_DEVICE=$(hdiutil info | awk -v image="$CUSTOM_DMG_TEMP" '
-                index($0, "image-path      : " image) == 1 { found=1; next }
-                found && $1 ~ /^\/dev\/disk/ { print $1; exit }
-            ')
-
-            if [ -n "$CUSTOM_DMG_DEVICE" ]; then
-                echo "⚠️ Finder 占用美化后的中间镜像，正在强制卸载 ${CUSTOM_DMG_DEVICE} 并保留其布局..."
-                hdiutil detach -force "$CUSTOM_DMG_DEVICE" >/dev/null 2>&1 || true
-            fi
-
-            if hdiutil convert "$CUSTOM_DMG_TEMP" -format UDZO -o "$DMG_PATH" -ov; then
-                echo "✅ 已从 create-dmg 美化中间镜像完成压缩，保留自定义背景与拖拽布局。"
-                rm -f "$CUSTOM_DMG_TEMP"
-            else
-                echo "⚠️ 美化中间镜像压缩失败，将使用原生 DMG fallback。" >&2
-            fi
-        elif [ "$CREATE_DMG_STATUS" -ne 0 ]; then
-            echo "⚠️ create-dmg 未生成可复用的中间镜像，将使用原生 DMG fallback。" >&2
-        fi
-    fi
-fi
-
-# 如果 create-dmg 失败，使用 hdiutil 备用方案
-if [ ! -f "$DMG_PATH" ]; then
-    echo "💡 使用系统原生 hdiutil 制作 DMG..."
-    ln -s /Applications "$STAGING_DIR/Applications"
-    
-    hdiutil create \
-      -volname "$PROJECT_NAME" \
-      -srcfolder "$STAGING_DIR" \
-      -ov \
-      -format UDZO \
-      "$DMG_PATH"
-fi
-
-rm -rf "$STAGING_DIR"
-
-if [ ! -f "$DMG_PATH" ]; then
-    echo "❌ DMG 制作失败！"
-    exit 1
-fi
-
-echo "🎉 DMG 制作成功！产物位置: $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"
-
-if [ "$LOCAL_ONLY" = "true" ]; then
-    echo "=================================================="
-    echo "🎉 本地 DMG 打包已完成！"
-    echo "📦 产物路径: $DMG_PATH"
-    echo "💡 提示: 可运行 'open ./dist' 或双击 DMG 镜像进行安装与验证。"
-    echo "=================================================="
-    exit 0
-fi
-
-# 6. Git Tag 处理
-echo "🏷️ 4/5 正在检查 Git Tag..."
-if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-    echo "ℹ️ Tag ${TAG_NAME} 已存在。"
-else
-    echo "🏷️ 创建 Git Tag: ${TAG_NAME}"
-    git tag -a "$TAG_NAME" -m "Release ${TAG_NAME}"
-    echo "🚀 推送 Tag 至 origin..."
-    git push origin "$TAG_NAME"
-fi
-
-# 7. GitHub Release 发布
-echo "🚀 5/5 正在发布 Release 到 GitHub..."
-
-if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
-    RELEASE_NOTES=$(cat "$NOTES_FILE")
-elif [ -n "$NOTES_TEXT" ]; then
-    RELEASE_NOTES="$NOTES_TEXT"
-else
-    # 动态获取上一个 tag 到当前 HEAD 之间的提交与更新说明
-    PREV_TAG=$(git tag --sort=-creatordate 2>/dev/null | grep -v "^${TAG_NAME}$" | head -n1 || echo "")
-    if [ -n "$PREV_TAG" ]; then
-        COMMITS_RANGE="${PREV_TAG}..HEAD"
+  if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+    if [[ "$ALLOW_DIRTY" == true ]]; then
+      warn "工作树不干净（--allow-dirty）：provenance 将记录 HEAD 而非未提交内容"
+      export PAPERRSS_ALLOW_DIRTY=1
     else
-        COMMITS_RANGE="HEAD~10..HEAD"
+      fail "工作树不干净；请提交后构建，或显式使用 --allow-dirty"
     fi
+  fi
 
-    CHANGELOG=$(git log "$COMMITS_RANGE" --oneline --no-merges 2>/dev/null | sed 's/^[a-f0-9]* /- /')
-    if [ -z "$CHANGELOG" ]; then
-        CHANGELOG=$(git log -n 5 --oneline --no-merges | sed 's/^[a-f0-9]* /- /')
-    fi
+  SOURCE_COMMIT=$(git rev-parse HEAD)
+  TAG="v$CLEAN_VERSION"
+  OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/dist/release}"
+  RELEASE_DIR="$OUTPUT_ROOT/$TAG"
+  ARCHIVE_PATH="$RELEASE_DIR/PaperRss.xcarchive"
+  EXPORT_DIR="$RELEASE_DIR/export"
+  APP_PATH="$EXPORT_DIR/PaperRss.app"
+  ZIP_PATH="$RELEASE_DIR/PaperRss-$TAG.zip"
+  DMG_PATH="$RELEASE_DIR/PaperRss-$TAG.dmg"
+  MANIFEST_PATH="$RELEASE_DIR/manifest.json"
 
-    # 提取本次版本发布提交（release commit）中的要点说明
-    RELEASE_BODY=$(git log "$COMMITS_RANGE" --grep="^release:" -n 1 --format=%b 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
-    if [ -z "$RELEASE_BODY" ]; then
-        RELEASE_BODY=$(git log -n 1 --format=%b 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
-    fi
-
-    # 如果 commit body 已经包含双语分割线（---），直接采用
-    if [[ "$RELEASE_BODY" == *"---"* ]]; then
-        RELEASE_NOTES="$RELEASE_BODY"
-    elif [ -n "$RELEASE_BODY" ]; then
-        # 组装标准精简双语 Release Notes 结构
-        if [ "$IS_PRERELEASE" = "true" ]; then
-            ZH_SUMMARY="本次 Beta 是针对近期优化与问题修复的预发布版本，可选升级，建议升级。"
-            EN_SUMMARY="This Beta is a prerelease update focusing on recent improvements and bug fixes (optional but recommended)."
-        else
-            ZH_SUMMARY="本次发布包含多项功能改进与稳定性优化，推荐所有用户升级。"
-            EN_SUMMARY="This release includes stability improvements and feature updates; recommended for all users."
-        fi
-
-        RELEASE_NOTES=$(cat <<EOF
-${ZH_SUMMARY}
-
-### 🌟 本次更新要点
-${RELEASE_BODY}
-
----
-
-${EN_SUMMARY}
-
-### 🌟 Highlights & Changelog
-${CHANGELOG}
-EOF
-)
+  if [[ -e "$RELEASE_DIR" ]]; then
+    if [[ "$FORCE" == true ]]; then
+      warn "清理既有产物目录（--force）: $RELEASE_DIR"
+      rm -rf "$RELEASE_DIR"
     else
-        if [ "$IS_PRERELEASE" = "true" ]; then
-            ZH_SUMMARY="本次 Beta 是针对近期优化与问题修复的预发布版本，可选升级，建议升级。"
-            EN_SUMMARY="This Beta is a prerelease update focusing on recent improvements and bug fixes (optional but recommended)."
-        else
-            ZH_SUMMARY="本次发布包含多项功能改进与稳定性优化，推荐所有用户升级。"
-            EN_SUMMARY="This release includes stability improvements and feature updates; recommended for all users."
-        fi
-
-        RELEASE_NOTES=$(cat <<EOF
-${ZH_SUMMARY}
-
-### 🌟 本次更新要点
-${CHANGELOG}
-
----
-
-${EN_SUMMARY}
-
-### 🌟 Highlights & Changelog
-${CHANGELOG}
-EOF
-)
+      fail "产物目录已存在: ${RELEASE_DIR}（同内容重跑请用 verify；重打用 --force）"
     fi
+  fi
+  mkdir -p "$RELEASE_DIR"
+
+  STABLE_FEED_URL="$PAPERRSS_APPCAST_BASE_URL/stable.xml"
+  BETA_FEED_URL="$PAPERRSS_APPCAST_BASE_URL/beta.xml"
+
+  pass "[PASS 0] 环境预检通过（notary-profile:${NOTARY_SET} create-dmg:$HAVE_CREATE_DMG commit:${SOURCE_COMMIT:0:12}）"
+
+  # [PASS 1] 测试
+  if [[ "$NO_TESTS" == true ]]; then
+    warn "已跳过测试（--no-tests）——发布前必须完整跑过一轮 verify.sh --core"
+  else
+    step "[PASS 1] 单元与状态机测试（verify.sh --core）"
+    ./scripts/verify.sh --core >"$RELEASE_DIR/verify-core.log" 2>&1 \
+      || { tail -40 "$RELEASE_DIR/verify-core.log" >&2; fail "verify.sh --core 未通过"; }
+    pass "[PASS 1] 测试全部通过（日志: $RELEASE_DIR/verify-core.log）"
+  fi
+
+  # [PASS 2] provenance 构建
+  step "[PASS 2] Provenance 构建（注入 SUFeedURL/SUPublicEDKey/SourceCommit）"
+  PROVENANCE_ARGS=(
+    --archive-path "$ARCHIVE_PATH"
+    --version "$CLEAN_VERSION" --build "$BUILD"
+    --feed-url-stable "$STABLE_FEED_URL"
+    --public-ed-key "${PAPERRSS_SUPUBLIC_ED_KEY:-}"
+    --source-commit "$SOURCE_COMMIT"
+  )
+  "$SPARKLE/build_with_provenance.sh" "${PROVENANCE_ARGS[@]}"
+
+  # [PASS 3–6] 导出 + 签名 + 公证 + Staple
+  step "[PASS 3–6] Developer ID 导出 / 签名 / 公证 / Staple 门禁"
+  NOTARIZE_ARGS=(--archive "$ARCHIVE_PATH" --output-dir "$EXPORT_DIR")
+  if [[ "$SKIP_NOTARIZATION" != true ]]; then
+    NOTARIZE_ARGS+=(--team-id "${PAPERRSS_TEAM_ID}" --notary-profile "${PAPERRSS_NOTARY_PROFILE}")
+  else
+    NOTARIZE_ARGS+=(--skip-notarization)
+  fi
+  EXPORT_OUT=$("$SPARKLE/export_and_notarize.sh" "${NOTARIZE_ARGS[@]}")
+  STAPLED_APP=$(printf '%s\n' "$EXPORT_OUT" | tail -n1)
+  [[ -d "$STAPLED_APP" ]] || fail "未取得 stapled App"
+
+  # [PASS 7] DMG + ZIP + EdDSA + manifest
+  step "[PASS 7] 发布 DMG / Sparkle ZIP / EdDSA 签名 / manifest"
+  DMG_ARGS=(--app "$STAPLED_APP" --output "$DMG_PATH" --version "$CLEAN_VERSION")
+  if [[ "$SKIP_NOTARIZATION" == true ]]; then
+    DMG_ARGS+=(--skip-notarization)
+  else
+    DMG_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
+  fi
+  "$SPARKLE/make_release_dmg.sh" "${DMG_ARGS[@]}"
+
+  ARTIFACT_ARGS=(
+    --app "$STAPLED_APP"
+    --channel "$CHANNEL"
+    --version "$CLEAN_VERSION" --build "$BUILD"
+    --source-commit "$SOURCE_COMMIT"
+    --download-url "https://github.com/${PAPERRSS_PUBLISH_REPO:-ohmyangboy/PaperRss}/releases/download/$TAG/PaperRss-$TAG.zip"
+    --premade-dmg "$DMG_PATH"
+    --output-dir "$RELEASE_DIR"
+  )
+  [[ -n "${PAPERRSS_SIGNING_ACCOUNT:-}" ]] && ARTIFACT_ARGS+=(--signing-account "${PAPERRSS_SIGNING_ACCOUNT}")
+  "$SPARKLE/build_artifacts.sh" "${ARTIFACT_ARGS[@]}"
+  # 扁平化到发布目录（appcast 校验按 asset-root 平铺查找）
+  SUBDIR="$RELEASE_DIR/PaperRss-$CLEAN_VERSION"
+  mv "$SUBDIR"/* "$RELEASE_DIR/" 2>/dev/null || true
+  rmdir "$SUBDIR" 2>/dev/null || true
+  MANIFEST_PATH="$RELEASE_DIR/manifest.json"
+  [[ -f "$MANIFEST_PATH" ]] || fail "manifest.json 缺失"
+  printf '%s\n' "${PAPERRSS_SUPUBLIC_ED_KEY:-}" > "$RELEASE_DIR/public-ed-key.txt"
+  chmod 600 "$RELEASE_DIR/public-ed-key.txt"
+
+  # [PASS 9] appcast 双通道生成与本地验证
+  step "[PASS 9] Appcast 双通道生成 + 本地契约验证"
+  PUBKEY_FILE="$RELEASE_DIR/public-ed-key.txt"
+  for ch in stable beta; do
+    node "$SPARKLE/appcast.mjs" generate \
+      --channel "$ch" --manifest "$MANIFEST_PATH" \
+      --output "$RELEASE_DIR/$ch.xml" --asset-root "$RELEASE_DIR" \
+      --public-key "$PUBKEY_FILE" >/dev/null
+    node "$SPARKLE/appcast.mjs" validate \
+      --channel "$ch" --appcast "$RELEASE_DIR/$ch.xml" \
+      --asset-root "$RELEASE_DIR" --public-key "$PUBKEY_FILE" >/dev/null
+    pass "[PASS 9] appcast/$ch.xml 生成并验证通过"
+  done
+
+  # [DONE] 清单
+  step "[DONE] 本地产物清单（dist/release/${TAG}）"
+  du -h "$RELEASE_DIR"/* 2>/dev/null | sort -k2 || true
+  echo ""
+  echo "下一步:"
+  echo "  ./scripts/release.sh verify --manifest $MANIFEST_PATH   # 复验"
+  echo "  ./scripts/release.sh publish --manifest $MANIFEST_PATH --tag $TAG --channel $CHANNEL   # 默认 dry-run"
+  exit 0
 fi
 
-PRERELEASE_FLAG=""
-if [ "$IS_PRERELEASE" = "true" ]; then
-    PRERELEASE_FLAG="--prerelease"
+# ══════════════════════════ verify ══════════════════════════
+if [[ "$CMD" == "verify" ]]; then
+  MANIFEST="" ARCHS="arm64"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manifest) MANIFEST="${2:-}"; shift 2 ;;
+      --require-architectures) ARCHS="${2:-}"; shift 2 ;;
+      *) fail "verify: 未知参数 $1" ;;
+    esac
+  done
+  [[ -f "$MANIFEST" ]] || fail "manifest 不存在: $MANIFEST"
+  DIR=$(dirname "$MANIFEST")
+  "$SPARKLE/validate_artifacts.sh" --manifest "$MANIFEST" --require-architectures "$ARCHS"
+  PUBKEY_FILE=""
+  if [[ -f "$DIR/public-ed-key.txt" ]]; then
+    PUBKEY_FILE="$DIR/public-ed-key.txt"
+  elif [[ -n "${PAPERRSS_SUPUBLIC_ED_KEY:-}" ]]; then
+    PUBKEY_FILE=$(mktemp)
+    printf '%s\n' "$PAPERRSS_SUPUBLIC_ED_KEY" > "$PUBKEY_FILE"
+    trap 'rm -f "$PUBKEY_FILE"' EXIT
+  fi
+  if [[ -n "$PUBKEY_FILE" ]]; then
+    for ch in stable beta; do
+      [[ -f "$DIR/$ch.xml" ]] || continue
+      node "$SPARKLE/appcast.mjs" validate --channel "$ch" \
+        --appcast "$DIR/$ch.xml" --asset-root "$DIR" --public-key "$PUBKEY_FILE" >/dev/null \
+        && pass "appcast/$ch.xml 验证通过"
+    done
+  fi
+  pass "verify 完成: $MANIFEST"
+  exit 0
 fi
 
-if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-    echo "ℹ️ Release ${TAG_NAME} 已存在，正在更新附件与说明..."
-    gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
-    if [ "$IS_PRERELEASE" = "true" ]; then
-        gh release edit "$TAG_NAME" --notes "$RELEASE_NOTES" --prerelease
-    else
-        gh release edit "$TAG_NAME" --notes "$RELEASE_NOTES"
-    fi
-else
-    echo "🌟 创建全新的 Release ${TAG_NAME}..."
-    gh release create "$TAG_NAME" "$DMG_PATH" \
-      --title "PaperRss ${TAG_NAME}" \
-      --notes "$RELEASE_NOTES" \
-      $PRERELEASE_FLAG
+# ══════════════════════════ publish ══════════════════════════
+if [[ "$CMD" == "publish" ]]; then
+  exec "$SPARKLE/publish_release.sh" "$@"
 fi
-
-echo "=================================================="
-echo "🎉 发布成功！"
-echo "🔗 Release 页面: $(gh release view "$TAG_NAME" --json url -q .url)"
-echo "=================================================="

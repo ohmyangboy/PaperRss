@@ -2,6 +2,12 @@ import SwiftUI
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
+#if os(macOS)
+#if SWIFT_PACKAGE
+import PaperRssUpdateSupport
+#endif
+import AppKit
+#endif
 
 @main
 struct PaperRssApp: App {
@@ -9,6 +15,7 @@ struct PaperRssApp: App {
     @StateObject private var navigation: AppNavigationModel
     #if os(macOS)
     @StateObject private var attention: MacSystemAttentionController
+    @StateObject private var updateCoordinator: UpdateCoordinator
     #endif
 
     init() {
@@ -18,19 +25,26 @@ struct PaperRssApp: App {
         _navigation = StateObject(wrappedValue: navigation)
         #if os(macOS)
         _attention = StateObject(wrappedValue: MacSystemAttentionController(store: store, navigation: navigation))
+        _updateCoordinator = StateObject(wrappedValue: UpdateCoordinatorFactory.make())
         #endif
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(store: store, navigation: navigation)
-                #if os(macOS)
+            #if os(macOS)
+            RootView(store: store, navigation: navigation, updateCoordinator: updateCoordinator)
                 .onAppear {
                     let application = NSApplication.shared
                     attention.start(application: application)
                     application.activate(ignoringOtherApps: true)
+                    updateCoordinator.start()
                 }
-                #endif
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    updateCoordinator.applicationDidBecomeActive()
+                }
+            #else
+            RootView(store: store, navigation: navigation)
+            #endif
         }
         .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
         #if os(iOS)
@@ -69,6 +83,16 @@ struct PaperRssApp: App {
             }
 
             #if os(macOS)
+            CommandGroup(after: .appInfo) {
+                Button(I18N.localized("检查更新", englishFallback: "Check for Updates")) {
+                    updateCoordinator.checkForUpdates()
+                }
+                .disabled({
+                    if case .checking = updateCoordinator.state { return true }
+                    return false
+                }())
+            }
+
             KeyboardShortcutHelpCommands()
             #endif
         }
@@ -84,7 +108,7 @@ struct PaperRssApp: App {
         .defaultSize(width: 560, height: 620)
 
         Settings {
-            SettingsView(store: store, attention: attention)
+            SettingsView(store: store, attention: attention, updateCoordinator: updateCoordinator)
                 .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
         }
         #endif
