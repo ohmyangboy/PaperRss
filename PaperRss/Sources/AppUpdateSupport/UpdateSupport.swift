@@ -69,6 +69,8 @@ public struct UpdateFailure: Equatable, Sendable {
 public enum UpdateState: Equatable {
     case idle
     case checking
+    /// 冷启动静默检查：胶囊不渲染转圈，无更新时不产生任何提示。
+    case checkingSilently
     case upToDate(checkedAt: Date)
     case updateAvailable(UpdateRelease)
     case downloading(UpdateDownloadProgress)
@@ -84,7 +86,7 @@ public enum UpdateState: Equatable {
         switch self {
         case .idle, .upToDate, .failed:
             false
-        case .checking, .updateAvailable, .downloading, .preparing,
+        case .checking, .checkingSilently, .updateAvailable, .downloading, .preparing,
              .readyToInstall, .installing, .relaunching, .deferredUntilQuit:
             true
         }
@@ -93,7 +95,7 @@ public enum UpdateState: Equatable {
     /// 胶囊主按钮语义。
     public var primaryAction: UpdatePrimaryAction {
         switch self {
-        case .idle, .upToDate, .failed, .checking:
+        case .idle, .upToDate, .failed, .checking, .checkingSilently:
             .checkForUpdates
         case .updateAvailable:
             .download
@@ -202,8 +204,13 @@ public final class UpdateCoordinator: ObservableObject {
 
     // MARK: 用户意图
 
-    /// 手动检查。绕过日期限制；会话活跃期间合并（忽略）重复请求。
+    /// 手动检查。会话活跃期间合并（忽略）重复请求；若正在静默检查，
+    /// 将其提升为可见检查（结果按手动检查呈现，含无更新提示）。
     public func checkForUpdates() {
+        if case .checkingSilently = state {
+            state = .checking
+            return
+        }
         guard !state.isActiveSession else { return }
         initiateCheck(userInitiated: true)
     }
@@ -262,7 +269,7 @@ public final class UpdateCoordinator: ObservableObject {
     // MARK: 私有
 
     private func initiateCheck(userInitiated: Bool) {
-        state = .checking
+        state = userInitiated ? .checking : .checkingSilently
         do {
             try updater.checkForUpdates(userInitiated: userInitiated)
         } catch {
@@ -273,8 +280,11 @@ public final class UpdateCoordinator: ObservableObject {
     private func receive(_ event: UpdaterEvent) {
         switch event {
         case .noUpdate:
+            let wasUserInitiated = state == .checking
             state = .upToDate(checkedAt: now())
-            lastUpToDateNoticeAt = now()
+            if wasUserInitiated {
+                lastUpToDateNoticeAt = now()
+            }
         case let .updateAvailable(release):
             state = .updateAvailable(release)
         case let .downloading(progress):

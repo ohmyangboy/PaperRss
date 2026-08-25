@@ -1194,7 +1194,7 @@ struct SettingsView: View {
         do {
             let coordinator = updateCoordinator
             switch coordinator.state {
-            case .checking:
+            case .checking, .checkingSilently:
                 ProgressView()
                     .controlSize(.small)
             case .downloading:
@@ -1289,7 +1289,7 @@ struct SettingsView: View {
         switch coordinator.state {
         case .idle:
             return I18N.shared.localized("尚未检查", "Not checked yet")
-        case .checking:
+        case .checking, .checkingSilently:
             return I18N.shared.localized("正在检查更新…", "Checking for updates...")
         case let .upToDate(checkedAt):
             let timeString = DateFormatter.localizedString(from: checkedAt, dateStyle: .none, timeStyle: .short)

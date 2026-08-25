@@ -31,6 +31,8 @@ struct UpdateCapsule: View {
                 ProgressView()
                     .controlSize(.mini)
             }
+        case .checkingSilently:
+            EmptyView()
         case .upToDate:
             if showsUpToDateToast {
                 capsule(emphasized: false) {

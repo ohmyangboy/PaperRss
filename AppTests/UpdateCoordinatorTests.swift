@@ -38,7 +38,45 @@ final class UpdateCoordinatorTests: XCTestCase {
         coordinator.start()
 
         XCTAssertEqual(updater.checkCount, 1, "每次冷启动必须检查一次，无日门禁")
-        XCTAssertEqual(coordinator.state, .checking)
+        XCTAssertEqual(coordinator.state, .checkingSilently)
+    }
+
+    func testColdStartNoUpdateIsSilentWithoutToast() {
+        let updater = FakeUpdaterPort()
+        let coordinator = makeCoordinator(updater: updater)
+
+        coordinator.start()
+        updater.send(.noUpdate)
+
+        guard case .upToDate = coordinator.state else {
+            return XCTFail("Expected up-to-date")
+        }
+        XCTAssertNil(coordinator.lastUpToDateNoticeAt, "静默检查无更新不得产生提示")
+    }
+
+    func testManualCheckNoUpdateShowsToastNotice() {
+        let updater = FakeUpdaterPort()
+        let coordinator = makeCoordinator(updater: updater)
+
+        coordinator.checkForUpdates()
+        updater.send(.noUpdate)
+
+        XCTAssertNotNil(coordinator.lastUpToDateNoticeAt, "手动检查无更新应产生约 3 秒提示")
+    }
+
+    func testManualCheckDuringSilentCheckPromotesToVisible() {
+        let updater = FakeUpdaterPort()
+        let coordinator = makeCoordinator(updater: updater)
+
+        coordinator.start()
+        XCTAssertEqual(coordinator.state, .checkingSilently)
+
+        coordinator.checkForUpdates()
+        XCTAssertEqual(coordinator.state, .checking, "手动检查应把静默会话提升为可见")
+
+        updater.send(.noUpdate)
+        XCTAssertNotNil(coordinator.lastUpToDateNoticeAt, "提升后的结果按手动检查呈现")
+        XCTAssertEqual(updater.checkCount, 1, "不重复发起检查")
     }
 
     func testStartFailureLandsInFailedStateWithFallback() {
