@@ -1725,7 +1725,7 @@ private struct EntryListView: View {
             #if os(macOS)
             .background {
                 ScrollOffsetObserver { offset in
-                    let shouldBlur = offset > 5
+                    let shouldBlur = offset > 1
                     if isScrolled != shouldBlur {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             isScrolled = shouldBlur
@@ -1736,13 +1736,7 @@ private struct EntryListView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 Color.clear.frame(height: 52)
                     .background {
-                        ZStack(alignment: .bottom) {
-                            Rectangle()
-                                .fill(.ultraThinMaterial)
-                            Divider()
-                                .opacity(0.15)
-                        }
-                        .opacity(isScrolled ? 1 : 0)
+                        PaperTopBarBlur(height: 52, opacity: isScrolled ? 1 : 0)
                     }
             }
             #endif
