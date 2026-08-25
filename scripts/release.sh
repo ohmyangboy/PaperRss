@@ -35,16 +35,21 @@ esac
 
 # ── 配置装载：环境变量优先，其次 release.env（gitignored）───────────────
 if [[ -f "$SPARKLE/release.env" ]]; then
-  # 只接受 KEY=VALUE 行；不 eval，杜绝注入
-  while IFS='=' read -r k v; do
-    [[ -z "$k" || "$k" == \#* ]] && continue
+  # 只接受 KEY=VALUE 行；不 eval，杜绝注入。
+  # 用 ${line%%=*}/${line#*=} 切分而非 IFS='=' read——后者会吞掉行尾的 '='，
+  # 破坏 base64 值的规范 padding（EdDSA 公钥以 '=' 结尾）。
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    case "$line" in *=*) ;; *) continue ;; esac
+    k="${line%%=*}"
+    v="${line#*=}"
     case "$k" in
       PAPERRSS_TEAM_ID|PAPERRSS_NOTARY_PROFILE|PAPERRSS_SIGNING_ACCOUNT|\
       PAPERRSS_SUPUBLIC_ED_KEY|PAPERRSS_APPCAST_BASE_URL|PAPERRSS_PUBLISH_REPO|\
       PAPERRSS_APPCAST_REPO|PAPERRSS_APPCAST_BRANCH)
         if [[ -z "${!k:-}" ]]; then printf -v "$k" '%s' "$v"; fi ;;
     esac
-  done < <(grep -v '^\s*$' "$SPARKLE/release.env" || true)
+  done < <(grep -v '^[[:space:]]*$' "$SPARKLE/release.env" || true)
 fi
 PAPERRSS_APPCAST_BASE_URL="${PAPERRSS_APPCAST_BASE_URL:-https://ohmyangboy.github.io/PaperRss/appcast}"
 

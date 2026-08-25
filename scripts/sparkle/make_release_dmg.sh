@@ -41,6 +41,17 @@ APP_PATH=$(CDPATH= cd -- "$APP_PATH" && pwd)
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 rm -f "$OUTPUT_PATH"
 
+# 清理上次中断遗留的 rw 中间镜像占用（diskimages-helper 残留会让后续
+# hdiutil convert 报“资源暂时不可用”）
+for stale_rw in "$(dirname "$OUTPUT_PATH")"/rw.*."$(basename "$OUTPUT_PATH")"; do
+  [[ -e "$stale_rw" ]] || continue
+  for pid in $(lsof -t "$stale_rw" 2>/dev/null || true); do
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  sleep 2
+  rm -f "$stale_rw"
+done
+
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/paperrss-dmg.XXXXXX")
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
@@ -48,8 +59,10 @@ trap cleanup EXIT
 STAGING="$TMP_DIR/dmg_staging"
 mkdir -p "$STAGING"
 cp -R "$APP_PATH" "$STAGING/"
-ln -s /Applications "$STAGING/Applications"
 xattr -cr "$STAGING" 2>/dev/null || true
+# 注意：不要在这里预创建 /Applications 软链——create-dmg 的 --app-drop-link
+# 会自行创建；重复预置会让其 ln 失败并中断 detach，留下 diskimages-helper
+# 锁住中间镜像（后续 convert/attach 全部 EBUSY）。软链仅在 hdiutil 兜底分支创建。
 
 step "[7] create-dmg 美化镜像（背景图 + 拖拽布局）"
 if [[ -x "$ROOT_DIR/scripts/generate_dmg_background.swift" || -f "$ROOT_DIR/scripts/generate_dmg_background.swift" ]]; then
@@ -83,6 +96,7 @@ if [[ ! -f "$OUTPUT_PATH" ]]; then
     rm -f "$RW_DMG"
   elif [[ "$CREATE_DMG_STATUS" -ne 0 ]]; then
     tail -20 "$TMP_DIR/create-dmg.log" >&2 || true
+    ln -s /Applications "$STAGING/Applications"
     hdiutil create -volname "PaperRss" -srcfolder "$STAGING" -ov -format UDZO "$OUTPUT_PATH" \
       || fail "DMG 制作失败（含原生 fallback）"
   fi
@@ -95,11 +109,19 @@ if [[ "$SKIP_NOTARIZATION" == true ]]; then
   echo "[SKIP] [PASS 8] DMG 公证已显式跳过（仅限本机演练）"
 else
   step "[8] DMG 签名 + 公证 + Staple"
-  IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed -E 's/^\s*[0-9]+\) ([A-F0-9]+) (.*)$/\1/')
+  IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed -E 's/.*[)] ([A-F0-9]{40}).*/\1/')
   [[ -n "$IDENTITY" ]] || fail "找不到 Developer ID Application 证书"
   codesign --sign "$IDENTITY" --timestamp "$OUTPUT_PATH" || fail "DMG codesign 失败"
-  xcrun notarytool submit "$OUTPUT_PATH" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1 | tee "$TMP_DIR/notary.log" \
-    | grep -qi "Accepted" || fail "DMG 公证未 Accepted"
+  # 不用 `xcrun | tee | grep -q`：grep -q 匹配后早退会让 xcrun 收到 SIGPIPE，
+  # 在 pipefail 下整条管线误判失败。先落盘再检查。
+  set +e
+  xcrun notarytool submit "$OUTPUT_PATH" --keychain-profile "$NOTARY_PROFILE" --wait \
+    > "$TMP_DIR/notary.log" 2>&1
+  SUBMIT_RC=$?
+  set -e
+  cat "$TMP_DIR/notary.log"
+  [[ $SUBMIT_RC -eq 0 ]] || fail "notarytool submit 失败"
+  grep -qi "Accepted" "$TMP_DIR/notary.log" || fail "DMG 公证未 Accepted"
   xcrun stapler staple "$OUTPUT_PATH" || fail "DMG stapler staple 失败"
   xcrun stapler validate "$OUTPUT_PATH" || fail "DMG stapler validate 未通过"
   hdiutil verify "$OUTPUT_PATH" >/dev/null 2>&1 || fail "hdiutil verify 未通过"
