@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:paperrss="https://paperrss.example/paperrss">
+  <channel>
+    <title>PaperRss Beta</title>
+    <link>https://github.com/ohmyangboy/PaperRss/releases</link>
+    <description>PaperRss beta updates</description>
+    <item>
+      <title>PaperRss 1.3.0-beta.4</title>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>1.3.0-beta.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.4/PaperRss-v1.3.0-beta.4.zip" length="10050017" type="application/octet-stream" sparkle:edSignature="a6WCHHAwcTiMSPfyIHNSx2DsRJJwsttCRJiaUf3NnA0Ln/Kr+CWu3c2RZxawgkS5E0BGTiPMQS+2KeixzxoIBA==" paperrss:sha256="75f6fa8b29831d4f120c9054edefc6852d8ccfd2cd3b7c2a0cf6e541ae54226e" sparkle:minimumSystemVersion="14.0" />
+    </item>
+  </channel>
+</rss>
