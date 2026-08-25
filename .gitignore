@@ -19,6 +19,7 @@ xcuserdata/
 *.key
 *.pem
 *.mobileprovision
+scripts/sparkle/release.env
 
 # Logs
 *.log

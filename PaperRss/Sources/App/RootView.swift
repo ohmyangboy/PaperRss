@@ -9,6 +9,11 @@ import UIKit
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
+#if os(macOS)
+#if SWIFT_PACKAGE
+import PaperRssUpdateSupport
+#endif
+#endif
 
 enum SidebarSelection: Hashable {
     case today
@@ -34,6 +39,9 @@ enum SidebarSelection: Hashable {
 struct RootView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var navigation: AppNavigationModel
+    #if os(macOS)
+    @ObservedObject var updateCoordinator: UpdateCoordinator
+    #endif
     @State private var selection: SidebarSelection? = .today
     // Keep selection independent from the value-semantic Entry model. Reading an
     // item updates its `isRead` / `updatedAt` fields, which used to invalidate the
@@ -146,7 +154,8 @@ struct RootView: View {
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
                 showsExporter: $showsExporter,
-                onDeleteSelection: { selectedEntryID = nil }
+                onDeleteSelection: { selectedEntryID = nil },
+                updateCoordinator: updateCoordinator
             )
             .ignoresSafeArea(),
             // 注意:内容列不能 .ignoresSafeArea()——否则 safeAreaInset 的 header
@@ -687,6 +696,9 @@ private struct SidebarView: View {
     /// leaves a stale selection behind — the toolbar would otherwise render
     /// an empty capsule placeholder.
     var onDeleteSelection: () -> Void
+    #if os(macOS)
+    @ObservedObject var updateCoordinator: UpdateCoordinator
+    #endif
     @AppStorage("sidebar_collapsed_accounts_raw") private var collapsedAccountsRaw: String = ""
     @AppStorage("sidebar_collapsed_folders_raw") private var collapsedFoldersRaw: String = ""
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
@@ -862,15 +874,6 @@ private struct SidebarView: View {
             }
         }
     }
-    private var availableUpdateRelease: AppReleaseInfo? {
-        guard case let .hasUpdate(release, _) = store.updateStatus else { return nil }
-        let releaseVersionClean = release.version.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        if let ignored = store.ignoredVersion, ignored == releaseVersionClean {
-            return nil
-        }
-        return release
-    }
-
     @ViewBuilder
     private var settingsFooter: some View {
         VStack(spacing: 0) {
@@ -884,45 +887,17 @@ private struct SidebarView: View {
                 .accessibilityLabel(I18N.localized("设置"))
                 .help(I18N.localized("设置"))
 
-                if let release = availableUpdateRelease {
-                    HStack(spacing: 5) {
-                        Button {
-                            UpdateCheckService.openURL(release.htmlURL)
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text(I18N.localized("NEW"))
-                                    .font(.system(size: 10, weight: .black))
-                                    .foregroundStyle(.white)
-                                Text("v\(release.version)")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white.opacity(0.95))
-                            }
-                        }
-                        .buttonStyle(.borderless)
-                        .help(I18N.shared.localizedFormat("点击前往下载新版本 v%@", release.version))
+                Spacer(minLength: 0)
 
-                        Button {
-                            store.ignoreVersion(release.version)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .black))
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel(I18N.localized("忽略此版本更新"))
-                        .help(I18N.localized("不再提示此版本更新"))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.orange, in: Capsule())
-                }
-
-                Spacer()
+                #if os(macOS)
+                UpdateCapsule(coordinator: updateCoordinator)
+                #endif
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.primary)
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            // 高度恒定：胶囊的出现/消失与内容变化不得改变侧边栏底部高度
+            .frame(height: 44)
         }
         .background(PaperHeaderSurface(kind: .sidebar))
     }
