@@ -56,8 +56,11 @@ let bgGradient = NSGradient(
 )!
 bgGradient.draw(in: NSRect(x: 0, y: 0, width: width, height: height), angle: 270)
 
-// 2. Drag Arrow & "按住拖拽安装" Badge
-// Icons center at Y=340 (AppKit Y). App icon X=175, Applications icon X=485.
+// 2. Drag Arrow & Badge
+// Icon center Y in Finder = 170 -> AppKit Y = 440 - 170 = 270
+// App icon X = 175, Applications icon X = 485
+
+let iconY: CGFloat = 270
 
 // Curved dashed drag arrow
 let arrowPath = NSBezierPath()
@@ -65,25 +68,25 @@ arrowPath.lineWidth = 2.5
 let dash: [CGFloat] = [6, 4]
 arrowPath.setLineDash(dash, count: 2, phase: 0)
 
-arrowPath.move(to: NSPoint(x: 235, y: 340))
-arrowPath.curve(to: NSPoint(x: 420, y: 340), controlPoint1: NSPoint(x: 280, y: 370), controlPoint2: NSPoint(x: 370, y: 370))
+arrowPath.move(to: NSPoint(x: 235, y: iconY))
+arrowPath.curve(to: NSPoint(x: 420, y: iconY), controlPoint1: NSPoint(x: 280, y: iconY + 38), controlPoint2: NSPoint(x: 375, y: iconY + 38))
 
-NSColor(calibratedRed: 0.35, green: 0.45, blue: 0.35, alpha: 0.75).setStroke()
+NSColor(calibratedRed: 0.28, green: 0.42, blue: 0.32, alpha: 0.75).setStroke()
 arrowPath.stroke()
 
-// Arrowhead at (420, 340)
+// Arrowhead at (420, iconY)
 let headPath = NSBezierPath()
-headPath.move(to: NSPoint(x: 423, y: 340))
-headPath.line(to: NSPoint(x: 410, y: 348))
-headPath.line(to: NSPoint(x: 413, y: 340))
-headPath.line(to: NSPoint(x: 410, y: 332))
+headPath.move(to: NSPoint(x: 423, y: iconY))
+headPath.line(to: NSPoint(x: 410, y: iconY + 8))
+headPath.line(to: NSPoint(x: 413, y: iconY))
+headPath.line(to: NSPoint(x: 410, y: iconY - 8))
 headPath.close()
 
-NSColor(calibratedRed: 0.35, green: 0.45, blue: 0.35, alpha: 0.9).setFill()
+NSColor(calibratedRed: 0.28, green: 0.42, blue: 0.32, alpha: 0.9).setFill()
 headPath.fill()
 
-// "按住拖拽安装" Badge Pill (Center X=330, Y=384, Width=150, Height=26)
-let pillRect = NSRect(x: 255, y: 382, width: 150, height: 26)
+// "按住拖拽安装" Badge Pill (Center X=330, Y=iconY + 48 = 318, Width=140, Height=26)
+let pillRect = NSRect(x: 260, y: iconY + 48, width: 140, height: 26)
 let pillPath = createRoundedRectPath(in: pillRect, cornerRadius: 13)
 
 NSGraphicsContext.saveGraphicsState()
@@ -93,56 +96,17 @@ shadow.shadowBlurRadius = 5
 shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
 shadow.set()
 
-NSColor(calibratedRed: 0.22, green: 0.32, blue: 0.24, alpha: 0.95).setFill()
+NSColor(calibratedRed: 0.20, green: 0.30, blue: 0.22, alpha: 0.95).setFill()
 pillPath.fill()
 NSGraphicsContext.restoreGraphicsState()
 
-let badgeFont = NSFont.systemFont(ofSize: 12, weight: .bold)
-drawText("按住拖拽安装 ➔", font: badgeFont, color: .white, at: NSRect(x: 255, y: 386, width: 150, height: 18), alignment: .center)
+let badgeFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+drawText("按住拖拽安装 ➔", font: badgeFont, color: .white, at: NSRect(x: 260, y: iconY + 52, width: 140, height: 18), alignment: .center)
 
-
-// 3. Install File Hint Label (Above the INSTALL.txt icon)
-let helperHintFont = NSFont.systemFont(ofSize: 11, weight: .bold)
-let helperHintColor = NSColor(calibratedRed: 0.22, green: 0.45, blue: 0.35, alpha: 1.0)
-drawText("▼ 双击 INSTALL.txt 复制命令，粘贴到「终端」回车运行", font: helperHintFont, color: helperHintColor, at: NSRect(x: 130, y: 246, width: 400, height: 16), alignment: .center)
-
-
-// 4. Bottom Beta Notice Card (Width=590, Height=106, Left=35, Bottom Y=16)
-let cardRect = NSRect(x: 35, y: 16, width: 590, height: 106)
-let cardPath = createRoundedRectPath(in: cardRect, cornerRadius: 10)
-
-NSGraphicsContext.saveGraphicsState()
-let cardShadow = NSShadow()
-cardShadow.shadowOffset = NSSize(width: 0, height: -3)
-cardShadow.shadowBlurRadius = 8
-cardShadow.shadowColor = NSColor.black.withAlphaComponent(0.06)
-cardShadow.set()
-
-NSColor.white.setFill()
-cardPath.fill()
-NSGraphicsContext.restoreGraphicsState()
-
-// Stroke for Card
-NSColor(calibratedRed: 0.86, green: 0.84, blue: 0.80, alpha: 1.0).setStroke()
-cardPath.lineWidth = 0.8
-cardPath.stroke()
-
-// Text inside Card
-let titleFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
-let stepFont = NSFont.systemFont(ofSize: 10.5, weight: .regular)
-let subFont = NSFont.systemFont(ofSize: 9.5, weight: .regular)
-
-let titleColor = NSColor(calibratedRed: 0.82, green: 0.28, blue: 0.16, alpha: 1.0)
-let textColor = NSColor(calibratedRed: 0.25, green: 0.25, blue: 0.25, alpha: 1.0)
-let subColor = NSColor(calibratedRed: 0.55, green: 0.55, blue: 0.55, alpha: 1.0)
-
-drawText("⚠️ 打开若提示“已损坏”或“无法打开”（未加入 Apple 付费公证）：", font: titleFont, color: titleColor, at: NSRect(x: 50, y: 96, width: 560, height: 18))
-
-drawText("1. 请先将左侧 PaperRss 拖入 Applications；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 74, width: 560, height: 16))
-
-drawText("2. 打开「终端」(Terminal.app)，将上方 INSTALL.txt 中的命令复制粘贴并回车；", font: stepFont, color: textColor, at: NSRect(x: 50, y: 54, width: 560, height: 16))
-
-drawText("3. 备用：或在「系统设置 > 隐私与安全性」底部点击「仍要打开」", font: subFont, color: subColor, at: NSRect(x: 50, y: 28, width: 560, height: 15))
+// 3. Bottom Brand Tagline
+let taglineFont = NSFont.systemFont(ofSize: 11, weight: .regular)
+let taglineColor = NSColor(calibratedRed: 0.50, green: 0.52, blue: 0.50, alpha: 0.85)
+drawText("PaperRss · 现代轻量 RSS 阅读器", font: taglineFont, color: taglineColor, at: NSRect(x: 50, y: 36, width: width - 100, height: 18), alignment: .center)
 
 NSGraphicsContext.restoreGraphicsState()
 

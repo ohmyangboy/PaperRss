@@ -74,9 +74,9 @@ DMG_ARGS=(
   --window-pos 200 120
   --window-size 660 440
   --icon-size 100
-  --icon "PaperRss.app" 175 105
+  --icon "PaperRss.app" 175 170
   --hide-extension "PaperRss.app"
-  --app-drop-link 485 105
+  --app-drop-link 485 170
   --disk-image-size 200
   --no-internet-enable
   --overwrite
