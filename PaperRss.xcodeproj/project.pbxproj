@@ -227,7 +227,7 @@
 			};
 			name = Release;
 		};
-		A10000000000000000000013 /* Release */ = {A10000000000000000000012 /* Debug */ = {
+		A10000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -267,7 +267,7 @@
 			};
 			name = Debug;
 		};
-		
+		A10000000000000000000013 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
