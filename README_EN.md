@@ -37,6 +37,8 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 - **Custom Model Integration**: Bring your own DeepSeek or OpenAI-compatible API keys, with customizable system prompts.
 - **Multi-Account Support**: Supports local accounts and FreshRSS server synchronization.
 
+For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
+
 ## Screenshots
 
 ### Immersive Paper-like Reading
