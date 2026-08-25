@@ -97,7 +97,11 @@ if echo "$ENTITLEMENTS" | grep -q "get-task-allow"; then
   VALUE=$(echo "$ENTITLEMENTS" | plutil -extract get-task-allow raw -o - - 2>/dev/null || echo "?")
   [[ "$VALUE" == "false" ]] || fail "get-task-allow 必须为 false（Hardened Runtime 导出）"
 fi
-codesign -dv "$APP_PATH" 2>&1 | grep -q "Runtime" || fail "未启用 Hardened Runtime"
+# Hardened Runtime：-dv 在部分工具链不打印独立 Runtime 行，
+# 统一用 -dvv 的 CodeDirectory flags 匹配（0x10000 = runtime 位）。
+CODESIGN_DVV=$(codesign -dvv "$APP_PATH" 2>&1)
+echo "$CODESIGN_DVV" | grep -Eq 'flags=0x[0-9a-f]+\(runtime\)|^Runtime[= ]' \
+  || fail "未启用 Hardened Runtime"
 # 注意：spctl 评估放在 [PASS 6] Staple 之后——未公证的 Developer ID 在此阶段
 # 被 Gatekeeper 拒绝是预期行为，不构成失败。
 pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + secure timestamp）"
