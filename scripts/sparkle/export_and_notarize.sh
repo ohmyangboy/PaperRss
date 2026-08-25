@@ -98,11 +98,9 @@ if echo "$ENTITLEMENTS" | grep -q "get-task-allow"; then
   [[ "$VALUE" == "false" ]] || fail "get-task-allow 必须为 false（Hardened Runtime 导出）"
 fi
 codesign -dv "$APP_PATH" 2>&1 | grep -q "Runtime" || fail "未启用 Hardened Runtime"
-
-SPCTL_OUT=$(spctl -a -vv -t execute "$APP_PATH" 2>&1) || {
-  echo "$SPCTL_OUT" >&2; fail "Gatekeeper spctl 评估未通过"; }
-echo "$SPCTL_OUT" | head -1
-pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + spctl accepted）"
+# 注意：spctl 评估放在 [PASS 6] Staple 之后——未公证的 Developer ID 在此阶段
+# 被 Gatekeeper 拒绝是预期行为，不构成失败。
+pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + secure timestamp）"
 
 # ── [PASS 5] 公证 ─────────────────────────────────────────────────────────
 SUBMISSION_FILE="$TMP_DIR/notary-submission.txt"

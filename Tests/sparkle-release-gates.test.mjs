@@ -19,14 +19,14 @@ const SPARKLE = join(ROOT, 'scripts', 'sparkle');
 function writeFake(bin, name, body) {
   const p = join(bin, name);
   // 先记录调用序列，再执行受控行为；失败也留痕。
-  writeFileSync(p, `#!/bin/sh\nprintf '%s\\n' "${name}" >> "$FAKE_CALLS"\n${body}\n`);
+  writeFileSync(p, `#!/bin/sh\n[ -n "$FAKE_CALLS" ] && printf '%s\\n' "${name} $*" >> "$FAKE_CALLS"\n${body}\n`);
   chmodSync(p, 0o755);
 }
 
 const CODESIGN_OK = `
 case "\$1" in
   --verify) exit 0 ;;
-  -dv)
+  -dv|-dvv)
     echo "Authority=Developer ID Application: Test (TEAM)"
     echo "TeamIdentifier=TEAM"
     echo "Runtime";;
@@ -133,7 +133,7 @@ test('export_and_notarize 全链路：导出→签名门禁→公证→Staple �
       PATH: `${bin}:${process.env.PATH}`,
     });
     assert.match(out, /\[PASS 3\]/);
-    assert.match(out, /\[PASS 4\][^\n]*Developer ID[^\n]*spctl accepted/);
+    assert.match(out, /\[PASS 4\][^\n]*Developer ID[^\n]*Hardened Runtime/);
     assert.match(out, /\[PASS 5\][^\n]*Accepted/);
     assert.match(out, /\[PASS 6\]/);
     assert.equal(out.trim().split('\n').pop(), join(dir, 'out', 'PaperRss.app'));
@@ -154,12 +154,27 @@ test('codesign 校验失败 → 立即终止，且不进入公证与 Staple', ()
   });
 });
 
-test('spctl Gatekeeper 拒绝 → FAIL，且不提交公证', () => {
-  withSandbox(({ dir, archive, makeBin }) => {
-    const bin = makeBin({ spctl: 'exit 3', notarytool: false });
+test('公证前不做 spctl 评估（未公证 Developer ID 被拒是预期），Staple 后必须复验', () => {
+  withSandbox(({ dir, archive, makeBin, newCalls }) => {
+    // stapler validate 失败 → FAIL（此时公证已完成，资产不得流出）
+    const bin = makeBin({
+      stapler: 'if [ "$1" = "validate" ]; then echo "invalid staple" >&2; exit 1; fi',
+    });
     runExpectFailure(
       join(SPARKLE, 'export_and_notarize.sh'), NOTARIZE_ARGS(dir, archive),
       { PATH: `${bin}:${process.env.PATH}` });
+
+    // happy path 中 spctl 只应在公证/Staple 之后被调用（调用序列断言）
+    const calls2 = newCalls('calls-order.log');
+    const bin2 = makeBin({});
+    run(join(SPARKLE, 'export_and_notarize.sh'), NOTARIZE_ARGS(dir, archive),
+      { PATH: `${bin2}:${process.env.PATH}`, FAKE_CALLS: calls2 });
+    const log = readFileSync(calls2, 'utf8').trim().split('\n');
+    const firstSpctl = log.findIndex((l) => l.startsWith('spctl'));
+    const notaryIdx = log.findIndex((l) => l.startsWith('notarytool'));
+    const stapleIdx = log.findIndex((l) => l.startsWith('stapler'));
+    assert.ok(notaryIdx > -1 && stapleIdx > -1);
+    assert.ok(firstSpctl > stapleIdx, 'spctl 只允许在 Staple 之后做 Gatekeeper 复验');
   });
 });
 
