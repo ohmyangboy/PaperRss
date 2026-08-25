@@ -30,7 +30,6 @@ struct UpdateCapsule: View {
             capsule(emphasized: false) {
                 ProgressView()
                     .controlSize(.mini)
-                Text(I18N.shared.localized("检查更新…", "Checking for Updates…"))
             }
         case .upToDate:
             if showsUpToDateToast {
@@ -45,37 +44,37 @@ struct UpdateCapsule: View {
             capsule(emphasized: release.isCritical) {
                 actionButton(
                     title: release.isCritical
-                        ? I18N.shared.localizedFormat("重要更新 %@ 可用", release.displayVersion)
-                        : I18N.shared.localizedFormat("更新 %@ 可用", release.displayVersion),
+                        ? I18N.shared.localized("重要更新", "Critical Update")
+                        : I18N.shared.localized("更新", "Update"),
                     systemImage: release.isCritical ? "exclamationmark.arrow.circlepath" : "arrow.down.circle.fill"
                 ) {
                     coordinator.beginDownload()
                 }
+                .help(I18N.shared.localizedFormat("更新 %@ 可用", release.displayVersion))
             }
         case let .downloading(progress):
             capsule(emphasized: false) {
                 if let fraction = progress.fractionCompleted {
                     ProgressView(value: fraction)
                         .progressViewStyle(.linear)
-                        .frame(width: 56)
-                    Text(I18N.shared.localizedFormat("下载中 %lld%%", Int((fraction * 100).rounded())))
+                        .frame(width: 44)
+                    Text(I18N.shared.localizedFormat("%lld%%", Int((fraction * 100).rounded())))
+                        .monospacedDigit()
                 } else {
                     ProgressView()
                         .controlSize(.mini)
-                    Text(I18N.shared.localized("下载中…", "Downloading…"))
                 }
             }
         case let .preparing(preparation):
             capsule(emphasized: false) {
                 ProgressView(value: preparation.fractionCompleted)
                     .progressViewStyle(.linear)
-                    .frame(width: 56)
-                Text(I18N.shared.localized("正在准备更新…", "Preparing Update…"))
+                    .frame(width: 44)
             }
         case .readyToInstall:
             capsule(emphasized: true) {
                 actionButton(
-                    title: I18N.shared.localized("重启更新", "Restart to Update"),
+                    title: I18N.shared.localized("重启", "Restart"),
                     systemImage: "power.circle.fill"
                 ) {
                     coordinator.installAndRelaunch()
@@ -83,39 +82,34 @@ struct UpdateCapsule: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
-        case let .installing(release):
+        case .installing, .relaunching:
             capsule(emphasized: true) {
                 ProgressView()
                     .controlSize(.mini)
-                Text(I18N.shared.localizedFormat("正在安装更新 %@", release.displayVersion))
             }
-        case .relaunching:
-            capsule(emphasized: true) {
-                ProgressView()
-                    .controlSize(.mini)
-                Text(I18N.shared.localized("正在重启…", "Relaunching…"))
-            }
-        case let .deferredUntilQuit(release):
+        case .deferredUntilQuit:
             capsule(emphasized: false) {
                 Image(systemName: "tray.and.arrow.down")
-                Text(I18N.shared.localizedFormat("更新 %@ 将在退出时安装", release.displayVersion))
+                Text(I18N.shared.localized("退出安装", "Install on Quit"))
             }
         case let .failed(failure):
             capsule(emphasized: false) {
                 actionButton(
-                    title: I18N.shared.localized("更新失败 · 重试", "Update failed · Retry"),
+                    title: I18N.shared.localized("重试", "Retry"),
                     systemImage: "arrow.clockwise.circle"
                 ) {
                     coordinator.checkForUpdates()
                 }
                 .help(failure.message)
                 Button {
-                    AppInfo.openURL(failure.fallbackURL)
+                    coordinator.dismissFailure()
                 } label: {
-                    Image(systemName: "safari")
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
-                .help(I18N.shared.localized("打开发布页手动下载", "Open the releases page"))
+                .accessibilityLabel(I18N.shared.localized("关闭", "Close"))
             }
         }
     }

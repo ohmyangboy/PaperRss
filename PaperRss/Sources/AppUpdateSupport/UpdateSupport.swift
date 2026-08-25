@@ -331,6 +331,12 @@ public final class UpdateCoordinator: ObservableObject {
         }
     }
 
+    /// 关闭失败态胶囊（回到空闲，不产生任何更新会话副作用）。
+    public func dismissFailure() {
+        guard case .failed = state else { return }
+        state = .idle
+    }
+
     public var canChangeChannel: Bool {
         !state.isActiveSession
     }

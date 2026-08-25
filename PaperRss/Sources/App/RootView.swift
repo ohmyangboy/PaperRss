@@ -880,18 +880,18 @@ private struct SidebarView: View {
             Divider()
                 .opacity(0.15)
             HStack(spacing: 8) {
-                #if os(macOS)
-                UpdateCapsule(coordinator: updateCoordinator)
-                #endif
-
-                Spacer(minLength: 0)
-
                 Button(action: showSettings) {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(I18N.localized("设置"))
                 .help(I18N.localized("设置"))
+
+                Spacer(minLength: 0)
+
+                #if os(macOS)
+                UpdateCapsule(coordinator: updateCoordinator)
+                #endif
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.primary)

@@ -121,6 +121,24 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.canChangeChannel)
     }
 
+    func testDismissFailureReturnsToIdleWithoutSideEffects() {
+        let updater = FakeUpdaterPort()
+        let coordinator = makeCoordinator(updater: updater)
+
+        updater.send(.failed(message: "feed unreachable"))
+        guard case .failed = coordinator.state else {
+            return XCTFail("Expected failed state")
+        }
+
+        coordinator.dismissFailure()
+        XCTAssertEqual(coordinator.state, .idle)
+
+        // 空闲态重复关闭是空操作
+        coordinator.dismissFailure()
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertEqual(updater.checkCount, 0)
+    }
+
     // MARK: - 通道
 
     func testStableIsDefaultAndBetaSelectionPersistsAcrossSessions() {
