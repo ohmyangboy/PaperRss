@@ -27,9 +27,9 @@ const CODESIGN_OK = `
 case "\$1" in
   --verify) exit 0 ;;
   -dv|-dvv)
+    echo "CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+0 location=embedded"
     echo "Authority=Developer ID Application: Test (TEAM)"
-    echo "TeamIdentifier=TEAM"
-    echo "Runtime";;
+    echo "TeamIdentifier=TEAM";;
   --entitlements) echo "{}";;
 esac
 exit 0`;

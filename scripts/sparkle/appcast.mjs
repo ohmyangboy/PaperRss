@@ -132,7 +132,11 @@ const orderedManifests = (manifests, options) => {
     seen.add(manifest.buildNumber);
     previous = manifest.buildNumber;
   }
-  if (selected.length === 0) fail(`no ${options.channel} releases remain after filtering`);
+  if (selected.length === 0) {
+    // 合法状态：如首版仅有 prerelease 时 stable 通道过滤后为空。
+    // Sparkle 客户端将空 channel 视为“无可用更新”；此处放行并提示。
+    console.warn(`[warn] no ${options.channel} releases remain after filtering; emitting an empty channel`);
+  }
   return selected;
 };
 
@@ -163,7 +167,8 @@ const attribute = (text, name) => text.match(new RegExp(`${name.replace(':', '\\
 export const validateAppcast = (xml, { channel, assetRoot, publicKeyPath } = {}) => {
   if (!xml.includes('<rss') || !xml.includes('<channel>')) fail('appcast XML is incomplete');
   const itemTexts = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => match[1]);
-  if (itemTexts.length === 0) fail('appcast has no items');
+  // 空 channel 合法（见 orderedManifests 的过滤说明）；仅校验非空条目的契约。
+  if (itemTexts.length === 0) return { channel, itemCount: 0, highestBuild: 0 };
   let previous = 0;
   for (const item of itemTexts) {
     const version = item.match(/<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/)?.[1];
