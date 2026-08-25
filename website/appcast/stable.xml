@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:paperrss="https://paperrss.example/paperrss">
+  <channel>
+    <title>PaperRss Stable</title>
+    <link>https://github.com/ohmyangboy/PaperRss/releases</link>
+    <description>PaperRss stable updates</description>
+
+  </channel>
+</rss>
