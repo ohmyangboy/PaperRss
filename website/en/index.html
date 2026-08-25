@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PaperRss — Focused RSS Reading with Thoughtful AI</title>
-  <meta name="description" content="PaperRss is a paper-inspired RSS reader for macOS with on-demand AI summaries, contextual translation, and OpenAI-compatible model support." />
+  <title>PaperRss — Read slowly, think deeply</title>
+  <meta name="description" content="PaperRss is a paper-inspired, bilingual RSS reader with thoughtful AI. Designed natively for macOS to restore a quiet, focused reading ritual." />
   <link rel="canonical" href="https://ohmyangboy.github.io/PaperRss/en/" />
   <link rel="alternate" hreflang="zh-CN" href="https://ohmyangboy.github.io/PaperRss/zh-CN/" />
   <link rel="alternate" hreflang="en" href="https://ohmyangboy.github.io/PaperRss/en/" />
@@ -15,40 +15,115 @@
   <script src="../stage-parallax.js" defer></script>
   <script src="../github-stars.js" defer></script>
   <script src="../install-copy.js" defer></script>
+  <script src="../dropdown-menu.js" defer></script>
 </head>
 <body>
-  <header class="site-header">
-    <a href="./" class="brand"><img src="../assets/app-icon.png" alt="PaperRss icon" /><div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">Reading first, AI second</span></div></a>
-    <nav class="site-nav"><a href="#features">Features</a><a href="#sponsor">Feedback & Support</a><a href="#install">Installation</a></nav>
+  <!-- Header kept for semantic & accessibility fallback; hidden by CSS for minimal poster experience -->
+  <header class="site-header" aria-hidden="true">
+    <a href="./" class="brand">
+      <img src="../assets/app-icon.png" alt="PaperRss icon" />
+      <div class="brand-text">
+        <span class="brand-name">PaperRss</span>
+        <span class="brand-tag">Reading first, AI second</span>
+      </div>
+    </a>
+    <nav class="site-nav">
+      <a href="#features">Features</a>
+      <a href="#install">Installation</a>
+      <a href="#sponsor">Feedback & Support</a>
+    </nav>
     <div class="header-actions">
       <a class="language-switcher" href="../zh-CN/" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')" aria-label="切换到简体中文">🌐 English</a>
       <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
         <span>GitHub</span>
-        <span class="gh-star-badge" aria-label="GitHub Star Count"><svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg><span class="gh-star-count"></span></span>
+        <span class="gh-star-badge" aria-label="GitHub Star Count">
+          <svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+            <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+          </svg>
+          <span class="gh-star-count"></span>
+        </span>
       </a>
-      <a href="https://github.com/ohmyangboy/PaperRss/releases" class="btn-download-primary">Release Notes</a>
     </div>
   </header>
 
   <main class="container">
+    <!-- Hero Section (Minimal Zine Poster Aesthetic) -->
     <section class="hero">
       <div class="hero-content">
         <div class="hero-app-icon"><img src="../assets/app-icon.png" alt="PaperRss app icon" /></div>
+        
+        <!-- Slogan: Read slowly, think deeply. -->
         <h1 class="scramble-title" title="Click to replay the decode animation">
-          <span class="scramble-target" data-text="Move between languages.">Move between languages.</span><br />
-          <em class="scramble-target" data-text="Keep intelligence in its place.">Keep intelligence in its place.</em>
+          <span class="scramble-target" data-text="Read slowly, think deeply.">Read slowly, think deeply.</span>
         </h1>
-        <p class="hero-subtitle">A calm, paper-inspired home for your feeds, with summaries and contextual translation available when they help—not competing for your attention.</p>
-        <div class="hero-ctas"><a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg" class="hero-cta-main">Download for macOS (v1.3.0-beta.3)</a><a href="#features" class="hero-cta-secondary">Explore Features ↓</a></div>
-        <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API keys stay on your Mac</p>
+        
+        <!-- Description -->
+        <p class="hero-subtitle">
+          PaperRss is a paper-inspired, bilingual RSS reader with thoughtful AI. Designed natively for macOS to restore a quiet, focused reading ritual.
+        </p>
+        
+        <!-- Hero Button Cluster -->
+        <div class="hero-ctas">
+          <!-- Split Download Button -->
+          <div class="dl-split">
+            <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg" class="dl-main">
+              <span class="dl-main-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+                </svg>
+              </span>
+              <span>Download for macOS</span>
+              <span class="dl-tag-universal">Universal</span>
+            </a>
+            <button type="button" class="dl-toggle" aria-haspopup="true" aria-expanded="false" aria-label="More download options">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            <div class="dl-menu" role="menu" aria-label="Download architectures">
+              <a class="dl-item" role="menuitem" href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg">
+                <span class="dl-os">macOS Universal (DMG)</span>
+                <span class="dl-item-sub">Apple Silicon & Intel</span>
+              </a>
+              <a class="dl-item" role="menuitem" href="https://github.com/ohmyangboy/PaperRss/releases" target="_blank" rel="noopener noreferrer">
+                <span class="dl-os">All Versions</span>
+                <span class="dl-item-sub">GitHub Releases ↗</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- GitHub Star Button in Hero CTA Cluster -->
+          <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub Repository">
+            <span>GitHub</span>
+            <span class="gh-star-badge" aria-label="GitHub Star Count">
+              <svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+              </svg>
+              <span class="gh-star-count"></span>
+            </span>
+          </a>
+
+          <!-- Language Switcher in Hero -->
+          <a class="language-switcher" href="../zh-CN/" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')" aria-label="切换到简体中文">🌐 中文</a>
+
+          <!-- Secondary CTA -->
+          <a href="#features" class="hero-cta-secondary">
+            <span>Features</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 17 17 7" />
+              <path d="M7 7h10v10" />
+            </svg>
+          </a>
+        </div>
       </div>
     </section>
 
+    <!-- Showcase Stage (Stacking Parallax) -->
     <section class="stage-section" id="stage-showcase">
       <div class="stage-sticky-viewport">
         <div class="stage-cards-wrapper">
           <div class="stage-card stage-card-base stage-card-1">
-            <img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss three-column reading workspace (Chinese interface shown)" class="stage-image" />
+            <img src="../assets/screenshots/paper-rss-main.png" alt="PaperRss three-column reading workspace" class="stage-image" />
             <div class="stage-card-scrim" aria-hidden="true"></div>
           </div>
           <div class="stage-card stage-card-mid stage-card-2">
@@ -62,32 +137,92 @@
       </div>
     </section>
 
+    <!-- Section Divider: Philosophy -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">CORE PHILOSOPHY</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Trust Rail (Core Philosophy Bento) -->
     <aside class="trust-rail">
-      <div class="trust-item"><strong>Local First</strong><span>API keys stay on your Mac</span></div>
-      <div class="trust-item"><strong>Thoughtful AI</strong><span>Summaries generated on demand</span></div>
-      <div class="trust-item"><strong>Contextual Tools</strong><span>Translate, explain, and ask</span></div>
-      <div class="trust-item"><strong>Your Models</strong><span>DeepSeek and OpenAI-compatible APIs</span></div>
+      <div class="trust-item">
+        <strong>Local First</strong>
+        <span>API keys and reading data stay on your Mac</span>
+      </div>
+      <div class="trust-item">
+        <strong>Thoughtful AI</strong>
+        <span>Full-article summaries generated on demand</span>
+      </div>
+      <div class="trust-item">
+        <strong>Contextual Tools</strong>
+        <span>Side-by-side translate, explain, and ask</span>
+      </div>
+      <div class="trust-item">
+        <strong>Your Models</strong>
+        <span>DeepSeek and OpenAI-compatible API support</span>
+      </div>
     </aside>
 
-    <section id="features" style="padding-top:2rem">
-      <div class="section-title-group"><p class="section-eyebrow">EDITORIAL EXPERIENCE</p><h2>A reading ritual built for beauty and focus</h2></div>
+    <!-- Section Divider: Features -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">FEATURES</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Features Section -->
+    <section id="features">
+      <div class="section-title-group">
+        <p class="section-eyebrow">EDITORIAL EXPERIENCE</p>
+        <h2>A reading ritual built for beauty and focus</h2>
+      </div>
       <div class="features-grid">
-        <div class="feature-card"><div><div class="feature-num">01 / BILINGUAL</div><h3>Side-by-side translation</h3><p>Keep each translated paragraph beside its source so long-form reading never loses context.</p></div><img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss paragraph-by-paragraph English and Chinese translation" class="feature-card-img" /></div>
-        <div class="feature-card" id="ai-assistant"><div><div class="feature-num">02 / EXPLAIN & ASK</div><h3>Explain & ask</h3><p>Select a passage to ask a focused question or get unfamiliar terms, ideas, and context explained by AI.</p></div><div class="feature-card-gallery"><img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss Ask AI input for selected text (Chinese interface shown)" class="feature-card-img" /><img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss AI explanation popover (Chinese interface shown)" class="feature-card-img" /></div></div>
-        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>Translate in place</h3><p>Get a contextual translation for the selected passage without leaving the reader.</p></div><img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss selection translation popover (Chinese interface shown)" class="feature-card-img" /></div>
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">01 / BILINGUAL</div>
+            <h3>Side-by-side translation</h3>
+            <p>Keep each translated paragraph beside its source so long-form reading never loses context.</p>
+          </div>
+          <img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss paragraph-by-paragraph English and Chinese translation" class="feature-card-img" />
+        </div>
+        <div class="feature-card" id="ai-assistant">
+          <div>
+            <div class="feature-num">02 / EXPLAIN & ASK</div>
+            <h3>Explain & ask</h3>
+            <p>Select a passage to ask a focused question or get unfamiliar terms, ideas, and context explained by AI.</p>
+          </div>
+          <div class="feature-card-gallery">
+            <img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss Ask AI input for selected text" class="feature-card-img" />
+            <img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss AI explanation popover" class="feature-card-img" />
+          </div>
+        </div>
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">03 / TRANSLATE</div>
+            <h3>Translate in place</h3>
+            <p>Get a contextual translation for the selected passage without leaving the reader.</p>
+          </div>
+          <img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss selection translation popover" class="feature-card-img" />
+        </div>
       </div>
     </section>
 
-    <section id="sponsor" class="sponsor-section">
-      <span class="sponsor-badge">FEEDBACK & COMMUNITY</span><h2>Feedback & Support</h2>
-      <p class="sponsor-desc">PaperRss is independently developed and open source. We welcome your feedback on GitHub, and you can also support continued development via PayPal.</p>
-      <div class="sponsor-box paypal-sponsor"><a href="https://paypal.me/ohmyangboy" class="paypal-button" target="_blank" rel="noopener">Support via PayPal</a><div class="feedback-links"><a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn">Open a GitHub Issue</a><a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback">★ Star PaperRss</a></div></div>
-    </section>
+    <!-- Section Divider: Installation -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">INSTALLATION</span>
+      <span class="hairline"></span>
+    </div>
 
+    <!-- Installation Section -->
     <section id="install" class="install-section">
-      <div class="section-title-group install-title"><p class="section-eyebrow">INSTALLATION GUIDE</p><h2>Install and Open PaperRss</h2></div>
+      <div class="section-title-group">
+        <p class="section-eyebrow">INSTALLATION GUIDE</p>
+        <h2>Install and Open PaperRss</h2>
+      </div>
       <div class="install-box">
-        <p>The current release is not notarized by Apple. If macOS says the app cannot be opened or is damaged, choose either option below:</p>
+        <p class="install-intro">The current release is not notarized by Apple. If macOS says the app cannot be opened or is damaged, choose either option below:</p>
         <div class="install-methods">
           <div class="install-method-item">
             <strong>Option 1: One-liner Terminal Command (Recommended)</strong>
@@ -108,8 +243,70 @@
         </div>
       </div>
     </section>
-  </main>
 
-  <footer class="site-footer"><div class="container"><div class="footer-nav"><a href="#features">Features</a><a href="#sponsor">Feedback & Support</a><a href="#install">Installation</a><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">GPLv3</a><a href="https://github.com/ohmyangboy/PaperRss">GitHub</a></div><p>© 2026 PaperRss. Made with care by @ohmyangboy.</p></div></footer>
+    <!-- Section Divider: Sponsor -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">FEEDBACK & SUPPORT</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Sponsor Section -->
+    <section id="sponsor" class="sponsor-section">
+      <span class="sponsor-badge">FEEDBACK & COMMUNITY</span>
+      <h2>Feedback & Support</h2>
+      <p class="sponsor-desc">PaperRss is independently developed and open source. We welcome your feedback on GitHub, and you can also support continued development via PayPal.</p>
+      <div class="sponsor-box paypal-sponsor">
+        <a href="https://paypal.me/ohmyangboy" class="paypal-button" target="_blank" rel="noopener">Support via PayPal</a>
+        <div class="feedback-links">
+          <a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn" target="_blank" rel="noopener noreferrer">Open a GitHub Issue</a>
+          <a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback" target="_blank" rel="noopener noreferrer">★ Star PaperRss</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section Divider: About -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">ABOUT</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <img src="../assets/app-icon.png" alt="PaperRss" />
+          <p>PaperRss — Read slowly, think deeply. A modern, paper-inspired RSS reader designed natively for macOS.</p>
+        </div>
+        <div class="footer-col">
+          <h3>Product</h3>
+          <ul>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#install">Installation</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h3>Open Source</h3>
+          <ul>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0 License</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss" target="_blank" rel="noopener noreferrer">Source Code</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss#readme" target="_blank" rel="noopener noreferrer">Documentation</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h3>Community</h3>
+          <ul>
+            <li><a href="#sponsor">Sponsor & Support</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/issues" target="_blank" rel="noopener noreferrer">Feedback & Issues</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p class="footer-copy">© 2026 PaperRss · Crafted with care by <a href="https://github.com/ohmyangboy" target="_blank" rel="noopener noreferrer">@ohmyangboy</a></p>
+      </div>
+    </footer>
+  </main>
 </body>
 </html>

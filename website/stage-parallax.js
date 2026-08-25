@@ -1,10 +1,8 @@
 (() => {
-  // 1. Disable browser scroll restoration so refresh always starts at top
   if ('scrollRestoration' in history) {
     history.scrollRestoration = 'manual';
   }
 
-  // 2. Clear hash and force scroll to top on page refresh/load
   if (window.location.hash) {
     history.replaceState(null, '', window.location.pathname + window.location.search);
   }
@@ -15,7 +13,6 @@
 
   const reduceMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-  // Universal high-grade Ease-In-Out curves (slow start, fluid surge, soft landing)
   function easeInOutQuart(t) {
     return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
   }
@@ -27,8 +24,6 @@
   function initStageParallax() {
     const heroContent = document.querySelector('.hero-content') || document.querySelector('.hero');
     const stageSection = document.getElementById('stage-showcase');
-    const featuresSection = document.getElementById('features');
-    const sponsorSection = document.getElementById('sponsor');
 
     const baseCard = stageSection ? (stageSection.querySelector('.stage-card-base') || stageSection.querySelector('.stage-card-1')) : null;
     const midCard = stageSection ? (stageSection.querySelector('.stage-card-mid') || stageSection.querySelector('.stage-card-2')) : null;
@@ -37,10 +32,8 @@
     const baseScrim = baseCard ? baseCard.querySelector('.stage-card-scrim') : null;
     const midScrim = midCard ? midCard.querySelector('.stage-card-scrim') : null;
 
-    // Cache layout metrics to eliminate forced reflows during scroll
     let stageTop = 0;
     let stageHeight = 0;
-    let sponsorTop = 0;
     let viewportHeight = window.innerHeight;
     let isMobile = false;
 
@@ -54,22 +47,13 @@
         stageTop = rect.top + scrollY;
         stageHeight = rect.height;
       }
-
-      if (sponsorSection) {
-        const sRect = sponsorSection.getBoundingClientRect();
-        sponsorTop = sRect.top + scrollY;
-      }
     }
 
-    // Target vs Current progress for smooth LERP physical interpolation across all sections
     let targetStageProgress = 0;
     let currentStageProgress = 0;
 
     let targetHeroProgress = 0;
     let currentHeroProgress = 0;
-
-    let targetSponsorProgress = 0;
-    let currentSponsorProgress = 0;
 
     let isLoopRunning = false;
 
@@ -90,26 +74,13 @@
           targetStageProgress = 0;
         }
       }
-
-      // 3. Features -> Sponsor overlapping progress
-      if (sponsorSection) {
-        const triggerPoint = sponsorTop - viewportHeight * 0.85;
-        const triggerRange = Math.min(viewportHeight * 0.8, 550);
-        if (scrollY > triggerPoint) {
-          targetSponsorProgress = Math.max(0, Math.min(1, (scrollY - triggerPoint) / triggerRange));
-        } else {
-          targetSponsorProgress = 0;
-        }
-      }
     }
 
     function renderFrame() {
-      // Smooth LERP (Linear Interpolation) with fluid physical inertia
-      const lerpFactor = 0.13;
+      const lerpFactor = 0.14;
 
       const heroDelta = targetHeroProgress - currentHeroProgress;
       const stageDelta = targetStageProgress - currentStageProgress;
-      const sponsorDelta = targetSponsorProgress - currentSponsorProgress;
 
       if (Math.abs(heroDelta) > 0.0003) {
         currentHeroProgress += heroDelta * lerpFactor;
@@ -123,21 +94,15 @@
         currentStageProgress = targetStageProgress;
       }
 
-      if (Math.abs(sponsorDelta) > 0.0003) {
-        currentSponsorProgress += sponsorDelta * lerpFactor;
-      } else {
-        currentSponsorProgress = targetSponsorProgress;
-      }
-
-      // --- 1. Hero Parallax: Ease-In-Out on Motion, Blur, Scale, and Fade ---
+      // --- 1. Hero Parallax ---
       if (heroContent) {
         const hMotionEase = easeInOutQuart(currentHeroProgress);
         const hBlurEase = easeInOutCubic(currentHeroProgress);
 
-        const hScale = (1 - 0.04 * hMotionEase).toFixed(4);
-        const hBlur = (5.5 * hBlurEase).toFixed(1);
-        const hOpacity = (1 - 0.65 * hMotionEase).toFixed(2);
-        const hTranslateY = -(hMotionEase * 32).toFixed(1);
+        const hScale = (1 - 0.035 * hMotionEase).toFixed(4);
+        const hBlur = (4.0 * hBlurEase).toFixed(1);
+        const hOpacity = (1 - 0.55 * hMotionEase).toFixed(2);
+        const hTranslateY = -(hMotionEase * 28).toFixed(1);
 
         heroContent.style.transform = `translate3d(0, ${hTranslateY}px, 0) scale(${hScale})`;
         heroContent.style.filter = `blur(${hBlur}px)`;
@@ -165,15 +130,15 @@
         const m1 = easeInOutQuart(p1);
         const m2 = easeInOutQuart(p2);
 
-        // Card 1: GPU-accelerated blur via scrim opacity + subtle scale during Phase 1
-        const scale1 = (1 - 0.045 * m1).toFixed(4);
+        // Card 1: subtle scale + scrim blur during Phase 1
+        const scale1 = (1 - 0.04 * m1).toFixed(4);
         baseCard.style.transform = `translate3d(0, 0, 0) scale(${scale1})`;
         if (baseScrim) {
           baseScrim.style.opacity = m1.toFixed(3);
         }
 
-        // Card 2: Starts at 115% and glides to 0% in Phase 1; then scales and blurs in Phase 2
-        const scale2 = (1 - 0.045 * m2).toFixed(4);
+        // Card 2: Starts at 115% and glides to 0% in Phase 1; then scales in Phase 2
+        const scale2 = (1 - 0.04 * m2).toFixed(4);
         const translateY2 = ((1 - m1) * 115).toFixed(2);
         midCard.style.transform = `translate3d(0, ${translateY2}%, 0) scale(${scale2})`;
         if (midScrim) {
@@ -184,7 +149,6 @@
         const translateY3 = (((1 - m1) + (1 - m2)) * 115).toFixed(2);
         overlayCard.style.transform = `translate3d(0, ${translateY3}%, 0)`;
       } else if (baseCard && overlayCard) {
-        // 2-Card fallback
         const animStart = 0.05;
         const animEnd = 0.85;
 
@@ -194,7 +158,7 @@
         }
 
         const motionEase = easeInOutQuart(p);
-        const scale = (1 - 0.045 * motionEase).toFixed(4);
+        const scale = (1 - 0.04 * motionEase).toFixed(4);
         baseCard.style.transform = `translate3d(0, 0, 0) scale(${scale})`;
 
         if (baseScrim) {
@@ -205,29 +169,9 @@
         overlayCard.style.transform = `translate3d(0, ${translateY}%, 0)`;
       }
 
-      // --- 3. Features -> Sponsor Parallax: Soft Blur & Overlapping Glide ---
-      if (featuresSection && sponsorSection) {
-        const sEase = easeInOutQuart(currentSponsorProgress);
-
-        // Features softly scales and blurs as Sponsor glides into view
-        const fScale = (1 - 0.035 * sEase).toFixed(4);
-        const fBlur = (5.0 * sEase).toFixed(1);
-        const fOpacity = (1 - 0.40 * sEase).toFixed(2);
-
-        featuresSection.style.transform = `translate3d(0, 0, 0) scale(${fScale})`;
-        featuresSection.style.filter = `blur(${fBlur}px)`;
-        featuresSection.style.opacity = fOpacity;
-
-        // Sponsor glides up smoothly and overlaps features
-        const sponsorTranslateY = ((1 - sEase) * 65).toFixed(1);
-        sponsorSection.style.transform = `translate3d(0, ${sponsorTranslateY}px, 0)`;
-      }
-
-      // Continue render loop if still interpolating
       if (
         Math.abs(targetHeroProgress - currentHeroProgress) > 0.0003 ||
-        Math.abs(targetStageProgress - currentStageProgress) > 0.0003 ||
-        Math.abs(targetSponsorProgress - currentSponsorProgress) > 0.0003
+        Math.abs(targetStageProgress - currentStageProgress) > 0.0003
       ) {
         window.requestAnimationFrame(renderFrame);
       } else {
@@ -255,15 +199,6 @@
         }
         if (baseScrim) baseScrim.style.opacity = '';
         if (midScrim) midScrim.style.opacity = '';
-
-        if (featuresSection) {
-          featuresSection.style.transform = '';
-          featuresSection.style.filter = '';
-          featuresSection.style.opacity = '';
-        }
-        if (sponsorSection) {
-          sponsorSection.style.transform = '';
-        }
         return;
       }
 
@@ -284,7 +219,6 @@
     window.addEventListener('resize', onResize, { passive: true });
     reduceMotionQuery.addEventListener('change', onResize);
 
-    // Initial setup
     measureLayout();
     requestRender();
   }

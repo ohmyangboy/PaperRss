@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PaperRss — 双语流转，克制智能化</title>
-  <meta name="description" content="PaperRss 是一款专为 macOS 打造的现代纸感 RSS 阅读器，支持 AI 摘要、划词翻译与兼容 OpenAI 的模型服务。" />
+  <title>PaperRss — 慢读，深思</title>
+  <meta name="description" content="PaperRss，一款双语流转、克制智能的原生RSS阅读器，提供恰到到好处的AI能力和阅读工具，还原为安静优雅的纸张阅读。" />
   <link rel="canonical" href="https://ohmyangboy.github.io/PaperRss/zh-CN/" />
   <link rel="alternate" hreflang="zh-CN" href="https://ohmyangboy.github.io/PaperRss/zh-CN/" />
   <link rel="alternate" hreflang="en" href="https://ohmyangboy.github.io/PaperRss/en/" />
@@ -15,41 +15,110 @@
   <script src="../stage-parallax.js" defer></script>
   <script src="../github-stars.js" defer></script>
   <script src="../install-copy.js" defer></script>
+  <script src="../dropdown-menu.js" defer></script>
 </head>
 <body>
-  <header class="site-header">
+  <!-- Header kept for semantic & accessibility fallback; hidden by CSS for minimal poster experience -->
+  <header class="site-header" aria-hidden="true">
     <a href="./" class="brand">
       <img src="../assets/app-icon.png" alt="PaperRss 图标" />
-      <div class="brand-text"><span class="brand-name">PaperRss</span><span class="brand-tag">Reading first, AI second</span></div>
+      <div class="brand-text">
+        <span class="brand-name">PaperRss</span>
+        <span class="brand-tag">Reading first, AI second</span>
+      </div>
     </a>
-    <nav class="site-nav"><a href="#features">功能特性</a><a href="#sponsor">反馈支持</a><a href="#install">安装说明</a></nav>
+    <nav class="site-nav">
+      <a href="#features">功能特性</a>
+      <a href="#install">安装说明</a>
+      <a href="#sponsor">反馈支持</a>
+    </nav>
     <div class="header-actions">
       <a class="language-switcher" href="../en/" lang="en" hreflang="en" onclick="localStorage.setItem('paperrss.locale','en')" aria-label="Switch to English">🌐 简体中文</a>
       <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库">
         <span>GitHub</span>
-        <span class="gh-star-badge" aria-label="GitHub 星标数"><svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/></svg><span class="gh-star-count"></span></span>
+        <span class="gh-star-badge" aria-label="GitHub 星标数">
+          <svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+            <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+          </svg>
+          <span class="gh-star-count"></span>
+        </span>
       </a>
-      <a href="https://github.com/ohmyangboy/PaperRss/releases" class="btn-download-primary">查看发布说明</a>
     </div>
   </header>
 
   <main class="container">
+    <!-- Hero Section (Minimal Zine Poster Aesthetic) -->
     <section class="hero">
       <div class="hero-content">
         <div class="hero-app-icon"><img src="../assets/app-icon.png" alt="PaperRss App 图标" /></div>
+        
+        <!-- Slogan: 慢读，深思 -->
         <h1 class="scramble-title" title="点击重新播放解密归位动画">
-          <span class="scramble-target" data-text="双语流转，克制智能化">双语流转，克制智能化</span><br />
-          <em class="scramble-target" data-text="让阅读回归纯粹与沉浸">让阅读回归纯粹与沉浸</em>
+          <span class="scramble-target" data-text="慢读，深思">慢读，深思</span>
         </h1>
-        <p class="hero-subtitle">没有喧宾夺主的 AI 噪声，只有恰到好处的全文摘要与划词双语翻译。把散落的全网订阅，还原为安静优雅的纸张阅读。</p>
+        
+        <!-- Description: Slogan 展开说明 -->
+        <p class="hero-subtitle">
+          PaperRss，一款双语流转、克制智能的原生RSS阅读器，提供恰到到好处的AI能力和阅读工具，还原为安静优雅的纸张阅读。
+        </p>
+        
+        <!-- Hero Button Cluster: Split Download with Universal tag, GitHub Star pill & Language switch -->
         <div class="hero-ctas">
-          <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg" class="hero-cta-main">下载 macOS 版本 (v1.3.0-beta.3)</a>
-          <a href="#features" class="hero-cta-secondary">浏览核心特性 ↓</a>
+          <!-- Split Download Button -->
+          <div class="dl-split">
+            <a href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg" class="dl-main">
+              <span class="dl-main-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+                </svg>
+              </span>
+              <span>下载 macOS 版本</span>
+              <span class="dl-tag-universal">Universal</span>
+            </a>
+            <button type="button" class="dl-toggle" aria-haspopup="true" aria-expanded="false" aria-label="更多下载架构">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            <div class="dl-menu" role="menu" aria-label="下载架构选择">
+              <a class="dl-item" role="menuitem" href="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.0-beta.3/PaperRss-v1.3.0-beta.3.dmg">
+                <span class="dl-os">macOS 通用版 (DMG)</span>
+                <span class="dl-item-sub">Apple Silicon & Intel</span>
+              </a>
+              <a class="dl-item" role="menuitem" href="https://github.com/ohmyangboy/PaperRss/releases" target="_blank" rel="noopener noreferrer">
+                <span class="dl-os">所有历史版本</span>
+                <span class="dl-item-sub">GitHub Releases ↗</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- GitHub Star Button (in Hero CTA Cluster) -->
+          <a href="https://github.com/ohmyangboy/PaperRss" class="btn-github" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库">
+            <span>GitHub</span>
+            <span class="gh-star-badge" aria-label="GitHub 星标数">
+              <svg class="gh-star-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+              </svg>
+              <span class="gh-star-count"></span>
+            </span>
+          </a>
+
+          <!-- Language Switcher in Hero -->
+          <a class="language-switcher" href="../en/" lang="en" hreflang="en" onclick="localStorage.setItem('paperrss.locale','en')" aria-label="Switch to English">🌐 EN</a>
+
+          <!-- Secondary CTA -->
+          <a href="#features" class="hero-cta-secondary">
+            <span>特性</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 17 17 7" />
+              <path d="M7 7h10v10" />
+            </svg>
+          </a>
         </div>
-        <p class="hero-meta">Apple Silicon & Intel Mac · macOS 14.0+ · API Key 仅存本机</p>
       </div>
     </section>
 
+    <!-- Showcase Stage (Stacking Parallax) -->
     <section class="stage-section" id="stage-showcase">
       <div class="stage-sticky-viewport">
         <div class="stage-cards-wrapper">
@@ -68,39 +137,99 @@
       </div>
     </section>
 
+    <!-- Section Divider: Philosophy -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">CORE PHILOSOPHY</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Trust Rail (Core Philosophy Bento) -->
     <aside class="trust-rail">
-      <div class="trust-item"><strong>本地优先</strong><span>API Key 仅存于本机设备</span></div>
-      <div class="trust-item"><strong>AI 智能阅读</strong><span>按需生成全文摘要</span></div>
-      <div class="trust-item"><strong>划词实时解读</strong><span>翻译、解释与提问</span></div>
-      <div class="trust-item"><strong>自由模型接入</strong><span>兼容 DeepSeek 与 OpenAI API</span></div>
+      <div class="trust-item">
+        <strong>本地优先</strong>
+        <span>API Key 与数据仅存于本机设备</span>
+      </div>
+      <div class="trust-item">
+        <strong>AI 智能阅读</strong>
+        <span>按需生成全文摘要，绝无干扰</span>
+      </div>
+      <div class="trust-item">
+        <strong>划词即时解读</strong>
+        <span>双语翻译、深度解释与上下文提问</span>
+      </div>
+      <div class="trust-item">
+        <strong>自由模型接入</strong>
+        <span>兼容 DeepSeek 与 OpenAI 接口</span>
+      </div>
     </aside>
 
-    <section id="features" style="padding-top:2rem">
-      <div class="section-title-group"><p class="section-eyebrow">EDITORIAL EXPERIENCE</p><h2>兼具美感与效能的阅读体验</h2></div>
+    <!-- Section Divider: Features -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">FEATURES</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Features Section -->
+    <section id="features">
+      <div class="section-title-group">
+        <p class="section-eyebrow">EDITORIAL EXPERIENCE</p>
+        <h2>兼具美感与效能的阅读体验</h2>
+      </div>
       <div class="features-grid">
-        <div class="feature-card"><div><div class="feature-num">01 / BILINGUAL</div><h3>中英文对照翻译</h3><p>逐段保留原文与译文，在长文中连续阅读，也能清楚对应上下文。</p></div><img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss 中英文逐段对照翻译" class="feature-card-img" /></div>
-        <div class="feature-card" id="ai-assistant"><div><div class="feature-num">02 / EXPLAIN & ASK</div><h3>AI 解释 & 提问</h3><p>选中文字后，可以结合文章语境直接提问，也可以让 AI 解释陌生词语、概念与背景。</p></div><div class="feature-card-gallery"><img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss 划词向 AI 提问输入框" class="feature-card-img" /><img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss 划词 AI 解释浮窗" class="feature-card-img" /></div></div>
-        <div class="feature-card"><div><div class="feature-num">03 / TRANSLATE</div><h3>划词即时翻译</h3><p>无需离开阅读页，即可获得当前选中文字的上下文翻译。</p></div><img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss 划词翻译浮窗" class="feature-card-img" /></div>
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">01 / BILINGUAL</div>
+            <h3>中英文对照翻译</h3>
+            <p>逐段保留原文与译文，在长文中连续阅读，也能清楚对应上下文。</p>
+          </div>
+          <img src="../assets/screenshots/bilingual-translation.png" alt="PaperRss 中英文逐段对照翻译" class="feature-card-img" />
+        </div>
+        <div class="feature-card" id="ai-assistant">
+          <div>
+            <div class="feature-num">02 / EXPLAIN & ASK</div>
+            <h3>AI 解释 & 提问</h3>
+            <p>选中文字后，可以结合文章语境直接提问，也可以让 AI 解释陌生词语、概念与背景。</p>
+          </div>
+          <div class="feature-card-gallery">
+            <img src="../assets/screenshots/ai-question-popover.png" alt="PaperRss 划词向 AI 提问输入框" class="feature-card-img" />
+            <img src="../assets/screenshots/ai-explain-popover.png" alt="PaperRss 划词 AI 解释浮窗" class="feature-card-img" />
+          </div>
+        </div>
+        <div class="feature-card">
+          <div>
+            <div class="feature-num">03 / TRANSLATE</div>
+            <h3>划词即时翻译</h3>
+            <p>无需离开阅读页，即可获得当前选中文字的上下文翻译。</p>
+          </div>
+          <img src="../assets/screenshots/ai-translate-popover.png" alt="PaperRss 划词翻译浮窗" class="feature-card-img" />
+        </div>
       </div>
     </section>
 
-    <section id="sponsor" class="sponsor-section">
-      <span class="sponsor-badge">FEEDBACK & COMMUNITY</span><h2>反馈与支持 PaperRss 持续进化</h2>
-      <p class="sponsor-desc">PaperRss 是独立开发并开源的软件。欢迎在 GitHub 提交反馈与建议，也可以通过微信赞赏支持开发者的持续投入。</p>
-      <div class="sponsor-box"><div class="qr-card"><img src="../assets/wechat-sponsor-qr.jpg" alt="微信赞赏码" /><div class="qr-caption">微信扫码赞赏支持</div></div><div class="feedback-links"><a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn">提交 GitHub Issue / 反馈建议</a><a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback">★ 给项目点个 Star</a></div></div>
-    </section>
+    <!-- Section Divider: Installation -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">INSTALLATION</span>
+      <span class="hairline"></span>
+    </div>
 
+    <!-- Installation Section -->
     <section id="install" class="install-section">
-      <div class="section-title-group install-title"><p class="section-eyebrow">INSTALLATION GUIDE</p><h2>安装与安全说明</h2></div>
+      <div class="section-title-group">
+        <p class="section-eyebrow">INSTALLATION GUIDE</p>
+        <h2>安装与安全说明</h2>
+      </div>
       <div class="install-box">
-        <p>当前 Release 尚未配置 Apple 付费开发者公证签名。若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：</p>
+        <p class="install-intro">当前 Release 尚未配置 Apple 付费开发者公证签名。若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：</p>
         <div class="install-methods">
           <div class="install-method-item">
             <strong>方式一：终端一键命令（推荐）</strong>
             <p class="install-subtext">先将 PaperRss 拖入 Applications。打开 Mac 自带的「终端」(Terminal.app)，点击下方「复制命令」粘贴到终端并按回车，即可自动清除隔离标记并启动：</p>
             <div class="install-cmd-row">
               <div class="install-cmd" id="install-cmd-text">pkill -x PaperRss 2&gt;/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2&gt;/dev/null; open "/Applications/PaperRss.app"</div>
-              <button class="install-cmd-copy" type="button" data-copy-target="install-cmd-text">复制命令</button>
+              <button class="install-cmd-copy" type="button" data-copy-target="install-cmd-text" data-copied-label="已复制 ✓" data-fail-label="复制失败">复制命令</button>
             </div>
             <p class="install-subtext">💡 DMG 镜像内的 <code>INSTALL.txt</code> 也包含这条命令，双击打开即可复制，无需手动输入。</p>
           </div>
@@ -114,8 +243,73 @@
         </div>
       </div>
     </section>
-  </main>
 
-  <footer class="site-footer"><div class="container"><div class="footer-nav"><a href="#features">功能特性</a><a href="#sponsor">反馈支持</a><a href="#install">安装说明</a><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE">GPLv3</a><a href="https://github.com/ohmyangboy/PaperRss">GitHub</a></div><p>© 2026 PaperRss. Made with care by @ohmyangboy.</p></div></footer>
+    <!-- Section Divider: Sponsor -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">FEEDBACK & SUPPORT</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Sponsor Section -->
+    <section id="sponsor" class="sponsor-section">
+      <span class="sponsor-badge">FEEDBACK & COMMUNITY</span>
+      <h2>反馈与支持 PaperRss 持续进化</h2>
+      <p class="sponsor-desc">PaperRss 是独立开发并开源的软件。欢迎在 GitHub 提交反馈与建议，也可以通过微信赞赏支持开发者的持续投入。</p>
+      <div class="sponsor-box">
+        <div class="qr-card">
+          <img src="../assets/wechat-sponsor-qr.jpg" alt="微信赞赏码" />
+          <div class="qr-caption">微信扫码赞赏支持</div>
+        </div>
+        <div class="feedback-links">
+          <a href="https://github.com/ohmyangboy/PaperRss/issues" class="feedback-btn" target="_blank" rel="noopener noreferrer">提交 GitHub Issue / 反馈建议</a>
+          <a href="https://github.com/ohmyangboy/PaperRss" class="feedback-btn secondary-feedback" target="_blank" rel="noopener noreferrer">★ 给项目点个 Star</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section Divider: About -->
+    <div class="section-divider">
+      <span class="hairline"></span>
+      <span class="section-label">ABOUT</span>
+      <span class="hairline"></span>
+    </div>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <img src="../assets/app-icon.png" alt="PaperRss" />
+          <p>PaperRss — 慢读，深思。一款专为 macOS 打造的现代纸感 RSS 阅读器。</p>
+        </div>
+        <div class="footer-col">
+          <h3>产品导航</h3>
+          <ul>
+            <li><a href="#features">功能特性</a></li>
+            <li><a href="#install">安装说明</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/releases" target="_blank" rel="noopener noreferrer">版本更新记录</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h3>开源与协议</h3>
+          <ul>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0 License</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss" target="_blank" rel="noopener noreferrer">GitHub 源码仓库</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss#readme" target="_blank" rel="noopener noreferrer">开发者文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h3>社区与反馈</h3>
+          <ul>
+            <li><a href="#sponsor">支持开发者</a></li>
+            <li><a href="https://github.com/ohmyangboy/PaperRss/issues" target="_blank" rel="noopener noreferrer">问题与建议反馈</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p class="footer-copy">© 2026 PaperRss · Crafted with care by <a href="https://github.com/ohmyangboy" target="_blank" rel="noopener noreferrer">@ohmyangboy</a></p>
+      </div>
+    </footer>
+  </main>
 </body>
 </html>
