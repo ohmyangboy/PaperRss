@@ -1440,9 +1440,12 @@ public final class AppStore: ObservableObject {
         if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
             return memoized
         }
-        // 注：预取与阅读加载可能对同一 entry 并发准备（罕见且良性，内容一致，
-        // 后写者胜出）。刻意不做共享去重任务：非结构化 Task 会切断视图
+        // 注：预取与阅读加载可能对同一 entry 并发准备（罕见且良性，后写者胜出）。
+        // 刻意不做共享去重任务：非结构化 Task 会切断视图
         // .task(id:) 的取消传播，导致快速切换无法中止在途网络请求。
+        // 内容一致性仅对缓存命中/全文 Feed 成立：摘要 Feed 的 localOnly 预取
+        // 产出纯 Feed 摘要，与前台（含网页抓取）结果不同——该差异由下方
+        // isProvisionalPrefetch 门禁拦截，禁止降级内容进入内存缓存。
         let generationAtStart = preparedArticleMemoryCache.generation
         let cached = try? localProvider.fetchCache(entryID: entry.id)
         let feed = self.feed(for: entry)
@@ -1471,11 +1474,14 @@ public final class AppStore: ObservableObject {
         // 取消的任务可能产出兜底结果，不污染内存缓存；
         // .fallback 表示本次未能产出真实正文（如网络瞬时失败），
         // 不缓存以便下次访问重新尝试；
+        // isProvisionalLocal 表示 localOnly 预取的弱 Feed 摘要（摘要 Feed 场景
+        // 远弱于网页全文），入缓存会让正式打开命中它并跳过网页升级；
         // 准备期间若发生失效（如重抓写入更好缓存），代数不匹配则放弃存储。
         if !Task.isCancelled,
            permitsMemoryCaching,
            prepared.source != .fallback,
            result.cacheState == .current,
+           !result.isProvisionalLocal,
            generationAtStart == preparedArticleMemoryCache.generation {
             preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)
         }

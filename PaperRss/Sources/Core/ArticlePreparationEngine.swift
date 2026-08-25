@@ -15,17 +15,23 @@ public struct ArticlePreparationResult: Sendable {
     public let updatedCache: ArticleCache?
     public let cacheState: ArticlePreparationCacheState
     public let didRefreshCache: Bool
+    /// localOnly 预取产出的"降级预览"：有网页 URL 可升级，但本次仅取到弱 Feed
+    /// 摘要（不含完整正文）。此类结果不得进入内存缓存，否则正式打开会命中它
+    /// 并跳过网页抓取升级。
+    public let isProvisionalLocal: Bool
 
     init(
         prepared: PreparedArticle,
         updatedCache: ArticleCache?,
         cacheState: ArticlePreparationCacheState,
-        didRefreshCache: Bool = false
+        didRefreshCache: Bool = false,
+        isProvisionalLocal: Bool = false
     ) {
         self.prepared = prepared
         self.updatedCache = updatedCache
         self.cacheState = cacheState
         self.didRefreshCache = didRefreshCache
+        self.isProvisionalLocal = isProvisionalLocal
     }
 }
 
@@ -83,7 +89,8 @@ public final class ArticlePreparationEngine: Sendable {
                 return ArticlePreparationResult(
                     prepared: feedCandidate.toPreparedArticle(),
                     updatedCache: nil,
-                    cacheState: .current
+                    cacheState: .current,
+                    isProvisionalLocal: entry.url != nil && !feedCandidate.quality.isStrong
                 )
             }
             return ArticlePreparationResult(
@@ -212,7 +219,17 @@ public final class ArticlePreparationEngine: Sendable {
         // 6. 回退到最佳本地候选或通用兜底
         if let bestLocal {
             let prepared = bestLocal.toPreparedArticle()
-            let cacheUpdate = computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
+            // 网页抓取已尝试但未产出更强正文时，弱 Feed 摘要仅作本次展示，
+            // 不得写入缓存：否则摘要会永久顶替完整正文（下次打开命中可用缓存
+            // 即不再重试网页）。无 URL（Feed 即权威）、本地候选已足够强
+            // （全文 Feed）或候选来自旧缓存（规范化/修订号升级等合法家务回写）
+            // 时照常缓存。
+            let cacheable = entry.url == nil
+                || bestLocal.quality.isStrong
+                || bestLocal.source == .cache
+            let cacheUpdate = cacheable
+                ? computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
+                : nil
             return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
         }
 

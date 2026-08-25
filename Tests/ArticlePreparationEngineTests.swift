@@ -244,6 +244,113 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertTrue(prepared.text.contains("本地可读 Feed 正文"))
     }
 
+    // MARK: - 6.5 弱本地候选不得投毒缓存（摘要 Feed 回归）
+
+    func testWebFailureWithWeakFeedSummaryDoesNotWriteDiskCache() async {
+        let loader = MockPageLoader()
+        let postURL = URL(string: "https://example.com/summary-feed-post")!
+        loader.errorMap[postURL] = URLError(.timedOut)
+
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        // 摘要 Feed：两段短文（不足 strong 阈值），有网页 URL 可升级
+        let entry = Entry(
+            id: "entry-summary-1",
+            feedID: defaultFeedID,
+            title: "摘要文章",
+            url: postURL,
+            publishedAt: .now,
+            summary: "摘要",
+            contentHTML: "<p>第一段摘要。</p><p>第二段摘要。</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: nil, policy: .foregroundRefresh)
+        XCTAssertEqual(result.prepared.source, .feed)
+        // 关键回归：弱摘要不得写入磁盘缓存，否则下次打开命中可用缓存永久顶替全文
+        XCTAssertNil(result.updatedCache)
+    }
+
+    func testWebFailureWithoutURLStillCachesFeedContent() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entry = Entry(
+            id: "entry-nourl-1",
+            feedID: defaultFeedID,
+            title: "无链接文章",
+            url: nil,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>第一段。</p><p>第二段。</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: nil, policy: .foregroundRefresh)
+        XCTAssertEqual(result.prepared.source, .feed)
+        // 无 URL 时 Feed 即权威内容，照常入缓存
+        XCTAssertNotNil(result.updatedCache)
+    }
+
+    func testWebFailureWithStrongFeedStillCachesFeedContent() async {
+        let loader = MockPageLoader()
+        let postURL = URL(string: "https://example.com/fullfeed-post")!
+        loader.errorMap[postURL] = URLError(.timedOut)
+
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        // 全文 Feed：三段以上长正文（strong），有 URL 但内容已是最终形态
+        let long = String(repeating: "这是一段完整的正文内容，包含背景、方法与结论。", count: 20)
+        let entry = Entry(
+            id: "entry-fullfeed-1",
+            feedID: defaultFeedID,
+            title: "全文文章",
+            url: postURL,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(long)</p><p>\(long)</p><p>\(long)</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: nil, policy: .foregroundRefresh)
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertNotNil(result.updatedCache)
+    }
+
+    func testLocalOnlyWeakSummaryWithURLIsProvisional() async {
+        let loader = MockPageLoader()
+        let postURL = URL(string: "https://example.com/prefetch-summary")!
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entry = Entry(
+            id: "entry-prefetch-1",
+            feedID: defaultFeedID,
+            title: "预取摘要",
+            url: postURL,
+            publishedAt: .now,
+            summary: "摘要",
+            contentHTML: "<p>第一段摘要。</p><p>第二段摘要。</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: nil, policy: .localOnly)
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertTrue(result.isProvisionalLocal, "弱摘要+有 URL 的 localOnly 结果必须是降级预览")
+        XCTAssertEqual(loader.requestCount, 0)
+    }
+
+    func testLocalOnlyStrongFeedWithURLIsNotProvisional() async {
+        let loader = MockPageLoader()
+        let postURL = URL(string: "https://example.com/prefetch-fullfeed")!
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let long = String(repeating: "这是一段完整的正文内容，包含背景、方法与结论。", count: 20)
+        let entry = Entry(
+            id: "entry-prefetch-2",
+            feedID: defaultFeedID,
+            title: "预取全文",
+            url: postURL,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(long)</p><p>\(long)</p><p>\(long)</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: nil, policy: .localOnly)
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertFalse(result.isProvisionalLocal, "全文 Feed 预取结果即最终内容，不得标记降级")
+    }
+
     // MARK: - 7. PreparedArticle Fields Provenance (Same-Origin)
 
     func testPreparedArticleFieldsAreStrictlySameOrigin() async {

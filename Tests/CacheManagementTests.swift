@@ -142,4 +142,52 @@ final class CacheManagementTests: XCTestCase {
         XCTAssertEqual(cache?.text, "旧缓存正文", "失败时旧缓存必须原样保留")
         XCTAssertNil(store.articleRefreshSignal, "失败不应发布刷新信号")
     }
+
+    // MARK: - 预取摘要不得污染内存缓存（摘要 Feed 回归）
+
+    func testLocalOnlyWeakSummaryDoesNotEnterMemoryCache() async throws {
+        let entry = try seedEntry(
+            id: "summary",
+            contentHTML: "<p>第一段摘要。</p><p>第二段摘要。</p>",
+            url: URL(string: "https://example.com/summary-post")
+        )
+
+        _ = await store.prepareArticle(for: entry, policy: .localOnly)
+
+        XCTAssertNil(
+            store.memoizedPreparedArticle(for: entry),
+            "弱摘要+有 URL 的预取结果不得进入内存缓存，否则正式打开会跳过网页升级"
+        )
+    }
+
+    func testLocalOnlyStrongFeedEntersMemoryCache() async throws {
+        let body = String(repeating: "<p>这是一段完整的正文内容，包含背景、方法与结论。</p>\n", count: 30)
+        let entry = try seedEntry(
+            id: "fullfeed",
+            contentHTML: body,
+            url: URL(string: "https://example.com/fullfeed-post")
+        )
+
+        _ = await store.prepareArticle(for: entry, policy: .localOnly)
+
+        XCTAssertNotNil(
+            store.memoizedPreparedArticle(for: entry),
+            "全文 Feed 预取结果即最终内容，应照常进入内存缓存以支持即时切换"
+        )
+    }
+
+    func testLocalOnlyWeakSummaryWithoutURLEntersMemoryCache() async throws {
+        let entry = try seedEntry(
+            id: "nourl-summary",
+            contentHTML: "<p>第一段摘要。</p><p>第二段摘要。</p>",
+            url: nil
+        )
+
+        _ = await store.prepareArticle(for: entry, policy: .localOnly)
+
+        XCTAssertNotNil(
+            store.memoizedPreparedArticle(for: entry),
+            "无 URL 时 Feed 即权威内容，预取结果应照常进入内存缓存"
+        )
+    }
 }
