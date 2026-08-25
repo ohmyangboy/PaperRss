@@ -26,9 +26,19 @@ final class UpdateCoordinatorTests: XCTestCase {
 
         coordinator.start()
         coordinator.start()
-        coordinator.applicationDidBecomeActive()
 
         XCTAssertEqual(updater.startCount, 1)
+        XCTAssertEqual(updater.checkCount, 1, "冷启动检查只执行一次")
+    }
+
+    func testColdStartAlwaysChecksOnce() {
+        let updater = FakeUpdaterPort()
+        let coordinator = makeCoordinator(updater: updater)
+
+        coordinator.start()
+
+        XCTAssertEqual(updater.checkCount, 1, "每次冷启动必须检查一次，无日门禁")
+        XCTAssertEqual(coordinator.state, .checking)
     }
 
     func testStartFailureLandsInFailedStateWithFallback() {
@@ -192,161 +202,21 @@ final class UpdateCoordinatorTests: XCTestCase {
         }
     }
 
-    // MARK: - 自动检查调度（自然日 + 失败退避）
-
-    func testSchedulerChecksOncePerNaturalDayOnLaunchAndForeground() {
-        var now = date(2026, 8, 25, 8, 0, 0)
-        let persisting = FakeSchedulePersisting()
-        let updater = FakeUpdaterPort()
-        let coordinator = makeCoordinator(
-            updater: updater,
-            schedulePersisting: persisting,
-            now: { now }
-        )
-
-        coordinator.start()
-        XCTAssertEqual(updater.checkCount, 1, "首次启动应检查一次")
-        updater.send(.noUpdate)
-
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 1, "同一天内回前台不应重复检查")
-
-        now = date(2026, 8, 26, 0, 0, 1)
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 2, "跨过午夜后回前台应再次检查")
-    }
-
-    func testSchedulerBacksOffAfterFailuresAndRecordsSuccess() {
-        var now = date(2026, 8, 25, 8, 0, 0)
-        let persisting = FakeSchedulePersisting()
-        let updater = FakeUpdaterPort()
-        let coordinator = makeCoordinator(
-            updater: updater,
-            schedulePersisting: persisting,
-            now: { now }
-        )
-
-        coordinator.start()
-        updater.send(.failed(message: "network unreachable"))
-
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 1, "失败后立即回前台不应触发重试")
-
-        now = now.addingTimeInterval(30 * 60)
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 1, "第一次退避为 1 小时，半小时后不应重试")
-
-        now = now.addingTimeInterval(31 * 60)
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 2, "超过 1 小时退避后应重试")
-        updater.send(.noUpdate)
-
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 2, "成功后当日不应再检查")
-        XCTAssertEqual(persisting.consecutiveFailures, 0)
-        XCTAssertNotNil(persisting.lastSuccessfulCheck)
-    }
-
-    func testSchedulerBackoffIsCappedAtOneDay() {
-        XCTAssertEqual(
-            UpdateCheckScheduling.backoffDelay(afterConsecutiveFailures: 1),
-            3_600
-        )
-        XCTAssertEqual(
-            UpdateCheckScheduling.backoffDelay(afterConsecutiveFailures: 2),
-            7_200
-        )
-        XCTAssertEqual(
-            UpdateCheckScheduling.backoffDelay(afterConsecutiveFailures: 10),
-            UpdateCheckScheduling.maxBackoffSeconds
-        )
-    }
-
-    func testFailedScheduledCheckDoesNotRecordSuccessDate() {
-        var now = date(2026, 8, 25, 23, 59, 0)
-        let persisting = FakeSchedulePersisting()
-        let updater = FakeUpdaterPort()
-        let coordinator = makeCoordinator(
-            updater: updater,
-            schedulePersisting: persisting,
-            now: { now }
-        )
-
-        coordinator.start()
-        updater.send(.failed(message: "timeout"))
-
-        now = date(2026, 8, 26, 8, 0, 0)
-        coordinator.applicationDidBecomeActive()
-        XCTAssertEqual(updater.checkCount, 2, "失败不记录成功日期：次日回前台应重新检查")
-    }
-
-    func testManualCheckBypassesDailyRestrictionButStillCountsOncePerSession() {
-        let persisting = FakeSchedulePersisting()
-        persisting.saveLastSuccessfulCheckDate(date(2026, 8, 25, 9, 0, 0))
-        let updater = FakeUpdaterPort()
-        let coordinator = makeCoordinator(
-            updater: updater,
-            schedulePersisting: persisting,
-            now: { self.date(2026, 8, 25, 10, 0, 0) }
-        )
-
-        coordinator.start()
-        XCTAssertEqual(updater.checkCount, 0, "当天已成功检查，启动不应自动检查")
-
-        coordinator.checkForUpdates()
-        XCTAssertEqual(updater.checkCount, 1, "手动检查不受日期限制")
-    }
-
-    func testScheduledCheckDoesNotInterruptActiveUserSession() {
-        let persisting = FakeSchedulePersisting()
-        let updater = FakeUpdaterPort()
-        let coordinator = makeCoordinator(
-            updater: updater,
-            schedulePersisting: persisting,
-            now: { self.date(2026, 8, 25, 8, 0, 0) }
-        )
-        let release = release("20")
-
-        updater.send(.readyToInstall(release))
-        coordinator.start()
-
-        XCTAssertEqual(updater.checkCount, 0)
-        XCTAssertEqual(coordinator.state, .readyToInstall(release), "就绪安装态不应被自动检查打断")
-    }
-
     // MARK: - Helpers
 
     private func makeCoordinator(
         updater: FakeUpdaterPort,
-        preferences: any UpdatePreferencesPort = FakeUpdatePreferences(),
-        schedulePersisting: (any UpdateSchedulePersisting)? = nil,
-        now: @escaping () -> Date = { Date(timeIntervalSince1970: 0) }
+        preferences: any UpdatePreferencesPort = FakeUpdatePreferences()
     ) -> UpdateCoordinator {
         UpdateCoordinator(
             updater: updater,
             fallbackURL: URL(string: "https://example.com/releases")!,
-            preferences: preferences,
-            schedulePersisting: schedulePersisting,
-            now: now
+            preferences: preferences
         )
     }
 
     private func release(_ version: String) -> UpdateRelease {
         UpdateRelease(version: version, displayVersion: "2.0.0", releaseNotes: nil, isCritical: false)
-    }
-
-    private func date(
-        _ year: Int, _ month: Int, _ day: Int,
-        _ hour: Int, _ minute: Int, _ second: Int
-    ) -> Date {
-        var components = DateComponents()
-        components.year = year
-        components.month = month
-        components.day = day
-        components.hour = hour
-        components.minute = minute
-        components.second = second
-        return Calendar(identifier: .gregorian).date(from: components)!
     }
 }
 
@@ -415,26 +285,6 @@ private final class FakeUpdatePreferences: UpdatePreferencesPort {
     }
 }
 
-private final class FakeSchedulePersisting: UpdateSchedulePersisting {
-    private(set) var lastSuccessfulCheck: Date?
-    private(set) var consecutiveFailures = 0
-
-    func loadLastSuccessfulCheckDate() -> Date? {
-        lastSuccessfulCheck
-    }
-
-    func saveLastSuccessfulCheckDate(_ date: Date?) {
-        lastSuccessfulCheck = date
-    }
-
-    func loadConsecutiveFailureCount() -> Int {
-        consecutiveFailures
-    }
-
-    func saveConsecutiveFailureCount(_ count: Int) {
-        consecutiveFailures = count
-    }
-}
 
 private enum TestUpdaterError: LocalizedError {
     case configurationMissing

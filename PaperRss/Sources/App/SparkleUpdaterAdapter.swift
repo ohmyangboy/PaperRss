@@ -505,14 +505,12 @@ enum UpdateCoordinatorFactory {
 
     static func make(bundle: Bundle = .main) -> UpdateCoordinator {
         let preferences = UserDefaultsUpdatePreferences(defaults: .standard)
-        let schedulePersisting = UserDefaultsUpdateSchedulePersisting(defaults: .standard)
         do {
             let configuration = try SparkleConfiguration(bundle: bundle)
             return UpdateCoordinator(
                 updater: SparkleUpdaterAdapter(configuration: configuration),
                 fallbackURL: fallbackURL,
-                preferences: preferences,
-                schedulePersisting: schedulePersisting
+                preferences: preferences
             )
         } catch let configurationError as SparkleConfigurationError {
             let message: String
@@ -533,26 +531,23 @@ enum UpdateCoordinatorFactory {
                     "This build does not have an HTTPS Beta update feed configured. Switch back to the Stable channel."
                 )
             }
-            return makeUnavailable(message: message, preferences: preferences, schedulePersisting: schedulePersisting)
+            return makeUnavailable(message: message, preferences: preferences)
         } catch {
             return makeUnavailable(
                 message: error.localizedDescription,
-                preferences: preferences,
-                schedulePersisting: schedulePersisting
+                preferences: preferences
             )
         }
     }
 
     private static func makeUnavailable(
         message: String,
-        preferences: any UpdatePreferencesPort,
-        schedulePersisting: (any UpdateSchedulePersisting)?
+        preferences: any UpdatePreferencesPort
     ) -> UpdateCoordinator {
         UpdateCoordinator(
             updater: UnavailableUpdaterPort(error: UpdateConfigurationFailure(message: message)),
             fallbackURL: fallbackURL,
-            preferences: preferences,
-            schedulePersisting: schedulePersisting
+            preferences: preferences
         )
     }
 }
@@ -575,33 +570,4 @@ private final class UserDefaultsUpdatePreferences: UpdatePreferencesPort {
     }
 }
 
-private final class UserDefaultsUpdateSchedulePersisting: UpdateSchedulePersisting {
-    private static let lastSuccessKey = "PaperRss.UpdateLastSuccessfulCheck"
-    private static let failureCountKey = "PaperRss.UpdateConsecutiveFailures"
-    private let defaults: UserDefaults
-
-    init(defaults: UserDefaults) {
-        self.defaults = defaults
-    }
-
-    func loadLastSuccessfulCheckDate() -> Date? {
-        defaults.object(forKey: Self.lastSuccessKey) as? Date
-    }
-
-    func saveLastSuccessfulCheckDate(_ date: Date?) {
-        if let date {
-            defaults.set(date, forKey: Self.lastSuccessKey)
-        } else {
-            defaults.removeObject(forKey: Self.lastSuccessKey)
-        }
-    }
-
-    func loadConsecutiveFailureCount() -> Int {
-        defaults.integer(forKey: Self.failureCountKey)
-    }
-
-    func saveConsecutiveFailureCount(_ count: Int) {
-        defaults.set(count, forKey: Self.failureCountKey)
-    }
-}
 #endif

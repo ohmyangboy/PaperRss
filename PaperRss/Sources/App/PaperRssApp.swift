@@ -39,9 +39,6 @@ struct PaperRssApp: App {
                     application.activate(ignoringOtherApps: true)
                     updateCoordinator.start()
                 }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                    updateCoordinator.applicationDidBecomeActive()
-                }
             #else
             RootView(store: store, navigation: navigation)
             #endif

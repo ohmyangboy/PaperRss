@@ -13,14 +13,6 @@ public protocol UpdatePreferencesPort: AnyObject {
     func saveChannel(_ channel: UpdateChannel)
 }
 
-/// 自动检查节奏的持久化边界。只保存调度所需的非敏感元数据。
-public protocol UpdateSchedulePersisting: AnyObject {
-    func loadLastSuccessfulCheckDate() -> Date?
-    func saveLastSuccessfulCheckDate(_ date: Date?)
-    func loadConsecutiveFailureCount() -> Int
-    func saveConsecutiveFailureCount(_ count: Int)
-}
-
 public struct UpdateRelease: Equatable, Sendable {
     public let version: String
     public let displayVersion: String
@@ -149,77 +141,6 @@ public protocol UpdaterPort: AnyObject {
     func selectChannel(_ channel: UpdateChannel) throws
 }
 
-// MARK: - 自动检查调度（纯策略，时钟与持久化均可注入）
-
-public struct UpdateCheckScheduleState: Equatable, Sendable {
-    public var lastSuccessfulCheck: Date?
-    public var lastFailedCheck: Date?
-    public var consecutiveFailures: Int
-
-    public init(
-        lastSuccessfulCheck: Date? = nil,
-        lastFailedCheck: Date? = nil,
-        consecutiveFailures: Int = 0
-    ) {
-        self.lastSuccessfulCheck = lastSuccessfulCheck
-        self.lastFailedCheck = lastFailedCheck
-        self.consecutiveFailures = consecutiveFailures
-    }
-}
-
-public enum UpdateCheckScheduling {
-    /// 失败退避上限：一天。超过后等价于“第二天再试”。
-    public static let maxBackoffSeconds: TimeInterval = 86_400
-
-    /// 第 n 次连续失败后的重试间隔：1h, 2h, 4h … 封顶 24h。
-    public static func backoffDelay(afterConsecutiveFailures count: Int) -> TimeInterval {
-        guard count > 0 else { return 0 }
-        let hourlySteps = pow(2.0, Double(count - 1))
-        return min(hourlySteps * 3_600, maxBackoffSeconds)
-    }
-
-    /// 是否应当执行一次自动检查：
-    /// 今天尚未成功检查过，且（从未失败过 或 已到退避重试时点）。
-    public static func shouldAutoCheck(
-        state: UpdateCheckScheduleState,
-        now: Date,
-        calendar: Calendar = .current
-    ) -> Bool {
-        if let lastSuccess = state.lastSuccessfulCheck,
-           calendar.isDate(lastSuccess, inSameDayAs: now) {
-            return false
-        }
-        guard let lastFailure = state.lastFailedCheck, state.consecutiveFailures > 0 else {
-            return true
-        }
-        let retryAt = lastFailure.addingTimeInterval(
-            backoffDelay(afterConsecutiveFailures: state.consecutiveFailures)
-        )
-        return now >= retryAt
-    }
-
-    public static func recordSuccess(
-        _ state: UpdateCheckScheduleState,
-        now: Date
-    ) -> UpdateCheckScheduleState {
-        var next = state
-        next.lastSuccessfulCheck = now
-        next.lastFailedCheck = nil
-        next.consecutiveFailures = 0
-        return next
-    }
-
-    public static func recordFailure(
-        _ state: UpdateCheckScheduleState,
-        now: Date
-    ) -> UpdateCheckScheduleState {
-        var next = state
-        next.lastFailedCheck = now
-        next.consecutiveFailures += 1
-        return next
-    }
-}
-
 // MARK: - 协调器
 
 @MainActor
@@ -231,17 +152,14 @@ public final class UpdateCoordinator: ObservableObject {
     private let updater: any UpdaterPort
     private let fallbackURL: URL
     private let preferences: any UpdatePreferencesPort
-    private let schedulePersisting: (any UpdateSchedulePersisting)?
     private var now: () -> Date
-    private var scheduleState: UpdateCheckScheduleState
     private var hasStarted = false
 
     public convenience init(updater: any UpdaterPort, fallbackURL: URL) {
         self.init(
             updater: updater,
             fallbackURL: fallbackURL,
-            preferences: VolatileUpdatePreferences(),
-            schedulePersisting: nil
+            preferences: VolatileUpdatePreferences()
         )
     }
 
@@ -249,19 +167,13 @@ public final class UpdateCoordinator: ObservableObject {
         updater: any UpdaterPort,
         fallbackURL: URL,
         preferences: any UpdatePreferencesPort,
-        schedulePersisting: (any UpdateSchedulePersisting)? = nil,
         now: @escaping () -> Date = { Date() }
     ) {
         self.updater = updater
         self.fallbackURL = fallbackURL
         self.preferences = preferences
-        self.schedulePersisting = schedulePersisting
         self.now = now
         channel = preferences.loadChannel() ?? .stable
-        scheduleState = UpdateCheckScheduleState(
-            lastSuccessfulCheck: schedulePersisting?.loadLastSuccessfulCheckDate(),
-            consecutiveFailures: schedulePersisting?.loadConsecutiveFailureCount() ?? 0
-        )
         updater.eventHandler = { [weak self] event in
             self?.receive(event)
         }
@@ -274,7 +186,8 @@ public final class UpdateCoordinator: ObservableObject {
 
     // MARK: 生命周期
 
-    /// 启动长生命周期会话（幂等）。启动后立即评估一次自动检查资格。
+    /// 启动长生命周期会话（幂等）。每次冷启动（进程从无到有）执行一次检查；
+    /// 回前台不触发检查。手动检查随时可用且不受此限制。
     public func start() {
         guard !hasStarted else { return }
         hasStarted = true
@@ -284,13 +197,7 @@ public final class UpdateCoordinator: ObservableObject {
             applyFailure(error.localizedDescription)
             return
         }
-        performScheduledCheckIfDue()
-    }
-
-    /// 前台回访钩子：每个自然日首次回到前台时补一次检查。
-    public func applicationDidBecomeActive() {
-        guard hasStarted else { return }
-        performScheduledCheckIfDue()
+        initiateCheck(userInitiated: false)
     }
 
     // MARK: 用户意图
@@ -354,12 +261,6 @@ public final class UpdateCoordinator: ObservableObject {
 
     // MARK: 私有
 
-    private func performScheduledCheckIfDue() {
-        guard UpdateCheckScheduling.shouldAutoCheck(state: scheduleState, now: now()) else { return }
-        guard !state.isActiveSession else { return }
-        initiateCheck(userInitiated: false)
-    }
-
     private func initiateCheck(userInitiated: Bool) {
         state = .checking
         do {
@@ -372,11 +273,9 @@ public final class UpdateCoordinator: ObservableObject {
     private func receive(_ event: UpdaterEvent) {
         switch event {
         case .noUpdate:
-            recordScheduleOutcome(success: true)
             state = .upToDate(checkedAt: now())
             lastUpToDateNoticeAt = now()
         case let .updateAvailable(release):
-            recordScheduleOutcome(success: true)
             state = .updateAvailable(release)
         case let .downloading(progress):
             state = .downloading(progress)
@@ -391,18 +290,8 @@ public final class UpdateCoordinator: ObservableObject {
         case let .deferredUntilQuit(release):
             state = .deferredUntilQuit(release)
         case let .failed(message):
-            recordScheduleOutcome(success: false)
             applyFailure(message)
         }
-    }
-
-    private func recordScheduleOutcome(success: Bool) {
-        let timestamp = now()
-        scheduleState = success
-            ? UpdateCheckScheduling.recordSuccess(scheduleState, now: timestamp)
-            : UpdateCheckScheduling.recordFailure(scheduleState, now: timestamp)
-        schedulePersisting?.saveLastSuccessfulCheckDate(scheduleState.lastSuccessfulCheck)
-        schedulePersisting?.saveConsecutiveFailureCount(scheduleState.consecutiveFailures)
     }
 
     private func applyFailure(_ message: String) {
