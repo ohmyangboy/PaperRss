@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.5](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.6](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
