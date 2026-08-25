@@ -1,146 +1,6 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
-    "DeepSeek OpenAI 兼容接口" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DeepSeek OpenAI-Compatible Endpoint"
-          }
-        }
-      }
-    },
-    "OpenAI 兼容接口" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "OpenAI-Compatible Endpoint"
-          }
-        }
-      }
-    },
-    "PaperRss 支持多账号并行与按需启用。本地订阅与 FreshRSS 远端订阅相互隔离，禁用账号不会删除本地数据或凭据。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PaperRss supports multiple independently enabled accounts. Local subscriptions and FreshRSS subscriptions remain isolated, and disabling an account does not delete local data or credentials."
-          }
-        }
-      }
-    },
-    "再按一次 C 切换对照翻译" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Press C again to toggle bilingual translation"
-          }
-        }
-      }
-    },
-    "再按一次 F 切换禅模式" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Press F again to toggle Focus Mode"
-          }
-        }
-      }
-    },
-    "再按一次 M 切换收藏" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Press M again to toggle star"
-          }
-        }
-      }
-    },
-    "再按一次 V 查看 AI 摘要" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Press V again to view the AI summary"
-          }
-        }
-      }
-    },
-    "当前账号" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Current Accounts"
-          }
-        }
-      }
-    },
-    "本机" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Local"
-          }
-        }
-      }
-    },
-    "本机独立存储与离线阅读" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "On-device storage and offline reading"
-          }
-        }
-      }
-    },
-    "管理本地与 FreshRSS 订阅账号及双向状态同步" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Manage local and FreshRSS accounts with two-way state sync"
-          }
-        }
-      }
-    },
-    "我的 Mac" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "My Mac"
-          }
-        }
-      }
-    },
-    "我的 Mac (本地账号)" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "My Mac (Local Account)"
-          }
-        }
-      }
-    },
-    "用于翻译、总结和解读文章" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "For translation, summarization, and article analysis"
-          }
-        }
-      }
-    },
     "(移出文件夹)" : {
       "localizations" : {
         "en" : {
@@ -153,6 +13,16 @@
     },
     "%@" : {
 
+    },
+    "%@ @ %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ @ %2$@"
+          }
+        }
+      }
     },
     "%@ pt" : {
 
@@ -268,6 +138,16 @@
         }
       }
     },
+    "DeepSeek OpenAI 兼容接口" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DeepSeek OpenAI-Compatible Endpoint"
+          }
+        }
+      }
+    },
     "DeepSeek 会按此选项发送 thinking；选择低、中、高时也会发送对应的 reasoning_effort。" : {
       "localizations" : {
         "en" : {
@@ -369,12 +249,32 @@
         }
       }
     },
+    "OpenAI 兼容接口" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI-Compatible Endpoint"
+          }
+        }
+      }
+    },
     "PaperRss 专为沉浸式阅读打造。在保持纸张排版美感的同时，提供舒适的长文阅读体验。字号调整会同步到所有文章。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "PaperRss is built for focused reading, combining paper-inspired typography with a comfortable long-form experience. Text size changes apply to every article."
+          }
+        }
+      }
+    },
+    "PaperRss 支持多账号并行与按需启用。本地订阅与 FreshRSS 远端订阅相互隔离，禁用账号不会删除本地数据或凭据。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PaperRss supports multiple independently enabled accounts. Local subscriptions and FreshRSS subscriptions remain isolated, and disabling an account does not delete local data or credentials."
           }
         }
       }
@@ -834,7 +734,48 @@
         }
       }
     },
+    "再按一次 C 切换对照翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press C again to toggle bilingual translation"
+          }
+        }
+      }
+    },
+    "再按一次 F 切换禅模式" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press F again to toggle Focus Mode"
+          }
+        }
+      }
+    },
+    "再按一次 M 切换收藏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press M again to toggle star"
+          }
+        }
+      }
+    },
+    "再按一次 V 查看 AI 摘要" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press V again to view the AI summary"
+          }
+        }
+      }
+    },
     "再次按下 B 查看上一篇" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -845,6 +786,7 @@
       }
     },
     "再次按下 N 查看下一篇" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -855,6 +797,7 @@
       }
     },
     "再次按下空格切换下一篇" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1470,6 +1413,7 @@
       }
     },
     "尚未设置 DeepSeek API Key。请在 AI 配置中粘贴并保存；它只保存在此 Mac 的本地应用配置中。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1631,12 +1575,32 @@
         }
       }
     },
+    "已清除 %lld 条缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cleared %lld caches"
+          }
+        }
+      }
+    },
     "已经是列表第一篇" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "This is the first article in the list"
+          }
+        }
+      }
+    },
+    "已缓存 %lld 篇文章，大小 %.1f MB" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cached %lld articles, %.1f MB"
           }
         }
       }
@@ -1782,6 +1746,16 @@
         }
       }
     },
+    "当前账号" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current Accounts"
+          }
+        }
+      }
+    },
     "微信赞赏码" : {
       "localizations" : {
         "en" : {
@@ -1832,6 +1806,16 @@
         }
       }
     },
+    "慢读，深思" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read slowly. Think deeply."
+          }
+        }
+      }
+    },
     "成功：接口可以响应。" : {
       "localizations" : {
         "en" : {
@@ -1848,6 +1832,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "We are still working on iCloud sync. Keep using local data until it is ready."
+          }
+        }
+      }
+    },
+    "我的 Mac" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My Mac"
+          }
+        }
+      }
+    },
+    "我的 Mac (本地账号)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "My Mac (Local Account)"
           }
         }
       }
@@ -1899,6 +1903,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Generate AI Summaries on Open"
+          }
+        }
+      }
+    },
+    "拉取失败，已保留原内容" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fetch failed, kept existing content"
           }
         }
       }
@@ -2237,6 +2251,26 @@
         }
       }
     },
+    "本机" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local"
+          }
+        }
+      }
+    },
+    "本机独立存储与离线阅读" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On-device storage and offline reading"
+          }
+        }
+      }
+    },
     "标为已读" : {
       "localizations" : {
         "en" : {
@@ -2398,6 +2432,16 @@
         }
       }
     },
+    "正在清除…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clearing…"
+          }
+        }
+      }
+    },
     "正在生成 %@" : {
       "localizations" : {
         "en" : {
@@ -2519,22 +2563,32 @@
         }
       }
     },
-    "正文显示失败，请切换文章后重试。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The article could not be displayed. Switch articles and try again."
-          }
-        }
-      }
-    },
     "正文字号" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Article Text Size"
+          }
+        }
+      }
+    },
+    "正文已更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content Updated"
+          }
+        }
+      }
+    },
+    "正文显示失败，请切换文章后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The article could not be displayed. Switch articles and try again."
           }
         }
       }
@@ -2620,6 +2674,7 @@
       }
     },
     "没有可翻译的正文。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2751,6 +2806,37 @@
         }
       }
     },
+    "清除" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear"
+          }
+        }
+      }
+    },
+    "清除失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Failed"
+          }
+        }
+      }
+    },
+    "清除网页正文缓存" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Article Cache"
+          }
+        }
+      }
+    },
     "点击前往下载新版本 v%@" : {
       "localizations" : {
         "en" : {
@@ -2827,6 +2913,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Generate Summary"
+          }
+        }
+      }
+    },
+    "用于翻译、总结和解读文章" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For translation, summarization, and article analysis"
           }
         }
       }
@@ -2923,121 +3019,12 @@
       }
     },
     "立即刷新" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Refresh Now"
-          }
-        }
-      }
-    },
-    "已缓存 %lld 篇文章，大小 %.1f MB" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cached %lld articles, %.1f MB"
-          }
-        }
-      }
-    },
-    "已清除 %lld 条缓存" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cleared %lld caches"
-          }
-        }
-      }
-    },
-    "拉取失败，已保留原内容" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fetch failed, kept existing content"
-          }
-        }
-      }
-    },
-    "正在清除…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clearing…"
-          }
-        }
-      }
-    },
-    "正文已更新" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Content Updated"
-          }
-        }
-      }
-    },
-    "缓存数据" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cache Data"
-          }
-        }
-      }
-    },
-    "清除" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear"
-          }
-        }
-      }
-    },
-    "清除失败" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear Failed"
-          }
-        }
-      }
-    },
-    "清除网页正文缓存" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear Article Cache"
-          }
-        }
-      }
-    },
-    "网页正文缓存" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Article Cache"
-          }
-        }
-      }
-    },
-    "重新拉取正文" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Refetch Article"
           }
         }
       }
@@ -3082,6 +3069,16 @@
         }
       }
     },
+    "管理本地与 FreshRSS 订阅账号及双向状态同步" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage local and FreshRSS accounts with two-way state sync"
+          }
+        }
+      }
+    },
     "精确调节" : {
       "localizations" : {
         "en" : {
@@ -3113,6 +3110,16 @@
         }
       }
     },
+    "缓存数据" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache Data"
+          }
+        }
+      }
+    },
     "编辑" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3130,6 +3137,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Decrease Article Text Size"
+          }
+        }
+      }
+    },
+    "网页正文缓存" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article Cache"
           }
         }
       }
@@ -3548,6 +3566,7 @@
       }
     },
     "选择一篇文章" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3623,6 +3642,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rename Folder"
+          }
+        }
+      }
+    },
+    "重新拉取正文" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refetch Article"
           }
         }
       }
@@ -3803,16 +3832,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Follows your system language by default. You can switch here at any time, and the interface updates immediately."
-          }
-        }
-      }
-    },
-    "慢读，深思" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Read slowly. Think deeply."
           }
         }
       }
