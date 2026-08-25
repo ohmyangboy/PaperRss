@@ -66,7 +66,7 @@ final class SparkleUpdaterAdapter: NSObject, UpdaterPort {
 
     func checkForUpdates(userInitiated: Bool) throws {
         if userInitiated {
-            try updater.checkForUpdates()
+            updater.checkForUpdates()
         } else {
             try updater.checkForUpdatesInBackground()
         }

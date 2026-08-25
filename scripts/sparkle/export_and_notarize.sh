@@ -88,7 +88,7 @@ pass "[PASS 3] Developer ID 导出成功: $APP_PATH"
 step "[4] 签名门禁"
 codesign --verify --deep --strict "$APP_PATH" || fail "codesign --verify --deep --strict 未通过"
 
-AUTHORITY=$(codesign -dv "$APP_PATH" 2>&1 | grep "Authority=" | head -1 || true)
+AUTHORITY=$(codesign -dvv "$APP_PATH" 2>&1 | grep "Authority=" | head -1 || true)
 echo "$AUTHORITY" | grep -q "Authority=Developer ID Application" \
   || fail "签名身份不是 Developer ID Application（实际: ${AUTHORITY:-无}）"
 

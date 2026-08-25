@@ -72,7 +72,7 @@ struct UpdateCapsule: View {
                     .frame(width: 56)
                 Text(I18N.shared.localized("正在准备更新…", "Preparing Update…"))
             }
-        case let .readyToInstall(release):
+        case .readyToInstall:
             capsule(emphasized: true) {
                 actionButton(
                     title: I18N.shared.localized("重启更新", "Restart to Update"),
