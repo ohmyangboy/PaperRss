@@ -193,7 +193,7 @@ if [[ "$CMD" == "build" ]]; then
   [[ -n "${PAPERRSS_SIGNING_ACCOUNT:-}" ]] && ARTIFACT_ARGS+=(--signing-account "${PAPERRSS_SIGNING_ACCOUNT}")
   "$SPARKLE/build_artifacts.sh" "${ARTIFACT_ARGS[@]}"
   # 扁平化到发布目录（appcast 校验按 asset-root 平铺查找）
-  SUBDIR="$RELEASE_DIR/PaperRss-$CLEAN_VERSION"
+  SUBDIR="$RELEASE_DIR/PaperRss-v$CLEAN_VERSION"
   mv "$SUBDIR"/* "$RELEASE_DIR/" 2>/dev/null || true
   rmdir "$SUBDIR" 2>/dev/null || true
   MANIFEST_PATH="$RELEASE_DIR/manifest.json"
