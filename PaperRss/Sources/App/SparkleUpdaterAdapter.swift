@@ -64,12 +64,13 @@ final class SparkleUpdaterAdapter: NSObject, UpdaterPort {
         isStarted = true
     }
 
-    func checkForUpdates(userInitiated: Bool) throws {
-        if userInitiated {
-            updater.checkForUpdates()
-        } else {
-            try updater.checkForUpdatesInBackground()
-        }
+    func checkForUpdates(userInitiated: Bool) {
+        // 统一走用户主动路径（SPUUserInitiatedUpdateDriver）：它保证
+        // showErrorToUser:YES——无更新回调 showUpdateNotFound、失败回调
+        // showUpdaterError，每个检查必然以状态机事件收尾。
+        // 后台路径（SPUScheduledUpdateDriver）在展示更新前会静默吞掉
+        // 失败（404 等），会让胶囊永远停在“检查中”。
+        updater.checkForUpdates()
     }
 
     func beginDownload() throws {

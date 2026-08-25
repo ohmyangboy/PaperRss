@@ -884,14 +884,14 @@ private struct SidebarView: View {
                 UpdateCapsule(coordinator: updateCoordinator)
                 #endif
 
+                Spacer(minLength: 0)
+
                 Button(action: showSettings) {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(I18N.localized("设置"))
                 .help(I18N.localized("设置"))
-
-                Spacer()
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.primary)
