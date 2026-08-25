@@ -896,7 +896,8 @@ private struct SidebarView: View {
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(.primary)
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            // 高度恒定：胶囊的出现/消失与内容变化不得改变侧边栏底部高度
+            .frame(height: 44)
         }
         .background(PaperHeaderSurface(kind: .sidebar))
     }
