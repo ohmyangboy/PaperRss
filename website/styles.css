@@ -349,15 +349,15 @@ body {
   top: calc(100% + 8px);
   left: 0;
   z-index: 50;
-  min-width: 220px;
+  min-width: 300px;
   display: none;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   padding: 6px;
   border-radius: 14px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border-medium);
+  box-shadow: 0 12px 32px rgba(28, 26, 23, 0.12), 0 2px 6px rgba(28, 26, 23, 0.06);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   animation: menuFadeIn 0.15s ease forwards;
@@ -376,26 +376,45 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  gap: 1.25rem;
+  padding: 9px 12px;
   border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: var(--ink);
   text-decoration: none;
-  transition: background 0.12s ease;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.15s ease, color 0.15s ease;
+  user-select: none;
 }
 
-.dl-item:hover {
-  background: var(--chip);
+.dl-item:hover,
+.dl-item:focus-visible {
+  background-color: var(--card-hover);
+  color: var(--ink);
+  outline: none;
+}
+
+.dl-item:active {
+  background-color: var(--skel);
 }
 
 .dl-os {
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .dl-item-sub {
   font-size: 0.72rem;
   color: var(--muted);
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.dl-item:hover .dl-item-sub,
+.dl-item:focus-visible .dl-item-sub {
+  color: var(--ink);
 }
 
 /* GitHub Star Pill Button (in Hero CTA cluster) */
@@ -1246,6 +1265,11 @@ body {
   .dl-split {
     width: 100%;
     max-width: 340px;
+  }
+
+  .dl-menu {
+    min-width: 0;
+    width: 100%;
   }
 
   .dl-main {
