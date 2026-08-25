@@ -154,6 +154,7 @@ if [[ "$CMD" == "build" ]]; then
     --archive-path "$ARCHIVE_PATH"
     --version "$CLEAN_VERSION" --build "$BUILD"
     --feed-url-stable "$STABLE_FEED_URL"
+    --feed-url-beta "$BETA_FEED_URL"
     --public-ed-key "${PAPERRSS_SUPUBLIC_ED_KEY:-}"
     --source-commit "$SOURCE_COMMIT"
   )

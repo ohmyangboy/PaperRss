@@ -124,11 +124,12 @@ struct UpdateCapsule: View {
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(emphasized ? Color.white : Color.primary.opacity(0.85))
         .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .frame(minWidth: 28, minHeight: 26)
         .background(
             (emphasized ? Color.accentColor : Color.primary.opacity(0.08)),
             in: Capsule()
         )
+        .animation(nil, value: coordinator.state)
         .accessibilityElement(children: .combine)
     }
 

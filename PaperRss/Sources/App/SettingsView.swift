@@ -1160,7 +1160,7 @@ struct SettingsView: View {
                         Text(I18N.shared.localized("Beta 抢先版", "Beta")).tag(UpdateChannel.beta)
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 220)
+                    .fixedSize()
                     .disabled(!updateCoordinator.canChangeChannel)
                 }
                 #endif
