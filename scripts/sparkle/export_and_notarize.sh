@@ -102,9 +102,34 @@ fi
 CODESIGN_DVV=$(codesign -dvv "$APP_PATH" 2>&1)
 echo "$CODESIGN_DVV" | grep -Eq 'flags=0x[0-9a-f]+\(runtime\)|^Runtime[= ]' \
   || fail "未启用 Hardened Runtime"
+
+pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + secure timestamp）"
+
+# 启动冒烟：导出产物必须能在本机存活启动（防 rpath/嵌入缺失类 dyld 崩溃
+# 流出到公证环节）。公证前执行——崩溃的 App 不配消耗公证额度。
+step "[4b] 启动冒烟（3 秒存活探针）"
+if [[ -z "${PAPERRSS_SKIP_LAUNCH_SMOKE:-}" ]]; then
+  LAUNCH_LOG="$TMP_DIR/launch-smoke.log"
+  open -n "$APP_PATH" >"$LAUNCH_LOG" 2>&1 || fail "App 无法启动（open 失败，见 $LAUNCH_LOG）"
+  ALIVE=false
+  for _ in 1 2 3 4 5 6; do
+    sleep 0.7
+    if pgrep -xf "$APP_PATH/Contents/MacOS/$APP_NAME" >/dev/null 2>&1; then ALIVE=true; break; fi
+  done
+  pkill -xf "$APP_PATH/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+  sleep 0.5
+  if [[ "$ALIVE" != true ]]; then
+    echo "启动冒烟失败：进程未存活。最近崩溃报告：" >&2
+    ls -t ~/Library/Logs/DiagnosticReports/PaperRss-* 2>/dev/null | head -1 >&2 || true
+    fail "导出产物启动即崩（典型原因：LC_RPATH 缺 @executable_path/../Frameworks 或框架未内嵌）"
+  fi
+  pass "[PASS 4b] 启动冒烟通过（进程存活并已退出）"
+else
+  echo "[SKIP] [PASS 4b] 启动冒烟已跳过（PAPERRSS_SKIP_LAUNCH_SMOKE）"
+fi
+
 # 注意：spctl 评估放在 [PASS 6] Staple 之后——未公证的 Developer ID 在此阶段
 # 被 Gatekeeper 拒绝是预期行为，不构成失败。
-pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + secure timestamp）"
 
 # ── [PASS 5] 公证 ─────────────────────────────────────────────────────────
 SUBMISSION_FILE="$TMP_DIR/notary-submission.txt"

@@ -227,7 +227,7 @@
 			};
 			name = Release;
 		};
-		A10000000000000000000012 /* Debug */ = {
+		A10000000000000000000013 /* Release */ = {A10000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -248,6 +248,10 @@
 				INFOPLIST_FILE = "PaperRss/Resources/macOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = PaperRss;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = "1.3.0-beta.3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yangbukun.PaperRss;
@@ -263,7 +267,7 @@
 			};
 			name = Debug;
 		};
-		A10000000000000000000013 /* Release */ = {
+		
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -285,6 +289,10 @@
 				INFOPLIST_FILE = "PaperRss/Resources/macOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = PaperRss;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = "1.3.0-beta.3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yangbukun.PaperRss;

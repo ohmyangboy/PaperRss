@@ -1,306 +1,6 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
-    "检查更新…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Checking for Updates…"
-          }
-        }
-      }
-    },
-    "已是最新版本" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "You're up to date"
-          }
-        }
-      }
-    },
-    "重要更新 %@ 可用" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Critical Update %@ Available"
-          }
-        }
-      }
-    },
-    "更新 %@ 可用" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update %@ Available"
-          }
-        }
-      }
-    },
-    "下载中…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Downloading…"
-          }
-        }
-      }
-    },
-    "下载中 %lld%%" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Downloading %lld%%"
-          }
-        }
-      }
-    },
-    "正在准备更新…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Preparing Update…"
-          }
-        }
-      }
-    },
-    "重启更新" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restart to Update"
-          }
-        }
-      }
-    },
-    "正在安装更新 %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Installing Update %@"
-          }
-        }
-      }
-    },
-    "正在重启…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Relaunching…"
-          }
-        }
-      }
-    },
-    "更新 %@ 将在退出时安装" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update %@ will install when you quit"
-          }
-        }
-      }
-    },
-    "更新失败 · 重试" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update failed · Retry"
-          }
-        }
-      }
-    },
-    "打开发布页手动下载" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open the releases page to download manually"
-          }
-        }
-      }
-    },
-    "应用会在每天首次启动或回到前台时自动检查更新；您也可以随时手动检查。更新经数字签名验证后安装。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "PaperRss checks for updates once per day on first launch or when returning to the foreground. You can also check manually. Updates are verified with digital signatures before installation."
-          }
-        }
-      }
-    },
-    "更新通道" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update Channel"
-          }
-        }
-      }
-    },
-    "Beta 通道可提前体验新功能，可能不够稳定。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The Beta channel offers early access to new features and may be less stable."
-          }
-        }
-      }
-    },
-    "通道" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Channel"
-          }
-        }
-      }
-    },
-    "Stable 稳定版" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stable"
-          }
-        }
-      }
-    },
-    "Beta 抢先版" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Beta"
-          }
-        }
-      }
-    },
-    "重试检查" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retry Check"
-          }
-        }
-      }
-    },
-    "下载更新 %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Download Update %@"
-          }
-        }
-      }
-    },
-    "重启并安装 %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restart & Install %@"
-          }
-        }
-      }
-    },
-    "此构建不支持应用内更新。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "In-app updates are unavailable in this build."
-          }
-        }
-      }
-    },
-    "正在检查更新…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Checking for updates..."
-          }
-        }
-      }
-    },
-    "正在下载更新：%lld%%" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Downloading update: %lld%%"
-          }
-        }
-      }
-    },
-    "正在下载更新…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Downloading update…"
-          }
-        }
-      }
-    },
-    "正在准备更新：%lld%%" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Preparing update: %lld%%"
-          }
-        }
-      }
-    },
-    "更新 %@ 已就绪，重启即可完成安装。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update %@ is ready — restart to finish installation."
-          }
-        }
-      }
-    },
-    "正在安装更新 %@…" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Installing update %@…"
-          }
-        }
-      }
-    },
-    "更新 %@ 将在退出应用时自动安装。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update %@ will be installed automatically when you quit the app."
-          }
-        }
-      }
-    },
     "(移出文件夹)" : {
       "localizations" : {
         "en" : {
@@ -428,6 +128,26 @@
         }
       }
     },
+    "Beta 抢先版" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta"
+          }
+        }
+      }
+    },
+    "Beta 通道可提前体验新功能，可能不够稳定。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Beta channel offers early access to new features and may be less stable."
+          }
+        }
+      }
+    },
     "C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏" : {
       "localizations" : {
         "en" : {
@@ -519,6 +239,7 @@
       }
     },
     "GitHub Release API 返回状态码 %lld" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -579,6 +300,16 @@
         }
       }
     },
+    "Stable 稳定版" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stable"
+          }
+        }
+      }
+    },
     "The Morning Digest · 晨间速览" : {
       "localizations" : {
         "en" : {
@@ -588,9 +319,6 @@
           }
         }
       }
-    },
-    "v%@" : {
-
     },
     "Version %@ (Build %@)" : {
       "localizations" : {
@@ -632,7 +360,28 @@
         }
       }
     },
+    "下载中 %lld%%" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading %lld%%"
+          }
+        }
+      }
+    },
+    "下载中…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading…"
+          }
+        }
+      }
+    },
     "下载新版本" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -642,7 +391,18 @@
         }
       }
     },
+    "下载更新 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Download Update %@"
+          }
+        }
+      }
+    },
     "不再提示此版本更新" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1803,6 +1563,16 @@
         }
       }
     },
+    "已是最新版本" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're up to date"
+          }
+        }
+      }
+    },
     "已是最新版本 (上次检查: %@)" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1915,6 +1685,16 @@
         }
       }
     },
+    "应用会在每天首次启动或回到前台时自动检查更新；您也可以随时手动检查。更新经数字签名验证后安装。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PaperRss checks for updates once per day on first launch or when returning to the foreground. You can also check manually. Updates are verified with digital signatures before installation."
+          }
+        }
+      }
+    },
     "应用保持打开时不自动刷新；打开应用时仍会按上方开关刷新。" : {
       "localizations" : {
         "en" : {
@@ -1936,6 +1716,7 @@
       }
     },
     "应用启动时会自动在后台检查 Release 更新；您也可以随时点击右侧按钮手动检查。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2067,6 +1848,7 @@
       }
     },
     "忽略此版本更新" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2183,6 +1965,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open Original Article"
+          }
+        }
+      }
+    },
+    "打开发布页手动下载" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the releases page to download manually"
           }
         }
       }
@@ -2440,6 +2232,7 @@
       }
     },
     "无效的网络响应" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2501,6 +2294,66 @@
         }
       }
     },
+    "更新 %@ 可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update %@ Available"
+          }
+        }
+      }
+    },
+    "更新 %@ 将在退出应用时自动安装。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update %@ will be installed automatically when you quit the app."
+          }
+        }
+      }
+    },
+    "更新 %@ 将在退出时安装" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update %@ will install when you quit"
+          }
+        }
+      }
+    },
+    "更新 %@ 已就绪，重启即可完成安装。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update %@ is ready — restart to finish installation."
+          }
+        }
+      }
+    },
+    "更新失败 · 重试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update failed · Retry"
+          }
+        }
+      }
+    },
+    "更新通道" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Channel"
+          }
+        }
+      }
+    },
     "服务商与连接" : {
       "localizations" : {
         "en" : {
@@ -2532,6 +2385,7 @@
       }
     },
     "未知错误" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2621,6 +2475,16 @@
         }
       }
     },
+    "检查更新…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking for Updates…"
+          }
+        }
+      }
+    },
     "检查更新失败: %@" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2643,6 +2507,7 @@
       }
     },
     "检查更新超时（超过 15 秒）" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2702,6 +2567,46 @@
         }
       }
     },
+    "正在下载更新：%lld%%" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading update: %lld%%"
+          }
+        }
+      }
+    },
+    "正在下载更新…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading update…"
+          }
+        }
+      }
+    },
+    "正在准备更新：%lld%%" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing update: %lld%%"
+          }
+        }
+      }
+    },
+    "正在准备更新…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing Update…"
+          }
+        }
+      }
+    },
     "正在准备正文…" : {
       "localizations" : {
         "en" : {
@@ -2718,6 +2623,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Refreshing feeds…"
+          }
+        }
+      }
+    },
+    "正在安装更新 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installing Update %@"
+          }
+        }
+      }
+    },
+    "正在安装更新 %@…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installing update %@…"
+          }
+        }
+      }
+    },
+    "正在检查更新…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking for updates..."
           }
         }
       }
@@ -2854,11 +2789,22 @@
       }
     },
     "正在连接 GitHub 检查 Release 更新…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Checking GitHub for updates…"
+          }
+        }
+      }
+    },
+    "正在重启…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relaunching…"
           }
         }
       }
@@ -2899,6 +2845,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This URL does not contain a recognized RSS, Atom, or JSON Feed."
+          }
+        }
+      }
+    },
+    "此构建不支持应用内更新。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In-app updates are unavailable in this build."
           }
         }
       }
@@ -3138,6 +3094,7 @@
       }
     },
     "点击前往下载新版本 v%@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3906,6 +3863,16 @@
         }
       }
     },
+    "通道" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Channel"
+          }
+        }
+      }
+    },
     "遇到了 Bug 或有新的功能想法？欢迎随时提交 GitHub Issue 或联系开发者。" : {
       "localizations" : {
         "en" : {
@@ -3936,6 +3903,26 @@
         }
       }
     },
+    "重启并安装 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restart & Install %@"
+          }
+        }
+      }
+    },
+    "重启更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restart to Update"
+          }
+        }
+      }
+    },
     "重命名文件夹" : {
       "localizations" : {
         "en" : {
@@ -3962,6 +3949,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Generate Again"
+          }
+        }
+      }
+    },
+    "重要更新 %@ 可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Critical Update %@ Available"
+          }
+        }
+      }
+    },
+    "重试检查" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry Check"
           }
         }
       }

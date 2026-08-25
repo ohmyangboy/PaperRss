@@ -78,7 +78,7 @@ function run(script, args, extraEnv = {}) {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, FAKE_CALLS: extraEnv.FAKE_CALLS ?? '', ...extraEnv },
+    env: { ...process.env, FAKE_CALLS: extraEnv.FAKE_CALLS ?? '', PAPERRSS_SKIP_LAUNCH_SMOKE: '1', ...extraEnv },
   });
 }
 
