@@ -70,17 +70,9 @@ For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 
 ## Download and Installation
 
-Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases) and drag PaperRss into your Applications folder.
+Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 
-As this is an open-source Beta release without paid Apple notarization, macOS may show a "damaged" or "cannot be opened" warning on first launch. You can resolve this using any of the following options:
-
-1. **Option 1 (Recommended)**: Drag PaperRss into Applications first, then open macOS **Terminal** (Terminal.app) and run the command below — it removes quarantine flags and launches the app automatically. The same command is inside `INSTALL.txt` in the DMG — just double-click it and copy:
-   ```bash
-   pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"
-   ```
-2. **Option 2**: Go to macOS **System Settings** → **Privacy & Security**, scroll down to the Security section, and click **Open Anyway**.
-
-_As PaperRss is actively being refined, we welcome and appreciate your feedback and interest. Official Apple notarization will be considered in future releases. Note: the old `join-beta.command` helper in previous DMGs was blocked by a "cannot be verified" Gatekeeper dialog on newer macOS; it has been removed in favor of the Terminal command flow above._
+> 📝 Note: The signing issue has been resolved — all artifacts are Developer ID signed and Apple notarized, so the "cannot be verified" warning is gone for good. Release cadence will speed up from here; thanks for your patience.
 
 ## Build from Source
 

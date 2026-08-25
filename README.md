@@ -70,18 +70,9 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹。
+从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
-由于当前为个人开源 Beta 版本（未加入 Apple 付费开发者公证），若首次打开提示“无法验证开发者”或“应用已损坏”，可任选以下方式打开：
-
-1. **方法一（推荐）**：先将 PaperRss 拖入 Applications；打开「终端」(Terminal.app)，执行以下命令即可自动清除隔离标记并启动（DMG 内的 `INSTALL.txt` 已包含该命令，双击打开复制即可）：
-
-   ```bash
-   pkill -x PaperRss 2>/dev/null; sleep 1; xattr -dr com.apple.quarantine /Applications/PaperRss.app; xattr -dr com.apple.provenance /Applications/PaperRss.app 2>/dev/null; open "/Applications/PaperRss.app"
-   ```
-1. **方法二**：打开 macOS「系统设置」→「隐私与安全性」，向下滑动至“安全性”一栏，点击「仍要打开」。
-
-_注：PaperRss 当前处于 Beta 测试阶段，后续产品功能稳定后会接入 Apple 官方公证签名。另：旧版 DMG 中的 `join-beta.command` 双击会被 macOS「无法验证」弹窗拦截，已从安装流程移除并改为上述终端命令方式。_
+> 📝 备注：签名问题已解决——所有产物均经过 Developer ID 签名与 Apple 公证，首次打开不会再出现「无法验证」提示。接下来版本更新会加快，敬请谅解。
 
 ## 从源码构建
 
