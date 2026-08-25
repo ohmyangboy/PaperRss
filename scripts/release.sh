@@ -162,9 +162,9 @@ if [[ "$CMD" == "build" ]]; then
 
   # [PASS 3–6] 导出 + 签名 + 公证 + Staple
   step "[PASS 3–6] Developer ID 导出 / 签名 / 公证 / Staple 门禁"
-  NOTARIZE_ARGS=(--archive "$ARCHIVE_PATH" --output-dir "$EXPORT_DIR")
+  NOTARIZE_ARGS=(--archive "$ARCHIVE_PATH" --output-dir "$EXPORT_DIR" --team-id "${PAPERRSS_TEAM_ID}")
   if [[ "$SKIP_NOTARIZATION" != true ]]; then
-    NOTARIZE_ARGS+=(--team-id "${PAPERRSS_TEAM_ID}" --notary-profile "${PAPERRSS_NOTARY_PROFILE}")
+    NOTARIZE_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
   else
     NOTARIZE_ARGS+=(--skip-notarization)
   fi
