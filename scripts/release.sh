@@ -80,6 +80,9 @@ if [[ "$CMD" == "build" ]]; then
   [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]] \
     || fail "版本号不符合 SemVer vX.Y.Z[-stage.N]: $VERSION"
   [[ "$BUILD" =~ ^[0-9]+$ ]] || fail "--build 必须是纯数字"
+  if [[ "$CLEAN_VERSION" =~ -(alpha|beta|rc)\. ]] && [[ "$CHANNEL" == "stable" ]]; then
+    fail "prerelease 版本（$CLEAN_VERSION）必须使用 --channel beta；stable 通道不接受预发布版本"
+  fi
 
   for tool in xcodebuild node git plutil ditto hdiutil codesign spctl; do
     command -v "$tool" >/dev/null 2>&1 || fail "缺少工具: $tool"
