@@ -142,6 +142,40 @@ struct PaperHeaderSurface: View {
     }
 }
 
+/// 顶部工具栏渐变玻璃模糊层（Gradient Glass Blur）。
+/// 通过对 .ultraThinMaterial 施加垂直平滑渐变遮罩，使内容向上滚动经过顶部工具栏区域时
+/// 呈现柔和透明的磨砂渐变融入背景，消除生硬的实色矩形色块与横向截断切线。
+struct PaperTopBarBlur: View {
+    var height: CGFloat = 52
+    var opacity: Double = 1.0
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0.0),
+                            .init(color: .black.opacity(0.95), location: 0.20),
+                            .init(color: .black.opacity(0.80), location: 0.40),
+                            .init(color: .black.opacity(0.50), location: 0.62),
+                            .init(color: .black.opacity(0.20), location: 0.82),
+                            .init(color: .black.opacity(0.04), location: 0.94),
+                            .init(color: .clear, location: 1.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+        }
+        .frame(height: height)
+        .opacity(opacity)
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+}
+
 struct PaperEmptyState: View {
     let title: String
     let description: String
