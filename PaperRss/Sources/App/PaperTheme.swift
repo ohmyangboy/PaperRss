@@ -1,9 +1,41 @@
 import SwiftUI
+#if SWIFT_PACKAGE
+import PaperRssCore
+#endif
 
 enum PaperSurfaceKind {
     case page
     case articleList
     case sidebar
+}
+
+extension ReaderAppearanceMode {
+    init(_ colorScheme: ColorScheme) {
+        self = colorScheme == .dark ? .dark : .light
+    }
+}
+
+extension Color {
+    init(paperHex: String) {
+        let raw = paperHex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let value = UInt64(raw, radix: 16) ?? 0
+        self.init(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+}
+
+private struct PaperAppearancePaletteKey: EnvironmentKey {
+    static let defaultValue = ReaderAppearance.default.palette(for: .light)
+}
+
+extension EnvironmentValues {
+    var paperAppearancePalette: ReaderAppearancePalette {
+        get { self[PaperAppearancePaletteKey.self] }
+        set { self[PaperAppearancePaletteKey.self] = newValue }
+    }
 }
 
 enum PaperTheme {
@@ -83,6 +115,33 @@ struct PaperSurface: View {
     }
 }
 
+struct AppearanceSurface: View {
+    let role: AppearanceSurfaceRole
+    let appearance: ReaderAppearance
+    let mode: ReaderAppearanceMode
+    var textureOpacity: Double = 1
+
+    var body: some View {
+        Group {
+            if appearance.preset == .paper && !appearance.isCustom {
+                PaperSurface(kind: paperSurfaceKind, textureOpacity: textureOpacity)
+            } else {
+                Color(paperHex: appearance.backgroundHex(for: mode, surface: role))
+            }
+        }
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+
+    private var paperSurfaceKind: PaperSurfaceKind {
+        switch role {
+        case .sidebar: .sidebar
+        case .articleList: .articleList
+        case .reader: .page
+        }
+    }
+}
+
 private struct PaperGrain: View {
     let opacity: Double
     @Environment(\.colorScheme) private var colorScheme
@@ -139,6 +198,33 @@ struct PaperHeaderSurface: View {
         }
         .accessibilityHidden(true)
         .allowsHitTesting(false)
+    }
+}
+
+struct AppearanceHeaderSurface: View {
+    let role: AppearanceSurfaceRole
+    let appearance: ReaderAppearance
+    let mode: ReaderAppearanceMode
+
+    var body: some View {
+        if appearance.preset == .paper && !appearance.isCustom {
+            PaperHeaderSurface(kind: paperSurfaceKind)
+        } else {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color(paperHex: appearance.backgroundHex(for: mode, surface: role)).opacity(0.88)
+            }
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private var paperSurfaceKind: PaperSurfaceKind {
+        switch role {
+        case .sidebar: .sidebar
+        case .articleList: .articleList
+        case .reader: .page
+        }
     }
 }
 

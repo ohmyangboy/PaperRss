@@ -67,8 +67,6 @@ struct RootView: View {
 
     var body: some View {
         mainContent
-            .tint(PaperTheme.accent)
-            .accentColor(PaperTheme.accent)
             .preferredColorScheme(store.appTheme.colorScheme)
             .environmentObject(store.iconStore)
             .task {
@@ -146,6 +144,7 @@ struct RootView: View {
         ThreeColumnSplitView(
             sidebar: SidebarView(
                 store: store,
+                appearanceMode: appearanceMode,
                 selection: sidebarSelection,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
@@ -164,6 +163,7 @@ struct RootView: View {
             // 内用 .ignoresSafeArea() 单独延伸到工具栏之下,观感保持一致。
             content: EntryListView(
                 store: store,
+                appearanceMode: appearanceMode,
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
@@ -193,14 +193,20 @@ struct RootView: View {
                 onDecreaseFontSize: { store.decreaseArticleFontSize() },
                 onResetFontSize: { store.resetArticleFontSize() },
                 onSelectFirstEntryIfNeeded: { selectFirstEntryIfNeeded() }
-            )
+            ),
+            appearance: store.readerAppearance,
+            appearanceMode: appearanceMode,
+            appTheme: store.appTheme
         )
         .ignoresSafeArea()
+        .tint(appearanceAccentColor)
+        .accentColor(appearanceAccentColor)
         #else
         // iOS: 保留 NavigationSplitView
         NavigationSplitView {
             SidebarView(
                 store: store,
+                appearanceMode: appearanceMode,
                 selection: sidebarSelection,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
@@ -214,6 +220,7 @@ struct RootView: View {
         } content: {
             EntryListView(
                 store: store,
+                appearanceMode: appearanceMode,
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
@@ -224,11 +231,33 @@ struct RootView: View {
             detailContent
         }
         .navigationSplitViewStyle(.balanced)
+        .tint(appearanceAccentColor)
+        .accentColor(appearanceAccentColor)
         #endif
     }
 
     private var currentSelection: SidebarSelection {
         selection ?? .today
+    }
+
+    private var appearanceMode: ReaderAppearanceMode {
+        switch store.appTheme {
+        case .system: ReaderAppearanceMode(colorScheme)
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    private var appearancePalette: ReaderAppearancePalette {
+        store.readerAppearance.palette(for: appearanceMode)
+    }
+
+    private var appearanceColorScheme: ColorScheme {
+        appearancePalette.colorScheme == .dark ? .dark : .light
+    }
+
+    private var appearanceAccentColor: Color {
+        Color(paperHex: appearancePalette.accentHex)
     }
 
     private var headerTitle: String {
@@ -342,20 +371,20 @@ struct RootView: View {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(PaperTheme.accent)
+                    .foregroundColor(appearanceAccentColor)
                 Text(toastMessage)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(colorScheme == .dark ? Color.white.opacity(0.9) : Color.black.opacity(0.85))
+                    .foregroundColor(appearanceColorScheme == .dark ? Color.white.opacity(0.9) : Color.black.opacity(0.85))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background {
                 Capsule()
-                    .fill(PaperTheme.surface(.page, scheme: colorScheme))
-                    .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.4 : 0.15), radius: 12, x: 0, y: 6)
+                    .fill(Color(paperHex: store.readerAppearance.backgroundHex(for: appearanceMode, surface: .reader)))
+                    .shadow(color: Color.black.opacity(appearanceColorScheme == .dark ? 0.4 : 0.15), radius: 12, x: 0, y: 6)
                     .overlay {
                         Capsule()
-                            .stroke(PaperTheme.accent.opacity(0.3), lineWidth: 1)
+                            .stroke(appearanceAccentColor.opacity(0.3), lineWidth: 1)
                     }
             }
             .padding(.bottom, 28)
@@ -598,6 +627,7 @@ struct RootView: View {
                 ArticleReaderView(
                     store: store,
                     entry: selectedEntry,
+                    appearanceMode: appearanceMode,
                     shortcutInvocation: readerShortcutInvocation,
                     onReaderShortcut: dispatchReaderShortcut,
                     onShortcutFeedback: { showToast($0) },
@@ -606,6 +636,7 @@ struct RootView: View {
                     isZenMode: isZenMode,
                     onToggleZenMode: { withAnimation { isZenMode.toggle() } }
                 )
+                .environment(\.colorScheme, appearanceColorScheme)
                 .ignoresSafeArea()
             } else {
                 emptyDetailPlaceholder
@@ -669,7 +700,7 @@ struct RootView: View {
 
     private var emptyDetailPlaceholder: some View {
         ZStack {
-            PaperSurface(kind: .page)
+            AppearanceSurface(role: .reader, appearance: store.readerAppearance, mode: appearanceMode)
                 .ignoresSafeArea()
             PaperEmptyState(
                 title: I18N.localized("慢读，深思"),
@@ -677,12 +708,15 @@ struct RootView: View {
                 showsBrandIcon: true
             )
         }
+        .environment(\.colorScheme, appearanceColorScheme)
+        .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
         .ignoresSafeArea()
     }
 }
 
 private struct SidebarView: View {
     @ObservedObject var store: AppStore
+    let appearanceMode: ReaderAppearanceMode
     @Binding var selection: SidebarSelection?
     @Binding var selectedFeedIDs: Set<UUID>
     @Binding var showsAddFeed: Bool
@@ -843,9 +877,16 @@ private struct SidebarView: View {
         }
         #endif
         .background {
-            // 与文章列表一致：纸张背景延伸到窗口顶部，避免 44pt 占位区透出白色背景
-            PaperSurface(kind: .sidebar, textureOpacity: 0.52).ignoresSafeArea()
+            AppearanceSurface(
+                role: .sidebar,
+                appearance: store.readerAppearance,
+                mode: appearanceMode,
+                textureOpacity: 0.52
+            )
+            .ignoresSafeArea()
         }
+        .environment(\.colorScheme, appearanceColorScheme)
+        .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
         #if os(iOS)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -899,7 +940,13 @@ private struct SidebarView: View {
             // 高度恒定：胶囊的出现/消失与内容变化不得改变侧边栏底部高度
             .frame(height: 44)
         }
-        .background(PaperHeaderSurface(kind: .sidebar))
+        .background(
+            AppearanceHeaderSurface(
+                role: .sidebar,
+                appearance: store.readerAppearance,
+                mode: appearanceMode
+            )
+        )
     }
     @ViewBuilder
     private var readingSection: some View {
@@ -948,7 +995,7 @@ private struct SidebarView: View {
                 Text(I18N.localized("我的 Mac"))
                     .font(.caption)
                     .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearanceMutedColor)
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -986,7 +1033,7 @@ private struct SidebarView: View {
                 Text(account.displayName)
                     .font(.caption)
                     .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(appearanceMutedColor)
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -1142,7 +1189,7 @@ private struct SidebarView: View {
                         FeedFaviconView(feedID: feed.id, iconURL: iconURL, title: feed.title, size: 14)
                     } else {
                         Image(systemName: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(PaperTheme.accent)
+                            .foregroundStyle(Color.accentColor)
                     }
                     Text(feed.title)
                         .font(.system(size: 13, weight: .medium))
@@ -1152,12 +1199,15 @@ private struct SidebarView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(PaperTheme.accent, in: Capsule())
+                            .background(Color.accentColor, in: Capsule())
                     }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(PaperTheme.surface(.sidebar, scheme: colorScheme), in: Capsule())
+                .background(
+                    Color(paperHex: store.readerAppearance.backgroundHex(for: appearanceMode, surface: .sidebar)),
+                    in: Capsule()
+                )
                 .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
             }
             .contextMenu {
@@ -1320,6 +1370,14 @@ private struct SidebarView: View {
             break
         }
     }
+
+    private var appearanceColorScheme: ColorScheme {
+        store.readerAppearance.palette(for: appearanceMode).colorScheme == .dark ? .dark : .light
+    }
+
+    private var appearanceMutedColor: Color {
+        Color(paperHex: store.readerAppearance.palette(for: appearanceMode).mutedHex)
+    }
 }
 
 /// Feed 图标视图。与旧 AsyncImage 实现的关键差异：
@@ -1364,9 +1422,9 @@ private struct FeedFaviconContent: View {
     private var fallbackBadge: some View {
         Text(title.prefix(1).uppercased())
             .font(.system(size: max(8, size * 0.58), weight: .bold, design: .rounded))
-            .foregroundStyle(PaperTheme.accent)
+            .foregroundStyle(Color.accentColor)
             .frame(width: size, height: size)
-            .background(PaperTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: size > 15 ? 4 : 3, style: .continuous))
+            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: size > 15 ? 4 : 3, style: .continuous))
     }
 }
 
@@ -1376,6 +1434,7 @@ private struct SidebarRow: View {
     let iconURL: URL?
     let count: Int
     var feedID: UUID?
+    @Environment(\.paperAppearancePalette) private var appearancePalette
 
     init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil) {
         self.title = title
@@ -1402,7 +1461,7 @@ private struct SidebarRow: View {
             if count > 0 {
                 Text(count, format: .number)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color(paperHex: appearancePalette.mutedHex))
             }
         }
     }
@@ -1411,16 +1470,21 @@ private struct SidebarRow: View {
 private struct SubscriptionsHeaderView: View {
     let onDropBatch: (Set<UUID>) -> Void
     @State private var isTargeted = false
+    @Environment(\.paperAppearancePalette) private var appearancePalette
 
     var body: some View {
         HStack(spacing: 6) {
             Text(I18N.localized("订阅源"))
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(isTargeted ? PaperTheme.accent : .secondary)
+                .foregroundStyle(
+                    isTargeted
+                        ? Color.accentColor
+                        : Color(paperHex: appearancePalette.mutedHex)
+                )
             if isTargeted {
                 Text(I18N.localized("(移出文件夹)"))
                     .font(.caption2)
-                    .foregroundStyle(PaperTheme.accent)
+                    .foregroundStyle(Color.accentColor)
             }
             Spacer()
         }
@@ -1428,7 +1492,7 @@ private struct SubscriptionsHeaderView: View {
         .padding(.vertical, 2)
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(isTargeted ? PaperTheme.accent.opacity(0.15) : Color.clear)
+                .fill(isTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
         )
         .dropDestination(for: String.self) { items, _ -> Bool in
             isTargeted = false
@@ -1455,7 +1519,7 @@ private struct FolderRowView: View {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isTargeted ? PaperTheme.accent.opacity(0.22) : Color.clear)
+                    .fill(isTargeted ? Color.accentColor.opacity(0.22) : Color.clear)
             )
             .dropDestination(for: String.self) { items, _ -> Bool in
                 isTargeted = false
@@ -1471,6 +1535,7 @@ private struct FolderRowView: View {
 
 private struct EntryListView: View {
     @ObservedObject var store: AppStore
+    let appearanceMode: ReaderAppearanceMode
     let selection: SidebarSelection
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
@@ -1648,10 +1713,16 @@ private struct EntryListView: View {
             #endif
             .scrollContentBackground(.hidden)
             .background {
-                // 让纸张背景延伸到窗口顶部（unified NSToolbar 之下、safeAreaInset 占位区），
-                // 否则占位区会透出窗口默认白色背景，形成顶部空白条
-                PaperSurface(kind: .articleList, textureOpacity: 0.62).ignoresSafeArea()
+                AppearanceSurface(
+                    role: .articleList,
+                    appearance: store.readerAppearance,
+                    mode: appearanceMode,
+                    textureOpacity: 0.62
+                )
+                .ignoresSafeArea()
             }
+            .environment(\.colorScheme, appearanceColorScheme)
+            .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
@@ -1729,6 +1800,10 @@ private struct EntryListView: View {
                 }
             }
         }
+    }
+
+    private var appearanceColorScheme: ColorScheme {
+        store.readerAppearance.palette(for: appearanceMode).colorScheme == .dark ? .dark : .light
     }
 }
 
@@ -1869,6 +1944,7 @@ private struct PaperCapsuleButton: NSViewRepresentable {
 
 private struct EntryRow: View {
     let entry: EntryListItem
+    @Environment(\.paperAppearancePalette) private var appearancePalette
 
     private func formattedDate(_ date: Date) -> String {
         let calendar = Calendar.current
@@ -1889,7 +1965,7 @@ private struct EntryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Circle()
-                .fill(entry.isRead ? .clear : PaperTheme.accent)
+                .fill(entry.isRead ? .clear : Color.accentColor)
                 .frame(width: 7, height: 7)
                 .padding(.top, 6)
                 .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
@@ -1904,7 +1980,7 @@ private struct EntryRow: View {
                 if entry.isSummaryVisible {
                     Text(entry.summaryPreview)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(appearanceMutedColor)
                         .lineLimit(2)
                 }
 
@@ -1917,7 +1993,7 @@ private struct EntryRow: View {
                     if !entry.accountSourceBadge.isEmpty {
                         Text(entry.accountSourceBadge)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(appearanceMutedColor)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
                             .background(
@@ -1929,7 +2005,7 @@ private struct EntryRow: View {
 
                     if entry.isStarred {
                         Image(systemName: "star.fill")
-                            .foregroundStyle(PaperTheme.warmAccent)
+                            .foregroundStyle(Color(paperHex: appearancePalette.warmHex))
                     }
 
                     Spacer(minLength: 8)
@@ -1937,18 +2013,22 @@ private struct EntryRow: View {
                     if let date = entry.publishedAt {
                         Text(formattedDate(date))
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(appearanceMutedColor)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(appearanceMutedColor)
             }
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
         .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
+    }
+
+    private var appearanceMutedColor: Color {
+        Color(paperHex: appearancePalette.mutedHex)
     }
 }
 

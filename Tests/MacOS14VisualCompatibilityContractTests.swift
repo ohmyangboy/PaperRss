@@ -11,7 +11,7 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    func testLegacyNavbarUsesPaperBackgroundWhileLiquidGlassControlsRemainAvailable() throws {
+    func testLegacyNavbarUsesContentThemeBackgroundWhileLiquidGlassControlsRemainAvailable() throws {
         let source = try sourceText("PaperRss/Sources/App/ThreeColumnSplitView.swift")
 
         XCTAssertTrue(source.contains("if #available(macOS 26.0, *)"))
@@ -26,7 +26,9 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("window.titlebarAppearsTransparent = true"))
         XCTAssertFalse(source.contains("window.titlebarAppearsTransparent = false"))
-        XCTAssertTrue(source.contains("PaperTheme.surface(.page, scheme: scheme)"))
+        XCTAssertTrue(source.contains("appearance.backgroundHex("))
+        XCTAssertTrue(source.contains("surface: .reader"))
+        XCTAssertTrue(source.contains("window.backgroundColor = chromeBackgroundColor"))
     }
 
     func testPrimaryEmptyStatesUseOnePaperTypographyComponent() throws {

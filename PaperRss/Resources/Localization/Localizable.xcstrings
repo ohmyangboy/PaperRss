@@ -1,6 +1,96 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "控制界面模式、三栏主题与文章阅读排版" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Control the interface mode, three-column theme, and reading typography" } } }
+    },
+    "内容主题" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Content Theme" } } }
+    },
+    "主题同步作用于侧边栏、文章列表与阅读区，不改变布局、间距或功能状态。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Themes stay coordinated across the sidebar, article list, and reader without changing layout, spacing, or feature state." } } }
+    },
+    "修改任一背景会进入 Custom 状态；三栏共享该背景，文字会自动保持清晰对比。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Changing either background creates a Custom state; all three columns share it and text contrast stays readable automatically." } } }
+    },
+    "三栏实时预览" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Three-Column Live Preview" } } }
+    },
+    "PaperRss 专为沉浸式阅读打造。三栏主题会保持一致，字号调整只作用于文章正文。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "PaperRss is designed for immersive reading. The three-column theme stays coordinated while text size applies only to article content." } } }
+    },
+    "重置内容外观" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset Content Appearance" } } }
+    },
+    "恢复默认内容外观" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Content Defaults" } } }
+    },
+    "重置阅读外观" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset Reader Appearance" } } }
+    },
+    "恢复 Paper、系统字体与 17pt" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Paper, system font, and 17pt" } } }
+    },
+    "恢复默认阅读外观" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Reader Defaults" } } }
+    },
+    "阅读主题" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reader Theme" } } }
+    },
+    "主题只改变文章阅读区，不会改变导航、布局或功能状态。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Themes affect only the article reader, never navigation, layout, or feature state." } } }
+    },
+    "排版" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Typography" } } }
+    },
+    "字体与字号只作用于文章正文，并会自动保存。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Font and size apply only to article text and save automatically." } } }
+    },
+    "正文字体" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Body Font" } } }
+    },
+    "使用这台 Mac 已安装的字体" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Uses fonts installed on this Mac" } } }
+    },
+    "颜色" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Colors" } } }
+    },
+    "修改任一背景会进入 Custom 状态；正文颜色会自动保持清晰对比。" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Changing either background creates a Custom state; text contrast stays readable automatically." } } }
+    },
+    "浅色背景" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Light Background" } } }
+    },
+    "深色背景" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dark Background" } } }
+    },
+    "Custom · 自定义" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Custom" } } }
+    },
+    "当前使用内置预设" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Using built-in preset" } } }
+    },
+    "重置为预设" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset to Preset" } } }
+    },
+    "Paper" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Paper" } } }
+    },
+    "White" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "White" } } }
+    },
+    "Geek" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Geek" } } }
+    },
+    "默认纸感，自动跟随 macOS 明暗模式" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Default paper feel that follows macOS appearance" } } }
+    },
+    "高对比、纯净、中性的现代阅读体验" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Clean, neutral, high-contrast modern reading" } } }
+    },
+    "Tokyo Night 深色配色，适合夜间与技术内容" : {
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Tokyo Night colors for nighttime and technical reading" } } }
+    },
     "更新" : {
       "localizations" : {
         "en" : {

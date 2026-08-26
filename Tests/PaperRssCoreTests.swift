@@ -952,13 +952,21 @@ final class PaperRssCoreTests: XCTestCase {
     func testArticleFontSizeAdjustmentsAndClamping() {
         let defaults = UserDefaults.standard
         let key = "PaperRss.articleFontSize"
+        let appearanceKey = "PaperRss.readerAppearance"
         let previousValue = defaults.object(forKey: key)
+        let previousAppearance = defaults.object(forKey: appearanceKey)
         defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: appearanceKey)
         defer {
             if let previousValue {
                 defaults.set(previousValue, forKey: key)
             } else {
                 defaults.removeObject(forKey: key)
+            }
+            if let previousAppearance {
+                defaults.set(previousAppearance, forKey: appearanceKey)
+            } else {
+                defaults.removeObject(forKey: appearanceKey)
             }
         }
 

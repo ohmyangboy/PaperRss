@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import WebKit
 #if os(macOS)
@@ -75,6 +76,7 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
 struct ArticleReaderView: View {
     @ObservedObject var store: AppStore
     let entry: Entry
+    var appearanceMode: ReaderAppearanceMode?
     var shortcutInvocation: ReaderShortcutInvocation?
     var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
     var onShortcutFeedback: (String) -> Void = { _ in }
@@ -160,6 +162,10 @@ struct ArticleReaderView: View {
         0
     }
 
+    private var readerAppearanceMode: ReaderAppearanceMode {
+        appearanceMode ?? ReaderAppearanceMode(colorScheme)
+    }
+
     private func toggleSummary() {
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
             isSummaryExpanded.toggle()
@@ -231,7 +237,11 @@ struct ArticleReaderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            PaperSurface(kind: .page)
+            AppearanceSurface(
+                role: .reader,
+                appearance: store.readerAppearance,
+                mode: readerAppearanceMode
+            )
                 .ignoresSafeArea()
         }
         #if os(iOS)
@@ -359,7 +369,7 @@ struct ArticleReaderView: View {
 
     private var loadingOverlay: some View {
         ZStack {
-            PaperSurface(kind: .page)
+            AppearanceSurface(role: .reader, appearance: store.readerAppearance, mode: readerAppearanceMode)
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture {}
@@ -378,7 +388,7 @@ struct ArticleReaderView: View {
 
     private var documentLoadFailureOverlay: some View {
         ZStack {
-            PaperSurface(kind: .page)
+            AppearanceSurface(role: .reader, appearance: store.readerAppearance, mode: readerAppearanceMode)
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture {}
@@ -404,6 +414,8 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                readerAppearance: store.readerAppearance,
+                readerAppearanceMode: readerAppearanceMode,
                 isInteractive: isDisplayedDocumentInteractive,
                 allowsNavigationWhenInactive: documentLoadFailed,
                 onDocumentReady: { loadedEntryID in
@@ -478,6 +490,8 @@ struct ArticleReaderView: View {
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
                 fontSize: store.articleFontSize,
+                readerAppearance: store.readerAppearance,
+                readerAppearanceMode: readerAppearanceMode,
                 isInteractive: isDisplayedDocumentInteractive,
                 allowsNavigationWhenInactive: documentLoadFailed,
                 onDocumentReady: { loadedEntryID in
@@ -623,7 +637,7 @@ struct ArticleReaderView: View {
                 HStack(spacing: 8) {
                     Label(I18N.localized("AI 摘要"), systemImage: "sparkles")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PaperTheme.accent)
+                        .foregroundStyle(Color.accentColor)
                     Spacer()
                     if store.summaryArtifact(for: entry) != nil {
                         Button {
@@ -633,12 +647,12 @@ struct ArticleReaderView: View {
                         } label: {
                             Image(systemName: isSummaryExpanded ? "chevron.up" : "chevron.down")
                                 .font(.caption.weight(.bold))
-                                .foregroundStyle(PaperTheme.accent)
+                                .foregroundStyle(Color.accentColor)
                                 .frame(width: 24, height: 24)
                                 .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .background(PaperTheme.accent.opacity(0.09), in: Circle())
+                        .background(Color.accentColor.opacity(0.09), in: Circle())
             .accessibilityLabel(I18N.shared.localized(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要"))
                         .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
                     }
@@ -800,9 +814,9 @@ struct ArticleReaderView: View {
         }
         .offset(y: 0.8)
         .symbolRenderingMode(.monochrome)
-        .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+        .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
         .frame(width: 28, height: 28)
-        .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+        .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
         .contentShape(Circle())
     }
 
@@ -810,9 +824,9 @@ struct ArticleReaderView: View {
         Image(systemName: name)
             .symbolRenderingMode(.monochrome)
             .font(.system(size: 13.5, weight: .regular))
-            .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+            .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
             .frame(width: 28, height: 28)
-            .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+            .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
             .contentShape(Circle())
     }
 
@@ -1336,6 +1350,57 @@ private extension String {
     }
 }
 
+private func readerFontStack(for appearance: ReaderAppearance) -> String {
+    let systemFallback = "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+    guard let family = appearance.fontFamilyName else { return systemFallback }
+    let escaped = family
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\r", with: " ")
+    return "\"\(escaped)\", \(systemFallback)"
+}
+
+private func readerAppearanceStyle(
+    _ appearance: ReaderAppearance,
+    mode: ReaderAppearanceMode
+) -> String {
+    let palette = appearance.palette(for: mode)
+    let variables = palette.cssVariables
+        .sorted { $0.key < $1.key }
+        .map { "\($0.key): \($0.value);" }
+        .joined(separator: " ")
+    return """
+    :root { color-scheme: \(palette.colorScheme.rawValue); \(variables) --paper-body-font-family: \(readerFontStack(for: appearance)); }
+    body { font-family: var(--paper-body-font-family); }
+    .paper-header-container, .paper-summary-card, #paper-rss-toc-rail {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    }
+    """
+}
+
+private func readerAppearanceJavaScript(
+    _ appearance: ReaderAppearance,
+    mode: ReaderAppearanceMode
+) -> String {
+    let palette = appearance.palette(for: mode)
+    var variables = palette.cssVariables
+    variables["--paper-body-font-family"] = readerFontStack(for: appearance)
+    guard let data = try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]),
+          let json = String(data: data, encoding: .utf8) else { return "" }
+    return """
+    (() => {
+      const root = document.documentElement;
+      const values = \(json);
+      Object.entries(values).forEach(([key, value]) => root.style.setProperty(key, value));
+      root.style.colorScheme = '\(palette.colorScheme.rawValue)';
+      if (document.body) {
+        document.body.style.fontFamily = values['--paper-body-font-family'];
+      }
+    })();
+    """
+}
+
 private let paperArticleStyle = """
 :root {
   color-scheme: light dark;
@@ -1382,14 +1447,17 @@ body {
   box-sizing: border-box;
   color: var(--paper-ink);
   background: transparent;
-  font-size: var(--paper-font-size, 17px);
-  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 17px;
+  font-family: var(--paper-body-font-family, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif);
   font-weight: 400;
   line-height: 1.72;
   letter-spacing: .006em;
   overflow-wrap: anywhere;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+body > :not(.paper-header-container):not(#paper-rss-toc-rail):not(#paper-rss-toc-preview) {
+  font-size: var(--paper-font-size, 17px);
 }
 ::selection { background: rgba(116, 137, 100, .24); }
 
@@ -4382,6 +4450,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    let readerAppearance: ReaderAppearance
+    let readerAppearanceMode: ReaderAppearanceMode
     let isInteractive: Bool
     let allowsNavigationWhenInactive: Bool
     let onDocumentReady: (String) -> Bool
@@ -4503,11 +4573,12 @@ private struct ArticleHTMLView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeInteractivity(in: webView)
+        context.coordinator.synchronizeReaderAppearance(in: webView)
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
         guard isInteractive else { return }
         context.coordinator.synchronizeSummaryCard(in: webView)
         context.coordinator.synchronizeSelectionOptions(in: webView)
         context.coordinator.restoreSelectionAnnotations(in: webView)
-        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
     }
 
     static func dismantleNSView(_ container: ArticleWebViewContainer, coordinator: Coordinator) {
@@ -4560,6 +4631,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var completedArticleKey: String?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private var renderedReaderAppearance: ReaderAppearance?
+        private var renderedReaderAppearanceMode: ReaderAppearanceMode?
         private struct SummaryRenderSignature: Equatable {
             let content: String
             let isExpanded: Bool
@@ -4580,6 +4653,16 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
+        }
+
+        func synchronizeReaderAppearance(in webView: WKWebView, force: Bool = false) {
+            guard force || renderedReaderAppearance != parent.readerAppearance ||
+                    renderedReaderAppearanceMode != parent.readerAppearanceMode else { return }
+            renderedReaderAppearance = parent.readerAppearance
+            renderedReaderAppearanceMode = parent.readerAppearanceMode
+            webView.evaluateJavaScript(
+                readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            )
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -4974,7 +5057,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                extraStyleCSS: paperArticleStyle
+                extraStyleCSS: paperArticleStyle + readerAppearanceStyle(
+                    parent.readerAppearance,
+                    mode: parent.readerAppearanceMode
+                )
             )
             renderedSummarySignature = nil
             loadedArticleKey = document.renderSignature
@@ -5014,6 +5100,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                       load.generation == self.currentLoadGeneration else { return }
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
+                self.synchronizeReaderAppearance(in: webView, force: true)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
@@ -5189,6 +5276,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
     let fontSize: Int
+    let readerAppearance: ReaderAppearance
+    let readerAppearanceMode: ReaderAppearanceMode
     let isInteractive: Bool
     let allowsNavigationWhenInactive: Bool
     let onDocumentReady: (String) -> Bool
@@ -5285,12 +5374,12 @@ private struct ArticleHTMLView: UIViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeInteractivity(in: webView)
+        context.coordinator.synchronizeReaderAppearance(in: webView)
+        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
         guard isInteractive else { return }
         context.coordinator.synchronizeSummaryCard(in: webView)
         context.coordinator.synchronizeSelectionOptions(in: webView)
         context.coordinator.restoreSelectionAnnotations(in: webView)
-        // 与 macOS 对称：字号变化即时生效，无需等待下次导航重建文档
-        webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -5342,6 +5431,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var failedLoadAttempts: [String: Int] = [:]
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private var renderedReaderAppearance: ReaderAppearance?
+        private var renderedReaderAppearanceMode: ReaderAppearanceMode?
         private struct SummaryRenderSignature: Equatable {
             let content: String
             let isExpanded: Bool
@@ -5362,6 +5453,16 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
+        }
+
+        func synchronizeReaderAppearance(in webView: WKWebView, force: Bool = false) {
+            guard force || renderedReaderAppearance != parent.readerAppearance ||
+                    renderedReaderAppearanceMode != parent.readerAppearanceMode else { return }
+            renderedReaderAppearance = parent.readerAppearance
+            renderedReaderAppearanceMode = parent.readerAppearanceMode
+            webView.evaluateJavaScript(
+                readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            )
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -5704,7 +5805,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                extraStyleCSS: paperArticleStyle
+                extraStyleCSS: paperArticleStyle + readerAppearanceStyle(
+                    parent.readerAppearance,
+                    mode: parent.readerAppearanceMode
+                )
             )
             renderedSummarySignature = nil
             loadedArticleKey = document.renderSignature
@@ -5745,6 +5849,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                       load.generation == self.currentLoadGeneration else { return }
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
+                self.synchronizeReaderAppearance(in: webView, force: true)
                 self.pendingContentOffset = nil
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
@@ -6009,19 +6114,19 @@ struct ReaderCapsuleToolbar: View {
         }
         .offset(y: 0.6)
         .symbolRenderingMode(.monochrome)
-        .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+        .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
         .frame(width: 28, height: 26)
-        .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+        .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
         .contentShape(Circle())
     }
 
     private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
         Image(systemName: name)
             .symbolRenderingMode(.monochrome)
-            .foregroundStyle(isActive ? AnyShapeStyle(PaperTheme.accent) : AnyShapeStyle(.primary))
+            .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
             .font(.system(size: 13, weight: .medium))
             .frame(width: 28, height: 26)
-            .background(isActive ? AnyShapeStyle(PaperTheme.accent.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
+            .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
             .contentShape(Circle())
     }
 }

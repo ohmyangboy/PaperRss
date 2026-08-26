@@ -71,7 +71,8 @@ public final class AppStore: ObservableObject {
         }
     }
     @Published public private(set) var appTheme: AppTheme = .system
-    @Published public private(set) var articleFontSize: Int = 17
+    @Published public private(set) var readerAppearance: ReaderAppearance = .default
+    public var articleFontSize: Int { readerAppearance.fontSize }
 
     /// Feed 图标仓库：行渲染经它同步查询已就绪图标，杜绝 AsyncImage 加载期闪烁。
     public let iconStore = FeedIconStore()
@@ -199,7 +200,21 @@ public final class AppStore: ObservableObject {
         static let refreshOnLaunch = "PaperRss.refreshOnLaunch"
         static let appTheme = "PaperRss.appTheme"
         static let articleFontSize = "PaperRss.articleFontSize"
+        static let readerAppearance = "PaperRss.readerAppearance"
         static let llmConfiguration = "PaperRss.llmConfiguration"
+    }
+
+    private static func loadReaderAppearance(from preferences: UserDefaults) -> ReaderAppearance {
+        if let data = preferences.data(forKey: PreferenceKey.readerAppearance),
+           let stored = try? JSONDecoder().decode(ReaderAppearance.self, from: data) {
+            return stored.normalized
+        }
+        let legacyFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
+        return ReaderAppearance(
+            fontSize: (ReaderAppearance.minimumFontSize...ReaderAppearance.maximumFontSize).contains(legacyFontSize)
+                ? legacyFontSize
+                : ReaderAppearance.defaultFontSize
+        )
     }
 
     @Published public private(set) var startupError: Error?
@@ -276,8 +291,7 @@ public final class AppStore: ObservableObject {
         refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
         let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
-        let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
-        articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
+        readerAppearance = Self.loadReaderAppearance(from: preferences)
 
         if let data = preferences.data(forKey: PreferenceKey.llmConfiguration),
            let savedConfig = try? JSONDecoder().decode(LLMConfiguration.self, from: data) {
@@ -362,8 +376,7 @@ public final class AppStore: ObservableObject {
         refreshOnLaunch = preferences.object(forKey: PreferenceKey.refreshOnLaunch) as? Bool ?? true
         let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
-        let storedFontSize = preferences.integer(forKey: PreferenceKey.articleFontSize)
-        articleFontSize = (13...25).contains(storedFontSize) ? storedFontSize : 17
+        readerAppearance = Self.loadReaderAppearance(from: preferences)
         llmConfiguration = testDatabase.llmConfiguration
 
         if migrationSucceededOrNotNeeded {
@@ -2180,15 +2193,53 @@ public final class AppStore: ObservableObject {
     }
 
     public func setArticleFontSize(_ size: Int) {
-        let clamped = max(13, min(25, size))
-        guard articleFontSize != clamped else { return }
-        articleFontSize = clamped
-        UserDefaults.standard.set(clamped, forKey: PreferenceKey.articleFontSize)
+        var updated = readerAppearance
+        updated.setFontSize(size)
+        saveReaderAppearanceIfNeeded(updated)
     }
 
     public func increaseArticleFontSize() { setArticleFontSize(articleFontSize + 1) }
     public func decreaseArticleFontSize() { setArticleFontSize(articleFontSize - 1) }
-    public func resetArticleFontSize() { setArticleFontSize(17) }
+    public func resetArticleFontSize() { setArticleFontSize(ReaderAppearance.defaultFontSize) }
+
+    public func setReaderThemePreset(_ preset: ReaderThemePreset) {
+        var updated = readerAppearance
+        updated.selectPreset(preset)
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func setReaderFontFamily(_ fontFamilyName: String?) {
+        var updated = readerAppearance
+        updated.setFontFamilyName(fontFamilyName)
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func setReaderBackgroundHex(_ hex: String, for mode: ReaderAppearanceMode) {
+        var updated = readerAppearance
+        updated.setBackgroundHex(hex, for: mode)
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func resetReaderAppearanceToPreset() {
+        var updated = readerAppearance
+        updated.resetToPreset()
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func resetReaderAppearanceToDefault() {
+        saveReaderAppearanceIfNeeded(.default)
+    }
+
+    private func saveReaderAppearanceIfNeeded(_ updated: ReaderAppearance) {
+        guard readerAppearance != updated else { return }
+        readerAppearance = updated
+        let preferences = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(updated) {
+            preferences.set(data, forKey: PreferenceKey.readerAppearance)
+        }
+        // 保留旧键，确保尚未升级到组合偏好模型的构建仍可读取字号。
+        preferences.set(updated.fontSize, forKey: PreferenceKey.articleFontSize)
+    }
 
     public func startAutomaticRefresh() {
         guard automaticRefreshTask == nil else { return }

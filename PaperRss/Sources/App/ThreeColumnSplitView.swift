@@ -90,9 +90,17 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     let content: Content
     let detail: Detail
     let toolbarActions: ToolbarActions
+    let appearance: ReaderAppearance
+    let appearanceMode: ReaderAppearanceMode
+    let appTheme: AppTheme
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(actions: toolbarActions)
+        Coordinator(
+            actions: toolbarActions,
+            appearance: appearance,
+            appearanceMode: appearanceMode,
+            appTheme: appTheme
+        )
     }
 
     func makeNSViewController(context: Context) -> NSSplitViewController {
@@ -169,6 +177,9 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     func updateNSViewController(_ splitVC: NSSplitViewController, context: Context) {
         // 更新工具栏动作状态
         context.coordinator.actions = toolbarActions
+        context.coordinator.appearance = appearance
+        context.coordinator.appearanceMode = appearanceMode
+        context.coordinator.appTheme = appTheme
 
         // 更新三栏的 SwiftUI 内容
         if let host = splitVC.splitViewItems[0].viewController as? PaperColumnContainerController<Sidebar> {
@@ -185,6 +196,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         context.coordinator.syncLocalizedToolbarText()
         context.coordinator.syncRefreshState()
         context.coordinator.syncHeaderState()
+        context.coordinator.syncAppearance()
 
         // 禅模式：平滑动画收起 Sidebar (Column 0) 和 EntryListView (Column 1)
         if splitVC.splitViewItems.count >= 2 {
@@ -238,6 +250,9 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         nonisolated(unsafe) static weak var current: ThreeColumnSplitViewCoordinator?
         var actions: ToolbarActions
+        var appearance: ReaderAppearance
+        var appearanceMode: ReaderAppearanceMode
+        var appTheme: AppTheme
         weak var splitViewController: NSSplitViewController?
         var toolbarConfigured = false
         var windowObservation: NSKeyValueObservation?
@@ -258,8 +273,16 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         nonisolated(unsafe) private var fullScreenChromeTimer: DispatchSourceTimer?
         private(set) var activeColumnIndex: Int = 1
         var didInitializeFocus = false
-        init(actions: ToolbarActions) {
+        init(
+            actions: ToolbarActions,
+            appearance: ReaderAppearance,
+            appearanceMode: ReaderAppearanceMode,
+            appTheme: AppTheme
+        ) {
             self.actions = actions
+            self.appearance = appearance
+            self.appearanceMode = appearanceMode
+            self.appTheme = appTheme
             super.init()
             setupLocalKeyMonitor()
             setupMouseDownMonitor()
@@ -880,6 +903,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         }
 
         private func applyMainWindowChrome(_ window: NSWindow) {
+            switch appTheme {
+            case .system:
+                window.appearance = nil
+            case .light:
+                window.appearance = NSAppearance(named: .aqua)
+            case .dark:
+                window.appearance = NSAppearance(named: .darkAqua)
+            }
             if #available(macOS 26.0, *) {
                 applyLiquidGlassWindowChrome(window)
             } else {
@@ -890,11 +921,24 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             // (约 1pt 宽,位于列表栏与阅读器栏之间)直接透出窗口背后的内容,
             // 在阅读器左缘形成一条可见缝隙。三个栏目的 PaperSurface 已覆盖
             // 全部内容区域,这里用纸张色填满分割线即可;动态颜色跟随明暗外观切换。
-            window.backgroundColor = NSColor(name: nil) { appearance in
-                let scheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
-                return NSColor(PaperTheme.surface(.page, scheme: scheme))
-            }
+            window.backgroundColor = chromeBackgroundColor
             window.isOpaque = true
+        }
+
+        fileprivate func syncAppearance() {
+            guard let window = splitViewController?.view.window else { return }
+            reconcileWindowChrome(for: window)
+        }
+
+        private var chromeBackgroundColor: NSColor {
+            NSColor(
+                Color(
+                    paperHex: appearance.backgroundHex(
+                        for: appearanceMode,
+                        surface: .reader
+                    )
+                )
+            )
         }
 
         /// Tahoe 及后续系统由 AppKit 为工具栏控件提供 Liquid Glass。
@@ -977,10 +1021,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private func neutralizeFullScreenCompanion(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
-            window.backgroundColor = NSColor(name: nil) { appearance in
-                let scheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
-                return NSColor(PaperTheme.surface(.page, scheme: scheme))
-            }
+            window.backgroundColor = chromeBackgroundColor
             window.isOpaque = true
 
             guard let contentView = window.contentView else { return }
@@ -999,6 +1040,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             // 已存在：仅在下一次同步时强制维持正确层级（AppKit 动画期间可能重排）
             if let existing = container.subviews.first(where: { $0 is PaperChromeBackdropView }) {
+                (existing as? PaperChromeBackdropView)?.backdropColor = chromeBackgroundColor
                 if let titlebarView {
                     container.addSubview(existing, positioned: .below, relativeTo: titlebarView)
                 } else if let backgroundView {
@@ -1007,7 +1049,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 return
             }
 
-            let overlay = PaperChromeBackdropView(frame: container.bounds)
+            let overlay = PaperChromeBackdropView(
+                frame: container.bounds,
+                backdropColor: chromeBackgroundColor
+            )
             overlay.autoresizingMask = [.width, .height]
 
             if let titlebarView {
@@ -1451,6 +1496,20 @@ extension NSToolbarItem.Identifier {
 /// 只做两件事：以页面背景色填充、跟随明暗外观刷新；不参与命中测试，绝不遮挡按钮。
 @MainActor
 final class PaperChromeBackdropView: NSView {
+    var backdropColor: NSColor {
+        didSet { updateBackdropColor() }
+    }
+
+    init(frame frameRect: NSRect, backdropColor: NSColor) {
+        self.backdropColor = backdropColor
+        super.init(frame: frameRect)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         wantsLayer = true
@@ -1465,10 +1524,9 @@ final class PaperChromeBackdropView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     private func updateBackdropColor() {
-        let scheme: ColorScheme = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer?.backgroundColor = NSColor(PaperTheme.surface(.page, scheme: scheme)).cgColor
+        layer?.backgroundColor = backdropColor.cgColor
         CATransaction.commit()
     }
 }

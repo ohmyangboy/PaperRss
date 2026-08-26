@@ -55,7 +55,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var subtitle: String {
         switch self {
-        case .appearance: I18N.shared.localized("控制界面颜色主题与文章阅读字号")
+        case .appearance: I18N.shared.localized("控制界面模式、三栏主题与文章阅读排版")
         case .accounts: I18N.shared.localized("管理本地与 FreshRSS 订阅账号及双向状态同步")
         case .aiService: I18N.shared.localized("配置模型服务、阅读助手与生成偏好")
         case .refresh: I18N.shared.localized("控制订阅的自动更新")
@@ -81,6 +81,7 @@ struct SettingsView: View {
     @State private var status = ""
     @State private var isTesting = false
     @State private var showingTargetLanguagePopover = false
+    @Environment(\.colorScheme) private var colorScheme
 
     // 账号管理与添加弹窗状态
     @State private var isShowingAddAccountSheet = false
@@ -662,35 +663,89 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.localized("正文字号", "Article Font Size"),
-                footer: I18N.shared.localized("调整文章阅读器中的正文字体大小，支持预设与微调。")
+                I18N.shared.localized("内容主题", "Content Theme"),
+                footer: I18N.shared.localized(
+                    "主题同步作用于侧边栏、文章列表与阅读区，不改变布局、间距或功能状态。",
+                    "Themes stay coordinated across the sidebar, article list, and reader without changing layout, spacing, or feature state."
+                )
+            ) {
+                VStack(spacing: 10) {
+                    ForEach(ReaderThemePreset.allCases) { preset in
+                        Button {
+                            store.setReaderThemePreset(preset)
+                        } label: {
+                            HStack(spacing: 12) {
+                                ReaderThemeSwatch(preset: preset)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(readerThemeTitle(preset))
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text(readerThemeDescription(preset))
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer(minLength: 12)
+                                if store.readerAppearance.preset == preset {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(PaperTheme.accent)
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                store.readerAppearance.preset == preset
+                                    ? PaperTheme.accent.opacity(0.09)
+                                    : Color.primary.opacity(0.025),
+                                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .stroke(
+                                        store.readerAppearance.preset == preset
+                                            ? PaperTheme.accent.opacity(0.35)
+                                            : Color.primary.opacity(0.07),
+                                        lineWidth: 1
+                                    )
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+            }
+
+            settingsGroup(
+                I18N.shared.localized("排版", "Typography"),
+                footer: I18N.shared.localized("字体与字号只作用于文章正文，并会自动保存。", "Font and size apply only to article text and save automatically.")
             ) {
                 settingsRow(
-                    I18N.shared.localized("预设字号", "Preset Sizes")
+                    I18N.shared.localized("正文字体", "Body Font"),
+                    description: I18N.shared.localized("使用这台 Mac 已安装的字体", "Uses fonts installed on this Mac")
                 ) {
-                    HStack(spacing: 8) {
-                        Button(I18N.localized("小 (14pt)")) { store.setArticleFontSize(14) }
-                            .buttonStyle(.bordered)
-                            .tint(store.articleFontSize == 14 ? Color.accentColor : .primary)
-
-                        Button(I18N.localized("标准 (17pt)")) { store.setArticleFontSize(17) }
-                            .buttonStyle(.bordered)
-                            .tint(store.articleFontSize == 17 ? Color.accentColor : .primary)
-
-                        Button(I18N.localized("大 (20pt)")) { store.setArticleFontSize(20) }
-                            .buttonStyle(.bordered)
-                            .tint(store.articleFontSize == 20 ? Color.accentColor : .primary)
-
-                        Button(I18N.localized("特大 (23pt)")) { store.setArticleFontSize(23) }
-                            .buttonStyle(.bordered)
-                            .tint(store.articleFontSize == 23 ? Color.accentColor : .primary)
+                    Picker(
+                        I18N.shared.localized("正文字体", "Body Font"),
+                        selection: Binding(
+                            get: { store.readerAppearance.fontFamilyName ?? "" },
+                            set: { store.setReaderFontFamily($0.isEmpty ? nil : $0) }
+                        )
+                    ) {
+                        Text(I18N.shared.localized("系统默认", "System Default")).tag("")
+                        Divider()
+                        ForEach(availableReaderFontFamilies, id: \.self) { family in
+                            Text(family).tag(family)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 240)
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.35)
 
                 settingsRow(
-                    I18N.shared.localized("精确调节", "Fine Tuning"),
+                    I18N.shared.localized("正文字号", "Body Size"),
                     description: I18N.shared.localized("范围：13pt ~ 25pt", "Range: 13pt ~ 25pt")
                 ) {
                     HStack(spacing: 12) {
@@ -716,31 +771,114 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.localized("实时预览", "Live Preview")
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(I18N.localized("The Morning Digest · 晨间速览"))
-                        .font(.system(size: CGFloat(store.articleFontSize) * 1.2, weight: .bold, design: .serif))
-                        .foregroundStyle(.primary)
-
-                    Text(I18N.localized("PaperRss 专为沉浸式阅读打造。在保持纸张排版美感的同时，提供舒适的长文阅读体验。字号调整会同步到所有文章。"))
-                        .font(.system(size: CGFloat(store.articleFontSize), weight: .regular))
-                        .lineSpacing(6)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
+                I18N.shared.localized("颜色", "Colors"),
+                footer: I18N.shared.localized(
+                    "修改任一背景会进入 Custom 状态；三栏共享该背景，文字会自动保持清晰对比。",
+                    "Changing either background creates a Custom state; all three columns share it and text contrast stays readable automatically."
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            ) {
+                settingsRow(I18N.shared.localized("浅色背景", "Light Background")) {
+                    ColorPicker(
+                        I18N.shared.localized("浅色背景", "Light Background"),
+                        selection: readerBackgroundBinding(for: .light),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow(I18N.shared.localized("深色背景", "Dark Background")) {
+                    ColorPicker(
+                        I18N.shared.localized("深色背景", "Dark Background"),
+                        selection: readerBackgroundBinding(for: .dark),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.35)
+
+                settingsRow(
+                    store.readerAppearance.isCustom
+                        ? I18N.shared.localized("Custom · 自定义", "Custom")
+                        : I18N.shared.localized("当前使用内置预设", "Using built-in preset")
+                ) {
+                    Button(I18N.shared.localized("重置为预设", "Reset to Preset")) {
+                        store.resetReaderAppearanceToPreset()
+                    }
+                    .disabled(!store.readerAppearance.isCustom)
+                }
+            }
+
+            settingsGroup(
+                I18N.shared.localized("三栏实时预览", "Three-Column Live Preview")
+            ) {
+                AppearanceThreeColumnPreview(
+                    appearance: store.readerAppearance,
+                    mode: readerAppearanceMode,
+                    bodyFont: readerPreviewFont
                 )
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
             }
+
+            settingsGroup(I18N.shared.localized("重置内容外观", "Reset Content Appearance")) {
+                settingsRow(
+                    I18N.shared.localized("恢复 Paper、系统字体与 17pt", "Restore Paper, system font, and 17pt")
+                ) {
+                    Button(I18N.shared.localized("恢复默认内容外观", "Restore Content Defaults")) {
+                        store.resetReaderAppearanceToDefault()
+                    }
+                    .disabled(store.readerAppearance == .default)
+                }
+            }
+        }
+    }
+
+    private var availableReaderFontFamilies: [String] {
+        #if os(macOS)
+        NSFontManager.shared.availableFontFamilies.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        #else
+        UIFont.familyNames.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        #endif
+    }
+
+    private var readerAppearanceMode: ReaderAppearanceMode {
+        switch store.appTheme {
+        case .system: ReaderAppearanceMode(colorScheme)
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    private var readerPreviewFont: Font {
+        if let family = store.readerAppearance.fontFamilyName {
+            return .custom(family, size: CGFloat(store.articleFontSize))
+        }
+        return .system(size: CGFloat(store.articleFontSize))
+    }
+
+    private func readerBackgroundBinding(for mode: ReaderAppearanceMode) -> Binding<Color> {
+        Binding(
+            get: { Color(paperHex: store.readerAppearance.backgroundHex(for: mode)) },
+            set: { store.setReaderBackgroundHex($0.readerHexString, for: mode) }
+        )
+    }
+
+    private func readerThemeTitle(_ preset: ReaderThemePreset) -> String {
+        switch preset {
+        case .paper: I18N.shared.localized("Paper", "Paper")
+        case .white: I18N.shared.localized("White", "White")
+        case .geek: I18N.shared.localized("Geek", "Geek")
+        }
+    }
+
+    private func readerThemeDescription(_ preset: ReaderThemePreset) -> String {
+        switch preset {
+        case .paper: I18N.shared.localized("默认纸感，自动跟随 macOS 明暗模式", "Default paper feel that follows macOS appearance")
+        case .white: I18N.shared.localized("高对比、纯净、中性的现代阅读体验", "Clean, neutral, high-contrast modern reading")
+        case .geek: I18N.shared.localized("Tokyo Night 深色配色，适合夜间与技术内容", "Tokyo Night colors for nighttime and technical reading")
         }
     }
 
@@ -1699,6 +1837,132 @@ struct SettingsView: View {
             }
             isTesting = false
         }
+    }
+}
+
+private struct AppearanceThreeColumnPreview: View {
+    let appearance: ReaderAppearance
+    let mode: ReaderAppearanceMode
+    let bodyFont: Font
+
+    var body: some View {
+        HStack(spacing: 1) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: "newspaper")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(accent)
+                previewRule(width: 38)
+                previewRule(width: 48)
+                previewRule(width: 32)
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(width: 82)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .background(surface(.sidebar))
+
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(0..<3, id: \.self) { index in
+                    VStack(alignment: .leading, spacing: 4) {
+                        previewRule(width: index == 1 ? 70 : 82)
+                        previewRule(width: index == 2 ? 48 : 58, opacity: 0.38)
+                    }
+                    if index < 2 {
+                        Divider().opacity(0.35)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(width: 126)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .background(surface(.articleList))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(I18N.localized("The Morning Digest · 晨间速览"))
+                    .font(.system(size: 15, weight: .bold, design: .serif))
+                    .foregroundStyle(ink)
+                Text(I18N.localized("PaperRss 专为沉浸式阅读打造。三栏主题会保持一致，字号调整只作用于文章正文。"))
+                    .font(bodyFont)
+                    .lineLimit(3)
+                    .foregroundStyle(muted)
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(surface(.reader))
+        }
+        .frame(height: 132)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(ink.opacity(0.14), lineWidth: 1)
+        }
+        .environment(\.colorScheme, palette.colorScheme == .dark ? .dark : .light)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var palette: ReaderAppearancePalette {
+        appearance.palette(for: mode)
+    }
+
+    private var ink: Color { Color(paperHex: palette.inkHex) }
+    private var muted: Color { Color(paperHex: palette.mutedHex) }
+    private var accent: Color { Color(paperHex: palette.accentHex) }
+
+    private func surface(_ role: AppearanceSurfaceRole) -> Color {
+        Color(paperHex: appearance.backgroundHex(for: mode, surface: role))
+    }
+
+    private func previewRule(width: CGFloat, opacity: Double = 0.62) -> some View {
+        Capsule()
+            .fill(ink.opacity(opacity))
+            .frame(width: width, height: 4)
+    }
+}
+
+private struct ReaderThemeSwatch: View {
+    let preset: ReaderThemePreset
+
+    var body: some View {
+        let appearance = ReaderAppearance(preset: preset)
+        HStack(spacing: 0) {
+            Color(paperHex: appearance.backgroundHex(for: .light))
+            Color(paperHex: appearance.backgroundHex(for: .dark))
+        }
+        .frame(width: 42, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private extension Color {
+    var readerHexString: String {
+        #if os(macOS)
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return "#000000" }
+        return String(
+            format: "#%02X%02X%02X",
+            Int(round(color.redComponent * 255)),
+            Int(round(color.greenComponent * 255)),
+            Int(round(color.blueComponent * 255))
+        )
+        #else
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard UIColor(self).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return "#000000" }
+        return String(
+            format: "#%02X%02X%02X",
+            Int(round(red * 255)),
+            Int(round(green * 255)),
+            Int(round(blue * 255))
+        )
+        #endif
     }
 }
 
