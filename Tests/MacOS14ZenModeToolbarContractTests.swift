@@ -41,9 +41,10 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
 
         XCTAssertTrue(toolbarSource.contains("if #available(macOS 26.0, *)"))
         XCTAssertTrue(toolbarSource.contains("private var legacyCapsuleBackground: some View"))
-        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.82)"))
+        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.64)"))
         XCTAssertTrue(toolbarSource.contains("Capsule().fill(.ultraThinMaterial)"))
         XCTAssertTrue(toolbarSource.contains(".shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14)"))
+        XCTAssertTrue(toolbarSource.contains(".padding(.vertical, 4)"))
     }
 
     private func appSource(_ name: String) throws -> String {

@@ -693,6 +693,7 @@ struct RootView: View {
                     }
                 }
             )
+            .environment(\.colorScheme, appearanceColorScheme)
             .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
         } else {
             EmptyView()

@@ -6071,6 +6071,7 @@ struct ReaderCapsuleToolbar: View {
             capsuleContent
         } else {
             capsuleContent
+                .padding(.vertical, 4)
                 .background { legacyCapsuleBackground }
                 .overlay {
                     Capsule()
@@ -6126,7 +6127,7 @@ struct ReaderCapsuleToolbar: View {
     private var legacyCapsuleBackground: some View {
         ZStack {
             Capsule().fill(.ultraThinMaterial)
-            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.82))
+            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.64))
         }
     }
     #endif
