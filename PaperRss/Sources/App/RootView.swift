@@ -748,6 +748,9 @@ private struct SidebarView: View {
     @AppStorage("sidebar_collapsed_accounts_raw") private var collapsedAccountsRaw: String = ""
     @AppStorage("sidebar_collapsed_folders_raw") private var collapsedFoldersRaw: String = ""
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
+    #if os(macOS)
+    @State private var showsFeedbackPopover = false
+    #endif
     @Environment(\.colorScheme) private var colorScheme
 
     #if os(macOS)
@@ -939,6 +942,23 @@ private struct SidebarView: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel(I18N.localized("设置"))
                 .help(I18N.localized("设置"))
+
+                #if os(macOS)
+                Button {
+                    showsFeedbackPopover.toggle()
+                } label: {
+                    Image(systemName: "exclamationmark.bubble")
+                        .frame(width: 28, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(I18N.shared.localized("反馈与联系", "Feedback & Contact"))
+                .help(I18N.shared.localized("反馈与联系", "Feedback & Contact"))
+                .popover(isPresented: $showsFeedbackPopover, arrowEdge: .bottom) {
+                    FeedbackPopoverView(store: store) {
+                        showsFeedbackPopover = false
+                    }
+                }
+                #endif
 
                 Spacer(minLength: 0)
 

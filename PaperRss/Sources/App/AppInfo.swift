@@ -20,11 +20,46 @@ public enum AppInfo {
     }
 
     @MainActor
-    public static func openURL(_ url: URL) {
+    @discardableResult
+    public static func openURL(_ url: URL) -> Bool {
         #if os(macOS)
-        NSWorkspace.shared.open(url)
+        return NSWorkspace.shared.open(url)
         #elseif os(iOS)
         UIApplication.shared.open(url)
+        return true
+        #endif
+    }
+
+    #if os(macOS)
+    /// 使用系统 Mail.app 打开预填充的邮件，而不是交给默认浏览器处理 mailto:。
+    @MainActor
+    public static func openMailURL(_ url: URL, completion: @escaping @MainActor (Bool) -> Void) {
+        guard let mailURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.mail") else {
+            completion(false)
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open(
+            [url],
+            withApplicationAt: mailURL,
+            configuration: configuration
+        ) { _, error in
+            let didOpen = error == nil
+            DispatchQueue.main.async {
+                completion(didOpen)
+            }
+        }
+    }
+    #endif
+
+    @MainActor
+    public static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #elseif os(iOS)
+        UIPasteboard.general.string = text
         #endif
     }
 }

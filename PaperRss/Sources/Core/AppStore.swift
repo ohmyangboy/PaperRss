@@ -102,6 +102,8 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var refreshInterval: FeedRefreshInterval = .twoHours
     @Published public private(set) var refreshOnLaunch: Bool = true
     @Published public private(set) var lastError: String?
+    /// 仅保存在当前进程内的反馈上下文；不写入数据库，也不包含原始错误文本。
+    @Published public private(set) var latestFeedbackError: FeedbackErrorSnapshot?
     @Published public private(set) var isICloudSyncEnabled = false
 
     private enum ICloudSyncState {
@@ -818,7 +820,9 @@ public final class AppStore: ObservableObject {
 
     public func addFeed(urlText: String, folder: String? = nil) async {
         guard let url = normalizedURL(urlText) else {
-            lastError = I18N.localized("请输入有效的 Feed URL。")
+            let message = I18N.localized("请输入有效的 Feed URL。")
+            reportErrorMessage(message, module: .settings)
+            lastError = message
             return
         }
 
@@ -827,9 +831,12 @@ public final class AppStore: ObservableObject {
         do {
             feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
         } catch let error as LocalAccountError {
-            lastError = error.errorDescription
+            let message = error.errorDescription ?? error.localizedDescription
+            reportError(error, module: .settings)
+            lastError = message
             return
         } catch {
+            reportError(error, module: .settings)
             lastError = error.localizedDescription
             return
         }
@@ -1166,7 +1173,10 @@ public final class AppStore: ObservableObject {
         } else {
             let message = failures.joined(separator: "\n")
             refreshStatus = .failed(message: message, finishedAt: finishedAt)
-            if reportErrors { lastError = message }
+            if reportErrors {
+                reportErrorMessage(message, module: .refresh)
+                lastError = message
+            }
         }
 
         // 如果本轮所有本地目标都已被删除，网络任务已经取消，Loading 不应再额外等待
@@ -1300,6 +1310,7 @@ public final class AppStore: ObservableObject {
                 await self?.syncCoordinator.pushAllPendingArticleStates()
             }
         } catch {
+            reportError(error, module: .settings)
             lastError = error.localizedDescription
         }
     }
@@ -1432,6 +1443,7 @@ public final class AppStore: ObservableObject {
             _ = try await syncCoordinator.refreshAccount(accountID: accountID, reason: .manual)
             reloadState()
         } catch {
+            reportError(error, module: .settings)
             lastError = error.localizedDescription
         }
     }
@@ -1682,7 +1694,9 @@ public final class AppStore: ObservableObject {
         let apiKey = loadAPIKey()
         guard !apiKey.isEmpty else {
             activeSummaryRequest = nil
-            lastError = LLMServiceError.missingAPIKey.localizedDescription
+            let error = LLMServiceError.missingAPIKey
+            reportError(error, module: .ai)
+            lastError = error.localizedDescription
             return
         }
 
@@ -1732,6 +1746,7 @@ public final class AppStore: ObservableObject {
         } catch {
             activeSummaryRequest = nil
             if !Task.isCancelled {
+                reportError(error, module: .ai)
                 lastError = error.localizedDescription
             }
         }
@@ -1750,6 +1765,18 @@ public final class AppStore: ObservableObject {
 
     public func dismissError() {
         lastError = nil
+    }
+
+    public func reportError(_ error: Error, module: FeedbackModule, at date: Date = .now) {
+        latestFeedbackError = FeedbackErrorSnapshot(
+            module: module,
+            message: error.localizedDescription,
+            occurredAt: date
+        )
+    }
+
+    public func reportErrorMessage(_ message: String, module: FeedbackModule, at date: Date = .now) {
+        latestFeedbackError = FeedbackErrorSnapshot(module: module, message: message, occurredAt: date)
     }
 
     @discardableResult
@@ -1938,7 +1965,9 @@ public final class AppStore: ObservableObject {
         // 4. 检查 API Key
         let apiKey = loadAPIKey()
         guard !apiKey.isEmpty else {
-            lastError = LLMServiceError.missingAPIKey.localizedDescription
+            let error = LLMServiceError.missingAPIKey
+            reportError(error, module: .ai)
+            lastError = error.localizedDescription
             return
         }
 
@@ -1990,6 +2019,7 @@ public final class AppStore: ObservableObject {
             }
         } catch {
             if !Task.isCancelled {
+                reportError(error, module: .ai)
                 lastError = error.localizedDescription
             }
         }
@@ -2009,7 +2039,9 @@ public final class AppStore: ObservableObject {
         let apiKey = loadAPIKey()
         guard !apiKey.isEmpty else {
             activeSelectionRequest = nil
-            lastError = LLMServiceError.missingAPIKey.localizedDescription
+            let error = LLMServiceError.missingAPIKey
+            reportError(error, module: .ai)
+            lastError = error.localizedDescription
             return nil
         }
         activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: kind, phase: .generating)
@@ -2035,6 +2067,7 @@ public final class AppStore: ObservableObject {
         } catch {
             activeSelectionRequest = nil
             if !Task.isCancelled {
+                reportError(error, module: .ai)
                 lastError = error.localizedDescription
             }
             return nil
