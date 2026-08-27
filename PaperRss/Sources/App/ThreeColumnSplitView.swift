@@ -937,6 +937,12 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 初始瞬间（辅助窗口尚未覆盖时）露出的白色条带。
         fileprivate func reconcileWindowChrome(for window: NSWindow) {
             applyMainWindowChrome(window)
+            // macOS 14 会在进入原生全屏时把 NSToolbar.visible 重置为 false，
+            // 但仍保留 AX toolbar item。显式恢复可见性，避免出现“元素还在、
+            // 画面却没有工具栏”的状态；仅作用于全屏过渡，不改变窗口态用户设置。
+            if window.styleMask.contains(.fullScreen) {
+                window.toolbar?.isVisible = true
+            }
             syncMainWindowTitlebarBackground(for: window)
             for companion in fullScreenCompanionWindows(of: window) {
                 neutralizeFullScreenCompanion(companion)
@@ -969,7 +975,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 让 Paper 窗口底色透出。macOS 26+ 恢复背景叶子，由逐控件玻璃路径处理。
         private func syncMainWindowTitlebarBackground(for window: NSWindow) {
             if window.styleMask.contains(.fullScreen) {
-                hideMainWindowTitlebarBackground(window)
+                // 全屏时 AppKit 可能把工具栏按钮和 NSTitlebarBackgroundView
+                // 放在同一棵视图树；隐藏该节点会留下 AX toolbar item，却让
+                // 实际按钮全部不可见。全屏保留系统标题栏背景，由辅助窗口
+                // 的 PaperChromeBackdropView 负责覆盖白色底即可。
+                restoreMainWindowTitlebarBackground(window)
             } else if #available(macOS 26.0, *) {
                 restoreMainWindowTitlebarBackground(window)
             } else {
@@ -1042,6 +1052,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private func applyLiquidGlassWindowChrome(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
+
+            // 全屏阶段 AppKit 会把 toolbar 迁移到 NSToolbarFullScreenWindow；
+            // 此时不再递归隐藏主窗口的材质视图，避免连同迁移中的工具栏宿主
+            // 一起设为 hidden/alpha=0。
+            guard !window.styleMask.contains(.fullScreen) else { return }
 
             // 主窗口：仅隐去标题栏/工具栏容器中的 NSVisualEffectView，保留 contentView (应用内容)
             if let themeFrame = window.contentView?.superview {
@@ -1123,10 +1138,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard let contentView = window.contentView else { return }
             var themeFrame: NSView = contentView
             while let superview = themeFrame.superview { themeFrame = superview }
-            // 只隐藏辅助窗口内的模糊材质（玻璃效果），不触碰任何按钮宿主
-            hideVisualEffects(in: themeFrame)
-
             guard let container = firstDescendant(of: themeFrame, className: "NSTitlebarContainerView") else { return }
+            // 不要递归隐藏辅助窗口中的所有 NSVisualEffectView：macOS 14 的
+            // NSToolbarFullScreenWindow 可能把按钮宿主包在材质视图下，递归隐藏
+            // 会连同工具栏按钮一起消失。背板放在 NSTitlebarView 下方即可覆盖
+            // 白色背景，同时完整保留 AppKit 的 toolbar 内容与命中区域。
             installPaperOverlay(in: container)
         }
 

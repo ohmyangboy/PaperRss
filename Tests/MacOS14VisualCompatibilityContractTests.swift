@@ -19,10 +19,11 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("applyLegacyPaperNavbarChrome"))
         XCTAssertTrue(source.contains("syncMainWindowTitlebarBackground"))
         XCTAssertTrue(source.contains("firstDescendant(of: container, className: \"NSTitlebarBackgroundView\")?.isHidden = true"))
+        XCTAssertTrue(source.contains("window.toolbar?.isVisible = true"))
         XCTAssertEqual(
             source.components(separatedBy: "restoreMainWindowTitlebarBackground(").count - 1,
-            2,
-            "Only the helper declaration and macOS 26+ sync branch may restore the system titlebar background"
+            3,
+            "Only the helper declaration plus the fullscreen and macOS 26+ sync branches may restore the system titlebar background"
         )
         XCTAssertTrue(source.contains("window.titlebarAppearsTransparent = true"))
         XCTAssertFalse(source.contains("window.titlebarAppearsTransparent = false"))
