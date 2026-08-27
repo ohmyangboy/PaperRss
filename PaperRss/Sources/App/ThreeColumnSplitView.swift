@@ -131,13 +131,15 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     let appearance: ReaderAppearance
     let appearanceMode: ReaderAppearanceMode
     let appTheme: AppTheme
+    let columnFocusState: PaperColumnFocusState
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             actions: toolbarActions,
             appearance: appearance,
             appearanceMode: appearanceMode,
-            appTheme: appTheme
+            appTheme: appTheme,
+            columnFocusState: columnFocusState
         )
     }
 
@@ -300,6 +302,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         var appearance: ReaderAppearance
         var appearanceMode: ReaderAppearanceMode
         var appTheme: AppTheme
+        let columnFocusState: PaperColumnFocusState
         weak var splitViewController: NSSplitViewController?
         var toolbarConfigured = false
         var windowObservation: NSKeyValueObservation?
@@ -325,12 +328,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             actions: ToolbarActions,
             appearance: ReaderAppearance,
             appearanceMode: ReaderAppearanceMode,
-            appTheme: AppTheme
+            appTheme: AppTheme,
+            columnFocusState: PaperColumnFocusState
         ) {
             self.actions = actions
             self.appearance = appearance
             self.appearanceMode = appearanceMode
             self.appTheme = appTheme
+            self.columnFocusState = columnFocusState
             super.init()
             setupLocalKeyMonitor()
             setupMouseDownMonitor()
@@ -529,6 +534,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                   splitVC.splitViewItems.indices.contains(index),
                   !splitVC.splitViewItems[index].isCollapsed else { return }
             activeColumnIndex = index
+            columnFocusState.activeColumnIndex = index
 
             if makeFirstResponder, let window = splitVC.view.window ?? NSApp.keyWindow {
                 let targetContainer = splitVC.splitViewItems[index].viewController.view
@@ -570,11 +576,13 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             for i in (activeColumnIndex + 1)..<splitVC.splitViewItems.count
             where !splitVC.splitViewItems[i].isCollapsed {
                 activeColumnIndex = i
+                columnFocusState.activeColumnIndex = i
                 return
             }
             for i in stride(from: activeColumnIndex - 1, through: 0, by: -1)
             where !splitVC.splitViewItems[i].isCollapsed {
                 activeColumnIndex = i
+                columnFocusState.activeColumnIndex = i
                 return
             }
         }

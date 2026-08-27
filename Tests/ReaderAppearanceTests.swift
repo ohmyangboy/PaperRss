@@ -192,9 +192,11 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(rootView.contains("Color(paperHex: palette.accentHex)"))
         XCTAssertTrue(rootView.contains("palette.colorScheme == .dark ? 0.34 : 0.18"))
         XCTAssertTrue(rootView.contains("let isSelected: Bool"))
-        XCTAssertTrue(rootView.contains("EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)"))
+        XCTAssertTrue(rootView.contains("EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0)"))
         XCTAssertTrue(rootView.contains(".padding(.horizontal, 10)"))
         XCTAssertTrue(rootView.contains(".padding(.vertical, 3)"))
+        XCTAssertTrue(rootView.contains("isListFocused"))
+        XCTAssertTrue(rootView.contains("Color.white.opacity(0.13)"))
         XCTAssertTrue(rootView.contains("primaryForegroundColor"))
         XCTAssertTrue(rootView.contains("secondaryForegroundColor"))
 

@@ -36,6 +36,12 @@ enum SidebarSelection: Hashable {
     }
 }
 
+/// 三栏之间共享当前焦点栏，让列表选中态能区分 active / inactive。
+/// 这是视觉状态，不改变文章选择本身，也不参与持久化。
+final class PaperColumnFocusState: ObservableObject {
+    @Published var activeColumnIndex: Int = 1
+}
+
 struct RootView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var navigation: AppNavigationModel
@@ -63,6 +69,7 @@ struct RootView: View {
     @State private var navigationConfirmation = ReaderNavigationConfirmation()
     @State private var navigationConfirmationExpiryTask: Task<Void, Never>?
     @State private var readerShortcutInvocation: ReaderShortcutInvocation?
+    @StateObject private var columnFocusState = PaperColumnFocusState()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -167,6 +174,7 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
+                columnFocusState: columnFocusState,
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) }
             )
@@ -196,7 +204,8 @@ struct RootView: View {
             ),
             appearance: store.readerAppearance,
             appearanceMode: appearanceMode,
-            appTheme: store.appTheme
+            appTheme: store.appTheme,
+            columnFocusState: columnFocusState
         )
         .ignoresSafeArea()
         .tint(appearanceAccentColor)
@@ -224,6 +233,7 @@ struct RootView: View {
                 selection: selection ?? .today,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
+                columnFocusState: columnFocusState,
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) }
             )
@@ -1541,6 +1551,7 @@ private struct EntryListView: View {
     let selection: SidebarSelection
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
+    @ObservedObject var columnFocusState: PaperColumnFocusState
     var autoScrollTrigger: UUID
     var onFeedback: (String) -> Void = { _ in }
 
@@ -1552,6 +1563,10 @@ private struct EntryListView: View {
 
     private var appearancePalette: ReaderAppearancePalette {
         store.readerAppearance.palette(for: appearanceMode)
+    }
+
+    private var isListFocused: Bool {
+        columnFocusState.activeColumnIndex == 1
     }
 
     private var timelineScope: TimelineScope {
@@ -1674,50 +1689,56 @@ private struct EntryListView: View {
         )
     }
 
+    @ViewBuilder
+    private func entryRowView(for entry: EntryListItem) -> some View {
+        let isSelected = selectedEntryID == entry.id
+        EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused)
+            .tag(entry.id)
+            .contentShape(Rectangle())
+            // 让主题选中卡片与列表边缘、相邻条目保持明确的呼吸空间；
+            // 整个 list row 仍是可点击区域，不缩小选择热区。
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            .listRowBackground(
+                EntryRowSelectionSurface(
+                    isSelected: isSelected,
+                    isFocused: isListFocused,
+                    palette: appearancePalette
+                )
+            )
+            .contextMenu {
+                Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
+                    let nextRead = !entry.isRead
+                    store.markRead(entryID: entry.id, read: nextRead)
+                    patchEntryState(entryID: entry.id, isRead: nextRead)
+                }
+                Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
+                    let nextStarred = !entry.isStarred
+                    store.toggleStar(entryID: entry.id)
+                    patchEntryState(entryID: entry.id, isStarred: nextStarred)
+                }
+                Divider()
+                Button {
+                    Task {
+                        let ok = await store.refetchArticle(entryID: entry.id)
+                        onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
+                    }
+                } label: {
+                    Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
+                }
+                .disabled(store.activeRefetchEntryIDs.contains(entry.id))
+            }
+            .onAppear {
+                if entry.id == loadedEntries.last?.id {
+                    loadNextPage()
+                }
+            }
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             List(selection: entryListSelection) {
                 ForEach(loadedEntries) { entry in
-                    let isSelected = selectedEntryID == entry.id
-                    EntryRow(entry: entry, isSelected: isSelected)
-                        .tag(entry.id)
-                        .contentShape(Rectangle())
-                        // 让主题选中卡片与列表边缘、相邻条目保持明确的呼吸空间；
-                        // 整个 list row 仍是可点击区域，不缩小选择热区。
-                        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-                        .listRowBackground(
-                            EntryRowSelectionSurface(
-                                isSelected: isSelected,
-                                palette: appearancePalette
-                            )
-                        )
-                        .contextMenu {
-                            Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
-                                let nextRead = !entry.isRead
-                                store.markRead(entryID: entry.id, read: nextRead)
-                                patchEntryState(entryID: entry.id, isRead: nextRead)
-                            }
-                            Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
-                                let nextStarred = !entry.isStarred
-                                store.toggleStar(entryID: entry.id)
-                                patchEntryState(entryID: entry.id, isStarred: nextStarred)
-                            }
-                            Divider()
-                            Button {
-                                Task {
-                                    let ok = await store.refetchArticle(entryID: entry.id)
-                                    onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
-                                }
-                            } label: {
-                                Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
-                            }
-                            .disabled(store.activeRefetchEntryIDs.contains(entry.id))
-                        }
-                        .onAppear {
-                            if entry.id == loadedEntries.last?.id {
-                                loadNextPage()
-                            }
-                        }
+                    entryRowView(for: entry)
                 }
             }
             #if os(macOS)
@@ -1964,16 +1985,17 @@ private struct PaperCapsuleButton: NSViewRepresentable {
 
 private struct EntryRowSelectionSurface: View {
     let isSelected: Bool
+    let isFocused: Bool
     let palette: ReaderAppearancePalette
 
     var body: some View {
         if isSelected {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color(paperHex: palette.accentHex).opacity(palette.colorScheme == .dark ? 0.34 : 0.18))
+                .fill(selectionFill)
                 .overlay {
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .strokeBorder(
-                            Color(paperHex: palette.accentHex).opacity(palette.colorScheme == .dark ? 0.50 : 0.30),
+                            selectionBorder,
                             lineWidth: 0.5
                         )
                 }
@@ -1985,11 +2007,32 @@ private struct EntryRowSelectionSurface: View {
             Color.clear
         }
     }
+
+    private var selectionFill: Color {
+        if isFocused {
+            return Color(paperHex: palette.accentHex)
+                .opacity(palette.colorScheme == .dark ? 0.34 : 0.18)
+        }
+        return palette.colorScheme == .dark
+            ? Color.white.opacity(0.13)
+            : Color.black.opacity(0.10)
+    }
+
+    private var selectionBorder: Color {
+        if isFocused {
+            return Color(paperHex: palette.accentHex)
+                .opacity(palette.colorScheme == .dark ? 0.50 : 0.30)
+        }
+        return palette.colorScheme == .dark
+            ? Color.white.opacity(0.16)
+            : Color.black.opacity(0.08)
+    }
 }
 
 private struct EntryRow: View {
     let entry: EntryListItem
     let isSelected: Bool
+    let isFocused: Bool
     @Environment(\.paperAppearancePalette) private var appearancePalette
 
     private func formattedDate(_ date: Date) -> String {
@@ -2045,7 +2088,7 @@ private struct EntryRow: View {
                             .padding(.vertical, 1.5)
                             .background(
                                 Capsule()
-                                    .fill(secondaryForegroundColor.opacity(isSelected ? 0.16 : 0.08))
+                                    .fill(secondaryForegroundColor.opacity(isActiveSelection ? 0.16 : 0.08))
                             )
                             .lineLimit(1)
                     }
@@ -2079,14 +2122,18 @@ private struct EntryRow: View {
     }
 
     private var primaryForegroundColor: Color {
-        guard isSelected else { return Color(paperHex: appearancePalette.inkHex) }
+        guard isActiveSelection else { return Color(paperHex: appearancePalette.inkHex) }
         return appearancePalette.colorScheme == .dark
             ? Color.white.opacity(0.94)
             : Color(paperHex: appearancePalette.inkHex)
     }
 
     private var secondaryForegroundColor: Color {
-        isSelected ? primaryForegroundColor.opacity(0.76) : appearanceMutedColor
+        isActiveSelection ? primaryForegroundColor.opacity(0.76) : appearanceMutedColor
+    }
+
+    private var isActiveSelection: Bool {
+        isSelected && isFocused
     }
 }
 
