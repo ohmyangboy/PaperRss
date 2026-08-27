@@ -11,6 +11,7 @@
   [![Release](https://img.shields.io/github/v/release/ohmyangboy/PaperRss?include_prereleases&style=flat-square&color=1d4ed8)](https://github.com/ohmyangboy/PaperRss/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-f7f5ef?style=flat-square&logo=apple&logoColor=000000)](https://github.com/ohmyangboy/PaperRss)
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/ohmyangboy/PaperRss/total)](https://github.com/ohmyangboy/PaperRss/releases)
 
   [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.0-beta.6](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
@@ -100,7 +101,16 @@ open PaperRss.xcodeproj
 
 问题、功能想法与代码改进请提交到 [GitHub Issues](https://github.com/ohmyangboy/PaperRss/issues)。或者在[社交媒体](https://xhslink.cn/m/972wHfC16uj)留言～
 
-交流信息也可以随时 email: ohmyangboy@gmail
+交流信息也可以随时发送邮件至 `ohmyangboy@gmail.com`。
+
+## 隐私、内容与第三方软件
+
+PaperRss 是本地优先而非“完全离线”的客户端：订阅和正文缓存默认保存在本机；刷新 Feed、同步 FreshRSS、加载原网页或图片、检查更新以及用户主动使用 AI 功能时，客户端会直接连接相应第三方服务。AI 功能可能按具体操作发送全部或部分文章内容，请在使用前审查所选模型服务商的条款。
+
+- [隐私政策](PRIVACY.md)
+- [内容与版权说明](CONTENT_NOTICE.md)
+- [第三方软件声明](THIRD_PARTY_NOTICES.md)
+- [官网法律与隐私页面](https://ohmyangboy.github.io/PaperRss/zh-CN/legal.html)
 
 ## 开源协议
 

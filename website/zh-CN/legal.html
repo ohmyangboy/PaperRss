@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>隐私、内容与开源声明 — PaperRss</title>
+  <meta name="description" content="PaperRss 隐私政策、内容与版权说明及第三方软件声明。" />
+  <link rel="canonical" href="https://ohmyangboy.github.io/PaperRss/zh-CN/legal.html" />
+  <link rel="alternate" hreflang="zh-CN" href="https://ohmyangboy.github.io/PaperRss/zh-CN/legal.html" />
+  <link rel="alternate" hreflang="en" href="https://ohmyangboy.github.io/PaperRss/en/legal.html" />
+  <link rel="icon" type="image/png" href="../assets/app-icon.png" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body class="legal-body">
+  <main class="legal-shell">
+    <nav class="legal-topbar" aria-label="法律页面导航">
+      <a class="legal-brand" href="./">
+        <img src="../assets/app-icon.png" alt="" />
+        <span>PaperRss</span>
+      </a>
+      <div class="legal-topbar-links">
+        <a href="#privacy">隐私政策</a>
+        <a href="#content">内容与版权</a>
+        <a href="#third-party">第三方声明</a>
+        <a href="../en/legal.html" lang="en" hreflang="en" onclick="localStorage.setItem('paperrss.locale','en')">EN</a>
+      </div>
+    </nav>
+
+    <header class="legal-hero">
+      <p class="legal-eyebrow">LEGAL &amp; PRIVACY</p>
+      <h1>透明说明数据流与内容边界</h1>
+      <p>最后更新：2026 年 8 月 27 日。PaperRss 是本地优先的开源 RSS 阅读器；以下说明适用于 macOS 应用和项目官网。</p>
+      <div class="legal-callout">
+        <strong>关键原则</strong>
+        <span>阅读数据和正文缓存默认保存在本机；只有用户选择的订阅、同步、更新或 AI 功能会直接连接相应第三方服务。</span>
+      </div>
+    </header>
+
+    <article class="legal-document">
+      <section id="privacy">
+        <p class="legal-section-number">01 / PRIVACY</p>
+        <h2>隐私政策</h2>
+
+        <h3>本机保存的数据</h3>
+        <p>PaperRss 会在本机保存订阅地址、Feed 与文章条目、已读和星标状态、文件夹、Feed 正文、按需提取的网页正文缓存、AI 结果以及应用设置。网页正文缓存可在应用设置中清除。</p>
+
+        <h3>凭据</h3>
+        <ul>
+          <li>FreshRSS 等服务凭据保存在 macOS Keychain。</li>
+          <li>用户配置的 AI API Key 当前保存在该 Mac 的 PaperRss 本地应用偏好中，不上传至 PaperRss 服务器，但不具备 Keychain 级别的静态加密；不建议在共享的 macOS 用户账户中保存敏感 Key。</li>
+        </ul>
+
+        <h3>网络请求与 AI</h3>
+        <p>客户端会按用户配置直接连接 Feed、文章原站、图片服务器、FreshRSS、GitHub/Sparkle 更新来源及用户选择的 AI 接口。当 Feed 内容不足且用户打开文章时，客户端可能请求公开原网页并在本机提取正文。</p>
+        <p>只有用户配置并主动使用 AI 功能时才会请求模型服务。根据功能不同，请求可能包含文章标题、全部或部分正文、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。相关服务商会按其条款和隐私政策处理这些内容。</p>
+
+        <h3>遥测与网站</h3>
+        <p>当前版本未集成产品分析 SDK、广告 SDK或跨应用追踪，也没有 PaperRss 维护者运营的阅读数据收集服务器。官网托管于 GitHub Pages，使用 <code>localStorage</code> 记住语言，并从 Google Fonts 获取网页字体；GitHub 和 Google 可能收到标准请求信息。外部链接在用户点击后由相应站点处理。</p>
+
+        <h3>用户选择与联系</h3>
+        <p>用户可以不配置 AI 服务、清除正文缓存、移除服务账户，或删除应用支持数据。第三方服务的数据保留和跨境处理由用户选择的服务商决定。隐私、删除或安全问题请联系 <a href="mailto:ohmyangboy@gmail.com">ohmyangboy@gmail.com</a>。不要在公开 Issue 中提交 API Key、私人 Feed 地址或敏感文章内容。</p>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/PRIVACY.md">查看完整双语隐私政策 ↗</a></p>
+      </section>
+
+      <section id="content">
+        <p class="legal-section-number">02 / CONTENT &amp; COPYRIGHT</p>
+        <h2>内容与版权说明</h2>
+
+        <h3>内容来源</h3>
+        <p>PaperRss 优先使用 RSS、Atom、JSON Feed 或用户连接服务主动提供的内容。Feed 内容不足时，用户打开文章可能触发对 Feed 所标注公开文章 URL 的普通请求，并只在用户设备上生成阅读缓存。PaperRss 当前不运营集中抓取正文、建立跨用户全文库或向公众重新发布文章的服务。</p>
+
+        <h3>权利归属</h3>
+        <p>第三方文章、图片、音视频、标题、标识和商标的权利仍归作者、出版者或其他权利人。内容可通过 Feed 或公开网页访问，不表示版权被放弃或转让给 PaperRss。PaperRss 的 GPL-3.0 只适用于项目代码及明确标注的项目材料，不适用于用户阅读的第三方内容。</p>
+
+        <h3>使用边界</h3>
+        <ul>
+          <li>只访问你有权使用的 Feed、账户与内容，并遵守适用法律和有效条款。</li>
+          <li>不要使用 PaperRss 绕过登录、付费墙、验证码或其他访问控制。</li>
+          <li>未经许可，不要批量导出、公开分享、出售、训练、建立搜索库或重新发布完整文章。</li>
+          <li>把内容提交给第三方 AI 服务前，应确认有权这样做并审查服务商政策。</li>
+        </ul>
+
+        <h3>权利人请求</h3>
+        <p>权利人可以发送作品、Feed、文章 URL 或域名、权利基础及希望采取的措施至 <a href="mailto:ohmyangboy@gmail.com">ohmyangboy@gmail.com</a>。维护者会善意审查可核实请求，并根据情况采取更正、移除、技术限制或后续版本域名例外等合理措施。</p>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/CONTENT_NOTICE.md">查看完整双语内容与版权说明 ↗</a></p>
+      </section>
+
+      <section id="third-party">
+        <p class="legal-section-number">03 / THIRD-PARTY SOFTWARE</p>
+        <h2>开源与第三方软件声明</h2>
+        <p>PaperRss 项目代码依据 GNU GPL v3.0 发布。第三方组件仍适用各自许可证，相关名称仅用于识别，不代表背书。</p>
+        <div class="legal-table-wrap">
+          <table>
+            <thead><tr><th>组件</th><th>版本</th><th>许可证</th></tr></thead>
+            <tbody>
+              <tr><td>GRDB.swift</td><td>7.11.1</td><td>MIT</td></tr>
+              <tr><td>Sparkle</td><td>2.9.6</td><td>MIT 及其完整上游声明</td></tr>
+              <tr><td>swift-markdown</td><td>0.8.0</td><td>Apache-2.0</td></tr>
+              <tr><td>swift-cmark</td><td>0.8.0</td><td>BSD-style 及其完整上游声明</td></tr>
+              <tr><td>MathJax runtime</td><td>4.1.2</td><td>Apache-2.0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/THIRD_PARTY_NOTICES.md">查看完整第三方软件声明与许可证链接 ↗</a></p>
+      </section>
+    </article>
+
+    <footer class="legal-footer">
+      <a href="./">返回 PaperRss 首页</a>
+      <span>© 2026 PaperRss · <a href="mailto:ohmyangboy@gmail.com">联系维护者</a></span>
+    </footer>
+  </main>
+</body>
+</html>

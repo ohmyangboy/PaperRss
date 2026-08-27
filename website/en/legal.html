@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy, Content, and Open-Source Notices — PaperRss</title>
+  <meta name="description" content="PaperRss privacy policy, content and copyright notice, and third-party software notices." />
+  <link rel="canonical" href="https://ohmyangboy.github.io/PaperRss/en/legal.html" />
+  <link rel="alternate" hreflang="zh-CN" href="https://ohmyangboy.github.io/PaperRss/zh-CN/legal.html" />
+  <link rel="alternate" hreflang="en" href="https://ohmyangboy.github.io/PaperRss/en/legal.html" />
+  <link rel="icon" type="image/png" href="../assets/app-icon.png" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body class="legal-body">
+  <main class="legal-shell">
+    <nav class="legal-topbar" aria-label="Legal page navigation">
+      <a class="legal-brand" href="./">
+        <img src="../assets/app-icon.png" alt="" />
+        <span>PaperRss</span>
+      </a>
+      <div class="legal-topbar-links">
+        <a href="#privacy">Privacy</a>
+        <a href="#content">Content</a>
+        <a href="#third-party">Third Parties</a>
+        <a href="../zh-CN/legal.html" lang="zh-CN" hreflang="zh-CN" onclick="localStorage.setItem('paperrss.locale','zh-CN')">简中</a>
+      </div>
+    </nav>
+
+    <header class="legal-hero">
+      <p class="legal-eyebrow">LEGAL &amp; PRIVACY</p>
+      <h1>Clear boundaries for data and content</h1>
+      <p>Last updated August 27, 2026. PaperRss is a local-first, open-source RSS reader. These notices apply to the macOS app and project website.</p>
+      <div class="legal-callout">
+        <strong>Core principle</strong>
+        <span>Your reading library and extracted article caches are stored locally by default. Only subscription, synchronization, update, or AI features you choose connect directly to the relevant third-party service.</span>
+      </div>
+    </header>
+
+    <article class="legal-document">
+      <section id="privacy">
+        <p class="legal-section-number">01 / PRIVACY</p>
+        <h2>Privacy Policy</h2>
+
+        <h3>Data stored locally</h3>
+        <p>PaperRss stores subscription URLs, feeds and entries, read and starred state, folders, feed content, on-demand extracted article caches, AI results, and app settings on your Mac. Extracted article caches can be cleared in Settings.</p>
+
+        <h3>Credentials</h3>
+        <ul>
+          <li>Credentials for services such as FreshRSS are stored in macOS Keychain.</li>
+          <li>A user-configured AI API key is currently stored in PaperRss's local app preferences on that Mac. It is not uploaded to a PaperRss server, but it is not encrypted at the level provided by Keychain. Do not store a sensitive key in a shared macOS user account.</li>
+        </ul>
+
+        <h3>Network requests and AI</h3>
+        <p>The client may connect directly to feed and publisher servers, image hosts, FreshRSS, GitHub/Sparkle update sources, and the AI endpoint selected by the user. If a feed supplies insufficient content and you open an article, the client may request the public article page and extract readable content locally.</p>
+        <p>An AI provider is contacted only after the user configures an endpoint and invokes an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, the user's question, a custom prompt, and the target language. The provider processes this data under its own terms and privacy policy.</p>
+
+        <h3>Telemetry and website</h3>
+        <p>The current app includes no product-analytics SDK, advertising SDK, cross-app tracking, or maintainer-operated reading-data collection server. The website is hosted on GitHub Pages, uses <code>localStorage</code> to remember language, and obtains web fonts from Google Fonts. GitHub and Google may receive ordinary request information. External sites are contacted after the user follows their links.</p>
+
+        <h3>Your choices and contact</h3>
+        <p>You may use PaperRss without configuring AI, clear extracted article caches, remove service accounts, or delete the app's support data. Third-party retention and international processing depend on the services you choose. For privacy, deletion, or security questions, email <a href="mailto:ohmyangboy@gmail.com">ohmyangboy@gmail.com</a>. Do not put API keys, private feed URLs, or sensitive article content in a public issue.</p>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/PRIVACY.md">Read the complete bilingual Privacy Policy ↗</a></p>
+      </section>
+
+      <section id="content">
+        <p class="legal-section-number">02 / CONTENT &amp; COPYRIGHT</p>
+        <h2>Content and Copyright Notice</h2>
+
+        <h3>Content sources</h3>
+        <p>PaperRss first uses content supplied by RSS, Atom, JSON Feed, or a service connected by the user. If a feed supplies insufficient content, opening an article may trigger an ordinary request to the public article URL identified by the feed and create a reading cache only on the user's device. PaperRss does not currently operate a service that centrally extracts article bodies, builds a cross-user full-text corpus, or republishes articles to the public.</p>
+
+        <h3>Ownership</h3>
+        <p>Rights in third-party articles, images, audio, video, titles, identifiers, and trademarks remain with their authors, publishers, or other rightsholders. Availability through a feed or public webpage does not waive copyright or transfer it to PaperRss. PaperRss's GPL-3.0 applies only to project code and expressly licensed project material, not third-party content read by users.</p>
+
+        <h3>Usage boundaries</h3>
+        <ul>
+          <li>Access only feeds, accounts, and content you are authorized to use, and comply with applicable law and valid terms.</li>
+          <li>Do not use PaperRss to bypass login requirements, paywalls, CAPTCHAs, or other access controls.</li>
+          <li>Without permission, do not bulk-export, publicly share, sell, train on, index, or republish complete articles.</li>
+          <li>Before sending content to an AI provider, confirm that you may do so and review the provider's policies.</li>
+        </ul>
+
+        <h3>Rightsholder requests</h3>
+        <p>A rightsholder may send the work, feed, article URL or domain, basis of rights, and requested action to <a href="mailto:ohmyangboy@gmail.com">ohmyangboy@gmail.com</a>. The maintainer will review verifiable requests in good faith and may take reasonable action such as correction, removal, technical restriction, or a domain exception in a later version.</p>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/CONTENT_NOTICE.md">Read the complete bilingual Content and Copyright Notice ↗</a></p>
+      </section>
+
+      <section id="third-party">
+        <p class="legal-section-number">03 / THIRD-PARTY SOFTWARE</p>
+        <h2>Open-Source and Third-Party Notices</h2>
+        <p>PaperRss project code is distributed under GNU GPL v3.0. Third-party components remain governed by their own licenses. Names are used only for identification and do not imply endorsement.</p>
+        <div class="legal-table-wrap">
+          <table>
+            <thead><tr><th>Component</th><th>Version</th><th>License</th></tr></thead>
+            <tbody>
+              <tr><td>GRDB.swift</td><td>7.11.1</td><td>MIT</td></tr>
+              <tr><td>Sparkle</td><td>2.9.6</td><td>MIT and complete upstream notices</td></tr>
+              <tr><td>swift-markdown</td><td>0.8.0</td><td>Apache-2.0</td></tr>
+              <tr><td>swift-cmark</td><td>0.8.0</td><td>BSD-style and complete upstream notices</td></tr>
+              <tr><td>MathJax runtime</td><td>4.1.2</td><td>Apache-2.0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="legal-source-link"><a href="https://github.com/ohmyangboy/PaperRss/blob/main/THIRD_PARTY_NOTICES.md">Read the complete third-party notices and license links ↗</a></p>
+      </section>
+    </article>
+
+    <footer class="legal-footer">
+      <a href="./">Back to the PaperRss home page</a>
+      <span>© 2026 PaperRss · <a href="mailto:ohmyangboy@gmail.com">Contact the maintainer</a></span>
+    </footer>
+  </main>
+</body>
+</html>

@@ -100,6 +100,15 @@ Or simply leave a free **star** — it makes the author's day ;D
 
 For bugs, feature ideas, and code improvements, please open a [GitHub Issue](https://github.com/ohmyangboy/PaperRss/issues), leave a message on [social media](https://xhslink.cn/m/972wHfC16uj), or contact via email at `ohmyangboy@gmail.com`.
 
+## Privacy, Content, and Third-Party Software
+
+PaperRss is local-first, not completely offline. Subscriptions and extracted article caches are stored locally by default. The client connects directly to relevant third parties when refreshing feeds, synchronizing FreshRSS, loading publisher pages or images, checking for updates, or invoking an AI feature. Depending on the selected AI action, all or part of an article may be sent to the provider, so review that provider's terms before use.
+
+- [Privacy Policy](PRIVACY.md)
+- [Content and Copyright Notice](CONTENT_NOTICE.md)
+- [Third-Party Software Notices](THIRD_PARTY_NOTICES.md)
+- [Website legal and privacy page](https://ohmyangboy.github.io/PaperRss/en/legal.html)
+
 ## License
 
 PaperRss is open-sourced under the [GNU General Public License v3.0](LICENSE).

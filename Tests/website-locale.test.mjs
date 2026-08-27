@@ -129,3 +129,42 @@ test('stage card stacking parallax is shared by both locales and respects reduce
   assert.match(script, /translate3d/);
 });
 
+test('localized legal pages disclose the real data and content boundaries', async () => {
+  const [zhHome, enHome, zhLegal, enLegal, styles] = await Promise.all([
+    readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/en/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/zh-CN/legal.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/en/legal.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/styles.css', import.meta.url), 'utf8'),
+  ]);
+
+  for (const home of [zhHome, enHome]) {
+    assert.match(home, /legal\.html#privacy/);
+    assert.match(home, /legal\.html#content/);
+    assert.match(home, /legal\.html#third-party/);
+  }
+
+  assert.doesNotMatch(zhHome, /API Key 与数据仅存于本机设备/);
+  assert.doesNotMatch(enHome, /API keys and reading data stay on your Mac/);
+
+  assert.match(zhLegal, /id="privacy"/);
+  assert.match(zhLegal, /AI API Key 当前保存在该 Mac 的 PaperRss 本地应用偏好/);
+  assert.match(zhLegal, /全部或部分正文/);
+  assert.match(zhLegal, /id="content"/);
+  assert.match(zhLegal, /不要使用 PaperRss 绕过登录、付费墙、验证码或其他访问控制/);
+  assert.match(zhLegal, /id="third-party"/);
+  assert.match(zhLegal, /GRDB\.swift/);
+  assert.match(zhLegal, /Sparkle/);
+  assert.match(zhLegal, /swift-markdown/);
+  assert.match(zhLegal, /MathJax runtime/);
+
+  assert.match(enLegal, /href="\.\.\/zh-CN\/legal\.html"/);
+  assert.match(enLegal, /user-configured AI API key is currently stored/);
+  assert.match(enLegal, /all or part of the article text/);
+  assert.match(enLegal, /does not currently operate a service that centrally extracts article bodies/);
+  assert.match(enLegal, /Complete third-party notices|complete third-party notices/i);
+
+  assert.match(styles, /\.legal-shell/);
+  assert.match(styles, /\.legal-document/);
+  assert.match(styles, /\.legal-callout/);
+});
