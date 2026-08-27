@@ -903,14 +903,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         }
 
         private func applyMainWindowChrome(_ window: NSWindow) {
-            switch appTheme {
-            case .system:
-                window.appearance = nil
-            case .light:
-                window.appearance = NSAppearance(named: .aqua)
-            case .dark:
-                window.appearance = NSAppearance(named: .darkAqua)
-            }
+            // 工具栏属于中间栏/阅读区的视觉 chrome。Geek 主题即使在“浅色模式”
+            // 下仍然使用深色阅读表面，因此这里必须跟随实际 palette，而不能只看
+            // AppTheme，否则 NSToolbar 的 labelColor 会以黑色压在深色背景上。
+            window.appearance = chromeAppearance
             if #available(macOS 26.0, *) {
                 applyLiquidGlassWindowChrome(window)
             } else {
@@ -927,7 +923,31 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
         fileprivate func syncAppearance() {
             guard let window = splitViewController?.view.window else { return }
+            syncToolbarAppearance()
             reconcileWindowChrome(for: window)
+        }
+
+        private var chromePalette: ReaderAppearancePalette {
+            appearance.palette(for: appearanceMode)
+        }
+
+        private var chromeAppearance: NSAppearance? {
+            switch chromePalette.colorScheme {
+            case .light:
+                NSAppearance(named: .aqua)
+            case .dark:
+                NSAppearance(named: .darkAqua)
+            }
+        }
+
+        private var chromeInkColor: NSColor {
+            NSColor(Color(paperHex: chromePalette.inkHex))
+        }
+
+        private func syncToolbarAppearance() {
+            titleLabel?.textColor = chromeInkColor
+            refreshButton?.contentTintColor = chromeInkColor
+            markAllReadButton?.contentTintColor = chromeInkColor
         }
 
         private var chromeBackgroundColor: NSColor {
@@ -1189,6 +1209,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 同步中间栏标题及全部已读按钮状态
         func syncHeaderState() {
             let isSidebarCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
+
+            syncToolbarAppearance()
             
             if let label = titleLabel {
                 label.isHidden = isSidebarCollapsed
@@ -1296,6 +1318,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: I18N.localized("刷新"))
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
+                button.contentTintColor = chromeInkColor
                 button.target = self
                 button.action = #selector(doRefresh)
                 
@@ -1362,7 +1385,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
                 let label = NSTextField(labelWithString: isCollapsed ? "" : actions.selectionTitle)
                 label.font = .systemFont(ofSize: 13, weight: .semibold)
-                label.textColor = .labelColor
+                label.textColor = chromeInkColor
                 label.isEditable = false
                 label.isSelectable = false
                 label.drawsBackground = false
@@ -1387,6 +1410,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 button.image = NSImage(systemSymbolName: "envelope.open", accessibilityDescription: I18N.localized("全部已读"))
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
+                button.contentTintColor = chromeInkColor
                 button.target = self
                 button.action = #selector(doMarkAllRead)
                 button.isEnabled = actions.hasUnread

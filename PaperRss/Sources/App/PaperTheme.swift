@@ -188,12 +188,17 @@ private struct PaperGrain: View {
 
 struct PaperHeaderSurface: View {
     var kind: PaperSurfaceKind = .page
+    /// 主题色叠加在 material 上的强度。默认值用于固定的侧边栏标题栏；
+    /// 浮动导航栏会降低该值，让滚动内容透出并保留主题色温。
+    var tintOpacity: Double?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
             Rectangle().fill(.ultraThinMaterial)
-            PaperTheme.surface(kind, scheme: colorScheme).opacity(colorScheme == .dark ? 0.82 : 0.88)
+            PaperTheme.surface(kind, scheme: colorScheme).opacity(
+                tintOpacity ?? (colorScheme == .dark ? 0.82 : 0.88)
+            )
             PaperGrain(opacity: 0.55)
         }
         .accessibilityHidden(true)
@@ -205,14 +210,16 @@ struct AppearanceHeaderSurface: View {
     let role: AppearanceSurfaceRole
     let appearance: ReaderAppearance
     let mode: ReaderAppearanceMode
+    var tintOpacity: Double?
 
     var body: some View {
         if appearance.preset == .paper && !appearance.isCustom {
-            PaperHeaderSurface(kind: paperSurfaceKind)
+            PaperHeaderSurface(kind: paperSurfaceKind, tintOpacity: tintOpacity)
         } else {
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
-                Color(paperHex: appearance.backgroundHex(for: mode, surface: role)).opacity(0.88)
+                Color(paperHex: appearance.backgroundHex(for: mode, surface: role))
+                    .opacity(tintOpacity ?? 0.88)
             }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
@@ -228,34 +235,36 @@ struct AppearanceHeaderSurface: View {
     }
 }
 
-/// 顶部工具栏渐变玻璃模糊层（Gradient Glass Blur）。
-/// 通过对 .ultraThinMaterial 施加垂直平滑渐变遮罩，使内容向上滚动经过顶部工具栏区域时
-/// 呈现柔和透明的磨砂渐变融入背景，消除生硬的实色矩形色块与横向截断切线。
+/// 文章列表滚动时的顶部导航材质。
+/// 与订阅源列表的标题栏复用同一套 AppearanceHeaderSurface，仅降低主题色叠加并
+/// 加入向下渐隐的 mask，让内容透过原生 material 柔和浮现，而不是形成不透明色块。
 struct PaperTopBarBlur: View {
+    let appearance: ReaderAppearance
+    let appearanceMode: ReaderAppearanceMode
     var height: CGFloat = 52
     var opacity: Double = 1.0
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0.0),
-                            .init(color: .black.opacity(0.95), location: 0.20),
-                            .init(color: .black.opacity(0.80), location: 0.40),
-                            .init(color: .black.opacity(0.50), location: 0.62),
-                            .init(color: .black.opacity(0.20), location: 0.82),
-                            .init(color: .black.opacity(0.04), location: 0.94),
-                            .init(color: .clear, location: 1.0)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-        }
+        AppearanceHeaderSurface(
+            role: .articleList,
+            appearance: appearance,
+            mode: appearanceMode,
+            tintOpacity: 0.64
+        )
         .frame(height: height)
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.94), location: 0.26),
+                    .init(color: .black.opacity(0.70), location: 0.58),
+                    .init(color: .black.opacity(0.24), location: 0.84),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
         .opacity(opacity)
         .accessibilityHidden(true)
         .allowsHitTesting(false)

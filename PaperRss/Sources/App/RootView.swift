@@ -1782,7 +1782,12 @@ private struct EntryListView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 Color.clear.frame(height: 52)
                     .background {
-                        PaperTopBarBlur(height: 52, opacity: isScrolled ? 1 : 0)
+                        PaperTopBarBlur(
+                            appearance: store.readerAppearance,
+                            appearanceMode: appearanceMode,
+                            height: 52,
+                            opacity: isScrolled ? 1 : 0
+                        )
                     }
             }
             #endif

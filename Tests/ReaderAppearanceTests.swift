@@ -151,6 +151,8 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(appearanceSection.contains("resetReaderAppearanceToPreset"))
         XCTAssertTrue(appearanceSection.contains("resetReaderAppearanceToDefault"))
         XCTAssertTrue(appearanceSection.contains("setAppTheme"))
+        XCTAssertTrue(appearanceSection.contains("readerFontPicker"))
+        XCTAssertTrue(appearanceSection.contains("filteredReaderFontFamilies"))
 
         XCTAssertTrue(reader.contains("AppearanceSurface(role: .reader"))
         XCTAssertEqual(reader.components(separatedBy: "synchronizeReaderAppearance(in: webView)").count - 1, 2)
@@ -167,6 +169,63 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(rootView.contains("role: .articleList"))
         XCTAssertTrue(rootView.contains("appearanceMode:"))
         XCTAssertTrue(rootView.contains("paperAppearancePalette"))
+
+        let splitView = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/ThreeColumnSplitView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(splitView.contains("window.appearance = chromeAppearance"))
+        XCTAssertTrue(splitView.contains("private var chromeInkColor: NSColor"))
+        XCTAssertTrue(splitView.contains("label.textColor = chromeInkColor"))
+    }
+
+    func testSettingsVisualShellKeepsCardsControlsAndAdvancedOptionsConsistent() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/SettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settings.contains("static let sidebarWidth: CGFloat = 224"))
+        XCTAssertTrue(settings.contains("static let cardCornerRadius: CGFloat = 14"))
+        XCTAssertTrue(settings.contains("static let rowMinimumHeight: CGFloat = 52"))
+        XCTAssertTrue(settings.contains(".background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius"))
+        XCTAssertTrue(settings.contains(".controlSize(.regular)"))
+        XCTAssertTrue(settings.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+        XCTAssertTrue(settings.contains("private var advancedOptionsDisclosure: some View"))
+        XCTAssertTrue(settings.contains("accessibilityAddTraits(.isToggle)"))
+        XCTAssertFalse(settings.contains("DisclosureGroup(isExpanded: $showsAIAdvancedOptions)"))
+        XCTAssertFalse(settings.contains("private var syncSettings: some View"))
+        XCTAssertFalse(settings.contains("case sync"))
+        XCTAssertFalse(settings.contains("case .sync"))
+        XCTAssertTrue(settings.contains("维护与恢复"))
+        XCTAssertTrue(settings.contains("AppearanceThreeColumnPreview("))
+        XCTAssertTrue(settings.contains("readerThemeDescription"))
+        XCTAssertTrue(settings.contains(".toggleStyle(.switch)"))
+        XCTAssertTrue(settings.contains("settingsAppearancePalette"))
+        XCTAssertTrue(settings.contains("private var appThemePicker: some View"))
+        XCTAssertTrue(settings.contains("background(isSelected ? settingsAccentColor : Color.clear, in: Capsule())"))
+        XCTAssertTrue(settings.contains("private var updateChannelPicker: some View"))
+        XCTAssertTrue(settings.contains("synchronizeSettingsWindowAppearance"))
+        XCTAssertTrue(settings.contains("private struct SettingsInfoButton: View"))
+        XCTAssertFalse(settings.contains("Tokyo Night"))
+        XCTAssertFalse(settings.contains("contentHeader"))
+
+        let paperTheme = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/PaperTheme.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(paperTheme.contains("struct PaperTopBarBlur: View"))
+        XCTAssertTrue(paperTheme.contains("AppearanceHeaderSurface("))
+        XCTAssertTrue(paperTheme.contains("tintOpacity: 0.64"))
+        XCTAssertTrue(paperTheme.contains(".mask {"))
+        XCTAssertTrue(paperTheme.contains("LinearGradient("))
+
+        let actionBarStart = try XCTUnwrap(settings.range(of: "private var actionBar"))
+        let actionBar = settings[actionBarStart.lowerBound..<settings.endIndex]
+        XCTAssertFalse(actionBar.contains("保存设置"))
     }
 
     private func restore(_ value: Any?, key: String, defaults: UserDefaults) {

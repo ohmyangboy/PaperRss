@@ -19,7 +19,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case aiService
     case refresh
     case language
-    case sync
     case feedback
     case about
 
@@ -33,7 +32,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiService: I18N.shared.localized("AI 功能", "AI Features")
         case .refresh: I18N.shared.localized("刷新", "Refresh")
         case .language: I18N.shared.localized("语言", "Language")
-        case .sync: I18N.shared.localized("同步", "Sync")
         case .feedback: I18N.shared.localized("反馈与赞赏", "Feedback & Sponsor")
         case .about: I18N.shared.localized("关于", "About")
         }
@@ -46,23 +44,46 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .aiService: "sparkles"
         case .refresh: "arrow.clockwise.circle"
         case .language: "globe"
-        case .sync: "icloud"
         case .feedback: "heart.circle"
         case .about: "info.circle"
         }
     }
 
-    @MainActor
-    var subtitle: String {
-        switch self {
-        case .appearance: I18N.shared.localized("控制界面模式、三栏主题与文章阅读排版")
-        case .accounts: I18N.shared.localized("管理本地与 FreshRSS 订阅账号及双向状态同步")
-        case .aiService: I18N.shared.localized("配置模型服务、阅读助手与生成偏好")
-        case .refresh: I18N.shared.localized("控制订阅的自动更新")
-        case .language: I18N.shared.localized("切换应用界面语言")
-        case .sync: I18N.shared.localized("同步阅读状态和 AI 结果")
-        case .feedback: I18N.shared.localized("赞赏支持开发者、提交问题反馈与交流")
-        case .about: I18N.shared.localized("版本信息、GitHub 仓库与软件更新")
+}
+
+private enum SettingsMetrics {
+    static let sidebarWidth: CGFloat = 224
+    static let contentMaxWidth: CGFloat = 720
+    static let contentHorizontalPadding: CGFloat = 34
+    static let contentTopPadding: CGFloat = 26
+    static let groupSpacing: CGFloat = 22
+    static let cardCornerRadius: CGFloat = 14
+    static let rowMinimumHeight: CGFloat = 52
+    static let rowHorizontalPadding: CGFloat = 18
+    static let rowVerticalPadding: CGFloat = 11
+}
+
+private struct SettingsInfoButton: View {
+    let message: String
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(I18N.shared.localized("显示说明", "Show information"))
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            Text(LocalizedStringKey(message))
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(width: 270, alignment: .leading)
         }
     }
 }
@@ -98,6 +119,11 @@ struct SettingsView: View {
     @State private var cacheClearDismissTask: Task<Void, Never>?
     @State private var isClearingCache = false
     @State private var cacheStats: ArticleCacheStats?
+    @State private var hoveredSection: SettingsSection?
+    @State private var showsAIAdvancedOptions = false
+    @State private var isFontPickerPresented = false
+    @State private var fontSearchText = ""
+    @FocusState private var isFontSearchFocused: Bool
 
     var body: some View {
         Group {
@@ -107,7 +133,18 @@ struct SettingsView: View {
             iOSBody
             #endif
         }
+        #if os(macOS)
+        .onAppear(perform: synchronizeSettingsWindowAppearance)
+        .onChange(of: store.appTheme) { _, _ in
+            synchronizeSettingsWindowAppearance()
+        }
+        #else
         .preferredColorScheme(store.appTheme.colorScheme)
+        #endif
+        .tint(settingsAccentColor)
+        .accentColor(settingsAccentColor)
+        .toggleStyle(.switch)
+        .environment(\.paperAppearancePalette, settingsAppearancePalette)
         .onChange(of: configuration) {
             save(updateStatus: false)
         }
@@ -120,28 +157,28 @@ struct SettingsView: View {
     private var macOSBody: some View {
         HStack(spacing: 0) {
             sidebarView
-                .frame(width: 210)
-
-            Divider().opacity(0.5)
+                .frame(width: SettingsMetrics.sidebarWidth)
 
             VStack(spacing: 0) {
-                contentHeader
-
                 ScrollView {
                     settingsPage
-                        .frame(maxWidth: 680, alignment: .leading)
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 24)
+                        .frame(maxWidth: SettingsMetrics.contentMaxWidth, alignment: .leading)
+                        .padding(.horizontal, SettingsMetrics.contentHorizontalPadding)
+                        .padding(.top, SettingsMetrics.contentTopPadding)
+                        .padding(.bottom, 34)
                 }
                 .scrollContentBackground(.hidden)
 
-                Divider().opacity(0.5)
-                actionBar
+                if showsActionBar {
+                    actionBar
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(settingsWindowBackground)
-        .frame(minWidth: 840, idealWidth: 920, minHeight: 580, idealHeight: 660)
+        .frame(minWidth: 900, idealWidth: 980, minHeight: 620, idealHeight: 720)
+        .controlSize(.regular)
+        .buttonBorderShape(.roundedRectangle(radius: 8))
         .onAppear(perform: loadConfiguration)
     }
     #else
@@ -152,11 +189,7 @@ struct SettingsView: View {
                     sidebarView
                         .frame(width: 200)
 
-                    Divider().opacity(0.5)
-
                     VStack(spacing: 0) {
-                        contentHeader
-
                         ScrollView {
                             settingsPage
                                 .padding(.horizontal, 24)
@@ -164,7 +197,6 @@ struct SettingsView: View {
                         }
                         .paperListScrollStyle()
 
-                        Divider().opacity(0.5)
                         actionBar
                     }
                 }
@@ -179,8 +211,6 @@ struct SettingsView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
 
-                    contentHeader
-
                     ScrollView {
                         settingsPage
                             .padding(.horizontal, 16)
@@ -188,7 +218,6 @@ struct SettingsView: View {
                     }
                     .paperListScrollStyle()
 
-                    Divider()
                     actionBar
                 }
             }
@@ -217,23 +246,39 @@ struct SettingsView: View {
             sidebarFooter
         }
         .background(settingsSidebarBackground)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.055))
+                .frame(width: 1)
+                .accessibilityHidden(true)
+        }
     }
 
     private var sidebarHeader: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.accentColor)
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(settingsAccentColor.opacity(0.13))
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(settingsAccentColor)
+            }
+            .frame(width: 30, height: 30)
 
-            Text(I18N.shared.localized("设置", "Settings"))
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(I18N.shared.localized("设置", "Settings"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(I18N.shared.localized("PaperRss"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
 
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
     }
 
     private func sidebarItem(for section: SettingsSection) -> some View {
@@ -245,6 +290,10 @@ struct SettingsView: View {
             }
         } label: {
             HStack(spacing: 10) {
+                Capsule()
+                    .fill(isSelected ? settingsAccentColor : Color.clear)
+                    .frame(width: 3, height: 18)
+
                 Image(systemName: section.icon)
                     .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
                     .frame(width: 20, alignment: .center)
@@ -258,9 +307,14 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .frame(minHeight: 38)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                    .fill(
+                        isSelected
+                            ? settingsAccentColor.opacity(0.13)
+                            : hoveredSection == section ? Color.primary.opacity(0.055) : Color.clear
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -269,15 +323,15 @@ struct SettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered in
+            hoveredSection = isHovered ? section : nil
+        }
         .accessibilityLabel(section.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Divider().opacity(0.4)
-                .padding(.bottom, 8)
-
             HStack(spacing: 6) {
                 Image(systemName: "doc.richtext")
                     .font(.system(size: 11))
@@ -288,32 +342,12 @@ struct SettingsView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 14)
-    }
-
-    private var contentHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(selectedSection.title)
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(.primary)
-
-            Text(selectedSection.subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 32)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
-        .background(.bar)
-        .overlay(alignment: .bottom) {
-            Divider().opacity(0.5)
-        }
+        .padding(.bottom, 18)
     }
 
     @ViewBuilder
     private var settingsPage: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             switch selectedSection {
             case .accounts:
                 accountsSettings
@@ -325,8 +359,6 @@ struct SettingsView: View {
                 refreshSettings
             case .language:
                 languageSettings
-            case .sync:
-                syncSettings
             case .feedback:
                 feedbackSettings
             case .about:
@@ -339,21 +371,21 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
                 I18N.shared.localized("当前账号", "Current Accounts"),
-                footer: I18N.shared.localized("PaperRss 支持多账号并行与按需启用。本地订阅与 FreshRSS 远端订阅相互隔离，禁用账号不会删除本地数据或凭据。")
+                info: I18N.shared.localized(
+                    "本地订阅与 FreshRSS 远端订阅相互隔离；禁用账号不会删除本地数据或凭据。",
+                    "Local and FreshRSS subscriptions stay separate. Disabling an account does not delete its data or credentials."
+                )
             ) {
                 // 本地账号
                 HStack(spacing: 12) {
                     Image(systemName: "macbook.and.iphone")
                         .font(.system(size: 20))
-                        .foregroundStyle(PaperTheme.accent)
+                        .foregroundStyle(settingsAccentColor)
                         .frame(width: 28)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(I18N.shared.localized("我的 Mac (本地账号)"))
                             .font(.system(size: 14, weight: .semibold))
-                        Text(I18N.shared.localized("本机独立存储与离线阅读"))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
 
                     Spacer()
@@ -378,14 +410,14 @@ struct SettingsView: View {
                 // FreshRSS 账号列表
                 let freshRSSAccounts = store.accounts.filter { $0.type == AccountType.freshRSS.rawValue }
                 ForEach(freshRSSAccounts, id: \.id) { account in
-                    Divider().padding(.horizontal, 18).opacity(0.35)
+                    Divider().padding(.horizontal, 18).opacity(0.18)
 
                     VStack(alignment: .leading, spacing: 10) {
                         // 主行：图标 + 标题与端点 + Toggle
                         HStack(spacing: 12) {
                             Image(systemName: "server.rack")
                                 .font(.system(size: 20))
-                                .foregroundStyle(PaperTheme.accent)
+                                .foregroundStyle(settingsAccentColor)
                                 .frame(width: 28)
 
                             VStack(alignment: .leading, spacing: 2) {
@@ -524,18 +556,13 @@ struct SettingsView: View {
     private var feedbackSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.localized("赞赏与支持"),
-                footer: I18N.shared.localized(
-                    store.appLanguage.resolvedLocalization() == .en
-                        ? "如果 PaperRss 改善了你的阅读体验，可以通过 PayPal 支持持续开发。"
-                        : "如果 PaperRss 改善了你的阅读体验，欢迎使用微信扫码赞赏支持持续开发。"
-                )
+                I18N.shared.localized("赞赏与支持")
             ) {
                 if store.appLanguage.resolvedLocalization() == .en {
                     HStack(spacing: 20) {
                         Image(systemName: "heart.circle.fill")
                             .font(.system(size: 44))
-                            .foregroundStyle(PaperTheme.accent)
+                            .foregroundStyle(settingsAccentColor)
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text(I18N.shared.localized("通过 PayPal 支持 PaperRss"))
@@ -596,12 +623,10 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.localized("问题反馈与建议", "Feedback & Issues"),
-                footer: I18N.shared.localized("遇到了 Bug 或有新的功能想法？欢迎随时提交 GitHub Issue 或联系开发者。")
+                I18N.shared.localized("问题反馈与建议", "Feedback & Issues")
             ) {
                 settingsRow(
-                    I18N.shared.localized("提交 GitHub Issue", "Submit GitHub Issue"),
-                    description: I18N.shared.localized("直接前往 GitHub 仓库提交反馈或功能建议")
+                    I18N.shared.localized("提交 GitHub Issue", "Submit GitHub Issue")
                 ) {
                     Button {
                         if let url = URL(string: "https://github.com/ohmyangboy/PaperRss/issues") {
@@ -616,11 +641,10 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent)
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow(
-                    I18N.shared.localized("开发者社区", "Developer Community"),
-                    description: "GitHub @ohmyangboy"
+                    I18N.shared.localized("开发者社区", "Developer Community")
                 ) {
                     Button {
                         if let url = URL(string: "https://github.com/ohmyangboy") {
@@ -640,113 +664,86 @@ struct SettingsView: View {
 
     private var appearanceSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
+            AppearanceThreeColumnPreview(
+                appearance: store.readerAppearance,
+                mode: readerAppearanceMode,
+                bodyFont: readerPreviewFont
+            )
+
             settingsGroup(
-                I18N.shared.localized("颜色主题"),
-                footer: I18N.shared.localized("选择浅色、深色或自动跟随系统的外观风格。", "Choose Light, Dark, or automatically follow system appearance.")
+                I18N.shared.localized("主题", "Theme")
             ) {
-                settingsRow(I18N.shared.localized("外观模式", "Theme Mode")) {
-                    Picker(
-                        I18N.shared.localized("外观模式", "Theme Mode"),
-                        selection: Binding(
-                            get: { store.appTheme },
-                            set: { store.setAppTheme($0) }
-                        )
+                VStack(spacing: 0) {
+                    settingsSubsectionTitle(I18N.shared.localized("外观模式", "Theme Mode"))
+                    settingsRow(I18N.shared.localized("外观模式", "Theme Mode")) {
+                        appThemePicker
+                    }
+
+                    Divider().padding(.horizontal, 18).opacity(0.18)
+
+                    settingsSubsectionTitle(I18N.shared.localized("内容主题", "Content Theme"))
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3),
+                        spacing: 10
                     ) {
-                        ForEach(AppTheme.allCases) { theme in
-                            Text(theme.title).tag(theme)
+                        ForEach(ReaderThemePreset.allCases) { preset in
+                            readerThemeTile(preset)
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 260)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+
+                    Divider().padding(.horizontal, 18).opacity(0.18)
+
+                    settingsSubsectionTitle(I18N.shared.localized("颜色", "Colors"))
+                    settingsRow(I18N.shared.localized("浅色背景", "Light Background")) {
+                        ColorPicker(
+                            I18N.shared.localized("浅色背景", "Light Background"),
+                            selection: readerBackgroundBinding(for: .light),
+                            supportsOpacity: false
+                        )
+                        .labelsHidden()
+                    }
+
+                    Divider().padding(.horizontal, 18).opacity(0.18)
+
+                    settingsRow(I18N.shared.localized("深色背景", "Dark Background")) {
+                        ColorPicker(
+                            I18N.shared.localized("深色背景", "Dark Background"),
+                            selection: readerBackgroundBinding(for: .dark),
+                            supportsOpacity: false
+                        )
+                        .labelsHidden()
+                    }
+
+                    Divider().padding(.horizontal, 18).opacity(0.18)
+
+                    settingsRow(
+                        store.readerAppearance.isCustom
+                            ? I18N.shared.localized("Custom · 自定义", "Custom")
+                            : I18N.shared.localized("当前使用内置预设", "Using built-in preset")
+                    ) {
+                        Button(I18N.shared.localized("重置为预设", "Reset to Preset")) {
+                            store.resetReaderAppearanceToPreset()
+                        }
+                        .disabled(!store.readerAppearance.isCustom)
+                    }
                 }
             }
 
             settingsGroup(
-                I18N.shared.localized("内容主题", "Content Theme"),
-                footer: I18N.shared.localized(
-                    "主题同步作用于侧边栏、文章列表与阅读区，不改变布局、间距或功能状态。",
-                    "Themes stay coordinated across the sidebar, article list, and reader without changing layout, spacing, or feature state."
-                )
-            ) {
-                VStack(spacing: 10) {
-                    ForEach(ReaderThemePreset.allCases) { preset in
-                        Button {
-                            store.setReaderThemePreset(preset)
-                        } label: {
-                            HStack(spacing: 12) {
-                                ReaderThemeSwatch(preset: preset)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(readerThemeTitle(preset))
-                                        .font(.system(size: 14, weight: .semibold))
-                                    Text(readerThemeDescription(preset))
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .multilineTextAlignment(.leading)
-                                }
-                                Spacer(minLength: 12)
-                                if store.readerAppearance.preset == preset {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(PaperTheme.accent)
-                                        .font(.system(size: 16, weight: .semibold))
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                store.readerAppearance.preset == preset
-                                    ? PaperTheme.accent.opacity(0.09)
-                                    : Color.primary.opacity(0.025),
-                                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .stroke(
-                                        store.readerAppearance.preset == preset
-                                            ? PaperTheme.accent.opacity(0.35)
-                                            : Color.primary.opacity(0.07),
-                                        lineWidth: 1
-                                    )
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-            }
-
-            settingsGroup(
-                I18N.shared.localized("排版", "Typography"),
-                footer: I18N.shared.localized("字体与字号只作用于文章正文，并会自动保存。", "Font and size apply only to article text and save automatically.")
+                I18N.shared.localized("排版", "Typography")
             ) {
                 settingsRow(
-                    I18N.shared.localized("正文字体", "Body Font"),
-                    description: I18N.shared.localized("使用这台 Mac 已安装的字体", "Uses fonts installed on this Mac")
+                    I18N.shared.localized("正文字体", "Body Font")
                 ) {
-                    Picker(
-                        I18N.shared.localized("正文字体", "Body Font"),
-                        selection: Binding(
-                            get: { store.readerAppearance.fontFamilyName ?? "" },
-                            set: { store.setReaderFontFamily($0.isEmpty ? nil : $0) }
-                        )
-                    ) {
-                        Text(I18N.shared.localized("系统默认", "System Default")).tag("")
-                        Divider()
-                        ForEach(availableReaderFontFamilies, id: \.self) { family in
-                            Text(family).tag(family)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 240)
+                    readerFontPicker
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow(
-                    I18N.shared.localized("正文字号", "Body Size"),
-                    description: I18N.shared.localized("范围：13pt ~ 25pt", "Range: 13pt ~ 25pt")
+                    I18N.shared.localized("正文字号", "Body Size")
                 ) {
                     HStack(spacing: 12) {
                         Image(systemName: "textformat.size.smaller")
@@ -770,59 +767,6 @@ struct SettingsView: View {
                 }
             }
 
-            settingsGroup(
-                I18N.shared.localized("颜色", "Colors"),
-                footer: I18N.shared.localized(
-                    "修改任一背景会进入 Custom 状态；三栏共享该背景，文字会自动保持清晰对比。",
-                    "Changing either background creates a Custom state; all three columns share it and text contrast stays readable automatically."
-                )
-            ) {
-                settingsRow(I18N.shared.localized("浅色背景", "Light Background")) {
-                    ColorPicker(
-                        I18N.shared.localized("浅色背景", "Light Background"),
-                        selection: readerBackgroundBinding(for: .light),
-                        supportsOpacity: false
-                    )
-                    .labelsHidden()
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
-                settingsRow(I18N.shared.localized("深色背景", "Dark Background")) {
-                    ColorPicker(
-                        I18N.shared.localized("深色背景", "Dark Background"),
-                        selection: readerBackgroundBinding(for: .dark),
-                        supportsOpacity: false
-                    )
-                    .labelsHidden()
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
-                settingsRow(
-                    store.readerAppearance.isCustom
-                        ? I18N.shared.localized("Custom · 自定义", "Custom")
-                        : I18N.shared.localized("当前使用内置预设", "Using built-in preset")
-                ) {
-                    Button(I18N.shared.localized("重置为预设", "Reset to Preset")) {
-                        store.resetReaderAppearanceToPreset()
-                    }
-                    .disabled(!store.readerAppearance.isCustom)
-                }
-            }
-
-            settingsGroup(
-                I18N.shared.localized("三栏实时预览", "Three-Column Live Preview")
-            ) {
-                AppearanceThreeColumnPreview(
-                    appearance: store.readerAppearance,
-                    mode: readerAppearanceMode,
-                    bodyFont: readerPreviewFont
-                )
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-            }
-
             settingsGroup(I18N.shared.localized("重置内容外观", "Reset Content Appearance")) {
                 settingsRow(
                     I18N.shared.localized("恢复 Paper、系统字体与 17pt", "Restore Paper, system font, and 17pt")
@@ -834,6 +778,145 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var appThemePicker: some View {
+        HStack(spacing: 3) {
+            ForEach(AppTheme.allCases) { theme in
+                let isSelected = store.appTheme == theme
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        store.setAppTheme(theme)
+                    }
+                } label: {
+                    Text(theme.title)
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .contentShape(Capsule())
+                        .background(isSelected ? settingsAccentColor : Color.clear, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .frame(width: 270)
+        .background(Color.primary.opacity(0.075), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
+        }
+        .contentShape(Capsule())
+        .animation(.easeInOut(duration: 0.2), value: store.appTheme)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(I18N.shared.localized("外观模式", "Theme Mode"))
+    }
+
+    private var readerFontPicker: some View {
+        Button {
+            fontSearchText = ""
+            isFontPickerPresented = true
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedReaderFontName)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 240, height: 32)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.bordered)
+        .popover(isPresented: $isFontPickerPresented, arrowEdge: .trailing) {
+            readerFontPickerPopover
+        }
+        .accessibilityLabel(I18N.shared.localized("正文字体", "Body Font"))
+        .accessibilityValue(selectedReaderFontName)
+    }
+
+    private var readerFontPickerPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField(
+                I18N.shared.localized("搜索字体", "Search fonts"),
+                text: $fontSearchText
+            )
+            .textFieldStyle(.roundedBorder)
+            .focused($isFontSearchFocused)
+
+            if filteredReaderFontFamilies.isEmpty {
+                Text(I18N.shared.localized("没有匹配的字体", "No matching fonts"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        readerFontOption(
+                            I18N.shared.localized("系统默认", "System Default"),
+                            family: nil
+                        )
+
+                        Divider()
+
+                        ForEach(filteredReaderFontFamilies, id: \.self) { family in
+                            readerFontOption(family, family: family)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(width: 280, height: 300)
+            }
+        }
+        .padding(12)
+        .frame(width: 304)
+        .onAppear { isFontSearchFocused = true }
+        .onDisappear { isFontSearchFocused = false }
+    }
+
+    private var selectedReaderFontName: String {
+        store.readerAppearance.fontFamilyName
+            ?? I18N.shared.localized("系统默认", "System Default")
+    }
+
+    private var filteredReaderFontFamilies: [String] {
+        let query = fontSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return availableReaderFontFamilies }
+        return availableReaderFontFamilies.filter {
+            $0.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func readerFontOption(_ title: String, family: String?) -> some View {
+        let isSelected = store.readerAppearance.fontFamilyName == family
+
+        return Button {
+            store.setReaderFontFamily(family)
+            isFontPickerPresented = false
+        } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(family.map { Font.custom($0, size: 13) } ?? .body)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(settingsAccentColor)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var availableReaderFontFamilies: [String] {
@@ -851,6 +934,43 @@ struct SettingsView: View {
         case .dark: .dark
         }
     }
+
+    private var settingsAppearancePalette: ReaderAppearancePalette {
+        store.readerAppearance.palette(for: readerAppearanceMode)
+    }
+
+    private var settingsAccentColor: Color {
+        Color(paperHex: settingsAppearancePalette.accentHex)
+    }
+
+    #if os(macOS)
+    /// SwiftUI 的 preferredColorScheme 在 Settings 场景从显式深色切回 nil 时，
+    /// 可能保留窗口级 NSAppearance。直接同步设置窗口，确保“跟随系统”真正
+    /// 回到当前 macOS 外观，同时保留窗口动态响应系统外观变化的能力。
+    private func synchronizeSettingsWindowAppearance() {
+        let apply = {
+            guard let window = NSApplication.shared.windows.first(where: {
+                $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window"
+            }) else { return }
+
+            switch store.appTheme {
+            case .system:
+                window.appearance = nil
+                window.contentView?.appearance = nil
+            case .light:
+                let appearance = NSAppearance(named: .aqua)
+                window.appearance = appearance
+                window.contentView?.appearance = appearance
+            case .dark:
+                let appearance = NSAppearance(named: .darkAqua)
+                window.appearance = appearance
+                window.contentView?.appearance = appearance
+            }
+        }
+
+        apply()
+    }
+    #endif
 
     private var readerPreviewFont: Font {
         if let family = store.readerAppearance.fontFamilyName {
@@ -876,17 +996,69 @@ struct SettingsView: View {
 
     private func readerThemeDescription(_ preset: ReaderThemePreset) -> String {
         switch preset {
-        case .paper: I18N.shared.localized("默认纸感，自动跟随 macOS 明暗模式", "Default paper feel that follows macOS appearance")
-        case .white: I18N.shared.localized("高对比、纯净、中性的现代阅读体验", "Clean, neutral, high-contrast modern reading")
-        case .geek: I18N.shared.localized("Tokyo Night 深色配色，适合夜间与技术内容", "Tokyo Night colors for nighttime and technical reading")
+        case .paper:
+            I18N.shared.localized("温暖纸感，随外观模式自然变化。", "Warm paper texture that adapts to the appearance mode.")
+        case .white:
+            I18N.shared.localized("高对比、纯净而克制的现代阅读体验。", "A clean, high-contrast reading experience.")
+        case .geek:
+            I18N.shared.localized("深色蓝紫配色，适合夜间与技术内容。", "A deep blue-violet palette for night reading and technical content.")
         }
+    }
+
+    private func readerThemeTile(_ preset: ReaderThemePreset) -> some View {
+        let isSelected = store.readerAppearance.preset == preset
+        return Button {
+            store.setReaderThemePreset(preset)
+        } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Spacer(minLength: 0)
+                    ReaderThemeSwatch(preset: preset)
+                    Spacer(minLength: 0)
+                }
+
+                Text(readerThemeTitle(preset))
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(readerThemeDescription(preset))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .topLeading)
+            .background(
+                isSelected ? settingsAccentColor.opacity(0.07) : Color.primary.opacity(0.022),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isSelected ? settingsAccentColor.opacity(0.52) : Color.primary.opacity(0.075),
+                        lineWidth: isSelected ? 1.3 : 0.8
+                    )
+            }
+            .overlay(alignment: .topTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(settingsAccentColor)
+                        .padding(7)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var languageSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.localized("界面语言", "Display Language"),
-                footer: I18N.shared.localized("默认跟随系统设置；也可以随时在这里切换，应用界面会立即更新。")
+                I18N.shared.localized("界面语言", "Display Language")
             ) {
                 settingsRow(I18N.shared.localized("语言选择", "Select Language")) {
                     Picker(I18N.shared.localized("语言选择", "Select Language"), selection: $store.appLanguage) {
@@ -906,7 +1078,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
                 "服务商与连接",
-                footer: "API Key 只保存在这台设备，不会参与 iCloud 同步。"
+                info: I18N.shared.localized(
+                    "API Key 只保存在这台设备，不会参与 iCloud 同步。",
+                    "Your API key stays on this device and is not included in iCloud sync."
+                )
             ) {
                 HStack(spacing: 12) {
                     Image(systemName: "wand.and.stars")
@@ -917,9 +1092,6 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(I18N.localized("DeepSeek 推荐配置"))
                             .font(.body.weight(.medium))
-                        Text(I18N.localized("官方 OpenAI 兼容地址与 Flash 模型"))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
 
                     Spacer(minLength: 16)
@@ -930,15 +1102,15 @@ struct SettingsView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
-                settingsRow("名称", description: "用于识别这组 AI 配置") {
+                settingsRow("名称") {
                     TextField(I18N.localized("例如：DeepSeek"), text: localizedProviderNameBinding)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 340)
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow("描述") {
                     TextField(I18N.localized("例如：个人阅读助手"), text: localizedProviderDescriptionBinding)
@@ -946,7 +1118,7 @@ struct SettingsView: View {
                         .frame(maxWidth: 340)
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow("API Key") {
                     HStack(spacing: 8) {
@@ -970,7 +1142,7 @@ struct SettingsView: View {
                     .frame(maxWidth: 360)
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow("Base URL") {
                     TextField(I18N.localized("https://api.deepseek.com"), text: $configuration.baseURL)
@@ -978,7 +1150,7 @@ struct SettingsView: View {
                         .frame(maxWidth: 360)
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow("模型") {
                     if configuration.usesDeepSeekAPI && !usesCustomModel {
@@ -999,7 +1171,7 @@ struct SettingsView: View {
                 }
 
                 if configuration.usesDeepSeekAPI {
-                    Divider().padding(.horizontal, 18).opacity(0.35)
+                    Divider().padding(.horizontal, 18).opacity(0.18)
 
                     settingsRow("自定义模型") {
                         Toggle(I18N.localized("输入自定义模型名称"), isOn: $usesCustomModel)
@@ -1009,24 +1181,19 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                "阅读助手：摘要",
-                footer: configuration.automaticallyGenerateSummary
-                    ? "首次打开尚无摘要的文章时自动生成；已有缓存不会重复请求。"
-                    : "保持手动模式，只在你点击“生成摘要”后请求模型。"
+                "阅读助手：摘要"
             ) {
                 settingsRow(
-                    "展示 AI 摘要模块",
-                    description: "关闭后，文章阅读页不显示摘要模块；已生成的摘要不会被删除。"
+                    "展示 AI 摘要模块"
                 ) {
                     Toggle(I18N.localized("展示 AI 摘要模块"), isOn: $configuration.showsAISummary)
                         .labelsHidden()
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow(
-                    "打开文章时自动生成 AI 摘要",
-                    description: "开启后，打开没有缓存摘要的文章会自动发送正文到模型。"
+                    "打开文章时自动生成 AI 摘要"
                 ) {
                     Toggle(I18N.localized("自动生成摘要"), isOn: $configuration.automaticallyGenerateSummary)
                         .labelsHidden()
@@ -1034,22 +1201,19 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                "阅读助手：翻译与划词",
-                footer: "逐段翻译只处理当前屏幕视口内容；划词功能触发后以浮窗形式呈现。"
+                "阅读助手：翻译与划词"
             ) {
                 settingsRow("翻译目标语言") {
                     HStack(spacing: 8) {
                         Button {
                             showingTargetLanguagePopover.toggle()
                         } label: {
-                            Image(systemName: "exclamationmark.circle")
-                                .foregroundStyle(PaperTheme.accent)
-                                .font(.system(size: 15))
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 13, weight: .semibold))
                         }
                         .buttonStyle(.plain)
-                        .onHover { isHovered in
-                            showingTargetLanguagePopover = isHovered
-                        }
+                        .accessibilityLabel(I18N.shared.localized("显示说明", "Show information"))
                         .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
                             Text(I18N.localized("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。"))
                                 .font(.subheadline)
@@ -1063,31 +1227,30 @@ struct SettingsView: View {
                     }
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
-                settingsRow("划词解释按钮", description: "开启后，划词选择文本时展示“直接解释”按钮") {
+                settingsRow("划词解释按钮") {
                     Toggle(I18N.localized("划词解释按钮"), isOn: $configuration.showsSelectionExplanation)
                         .labelsHidden()
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
-                settingsRow("划词提问按钮", description: "开启后，划词选择文本时展示“向 AI 提问”按钮") {
+                settingsRow("划词提问按钮") {
                     Toggle(I18N.localized("划词提问按钮"), isOn: $configuration.showsSelectionAsk)
                         .labelsHidden()
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
-                settingsRow("划词翻译按钮", description: "开启后，划词选择文本时展示“翻译”按钮") {
+                settingsRow("划词翻译按钮") {
                     Toggle(I18N.localized("划词翻译按钮"), isOn: $configuration.showsSelectionTranslation)
                         .labelsHidden()
                 }
             }
 
             settingsGroup(
-                "个性化 Prompt",
-                footer: "自定义指令会附加在系统默认 Prompt 之后（例如：“请用通俗易懂的口语解释”或“侧重分析工程实现细节”）。"
+                "个性化 Prompt"
             ) {
                 VStack(alignment: .leading, spacing: 8) {
                     TextEditor(text: $configuration.customPrompt)
@@ -1103,113 +1266,92 @@ struct SettingsView: View {
                 .padding(.vertical, 10)
             }
 
-            settingsGroup(
-                "生成偏好（高级）",
-                footer: reasoningFooter
-            ) {
-                settingsRow(
-                    "推理偏好",
-                    description: "仅在服务商明确支持时生效；翻译和划词解释会自动关闭推理。"
-                ) {
-                    Picker(I18N.localized("推理偏好"), selection: $configuration.reasoningMode) {
-                        Text(I18N.localized("自动")).tag("自动")
-                        Text(I18N.localized("关闭")).tag("关闭")
-                        Text(I18N.localized("低")).tag("低")
-                        Text(I18N.localized("中")).tag("中")
-                        Text(I18N.localized("高")).tag("高")
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 150, alignment: .trailing)
-                }
-            }
-
-            settingsGroup(
-                "连接安全（高级）",
-                footer: "仅用于模型 Base URL。HTTP 未加密，只有在你信任局域网环境时才建议开启。"
-            ) {
-                settingsRow("允许局域网 HTTP（不安全）") {
-                    Toggle(I18N.localized("允许局域网 HTTP"), isOn: $configuration.allowInsecureLocalEndpoint)
-                        .labelsHidden()
-                }
-            }
+            advancedOptionsDisclosure
         }
     }
 
-    private var syncSettings: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "clock.badge.exclamationmark")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.orange)
-                    .frame(width: 22)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(I18N.shared.localized("同步功能暂未上线", "Sync is not available yet"))
-                        .font(.body.weight(.semibold))
-
-                    Text(I18N.shared.localized(
-                        "我们正在完善 iCloud 同步功能，正式上线前请继续使用本机数据。",
-                        "We are still working on iCloud sync. Please continue using local data until it is released."
-                    ))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var advancedOptionsDisclosure: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showsAIAdvancedOptions.toggle()
                 }
-
-                Spacer(minLength: 0)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.orange.opacity(0.28), lineWidth: 0.8)
-            }
-            .accessibilityElement(children: .combine)
-
-            settingsGroup(
-                "iCloud",
-                footer: "API Key、网页正文、网页缓存、HTTP 缓存和调试日志不会同步。"
-            ) {
-                settingsRow("同步内容", description: "订阅、已读、收藏和 AI 结果") {
-                    Toggle(I18N.localized("同步订阅、已读、收藏和 AI 结果"), isOn: Binding(
-                        get: { store.isICloudSyncEnabled },
-                        set: { store.setICloudSyncEnabled($0) }
-                    ))
-                    .labelsHidden()
-                    // 无 CloudKit entitlement 的构建（ad-hoc 签名、纯 SPM
-                    // 产物）调用 CloudKit 会抛无法捕获的 Objective-C 异常
-                    // 并终止应用，因此在没有权限时直接禁用入口。
-                    .disabled(!CloudSyncService.isICloudEntitled)
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
-                settingsRow("状态") {
-                    Text(store.iCloudSyncStatus)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: showsAIAdvancedOptions ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 240, alignment: .trailing)
+                        .frame(width: 28, height: 28)
+
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(settingsAccentColor)
+                        .frame(width: 28, height: 28)
+                        .background(settingsAccentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    Text(I18N.shared.localized("高级选项", "Advanced Options"))
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
+                        .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(I18N.shared.localized("高级选项", "Advanced Options"))
+            .accessibilityValue(
+                showsAIAdvancedOptions
+                    ? I18N.shared.localized("已展开", "Expanded")
+                    : I18N.shared.localized("已收起", "Collapsed")
+            )
+            .accessibilityAddTraits(.isToggle)
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
-                settingsRow("操作") {
-                    Button(I18N.localized("立即同步")) {
-                        Task { await store.syncICloud() }
+            if showsAIAdvancedOptions {
+                VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
+                    settingsGroup(
+                        "生成偏好（高级）"
+                    ) {
+                        settingsRow(
+                            "推理偏好"
+                        ) {
+                            Picker(I18N.localized("推理偏好"), selection: $configuration.reasoningMode) {
+                                Text(I18N.localized("自动")).tag("自动")
+                                Text(I18N.localized("关闭")).tag("关闭")
+                                Text(I18N.localized("低")).tag("低")
+                                Text(I18N.localized("中")).tag("中")
+                                Text(I18N.localized("高")).tag("高")
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 150, alignment: .trailing)
+                        }
                     }
-                    .disabled(!store.isICloudSyncEnabled)
-                }
-            }
 
-            settingsGroup("隐私") {
-                settingsRow("API Key") {
-                    Text(I18N.localized("仅存于本机，不参与同步"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 240, alignment: .trailing)
+                    settingsGroup(
+                        "连接安全（高级）",
+                        info: I18N.shared.localized(
+                            "仅用于模型 Base URL。HTTP 未加密，只有在你信任的局域网环境中才建议开启。",
+                            "Applies only to the model Base URL. HTTP is unencrypted; enable it only on a trusted local network."
+                        )
+                    ) {
+                        settingsRow("允许局域网 HTTP（不安全）") {
+                            Toggle(I18N.localized("允许局域网 HTTP"), isOn: $configuration.allowInsecureLocalEndpoint)
+                                .labelsHidden()
+                        }
+                    }
                 }
+                .padding(.top, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .tint(settingsAccentColor)
     }
 
     private var aboutSettings: some View {
@@ -1223,10 +1365,10 @@ struct SettingsView: View {
                             .font(.system(size: 22, weight: .bold))
                         Text(I18N.localized("Beta"))
                             .font(.caption2.weight(.bold))
-                            .foregroundStyle(PaperTheme.accent)
+                            .foregroundStyle(settingsAccentColor)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(PaperTheme.accent.opacity(0.12), in: Capsule())
+                            .background(settingsAccentColor.opacity(0.12), in: Capsule())
                     }
 
                     Text("Version \(AppInfo.currentVersion) (Build \(AppInfo.currentBuild))")
@@ -1234,18 +1376,6 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text(I18N.localized("专为沉浸式阅读打造的现代 RSS 订阅与 AI 阅读助手。"))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-
-                Text(I18N.localized("当前为个人 Beta 版本，感谢您的使用和反馈。"))
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(PaperTheme.accent)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -1256,12 +1386,10 @@ struct SettingsView: View {
             }
 
             settingsGroup(
-                I18N.shared.localized("开源社区", "Open Source"),
-                footer: I18N.shared.localized("欢迎在 GitHub 上提出 Issue、提交 Feedback 或 Star 本项目。")
+                I18N.shared.localized("开源社区", "Open Source")
             ) {
                 settingsRow(
-                    I18N.shared.localized("GitHub 官方仓库", "GitHub Repository"),
-                    description: "https://github.com/ohmyangboy/PaperRss"
+                    I18N.shared.localized("GitHub 官方仓库", "GitHub Repository")
                 ) {
                     Button {
                         AppInfo.openURL(AppInfo.githubRepositoryURL)
@@ -1277,7 +1405,10 @@ struct SettingsView: View {
 
             settingsGroup(
                 I18N.shared.localized("软件更新", "Software Update"),
-                footer: I18N.shared.localized("应用会在每天首次启动或回到前台时自动检查更新；您也可以随时手动检查。更新经数字签名验证后安装。")
+                info: I18N.shared.localized(
+                    "更新经数字签名验证后安装；Beta 通道可能不够稳定。",
+                    "Updates are installed only after signature verification. The Beta channel may be less stable."
+                )
             ) {
                 settingsRow(
                     I18N.shared.localized("当前版本状态", "Current Version Status"),
@@ -1287,24 +1418,17 @@ struct SettingsView: View {
                 }
 
                 #if os(macOS)
-                Divider().padding(.horizontal, 18).opacity(0.35)
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
                 settingsRow(
-                    I18N.shared.localized("更新通道", "Update Channel"),
-                    description: I18N.shared.localized("Beta 通道可提前体验新功能，可能不够稳定。", "The Beta channel offers early access to new features and may be less stable.")
+                    I18N.shared.localized("更新通道", "Update Channel")
                 ) {
-                    Picker(I18N.shared.localized("通道", "Channel"), selection: channelBinding) {
-                        Text(I18N.shared.localized("Stable 稳定版", "Stable")).tag(UpdateChannel.stable)
-                        Text(I18N.shared.localized("Beta 抢先版", "Beta")).tag(UpdateChannel.beta)
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .disabled(!updateCoordinator.canChangeChannel)
+                    updateChannelPicker
                 }
                 #endif
 
                 if let notes = activeReleaseNotes, !notes.isEmpty {
-                    Divider().padding(.horizontal, 18).opacity(0.35)
+                    Divider().padding(.horizontal, 18).opacity(0.18)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text(I18N.shared.localizedFormat("新版本更新说明 (%@)", activeReleaseVersion))
@@ -1373,11 +1497,42 @@ struct SettingsView: View {
         }
     }
 
-    private var channelBinding: Binding<UpdateChannel> {
-        Binding<UpdateChannel>(
-            get: { updateCoordinator.channel },
-            set: { updateCoordinator.selectChannel($0) }
-        )
+    private var updateChannelPicker: some View {
+        HStack(spacing: 3) {
+            ForEach(UpdateChannel.allCases, id: \.self) { channel in
+                let isSelected = updateCoordinator.channel == channel
+                Button {
+                    guard updateCoordinator.canChangeChannel else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        updateCoordinator.selectChannel(channel)
+                    }
+                } label: {
+                    Text(
+                        channel == .stable
+                            ? I18N.shared.localized("Stable 稳定版", "Stable")
+                            : I18N.shared.localized("Beta 抢先版", "Beta")
+                    )
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .frame(minWidth: 108, minHeight: 36)
+                    .contentShape(Capsule())
+                    .background(isSelected ? settingsAccentColor : Color.clear, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!updateCoordinator.canChangeChannel)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Color.primary.opacity(0.075), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
+        }
+        .contentShape(Capsule())
+        .animation(.easeInOut(duration: 0.2), value: updateCoordinator.channel)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(I18N.shared.localized("通道", "Channel"))
     }
     #endif
 
@@ -1494,12 +1649,7 @@ struct SettingsView: View {
 
     private var refreshSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            settingsGroup(
-                "启动",
-                footer: store.refreshOnLaunch
-                    ? "每次打开或回到前台时，PaperRss 会立即检查所有订阅。"
-                    : "已关闭启动刷新；你仍可以使用底部的刷新按钮手动获取最新消息。"
-            ) {
+            settingsGroup("启动") {
                 settingsRow("打开应用时自动刷新") {
                     Toggle(I18N.localized("打开应用时自动刷新"), isOn: Binding(
                         get: { store.refreshOnLaunch },
@@ -1509,7 +1659,7 @@ struct SettingsView: View {
                 }
             }
 
-            settingsGroup("运行期间", footer: store.refreshInterval.detail) {
+            settingsGroup("运行期间") {
                 settingsRow("自动刷新订阅") {
                     Picker(
                         "自动刷新订阅",
@@ -1541,9 +1691,15 @@ struct SettingsView: View {
                         RefreshStatusView(store: store, compact: true)
                     }
                 }
+            }
 
-                Divider().padding(.horizontal, 18).opacity(0.35)
-
+            settingsGroup(
+                I18N.shared.localized("维护与恢复", "Maintenance & Recovery"),
+                info: I18N.shared.localized(
+                    "清除本地缓存不会删除订阅或账号设置。",
+                    "Clearing the local cache does not remove subscriptions or account settings."
+                )
+            ) {
                 settingsRow("缓存数据") {
                     VStack(alignment: .trailing, spacing: 6) {
                         Button(role: .destructive) {
@@ -1608,15 +1764,10 @@ struct SettingsView: View {
     #if os(macOS)
     private var reminderSettings: some View {
         settingsGroup(
-            I18N.shared.localized("提醒", "Alerts"),
-            footer: I18N.shared.localized(
-                "Dock 徽标显示全部未读文章。",
-                "The Dock badge shows all unread articles."
-            )
+            I18N.shared.localized("提醒", "Alerts")
         ) {
             settingsRow(
-                I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
-                description: I18N.shared.localized("立即显示当前未读数，超过 99 显示 99+。")
+                I18N.shared.localized("Dock 未读徽标", "Dock unread badge")
             ) {
                 Toggle(
                     I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
@@ -1634,36 +1785,43 @@ struct SettingsView: View {
     @ViewBuilder
     private func settingsGroup<Content: View>(
         _ title: String,
-        footer: String? = nil,
+        info: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(LocalizedStringKey(title))
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(LocalizedStringKey(title))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.82))
 
-            content()
+                if let info, !info.isEmpty {
+                    SettingsInfoButton(message: info)
+                }
 
-            if let footer, !footer.isEmpty {
-                Text(LocalizedStringKey(footer))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 6)
-                    .padding(.bottom, 14)
-            } else {
-                Spacer(minLength: 12)
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 3)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content()
+            }
+            .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
+            }
+
         }
-        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
-        }
+    }
+
+    private func settingsSubsectionTitle(_ title: String) -> some View {
+        Text(LocalizedStringKey(title))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, SettingsMetrics.rowHorizontalPadding)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1687,9 +1845,11 @@ struct SettingsView: View {
 
             Spacer(minLength: 12)
             control()
+                .controlSize(.regular)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.horizontal, SettingsMetrics.rowHorizontalPadding)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+        .frame(minHeight: SettingsMetrics.rowMinimumHeight)
     }
 
     /// 内置默认文案属于产品界面，但字段本身允许用户编辑。读取时只翻译精确
@@ -1748,15 +1908,14 @@ struct SettingsView: View {
                 Button(I18N.shared.localized(isTesting ? "正在测试…" : "测试连接")) { test() }
                     .disabled(isTesting)
             }
-
-            if selectedSection == .aiService {
-                Button(I18N.localized("保存设置")) { save() }
-                    .buttonStyle(.borderedProminent)
-            }
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 13)
-        .background(.bar)
+        .padding(.vertical, 11)
+        .background(settingsWindowBackground)
+    }
+
+    private var showsActionBar: Bool {
+        selectedSection == .aiService || !status.isEmpty
     }
 
     private var settingsSidebarBackground: Color {
@@ -1781,12 +1940,6 @@ struct SettingsView: View {
         #else
         Color(uiColor: .secondarySystemGroupedBackground)
         #endif
-    }
-
-    private var reasoningFooter: String {
-        configuration.usesDeepSeekAPI
-            ? "DeepSeek 会按此选项发送 thinking；选择低、中、高时也会发送对应的 reasoning_effort。"
-            : "其他 OpenAI 兼容接口只在明确支持时使用对应推理参数。"
     }
 
     private var statusIsSuccess: Bool {
@@ -1926,11 +2079,31 @@ private struct ReaderThemeSwatch: View {
 
     var body: some View {
         let appearance = ReaderAppearance(preset: preset)
-        HStack(spacing: 0) {
-            Color(paperHex: appearance.backgroundHex(for: .light))
-            Color(paperHex: appearance.backgroundHex(for: .dark))
+        let palette = appearance.palette(for: .light)
+
+        HStack(spacing: 1) {
+            ForEach(AppearanceSurfaceRole.allCases, id: \.self) { role in
+                ZStack(alignment: .topLeading) {
+                    Color(paperHex: appearance.backgroundHex(for: .light, surface: role))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Capsule()
+                            .fill(Color(paperHex: palette.inkHex).opacity(0.78))
+                            .frame(width: role == .reader ? 20 : 13, height: 3)
+                        Capsule()
+                            .fill(Color(paperHex: palette.mutedHex).opacity(0.48))
+                            .frame(width: role == .sidebar ? 12 : 18, height: 2.5)
+                        if role == .reader {
+                            Capsule()
+                                .fill(Color(paperHex: palette.accentHex).opacity(0.7))
+                                .frame(width: 15, height: 2.5)
+                        }
+                    }
+                    .padding(7)
+                }
+            }
         }
-        .frame(width: 42, height: 32)
+        .frame(width: 112, height: 56)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -2065,6 +2238,7 @@ private enum AccountProviderType: String, CaseIterable, Identifiable {
 private struct AddAccountSheet: View {
     @ObservedObject var store: AppStore
     @Binding var isPresented: Bool
+    @Environment(\.paperAppearancePalette) private var paperAppearancePalette
 
     @State private var selectedProvider: AccountProviderType? = nil
 
@@ -2153,7 +2327,7 @@ private struct AddAccountSheet: View {
                     HStack(spacing: 14) {
                         Image(systemName: provider.icon)
                             .font(.system(size: 22))
-                            .foregroundStyle(PaperTheme.accent)
+                            .foregroundStyle(Color(paperHex: paperAppearancePalette.accentHex))
                             .frame(width: 32)
 
                         VStack(alignment: .leading, spacing: 2) {
