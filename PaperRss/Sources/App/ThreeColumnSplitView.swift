@@ -161,7 +161,10 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         sidebarItem.canCollapse = true
 
         // 文章列表 — 使用 contentListWithViewController 声明 content list 身份并挂载独立浮层滚动条
-        let contentContainer = PaperColumnContainerController(rootView: content)
+        let contentContainer = PaperColumnContainerController(
+            rootView: content,
+            suppressSystemSelectionHighlight: true
+        )
         contentContainer.view.wantsLayer = true
         contentContainer.view.clipsToBounds = true
         contentContainer.view.layer?.masksToBounds = true

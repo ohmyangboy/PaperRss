@@ -191,10 +191,23 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(rootView.contains("EntryRowSelectionSurface"))
         XCTAssertTrue(rootView.contains("Color(paperHex: palette.accentHex)"))
         XCTAssertTrue(rootView.contains("palette.colorScheme == .dark ? 0.34 : 0.18"))
-        XCTAssertTrue(rootView.contains(".tint(.clear)"))
         XCTAssertTrue(rootView.contains("let isSelected: Bool"))
+        XCTAssertTrue(rootView.contains("EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)"))
+        XCTAssertTrue(rootView.contains(".padding(.horizontal, 10)"))
+        XCTAssertTrue(rootView.contains(".padding(.vertical, 3)"))
         XCTAssertTrue(rootView.contains("primaryForegroundColor"))
         XCTAssertTrue(rootView.contains("secondaryForegroundColor"))
+
+        let columnContainer = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/PaperFloatingScrollbarView.swift"),
+            encoding: .utf8
+        )
+        let splitView = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/ThreeColumnSplitView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(columnContainer.contains("tableView.selectionHighlightStyle = .none"))
+        XCTAssertTrue(splitView.contains("suppressSystemSelectionHighlight: true"))
     }
 
     func testSettingsVisualShellKeepsCardsControlsAndAdvancedOptionsConsistent() throws {

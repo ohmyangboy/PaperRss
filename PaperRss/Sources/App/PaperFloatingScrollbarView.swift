@@ -380,9 +380,11 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
 
     let hostingController: NSHostingController<Content>
     let scrollbar = PaperFloatingScrollbarView()
+    private let suppressSystemSelectionHighlight: Bool
 
-    init(rootView: Content) {
+    init(rootView: Content, suppressSystemSelectionHighlight: Bool = false) {
         self.hostingController = NSHostingController(rootView: rootView)
+        self.suppressSystemSelectionHighlight = suppressSystemSelectionHighlight
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -446,24 +448,30 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
     }
 
     private func findAndAttachScrollViewIfNeeded() {
-        guard let scrollView = findScrollView(in: hostingController.view) else { return }
+        guard let tableView = findTableView(in: hostingController.view),
+              let scrollView = tableView.enclosingScrollView else { return }
+        if suppressSystemSelectionHighlight {
+            // 保留键盘/辅助功能选择行为，只禁用 NSTableView 默认蓝色底色，
+            // 由 EntryListView 按当前阅读主题统一绘制选中态。
+            tableView.selectionHighlightStyle = .none
+        }
         scrollbar.attach(to: scrollView)
     }
 
-    /// 递归查找视图树中的 NSTableView / NSOutlineView 的 enclosingScrollView（严格排除 WKWebView 子树）
-    private func findScrollView(in view: NSView) -> NSScrollView? {
+    /// 递归查找视图树中的 NSTableView / NSOutlineView（严格排除 WKWebView 子树）。
+    private func findTableView(in view: NSView) -> NSTableView? {
         let className = String(describing: type(of: view))
         if className.contains("WKWebView") || className.contains("WebView") {
             return nil
         }
-        if let tv = view as? NSTableView {
-            return tv.enclosingScrollView
-        }
         if let ov = view as? NSOutlineView {
-            return ov.enclosingScrollView
+            return ov
+        }
+        if let tv = view as? NSTableView {
+            return tv
         }
         for subview in view.subviews {
-            if let found = findScrollView(in: subview) {
+            if let found = findTableView(in: subview) {
                 return found
             }
         }

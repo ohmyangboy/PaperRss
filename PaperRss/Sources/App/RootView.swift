@@ -1682,6 +1682,9 @@ private struct EntryListView: View {
                     EntryRow(entry: entry, isSelected: isSelected)
                         .tag(entry.id)
                         .contentShape(Rectangle())
+                        // 让主题选中卡片与列表边缘、相邻条目保持明确的呼吸空间；
+                        // 整个 list row 仍是可点击区域，不缩小选择热区。
+                        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
                         .listRowBackground(
                             EntryRowSelectionSurface(
                                 isSelected: isSelected,
@@ -1719,8 +1722,6 @@ private struct EntryListView: View {
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
-            // 自绘选中底色，避免 NSTableView 把系统 accent 直接盖在主题表面上。
-            .tint(.clear)
             .scrollIndicators(.never, axes: .vertical)
             #else
             .listStyle(.inset)
@@ -1976,6 +1977,10 @@ private struct EntryRowSelectionSurface: View {
                             lineWidth: 0.5
                         )
                 }
+                // listRowBackground 会占满原生 row；把留白施加到卡片本身，
+                // 才不会让主题选中态贴住列表边缘。
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
         } else {
             Color.clear
         }
