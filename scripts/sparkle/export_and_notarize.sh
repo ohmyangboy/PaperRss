@@ -58,7 +58,7 @@ EXPORT_DIR="$OUTPUT_DIR"
 PLIST_PATH="$TMP_DIR/ExportOptions.plist"
 APP_PATH="$EXPORT_DIR/$APP_NAME.app"
 
-mkdir -p "$EXPORT_DIR"
+mkdir -p "$EXPORT_DIR" && EXPORT_DIR=$(CDPATH= cd -- "$EXPORT_DIR" && pwd)
 rm -rf "$APP_PATH"
 
 # ── [PASS 3] Developer ID 导出 ────────────────────────────────────────────
