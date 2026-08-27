@@ -71,6 +71,30 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
         nsView.rootView = content
     }
 }
+
+/// macOS 14–25 的 toolbar hosting view 不能稳定地用 SwiftUI Material 采样
+/// 窗口内容；用原生视觉效果视图明确指定 withinWindow，才能透出文章标题。
+private struct LegacyReaderCapsuleMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        configure(nsView)
+    }
+
+    private func configure(_ view: NSVisualEffectView) {
+        view.material = .popover
+        view.blendingMode = .withinWindow
+        view.state = .active
+        view.wantsLayer = true
+        view.layer?.cornerCurve = .continuous
+        view.layer?.cornerRadius = 18
+        view.layer?.masksToBounds = true
+    }
+}
 #endif
 
 struct ArticleReaderView: View {
@@ -6126,8 +6150,9 @@ struct ReaderCapsuleToolbar: View {
     @ViewBuilder
     private var legacyCapsuleBackground: some View {
         ZStack {
-            Capsule().fill(.ultraThinMaterial)
-            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.64))
+            LegacyReaderCapsuleMaterial()
+                .clipShape(Capsule())
+            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.34))
         }
     }
     #endif

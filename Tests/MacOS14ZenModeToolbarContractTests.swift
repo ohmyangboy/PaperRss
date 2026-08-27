@@ -41,8 +41,10 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
 
         XCTAssertTrue(toolbarSource.contains("if #available(macOS 26.0, *)"))
         XCTAssertTrue(toolbarSource.contains("private var legacyCapsuleBackground: some View"))
-        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.64)"))
-        XCTAssertTrue(toolbarSource.contains("Capsule().fill(.ultraThinMaterial)"))
+        XCTAssertTrue(source.contains("private struct LegacyReaderCapsuleMaterial: NSViewRepresentable"))
+        XCTAssertTrue(source.contains("view.blendingMode = .withinWindow"))
+        XCTAssertTrue(source.contains("view.state = .active"))
+        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.34)"))
         XCTAssertTrue(toolbarSource.contains(".shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14)"))
         XCTAssertTrue(toolbarSource.contains(".padding(.vertical, 4)"))
     }
