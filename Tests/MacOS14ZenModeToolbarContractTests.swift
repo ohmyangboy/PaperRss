@@ -34,6 +34,18 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
         XCTAssertTrue(source.contains("Capsule().strokeBorder"))
     }
 
+    func testLegacyReaderCapsuleToolbarDrawsAThemeAwareBackgroundOnMacOS14() throws {
+        let source = try appSource("ArticleReaderView.swift")
+        let toolbarStart = try XCTUnwrap(source.range(of: "struct ReaderCapsuleToolbar: View"))
+        let toolbarSource = source[toolbarStart.lowerBound..<source.endIndex]
+
+        XCTAssertTrue(toolbarSource.contains("if #available(macOS 26.0, *)"))
+        XCTAssertTrue(toolbarSource.contains("private var legacyCapsuleBackground: some View"))
+        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.82)"))
+        XCTAssertTrue(toolbarSource.contains("Capsule().fill(.ultraThinMaterial)"))
+        XCTAssertTrue(toolbarSource.contains(".shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14)"))
+    }
+
     private func appSource(_ name: String) throws -> String {
         try String(
             contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/\(name)"),

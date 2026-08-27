@@ -6063,8 +6063,27 @@ struct ReaderCapsuleToolbar: View {
     var onToggleZenMode: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.paperAppearancePalette) private var appearancePalette
 
     var body: some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            capsuleContent
+        } else {
+            capsuleContent
+                .background { legacyCapsuleBackground }
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14), radius: 7, x: 0, y: 3)
+        }
+        #else
+        capsuleContent
+        #endif
+    }
+
+    private var capsuleContent: some View {
         HStack(spacing: 6) {
             Button(action: onToggleBilingual) {
                 translationToolbarIcon(isActive: isBilingualActive)
@@ -6101,6 +6120,16 @@ struct ReaderCapsuleToolbar: View {
         .padding(.horizontal, 6)
         .frame(height: 28)
     }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var legacyCapsuleBackground: some View {
+        ZStack {
+            Capsule().fill(.ultraThinMaterial)
+            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.82))
+        }
+    }
+    #endif
 
     private func translationToolbarIcon(isActive: Bool) -> some View {
         ZStack {
