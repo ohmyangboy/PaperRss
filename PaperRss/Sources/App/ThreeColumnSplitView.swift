@@ -6,6 +6,44 @@ import WebKit
 import PaperRssCore
 #endif
 
+/// macOS 14–25 不会为自定义 NSToolbarItem 提供 Liquid Glass。把视觉效果视图
+/// 直接放在 toolbar item 容器，才能以 `withinWindow` 模糊下方阅读内容；SwiftUI
+/// hosting view 仅负责按钮，不再把 material 扁平化为一块主题色。
+private final class LegacyReaderCapsuleMaterialContainer: NSVisualEffectView {
+    private let tintView = NSView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        isEmphasized = false
+        wantsLayer = true
+        layer?.cornerCurve = .continuous
+        layer?.cornerRadius = 18
+        layer?.masksToBounds = true
+
+        tintView.wantsLayer = true
+        tintView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tintView)
+        NSLayoutConstraint.activate([
+            tintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tintView.topAnchor.constraint(equalTo: topAnchor),
+            tintView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func applyThemeTint(_ color: NSColor) {
+        tintView.layer?.backgroundColor = color.withAlphaComponent(0.14).cgColor
+    }
+}
+
 // MARK: - 工具栏动作回调
 
 /// 由 SwiftUI 视图层传入的工具栏动作和状态
@@ -219,22 +257,28 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         if let host = context.coordinator.readerCapsuleHost {
             if toolbarActions.showsReaderCapsule {
                 host.isHidden = false
+                context.coordinator.readerCapsuleMaterialContainer?.isHidden = false
                 if #available(macOS 15.0, *) {
                     context.coordinator.readerCapsuleItem?.isHidden = false
                 }
-                host.rootView = toolbarActions.readerCapsule
+                host.rootView = context.coordinator.readerCapsuleRootView(toolbarActions.readerCapsule)
                 let size = host.fittingSize
                 let width = size.width > 0 ? size.width : 140
-                let height = size.height > 0 ? size.height : 28
-                host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                let height = context.coordinator.readerCapsuleHeight(for: size.height)
+                let sizingView = context.coordinator.readerCapsuleMaterialContainer ?? host
+                sizingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
                 context.coordinator.readerCapsuleWidthConstraint?.constant = width
                 context.coordinator.readerCapsuleHeightConstraint?.constant = height
+                context.coordinator.readerCapsuleMaterialContainer?.applyThemeTint(
+                    context.coordinator.chromeBackgroundColor
+                )
             } else {
                 host.isHidden = true
+                context.coordinator.readerCapsuleMaterialContainer?.isHidden = true
                 if #available(macOS 15.0, *) {
                     context.coordinator.readerCapsuleItem?.isHidden = true
                 }
-                host.frame = .zero
+                (context.coordinator.readerCapsuleMaterialContainer ?? host).frame = .zero
                 context.coordinator.readerCapsuleWidthConstraint?.constant = 0
                 context.coordinator.readerCapsuleHeightConstraint?.constant = 0
             }
@@ -262,6 +306,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var refreshSpinner: NSProgressIndicator?
         fileprivate weak var readerCapsuleItem: NSToolbarItem?
         fileprivate weak var readerCapsuleHost: NSHostingView<AnyView>?
+        fileprivate weak var readerCapsuleMaterialContainer: LegacyReaderCapsuleMaterialContainer?
         fileprivate weak var readerCapsuleWidthConstraint: NSLayoutConstraint?
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
         fileprivate weak var entryListTitleItem: NSToolbarItem?
@@ -300,6 +345,25 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 NSEvent.removeMonitor(monitor)
             }
             fullScreenChromeTimer?.cancel()
+        }
+
+        private var usesLegacyReaderCapsuleMaterial: Bool {
+            if #available(macOS 26.0, *) {
+                false
+            } else {
+                true
+            }
+        }
+
+        fileprivate func readerCapsuleRootView(_ rootView: AnyView) -> AnyView {
+            guard usesLegacyReaderCapsuleMaterial else { return rootView }
+            return AnyView(
+                rootView.environment(\.readerCapsuleMaterialHostedByAppKit, true)
+            )
+        }
+
+        fileprivate func readerCapsuleHeight(for contentHeight: CGFloat) -> CGFloat {
+            usesLegacyReaderCapsuleMaterial ? max(36, contentHeight + 8) : max(28, contentHeight)
         }
 
         private func setupLocalKeyMonitor() {
@@ -924,6 +988,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate func syncAppearance() {
             guard let window = splitViewController?.view.window else { return }
             syncToolbarAppearance()
+            readerCapsuleMaterialContainer?.applyThemeTint(chromeBackgroundColor)
             reconcileWindowChrome(for: window)
         }
 
@@ -950,7 +1015,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             markAllReadButton?.contentTintColor = chromeInkColor
         }
 
-        private var chromeBackgroundColor: NSColor {
+        fileprivate var chromeBackgroundColor: NSColor {
             NSColor(
                 Color(
                     paperHex: appearance.backgroundHex(
@@ -1249,6 +1314,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                         item.isHidden = !actions.showsReaderCapsule
                     }
                     readerCapsuleHost?.isHidden = !actions.showsReaderCapsule
+                    readerCapsuleMaterialContainer?.isHidden = !actions.showsReaderCapsule
                 } else {
                     if #available(macOS 15.0, *) {
                         item.isHidden = isZenMode
@@ -1438,7 +1504,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     item.isHidden = !actions.showsReaderCapsule
                 }
 
-                let host = NSHostingView(rootView: actions.readerCapsule)
+                let host = NSHostingView(rootView: readerCapsuleRootView(actions.readerCapsule))
                 host.wantsLayer = true
                 host.layer?.backgroundColor = NSColor.clear.cgColor
                 host.translatesAutoresizingMaskIntoConstraints = false
@@ -1446,14 +1512,37 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
                 let size = host.fittingSize
                 let width: CGFloat = actions.showsReaderCapsule ? (size.width > 0 ? size.width : 108) : 0
-                let height: CGFloat = actions.showsReaderCapsule ? (size.height > 0 ? size.height : 28) : 0
-                host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                let height: CGFloat = actions.showsReaderCapsule
+                    ? readerCapsuleHeight(for: size.height)
+                    : 0
+
+                let itemView: NSView
+                if usesLegacyReaderCapsuleMaterial {
+                    let materialContainer = LegacyReaderCapsuleMaterialContainer()
+                    materialContainer.applyThemeTint(chromeBackgroundColor)
+                    materialContainer.translatesAutoresizingMaskIntoConstraints = false
+                    materialContainer.isHidden = !actions.showsReaderCapsule
+                    materialContainer.addSubview(host)
+                    NSLayoutConstraint.activate([
+                        host.leadingAnchor.constraint(equalTo: materialContainer.leadingAnchor),
+                        host.trailingAnchor.constraint(equalTo: materialContainer.trailingAnchor),
+                        host.topAnchor.constraint(equalTo: materialContainer.topAnchor, constant: 4),
+                        host.bottomAnchor.constraint(equalTo: materialContainer.bottomAnchor, constant: -4)
+                    ])
+                    materialContainer.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                    itemView = materialContainer
+                    self.readerCapsuleMaterialContainer = materialContainer
+                } else {
+                    host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                    itemView = host
+                    self.readerCapsuleMaterialContainer = nil
+                }
                 
-                let widthConstraint = host.widthAnchor.constraint(equalToConstant: width)
-                let heightConstraint = host.heightAnchor.constraint(equalToConstant: height)
+                let widthConstraint = itemView.widthAnchor.constraint(equalToConstant: width)
+                let heightConstraint = itemView.heightAnchor.constraint(equalToConstant: height)
                 NSLayoutConstraint.activate([widthConstraint, heightConstraint])
 
-                item.view = host
+                item.view = itemView
                 self.readerCapsuleItem = item
                 self.readerCapsuleHost = host
                 self.readerCapsuleWidthConstraint = widthConstraint

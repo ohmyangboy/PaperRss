@@ -1550,6 +1550,10 @@ private struct EntryListView: View {
     @State private var isLoadingPage: Bool = false
     private let pageSize = 100
 
+    private var appearancePalette: ReaderAppearancePalette {
+        store.readerAppearance.palette(for: appearanceMode)
+    }
+
     private var timelineScope: TimelineScope {
         switch selection {
         case .today:
@@ -1674,10 +1678,16 @@ private struct EntryListView: View {
         ScrollViewReader { proxy in
             List(selection: entryListSelection) {
                 ForEach(loadedEntries) { entry in
-                    EntryRow(entry: entry)
+                    let isSelected = selectedEntryID == entry.id
+                    EntryRow(entry: entry, isSelected: isSelected)
                         .tag(entry.id)
                         .contentShape(Rectangle())
-                        .listRowBackground(Color.clear)
+                        .listRowBackground(
+                            EntryRowSelectionSurface(
+                                isSelected: isSelected,
+                                palette: appearancePalette
+                            )
+                        )
                         .contextMenu {
                             Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
                                 let nextRead = !entry.isRead
@@ -1709,6 +1719,8 @@ private struct EntryListView: View {
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
+            // 自绘选中底色，避免 NSTableView 把系统 accent 直接盖在主题表面上。
+            .tint(.clear)
             .scrollIndicators(.never, axes: .vertical)
             #else
             .listStyle(.inset)
@@ -1949,8 +1961,30 @@ private struct PaperCapsuleButton: NSViewRepresentable {
 }
 #endif
 
+private struct EntryRowSelectionSurface: View {
+    let isSelected: Bool
+    let palette: ReaderAppearancePalette
+
+    var body: some View {
+        if isSelected {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color(paperHex: palette.accentHex).opacity(palette.colorScheme == .dark ? 0.34 : 0.18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .strokeBorder(
+                            Color(paperHex: palette.accentHex).opacity(palette.colorScheme == .dark ? 0.50 : 0.30),
+                            lineWidth: 0.5
+                        )
+                }
+        } else {
+            Color.clear
+        }
+    }
+}
+
 private struct EntryRow: View {
     let entry: EntryListItem
+    let isSelected: Bool
     @Environment(\.paperAppearancePalette) private var appearancePalette
 
     private func formattedDate(_ date: Date) -> String {
@@ -1972,7 +2006,7 @@ private struct EntryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Circle()
-                .fill(entry.isRead ? .clear : Color.accentColor)
+                .fill(entry.isRead ? .clear : Color(paperHex: appearancePalette.accentHex))
                 .frame(width: 7, height: 7)
                 .padding(.top, 6)
                 .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
@@ -1981,13 +2015,14 @@ private struct EntryRow: View {
                 Text(entry.title)
                     .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
                     .tracking(0.1)
+                    .foregroundStyle(primaryForegroundColor)
                     .lineLimit(entry.isSummaryVisible ? 2 : 4)
 
                 // Desc 独占整行（仅在非冗余时渲染）
                 if entry.isSummaryVisible {
                     Text(entry.summaryPreview)
                         .font(.subheadline)
-                        .foregroundStyle(appearanceMutedColor)
+                        .foregroundStyle(secondaryForegroundColor)
                         .lineLimit(2)
                 }
 
@@ -2000,12 +2035,12 @@ private struct EntryRow: View {
                     if !entry.accountSourceBadge.isEmpty {
                         Text(entry.accountSourceBadge)
                             .font(.caption2)
-                            .foregroundStyle(appearanceMutedColor)
+                            .foregroundStyle(secondaryForegroundColor)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
                             .background(
                                 Capsule()
-                                    .fill(Color.primary.opacity(0.06))
+                                    .fill(secondaryForegroundColor.opacity(isSelected ? 0.16 : 0.08))
                             )
                             .lineLimit(1)
                     }
@@ -2020,13 +2055,13 @@ private struct EntryRow: View {
                     if let date = entry.publishedAt {
                         Text(formattedDate(date))
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(appearanceMutedColor)
+                            .foregroundStyle(secondaryForegroundColor)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(appearanceMutedColor)
+                .foregroundStyle(secondaryForegroundColor)
             }
         }
         .padding(.vertical, 6)
@@ -2036,6 +2071,17 @@ private struct EntryRow: View {
 
     private var appearanceMutedColor: Color {
         Color(paperHex: appearancePalette.mutedHex)
+    }
+
+    private var primaryForegroundColor: Color {
+        guard isSelected else { return Color(paperHex: appearancePalette.inkHex) }
+        return appearancePalette.colorScheme == .dark
+            ? Color.white.opacity(0.94)
+            : Color(paperHex: appearancePalette.inkHex)
+    }
+
+    private var secondaryForegroundColor: Color {
+        isSelected ? primaryForegroundColor.opacity(0.76) : appearanceMutedColor
     }
 }
 

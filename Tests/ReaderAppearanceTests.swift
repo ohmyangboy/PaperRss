@@ -179,6 +179,24 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(splitView.contains("label.textColor = chromeInkColor"))
     }
 
+    func testEntryListSelectionUsesAppearancePaletteAndReadableForegrounds() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let rootView = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(rootView.contains("EntryRowSelectionSurface"))
+        XCTAssertTrue(rootView.contains("Color(paperHex: palette.accentHex)"))
+        XCTAssertTrue(rootView.contains("palette.colorScheme == .dark ? 0.34 : 0.18"))
+        XCTAssertTrue(rootView.contains(".tint(.clear)"))
+        XCTAssertTrue(rootView.contains("let isSelected: Bool"))
+        XCTAssertTrue(rootView.contains("primaryForegroundColor"))
+        XCTAssertTrue(rootView.contains("secondaryForegroundColor"))
+    }
+
     func testSettingsVisualShellKeepsCardsControlsAndAdvancedOptionsConsistent() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

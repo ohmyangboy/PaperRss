@@ -50,6 +50,20 @@ private struct ReaderHeaderHeightPreferenceKey: PreferenceKey {
     }
 }
 
+/// 旧版 AppKit toolbar 会把真正的 material 放在 NSToolbarItem 容器层。
+/// 这样 NSVisualEffectView 才能以 withinWindow 采样下方的阅读内容，SwiftUI
+/// 只保留按钮布局，避免它在 NSHostingView 内把 material 扁平化为实色。
+private struct ReaderCapsuleMaterialHostedByAppKitKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var readerCapsuleMaterialHostedByAppKit: Bool {
+        get { self[ReaderCapsuleMaterialHostedByAppKitKey.self] }
+        set { self[ReaderCapsuleMaterialHostedByAppKitKey.self] = newValue }
+    }
+}
+
 #if os(macOS)
 private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -69,30 +83,6 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSHostingView<Content>, context: Context) {
         nsView.rootView = content
-    }
-}
-
-/// macOS 14–25 的 toolbar hosting view 不能稳定地用 SwiftUI Material 采样
-/// 窗口内容；用原生视觉效果视图明确指定 withinWindow，才能透出文章标题。
-private struct LegacyReaderCapsuleMaterial: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        configure(view)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        configure(nsView)
-    }
-
-    private func configure(_ view: NSVisualEffectView) {
-        view.material = .popover
-        view.blendingMode = .withinWindow
-        view.state = .active
-        view.wantsLayer = true
-        view.layer?.cornerCurve = .continuous
-        view.layer?.cornerRadius = 18
-        view.layer?.masksToBounds = true
     }
 }
 #endif
@@ -6088,10 +6078,13 @@ struct ReaderCapsuleToolbar: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.paperAppearancePalette) private var appearancePalette
+    @Environment(\.readerCapsuleMaterialHostedByAppKit) private var materialHostedByAppKit
 
     var body: some View {
         #if os(macOS)
         if #available(macOS 26.0, *) {
+            capsuleContent
+        } else if materialHostedByAppKit {
             capsuleContent
         } else {
             capsuleContent
@@ -6150,9 +6143,8 @@ struct ReaderCapsuleToolbar: View {
     @ViewBuilder
     private var legacyCapsuleBackground: some View {
         ZStack {
-            LegacyReaderCapsuleMaterial()
-                .clipShape(Capsule())
-            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.34))
+            Capsule().fill(.ultraThinMaterial)
+            Capsule().fill(Color(paperHex: appearancePalette.backgroundHex).opacity(0.64))
         }
     }
     #endif

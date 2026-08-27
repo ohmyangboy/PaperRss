@@ -25,7 +25,7 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
         XCTAssertLessThan(syncCall.lowerBound, itemLoop.lowerBound)
     }
 
-    func testReaderToolbarCapsuleKeepsOpaqueFallbackBehindLegacyMaterial() throws {
+    func testReaderToolbarCapsuleRetainsSwiftUIFallbackOutsideTheToolbarContainer() throws {
         let source = try appSource("ArticleReaderView.swift")
 
         XCTAssertTrue(source.contains("PaperTheme.surface(.page, scheme: colorScheme)"))
@@ -36,17 +36,18 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
 
     func testLegacyReaderCapsuleToolbarDrawsAThemeAwareBackgroundOnMacOS14() throws {
         let source = try appSource("ArticleReaderView.swift")
+        let splitViewSource = try appSource("ThreeColumnSplitView.swift")
         let toolbarStart = try XCTUnwrap(source.range(of: "struct ReaderCapsuleToolbar: View"))
         let toolbarSource = source[toolbarStart.lowerBound..<source.endIndex]
 
         XCTAssertTrue(toolbarSource.contains("if #available(macOS 26.0, *)"))
-        XCTAssertTrue(toolbarSource.contains("private var legacyCapsuleBackground: some View"))
-        XCTAssertTrue(source.contains("private struct LegacyReaderCapsuleMaterial: NSViewRepresentable"))
-        XCTAssertTrue(source.contains("view.blendingMode = .withinWindow"))
-        XCTAssertTrue(source.contains("view.state = .active"))
-        XCTAssertTrue(toolbarSource.contains("Color(paperHex: appearancePalette.backgroundHex).opacity(0.34)"))
-        XCTAssertTrue(toolbarSource.contains(".shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.14)"))
-        XCTAssertTrue(toolbarSource.contains(".padding(.vertical, 4)"))
+        XCTAssertTrue(toolbarSource.contains("else if materialHostedByAppKit"))
+        XCTAssertTrue(source.contains("readerCapsuleMaterialHostedByAppKit"))
+        XCTAssertTrue(splitViewSource.contains("LegacyReaderCapsuleMaterialContainer"))
+        XCTAssertTrue(splitViewSource.contains("blendingMode = .withinWindow"))
+        XCTAssertTrue(splitViewSource.contains("material = .popover"))
+        XCTAssertTrue(splitViewSource.contains("color.withAlphaComponent(0.14)"))
+        XCTAssertTrue(splitViewSource.contains("rootView.environment(\\.readerCapsuleMaterialHostedByAppKit, true)"))
     }
 
     private func appSource(_ name: String) throws -> String {
