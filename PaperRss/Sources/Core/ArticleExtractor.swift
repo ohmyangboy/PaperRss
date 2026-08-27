@@ -226,6 +226,11 @@ public enum ArticleExtractor {
         var bestCandidate: ScannedContainer?
 
         for candidate in candidates {
+            // RSSHub 约定 class 含 rsshub-quote 的容器是“内嵌引用内容”，
+            // 永远不是正文容器。转推/引用推文的描述把推文主文本放在顶层，
+            // 只把被引用推文包进该容器；若让它参与评分，富媒体引用（多图）
+            // 会以高分胜出并被当作正文容器，导致容器外的推文主内容整体丢弃。
+            if isEmbeddedQuoteContainer(candidate) { continue }
             let score = scoreCandidateContainer(tag: candidate.tag, attributes: candidate.attributes, bodyHTML: candidate.innerHTML)
             if score > bestScore {
                 bestScore = score
@@ -265,6 +270,14 @@ public enum ArticleExtractor {
             in: html,
             range: NSRange(html.startIndex..., in: html)
         ) ?? 0
+    }
+
+    /// RSSHub 把内嵌引用（引用推文/转推来源）包进 `class="rsshub-quote"` 的容器，
+    /// 该容器语义上永远是“被引用的附属内容”而非正文容器。
+    private static func isEmbeddedQuoteContainer(_ candidate: ScannedContainer) -> Bool {
+        let attributes = parseAttributesMap(from: candidate.attributes)
+        let classAndID = "\(attributes["class"] ?? "") \(attributes["id"] ?? "")".lowercased()
+        return classAndID.contains("rsshub-quote")
     }
 
     private static func isLowNoiseContainer(_ candidate: ScannedContainer) -> Bool {

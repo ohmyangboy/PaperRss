@@ -397,7 +397,7 @@ final class PaperRssCoreTests: XCTestCase {
 
     func testRSSHubTwitterFeedBodyStaysCompactAndKeepsTextOrder() {
         let html = """
-        Going live today 👀<hr style="border:0"><div class="rsshub-quote">Nohe: @rodydavis @antigravity Heres the link!<br>https://www.youtube.com/watch?v=LcnBRo11mnk<br></div>
+        Going live today 👀<hr style="border:0"><div class="rsshub-quote">Nohe: @rodydavis @antigravity Heres the link!<br>https://www.youtube.com/watch?v=LcnBRo11mnk<br></div>
         """
         let content = ArticleExtractor.content(
             from: html,
@@ -407,12 +407,37 @@ final class PaperRssCoreTests: XCTestCase {
         // The leading status text is now a real paragraph boundary, so the
         // tweet body and the quoted tweet become independent translation units
         // instead of one undetectable blob.
-        XCTAssertEqual(content.text, "Going live today 👀\n\nNohe: @rodydavis @antigravity Heres the link!\nhttps://www.youtube.com/watch?v=LcnBRo11mnk")
+        XCTAssertEqual(content.text, "Going live today 👀\n\nNohe: @rodydavis @antigravity Heres the link!\nhttps://www.youtube.com/watch?v=LcnBRo11mnk")
         XCTAssertTrue(content.html.contains("Going live today 👀"))
         XCTAssertTrue(content.html.contains("youtube.com/watch?v=LcnBRo11mnk"))
         XCTAssertFalse(content.html.contains("style="))
         XCTAssertFalse(content.html.contains("rsshub-quote"))
     }
+
+    func testRSSHubQuoteTweetKeepsMainStatusWhenQuoteIsMediaRich() {
+        // 真实转推结构：推文主文本在顶层（含段落、引用与配图），被引用推文
+        // 包在 <div class="rsshub-quote"> 里。引用侧图片多、评分高（≥35），
+        // 旧逻辑会把它选成“正文容器”，导致容器外的推文主内容整体丢失。
+        let html = """
+        上次我说让 AI 很难跳出既定框架，这次我用数据验证了它。<br><br>上次我在 AI 帮我翻译完视频后，我给它提问：<br><br>&gt; 如果跳出当前架构，让你基于功能重新设计当前的翻译流程，你会采取什么不一样的做法？<br><br>等它验证完，发现并没有预期那么好，但是也不是完全没价值。<br><img width="837" height="1106" src="https://pbs.twimg.com/media/HQs0KNZWYAEWpqj?format=jpg&amp;name=orig"><br><img width="860" height="1214" src="https://pbs.twimg.com/media/HQs0OyIX0AED-Jc?format=jpg&amp;name=orig"><hr style="border:0;border-top:1px solid #80808030;margin:12px 0;"><div class="rsshub-quote">宝玉: 我最近就发现，即使聪明如 Fable 5，它很难跳出既定框架，发现一条完全不同的路线。<br><img width="2048" height="1104" src="https://pbs.twimg.com/media/HPz_kpNWAAAPYTf?format=jpg&amp;name=orig"><br><img width="1580" height="1856" src="https://pbs.twimg.com/media/HP0FG1OXsAAyFZP?format=jpg&amp;name=orig"></div>
+        """
+        let content = ArticleExtractor.content(
+            from: html,
+            baseURL: URL(string: "https://x.com/dotey/status/2092826289841299636")
+        )
+
+        // 主文本与被引用推文都必须保留，且保持原始先后顺序。
+        let mainRange = content.text.range(of: "上次我说让 AI 很难跳出既定框架")
+        let quoteRange = content.text.range(of: "我最近就发现，即使聪明如 Fable 5")
+        XCTAssertNotNil(mainRange, "推文主内容不得因引用容器富媒体而被丢弃")
+        XCTAssertNotNil(quoteRange, "被引用推文内容必须保留")
+        if let mainRange, let quoteRange {
+            XCTAssertLessThan(mainRange.lowerBound, quoteRange.lowerBound, "主内容应先于引用内容")
+        }
+        XCTAssertEqual(content.imageURLs.count, 4, "主文本与引用内的图片都应保留")
+        XCTAssertFalse(content.html.contains("rsshub-quote"))
+    }
+
 
     func testSanitizerWrapsTopLevelTweetTextIntoTranslatableParagraphs() {
         let html = """
