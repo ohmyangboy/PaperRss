@@ -3324,6 +3324,14 @@ enum PaperReaderBridge {
 
           let isAsking = false;
 
+          const canonicalOptionsSignature = value => {
+            if (Array.isArray(value)) return "[" + value.map(item => canonicalOptionsSignature(item)).join(",") + "]";
+            if (value && typeof value === "object") {
+              return "{" + Object.keys(value).sort().map(key => JSON.stringify(key) + ":" + canonicalOptionsSignature(value[key])).join(",") + "}";
+            }
+            return JSON.stringify(value);
+          };
+
           const removeAction = () => {
             isAsking = false;
             actionBar?.remove();
@@ -3674,9 +3682,14 @@ enum PaperReaderBridge {
 
           const presentActionForSelection = () => {
             if (isAsking) return;
-            removeAction();
             const selection = window.getSelection();
             const selectedText = selection?.toString().trim() || "";
+            // 选区文本未变化时不得拆除重建工具条：pointerup/selectionchange 都会
+            // 触发本函数，若在用户按下工具条按钮到 click 派发之间移除并重建按钮
+            // 节点，click 的目标节点已被替换，按钮的 click 监听永远无法命中
+            // （表现：工具条消失且不出现任何 AI 弹窗）。选区真正变化时才重建。
+            if (actionBar && activeSelection === selectedText) return;
+            removeAction();
             if (!selection || selection.rangeCount === 0 || selectedText.length < 2) return;
             const range = selection.getRangeAt(0).cloneRange();
             const origin = range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? range.commonAncestorContainer.parentElement : range.commonAncestorContainer;
@@ -3755,6 +3768,18 @@ enum PaperReaderBridge {
 
           window.paperRssSelectionAssistant = {
             updateOptions(options) {
+              // 原生 updateNSView 每次 SwiftUI 更新都会重发同一份 options。
+              // 若据此无条件 removeAction()，用户按住工具条按钮的瞬间工具条会被
+              // 拆除重建，click 派发时目标按钮已被替换 —— 按钮监听永远无法命中
+              // （表现：划词后点击解释/提问/翻译毫无反应，工具条消失且无弹窗）。
+              // 仅在选项真正变化时才清除过期的工具条/弹窗。签名必须按键排序
+              // 规范化：同一 payload 反复序列化的键序不保证一致。
+              const signature = canonicalOptionsSignature(options);
+              if (window.paperRssSelectionOptionsSignature === signature && window.paperRssSelectionOptions) {
+                window.paperRssSelectionOptions = options;
+                return;
+              }
+              window.paperRssSelectionOptionsSignature = signature;
               window.paperRssSelectionOptions = options;
               removeAction();
               if (!hasEnabledAction(options)) dismissPopover();
@@ -4647,6 +4672,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var renderedPendingTranslationIDs = Set<String>()
         private var renderedReaderAppearance: ReaderAppearance?
         private var renderedReaderAppearanceMode: ReaderAppearanceMode?
+        private var renderedSelectionOptionsJSON: String?
         private struct SummaryRenderSignature: Equatable {
             let content: String
             let isExpanded: Bool
@@ -4797,6 +4823,13 @@ private struct ArticleHTMLView: NSViewRepresentable {
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: options),
                   let json = String(data: data, encoding: .utf8) else { return }
+            // 该函数随每次 SwiftUI 更新（updateNSView）被调用。JS 侧
+            // updateOptions 收到 options 会清掉当前划词工具条；若这里不去重，
+            // 用户按住按钮的瞬间工具条被拆除重建，click 永远无法命中按钮。
+            // JSONSerialization 键序在多次序列化间并不保证一致，必须缓存
+            // 序列化结果本身做幂等判断；页面重载后（世界重置）强制重发。
+            guard json != renderedSelectionOptionsJSON else { return }
+            renderedSelectionOptionsJSON = json
             let script = """
             (() => {
               const options = \(json);
@@ -5077,6 +5110,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 )
             )
             renderedSummarySignature = nil
+            renderedSelectionOptionsJSON = nil
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
             loadedArticle = parent.article
@@ -5447,6 +5481,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var renderedPendingTranslationIDs = Set<String>()
         private var renderedReaderAppearance: ReaderAppearance?
         private var renderedReaderAppearanceMode: ReaderAppearanceMode?
+        private var renderedSelectionOptionsJSON: String?
         private struct SummaryRenderSignature: Equatable {
             let content: String
             let isExpanded: Bool
@@ -5596,6 +5631,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: options),
                   let json = String(data: data, encoding: .utf8) else { return }
+            // 与 macOS 协调器一致：同一份 options 不重复下发，避免 SwiftUI
+            // 每次更新都触发 JS 侧拆除重建划词工具条（详见 macOS 侧注释）。
+            guard json != renderedSelectionOptionsJSON else { return }
+            renderedSelectionOptionsJSON = json
             let script = """
             (() => {
               const options = \(json);
@@ -5825,6 +5864,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 )
             )
             renderedSummarySignature = nil
+            renderedSelectionOptionsJSON = nil
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
             loadedArticle = parent.article

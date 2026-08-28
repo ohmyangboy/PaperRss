@@ -65,6 +65,7 @@ struct RootView: View {
     @State private var isZenMode = false
     @State private var autoScrollTrigger = UUID()
     @State private var toastMessage: String?
+    @State private var toastIcon: String = "checkmark.circle.fill"
     @State private var toastTask: Task<Void, Never>?
     @State private var navigationConfirmation = ReaderNavigationConfirmation()
     @State private var navigationConfirmationExpiryTask: Task<Void, Never>?
@@ -140,6 +141,13 @@ struct RootView: View {
             .alert("PaperRss", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.dismissError() } })) {
                 Button(I18N.localized("好"), role: .cancel) { store.dismissError() }
             } message: { Text(store.lastError ?? "") }
+            // 非阻断式瞬时提示（如翻译失败）：toast 呈现后立即消费，
+            // 避免与阻断式 lastError alert 混用。
+            .onChange(of: store.transientNotice) { _, notice in
+                guard let notice else { return }
+                showToast(notice.message, icon: "exclamationmark.triangle.fill")
+                store.dismissTransientNotice()
+            }
     }
 
     // MARK: - 平台分支主内容
@@ -316,11 +324,13 @@ struct RootView: View {
 
     private func showToast(
         _ message: String,
+        icon: String = "checkmark.circle.fill",
         duration: TimeInterval = ReaderNavigationConfirmation.defaultTimeout
     ) {
         toastTask?.cancel()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             toastMessage = message
+            toastIcon = icon
         }
         toastTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(max(0, duration) * 1_000_000_000))
@@ -379,7 +389,7 @@ struct RootView: View {
     private var toastOverlay: some View {
         if let toastMessage {
             HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: toastIcon)
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(appearanceAccentColor)
                 Text(toastMessage)

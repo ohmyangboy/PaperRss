@@ -102,6 +102,17 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var refreshInterval: FeedRefreshInterval = .twoHours
     @Published public private(set) var refreshOnLaunch: Bool = true
     @Published public private(set) var lastError: String?
+    /// 非阻断式瞬时提示（toast）。批量后台操作（如双语文逐段翻译）失败时的
+    /// 轻量通知通道，与阻断式 lastError alert 分离；id 用于驱动 SwiftUI
+    /// onChange，即使消息相同也能再次触发。
+    public struct TransientNotice: Equatable {
+        public let id = UUID()
+        public let message: String
+        public init(message: String) { self.message = message }
+    }
+    @Published public private(set) var transientNotice: TransientNotice?
+    private var transientNoticeSignature: String?
+    private var transientNoticeAt: Date = .distantPast
     /// 仅保存在当前进程内的反馈上下文；不写入数据库，也不包含原始错误文本。
     @Published public private(set) var latestFeedbackError: FeedbackErrorSnapshot?
     @Published public private(set) var isICloudSyncEnabled = false
@@ -1767,6 +1778,22 @@ public final class AppStore: ObservableObject {
         lastError = nil
     }
 
+    /// 发出非阻断式瞬时提示。同一消息在冷却期内的重复触发（如翻译批次
+    /// 随滚动多次失败）只保留一次，避免 toast 刷屏。
+    public func emitTransientNotice(_ message: String, cooldown: TimeInterval = 8) {
+        if message == transientNoticeSignature,
+           Date.now.timeIntervalSince(transientNoticeAt) < cooldown {
+            return
+        }
+        transientNoticeSignature = message
+        transientNoticeAt = .now
+        transientNotice = TransientNotice(message: message)
+    }
+
+    public func dismissTransientNotice() {
+        transientNotice = nil
+    }
+
     public func reportError(_ error: Error, module: FeedbackModule, at date: Date = .now) {
         latestFeedbackError = FeedbackErrorSnapshot(
             module: module,
@@ -1788,11 +1815,15 @@ public final class AppStore: ObservableObject {
         selectionAnchor: AISelectionAnchor? = nil,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
+        // hash 基准与 articleContext 相同；正常路径下 == preparedArticle.text
+        // 的 digest，与划词标注恢复查询 (savedSelectionAnnotations) 严格同源。
+        let anchorArticleHash = (articleText.isEmpty ? entry.sourceText : articleText).stableDigest
         let opResult = await executeSelectionAI(
             entry: entry,
             kind: .selectionExplanation,
             selectionText: selection,
             selectionAnchor: selectionAnchor,
+            selectionArticleHash: anchorArticleHash,
             operation: { [weak self] apiKey, config in
                 guard let self else { return nil }
                 return try await self.llm.explainSelection(
@@ -1850,11 +1881,15 @@ public final class AppStore: ObservableObject {
         selectionAnchor: AISelectionAnchor? = nil,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
+        // 与 explainSelection 相同的 hash 基准；缺失该字段的提问 artifact
+        // 无法被划词标注恢复链路检索（切换文章后提问图标消失的根因）。
+        let anchorArticleHash = (articleText.isEmpty ? entry.sourceText : articleText).stableDigest
         let opResult = await executeSelectionAI(
             entry: entry,
             kind: .interpretation,
             selectionText: selection,
             selectionAnchor: selectionAnchor,
+            selectionArticleHash: anchorArticleHash,
             operation: { [weak self] apiKey, config in
                 guard let self else { return nil }
                 return try await self.llm.askSelection(
@@ -1967,7 +2002,9 @@ public final class AppStore: ObservableObject {
         guard !apiKey.isEmpty else {
             let error = LLMServiceError.missingAPIKey
             reportError(error, module: .ai)
-            lastError = error.localizedDescription
+            // 未配置 API Key 属于可预期的环境状态，且翻译随滚动批量触发，
+            // 走非阻断 toast 并冷却去重，不弹 lastError 阻断式弹窗。
+            emitTransientNotice(error.localizedDescription)
             return
         }
 
@@ -2020,7 +2057,8 @@ public final class AppStore: ObservableObject {
         } catch {
             if !Task.isCancelled {
                 reportError(error, module: .ai)
-                lastError = error.localizedDescription
+                // 翻译失败随滚动批量触发，走非阻断 toast 并冷却去重。
+                emitTransientNotice(error.localizedDescription)
             }
         }
     }
@@ -2030,6 +2068,7 @@ public final class AppStore: ObservableObject {
         kind: AIArtifactKind,
         selectionText: String? = nil,
         selectionAnchor: AISelectionAnchor? = nil,
+        selectionArticleHash: String? = nil,
         operation: @Sendable @escaping (String, LLMConfiguration) async throws -> String?
     ) async -> String? {
         let configuration = llmConfiguration
@@ -2057,6 +2096,7 @@ public final class AppStore: ObservableObject {
                     promptVersion: 1,
                     content: result,
                     selectionText: selectionText,
+                    selectionArticleHash: selectionArticleHash,
                     selectionAnchor: selectionAnchor,
                     isComplete: true
                 )

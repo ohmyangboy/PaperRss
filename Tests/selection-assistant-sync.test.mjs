@@ -48,6 +48,29 @@ test('updating options dismisses stale selection UI', () => {
   );
 });
 
+test('selection action bar stays stable while the selection is unchanged', () => {
+  const selectionScript = source.match(
+    /static let selectionScript = WKUserScript\(\n        source: """([\s\S]*?)""",\n        injectionTime:/
+  )?.[1] ?? '';
+
+  // presentActionForSelection must early-return when the bar is already shown
+  // for the same selection text: rebuilding between pointerdown and click
+  // replaces the button node so the click never fires (no AI popover).
+  assert.ok(
+    /if \(actionBar && activeSelection === selectedText\) return;/.test(selectionScript),
+    'unchanged selections must reuse the existing action bar instead of rebuilding it'
+  );
+  // The guard must run before the unconditional removeAction() rebuild path.
+  const presentBody = selectionScript.match(
+    /const presentActionForSelection = \(\) => \{([\s\S]*?)\n          \};/
+  )?.[1] ?? '';
+  assert.ok(presentBody.length > 0, 'presentActionForSelection must exist');
+  const guardIndex = presentBody.indexOf('if (actionBar && activeSelection === selectedText) return;');
+  const removeIndex = presentBody.indexOf('removeAction();');
+  assert.ok(guardIndex !== -1 && removeIndex !== -1 && guardIndex < removeIndex,
+    'the stability guard must precede the rebuild path');
+});
+
 test('reader toolbar uses unified translation bubble icon', () => {
   assert.ok(
     /translationToolbarIcon/.test(source),

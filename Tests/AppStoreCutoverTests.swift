@@ -282,6 +282,57 @@ final class AppStoreCutoverTests: XCTestCase {
         XCTAssertEqual(recovered.content, "这是一个核心解释内容")
     }
 
+    /// 划词提问 (interpretation) 与历史 NULL-hash 记录必须能被恢复查询命中：
+    /// executeSelectionAI 统一保存路径的历史版本曾丢失 selectionArticleHash，
+    /// 且提问以 interpretation 落库，旧查询只认 selectionExplanation + 精确
+    /// hash —— 两者叠加导致切换文章后划词提问图标消失。
+    @MainActor
+    func testSelectionAnnotationRestoreCoversAskKindAndLegacyNullHash() async throws {
+        let db = try LibraryDatabase(databaseURL: sqliteURL)
+        let repo = AIArtifactRepository(database: db)
+
+        let now = Date().timeIntervalSince1970
+        try db.write { writeDB in
+            try AccountRecord(id: "local-default", type: "local", displayName: "本地", isEnabled: true, createdAt: now, updatedAt: now).save(writeDB)
+            try FeedRecord(id: "feed-1", accountID: "local-default", title: "Feed 1", feedURL: "https://feed.com", updatedAt: now).save(writeDB)
+            try ItemRecord(id: "item-1", accountID: "local-default", externalID: "ext-1", feedID: "feed-1", createdAt: now, updatedAt: now).save(writeDB)
+        }
+
+        func makeArtifact(id: UUID, kind: AIArtifactKind, articleHash: String?) -> AIArtifact {
+            AIArtifact(
+                id: id,
+                entryID: "item-1",
+                kind: kind,
+                contentHash: "content-\(id.uuidString)",
+                model: "deepseek-chat",
+                targetLanguage: "zh-Hans",
+                content: "回答内容 \(id.uuidString.prefix(4))",
+                selectionText: "选中段落文本",
+                selectionArticleHash: articleHash,
+                selectionAnchor: AISelectionAnchor(paragraphID: "p-1", startOffset: 0, endOffset: 6),
+                isComplete: true
+            )
+        }
+
+        // 1) 提问 (interpretation) 且写入 articleHash —— 新保存路径的行为
+        let ask = makeArtifact(id: UUID(), kind: .interpretation, articleHash: "article-hash-99")
+        // 2) 历史提问记录：hash 为 NULL（保存路径丢字段时期产生）
+        let legacyAsk = makeArtifact(id: UUID(), kind: .interpretation, articleHash: nil)
+        // 3) 历史解释记录：hash 为 NULL
+        let legacyExplain = makeArtifact(id: UUID(), kind: .selectionExplanation, articleHash: nil)
+        // 4) 另一篇文章版本的记录 —— 不得恢复（锚点可能漂移）
+        let stale = makeArtifact(id: UUID(), kind: .selectionExplanation, articleHash: "other-article-hash")
+
+        for artifact in [ask, legacyAsk, legacyExplain, stale] {
+            try await repo.saveArtifactModel(artifact)
+        }
+
+        let fetched = try await repo.fetchSelectionArtifacts(entryID: "item-1", articleHash: "article-hash-99")
+        let fetchedIDs = Set(fetched.map(\.id))
+        XCTAssertEqual(fetchedIDs, Set([ask.id, legacyAsk.id, legacyExplain.id]),
+                       "恢复查询必须命中提问记录、历史 NULL-hash 记录，且排除其他文章版本的记录")
+    }
+
     @MainActor
     func testLocalAccountDoesNotCreateRemoteAccountSyncState() throws {
         let db = try LibraryDatabase(databaseURL: sqliteURL)

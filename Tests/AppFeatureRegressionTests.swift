@@ -43,6 +43,34 @@ final class AppFeatureRegressionTests: XCTestCase {
         try await super.tearDown()
     }
 
+    // MARK: - 非阻断式瞬时提示 (toast) 冷却去重回归
+
+    /// 翻译随滚动批量触发，未配置 API Key 等失败会连续多次上报；
+    /// 瞬时提示必须在冷却期内去重，只产生一次 toast。
+    func testTransientNoticeDeduplicatesRepeatedTranslationFailures() async throws {
+        let localStore = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in
+            FeedFetchResult.notModified(etag: nil, lastModified: nil)
+        })
+        let missingKeyMessage = LLMServiceError.missingAPIKey.localizedDescription
+
+        // 首次失败：发出通知
+        localStore.emitTransientNotice(missingKeyMessage)
+        let first = localStore.transientNotice
+        XCTAssertNotNil(first)
+
+        // 冷却期内的重复失败（滚动触发多批次翻译）：不生成新通知
+        localStore.emitTransientNotice(missingKeyMessage)
+        localStore.emitTransientNotice(missingKeyMessage)
+        XCTAssertEqual(localStore.transientNotice?.id, first?.id, "冷却期内重复触发必须去重")
+
+        // 消费后置空；新消息再次触发时生成新通知
+        localStore.dismissTransientNotice()
+        XCTAssertNil(localStore.transientNotice)
+        localStore.emitTransientNotice("网络连接中断")
+        XCTAssertNotNil(localStore.transientNotice)
+        XCTAssertNotEqual(localStore.transientNotice?.id, first?.id)
+    }
+
     // MARK: - 1. 文章标题与元数据更新回归 (Article Title & Metadata Mutation)
 
     func testArticleTitleAndMetadataUpdateRegression() async throws {

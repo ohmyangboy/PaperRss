@@ -115,11 +115,18 @@ public final class AIArtifactRepository: Sendable {
         articleHash: String,
         in db: Database
     ) throws -> [AIArtifact] {
+        // kind 覆盖 selectionExplanation 与 interpretation：划词提问
+        // (askSelection) 以 interpretation 落库，恢复划词标注时两者都必须可见。
+        // selection_article_hash 兼容 NULL：executeSelectionAI 统一保存路径的
+        // 历史版本曾丢失该字段；hash 为空的记录仍可尝试恢复，锚点失效由
+        // JS 侧 rangeForAnchor 解析失败兜底，不会错画。
         let records = try AIArtifactRecord
             .filter(
                 (Column("item_id") == entryID || Column("subject_key") == entryID) &&
-                Column("kind") == AIArtifactKind.selectionExplanation.rawValue &&
-                Column("selection_article_hash") == articleHash &&
+                (Column("kind") == AIArtifactKind.selectionExplanation.rawValue ||
+                 Column("kind") == AIArtifactKind.interpretation.rawValue) &&
+                (Column("selection_article_hash") == articleHash ||
+                 Column("selection_article_hash") == nil) &&
                 Column("is_complete") == true &&
                 Column("is_deleted") == false
             )
