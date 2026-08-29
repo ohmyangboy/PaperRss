@@ -22,13 +22,13 @@ test('invalid stored values are ignored', () => {
 
 test('website showcases the supplied full-resolution product screenshots', async () => {
   const expectedScreenshots = new Map([
-    ['paper-rss-main.png', [2940, 1846]],
-    ['paper-rss-second.png', [2940, 1846]],
-    ['full-screen.png', [2940, 1846]],
-    ['bilingual-translation.png', [1544, 1774]],
-    ['ai-question-popover.png', [732, 216]],
-    ['ai-translate-popover.png', [896, 852]],
-    ['ai-explain-popover.png', [926, 836]],
+    ['paper-rss-main.webp', [2160, 1357]],
+    ['paper-rss-second.webp', [2160, 1357]],
+    ['full-screen.webp', [2160, 1357]],
+    ['bilingual-translation.webp', [1344, 1545]],
+    ['ai-question-popover.webp', [732, 216]],
+    ['ai-translate-popover.webp', [896, 852]],
+    ['ai-explain-popover.webp', [926, 836]],
   ]);
   const localePages = await Promise.all([
     readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
@@ -40,25 +40,48 @@ test('website showcases the supplied full-resolution product screenshots', async
       assert.match(page, new RegExp(`assets/screenshots/${filename.replaceAll('.', '\\.')}`));
     }
 
-    const png = await readFile(new URL(`../website/assets/screenshots/${filename}`, import.meta.url));
-    assert.equal(png.toString('ascii', 1, 4), 'PNG');
-    assert.equal(png.readUInt32BE(16), expectedWidth);
-    assert.equal(png.readUInt32BE(20), expectedHeight);
+    const img = await readFile(new URL(`../website/assets/screenshots/${filename}`, import.meta.url));
+    assert.equal(img.toString('ascii', 0, 4), 'RIFF');
+    assert.equal(img.toString('ascii', 8, 12), 'WEBP');
+    assert.equal(img.readUInt16LE(26) & 0x3fff, expectedWidth);
+    assert.equal(img.readUInt16LE(28) & 0x3fff, expectedHeight);
   }
 
   for (const page of localePages) {
     assert.doesNotMatch(page, /class="deep-feature"/);
     assert.doesNotMatch(page, /class="hero-stamp"/);
     assert.match(page, /class="hero-content"/);
-    assert.match(page, /class="hero-app-icon"><img src="\.\.\/assets\/app-icon\.png"/);
+    assert.match(page, /class="hero-app-icon"><img src="\.\.\/assets\/app-icon\.webp"/);
     assert.doesNotMatch(page, /stage-bar|window-dots|window-dot/);
     assert.match(page, /class="scramble-title"/);
     assert.match(page, /class="scramble-target"/);
     assert.match(page, /src="\.\.\/scramble-title\.js"/);
     assert.match(page, /id="ai-assistant"/);
     assert.match(page, /02 \/ EXPLAIN &amp; ASK|02 \/ EXPLAIN & ASK/);
-    assert.match(page, /feature-card-gallery[\s\S]*ai-question-popover\.png[\s\S]*ai-explain-popover\.png/);
+    assert.match(page, /feature-card-gallery[\s\S]*ai-question-popover\.webp[\s\S]*ai-explain-popover\.webp/);
   }
+});
+
+test('download routing and options support dual-source smart download', async () => {
+  const [zhHome, enHome, routerScript] = await Promise.all([
+    readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/en/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('../website/download-router.js', import.meta.url), 'utf8'),
+  ]);
+
+  for (const home of [zhHome, enHome]) {
+    assert.match(home, /src="\.\.\/download-router\.js"/);
+    assert.match(home, /class="dl-main"[^>]*data-smart-download/);
+    assert.match(home, /href="https:\/\/download\.1leaf\.cc\/PaperRss-latest\.dmg"/);
+    assert.match(home, /href="https:\/\/github\.com\/ohmyangboy\/PaperRss\/releases\/latest"/);
+    assert.match(home, /href="https:\/\/github\.com\/ohmyangboy\/PaperRss\/releases"/);
+  }
+
+  assert.match(routerScript, /https:\/\/download\.1leaf\.cc\/PaperRss-latest\.dmg/);
+  assert.match(routerScript, /https:\/\/api\.github\.com\/repos\/ohmyangboy\/PaperRss\/releases\/latest/);
+  assert.match(routerScript, /https:\/\/github\.com\/ohmyangboy\/PaperRss\/releases\/latest/);
+  assert.match(routerScript, /data-smart-download/);
+  assert.match(routerScript, /aria-busy/);
 });
 
 test('title scramble animation is shared by both locales and respects reduced motion', async () => {

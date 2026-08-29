@@ -287,6 +287,11 @@ body {
   opacity: 0.92;
 }
 
+.dl-main[aria-busy="true"] {
+  cursor: wait;
+  opacity: 0.75;
+}
+
 .dl-main-icon {
   display: inline-flex;
   align-items: center;
