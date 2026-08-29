@@ -70,18 +70,18 @@ enum ArticleMarkupNormalizer: Sendable {
             let singleDecoded = decodeStructuralHTMLEntities(trimmed)
             let subFormat = detectFormat(singleDecoded)
             if subFormat == .markdown {
-                return renderPureMarkdown(singleDecoded)
+                return renderPureMarkdown(singleDecoded, baseURL: baseURL)
             } else if subFormat == .mixed {
-                return normalizeMixedContent(singleDecoded)
+                return normalizeMixedContent(singleDecoded, baseURL: baseURL)
             } else {
                 return singleDecoded
             }
 
         case .markdown:
-            return renderPureMarkdown(trimmed)
+            return renderPureMarkdown(trimmed, baseURL: baseURL)
 
         case .mixed:
-            return normalizeMixedContent(trimmed)
+            return normalizeMixedContent(trimmed, baseURL: baseURL)
 
         case .plainText:
             let escaped = escapeHTML(trimmed)
@@ -97,11 +97,13 @@ enum ArticleMarkupNormalizer: Sendable {
 
     // MARK: - Markdown AST Rendering
 
-    private static func renderPureMarkdown(_ source: String) -> String {
+    private static func renderPureMarkdown(_ source: String, baseURL: URL? = nil) -> String {
         diagnosticASTConstructionCount += 1
         // 公式先占位再还原：防止 swift-markdown 把公式内部的 *、_、\、{} 误解析为强调/转义
         let shielded = ArticleMathDetector.shieldFormulas(in: source)
-        let document = Document(parsing: shielded.shieldedText, options: [.parseBlockDirectives, .parseSymbolLinks])
+        // 图片对齐/尺寸语法（wiki 嵌入、kramdown 属性、Typora 尺寸）先展开为受控 <img>
+        let expanded = expandingImageEmbeds(in: shielded.shieldedText, baseURL: baseURL)
+        let document = Document(parsing: expanded, options: [.parseBlockDirectives, .parseSymbolLinks])
         var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: false)
         let rendered = renderer.render(document)
         return ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
@@ -109,7 +111,7 @@ enum ArticleMarkupNormalizer: Sendable {
 
     // MARK: - Quote-Aware Linear Scanner for Mixed HTML/Markdown
 
-    private static func normalizeMixedContent(_ html: String) -> String {
+    private static func normalizeMixedContent(_ html: String, baseURL: URL? = nil) -> String {
         var result = ""
         var cursor = html.startIndex
         var tagStack: [String] = []
@@ -125,14 +127,14 @@ enum ArticleMarkupNormalizer: Sendable {
             guard let tagStart = html[cursor...].firstIndex(of: "<") else {
                 // 剩余全部为文本
                 let trailingText = String(html[cursor...])
-                result += processTextRun(trailingText, tagStack: tagStack, protectedTags: protectedTags, inlineParentTags: inlineParentTags)
+                result += processTextRun(trailingText, tagStack: tagStack, protectedTags: protectedTags, inlineParentTags: inlineParentTags, baseURL: baseURL)
                 break
             }
 
             // 处理标签前的文本段
             if tagStart > cursor {
                 let textSegment = String(html[cursor..<tagStart])
-                result += processTextRun(textSegment, tagStack: tagStack, protectedTags: protectedTags, inlineParentTags: inlineParentTags)
+                result += processTextRun(textSegment, tagStack: tagStack, protectedTags: protectedTags, inlineParentTags: inlineParentTags, baseURL: baseURL)
             }
 
             // 扫描 HTML 标签（Quote-Aware，跳过属性中的引号）
@@ -216,7 +218,8 @@ enum ArticleMarkupNormalizer: Sendable {
         _ text: String,
         tagStack: [String],
         protectedTags: Set<String>,
-        inlineParentTags: Set<String>
+        inlineParentTags: Set<String>,
+        baseURL: URL?
     ) -> String {
         // 1. 如果在受保护的 pre/code/kbd/script 标签中，绝不转换 Markdown
         if tagStack.contains(where: { protectedTags.contains($0) }) {
@@ -236,7 +239,8 @@ enum ArticleMarkupNormalizer: Sendable {
         if isInsideInlineContainer {
             // 在 <p> 或其他内联容器内：只执行 inline Markdown 转换，严禁输出块级 heading/list/table
             diagnosticASTConstructionCount += 1
-            let document = Document(parsing: shielded.shieldedText, options: [.parseBlockDirectives, .parseSymbolLinks])
+            let expanded = expandingImageEmbeds(in: shielded.shieldedText, baseURL: baseURL)
+            let document = Document(parsing: expanded, options: [.parseBlockDirectives, .parseSymbolLinks])
             var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: true)
             let rendered = renderer.render(document).trimmingCharacters(in: .whitespacesAndNewlines)
             let unshielded = ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
@@ -249,9 +253,10 @@ enum ArticleMarkupNormalizer: Sendable {
             // 在顶级或 div/article 块级容器内：允许执行完整块级 Markdown 转换
             // 清理 HTML 排版带来的多余缩进，但保留 fenced code 块内的原始缩进
             let cleanedLines = stripLayoutIndentationPreservingFencedCode(shielded.shieldedText)
+            let expanded = expandingImageEmbeds(in: cleanedLines, baseURL: baseURL)
 
             diagnosticASTConstructionCount += 1
-            let document = Document(parsing: cleanedLines, options: [.parseBlockDirectives, .parseSymbolLinks])
+            let document = Document(parsing: expanded, options: [.parseBlockDirectives, .parseSymbolLinks])
             var renderer = ArticleMarkdownHTMLRenderer(isInlineOnly: false)
             let rendered = renderer.render(document).trimmingCharacters(in: .whitespacesAndNewlines)
             let unshielded = ArticleMathDetector.unshieldFormulas(rendered, tokens: shielded.tokens)
@@ -284,6 +289,283 @@ enum ArticleMarkupNormalizer: Sendable {
         return resultLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Image Embed Expansion
+
+    /// 在 Markdown AST 解析前，把图片对齐/尺寸类语法预展开为受控 <img> HTML。
+    /// 支持的常见写法：
+    /// - Obsidian wiki 嵌入：`![[name|40|left]]`、`![[name|300x200]]`、`![[https://…|right]]`
+    /// - alt 管道参数：`![alt|40|left](url)`
+    /// - kramdown/Pandoc 属性：`![alt](url){: .align-left}`、`![alt](url){width=40}`
+    /// - Typora 尺寸：`![alt](url =40x)`、`![alt](url =40x30)`
+    /// fenced code 块内不转换；提取不到对齐/尺寸语义时保持原文，交给 AST 正常渲染。
+    static func expandingImageEmbeds(in text: String, baseURL: URL?) -> String {
+        guard text.contains("![") else { return text }
+
+        var result = ""
+        var inFence = false
+        let lines = text.components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
+                inFence.toggle()
+                result += line
+            } else if inFence {
+                result += line
+            } else {
+                result += expandingImageEmbeds(inLine: line, baseURL: baseURL)
+            }
+            if index < lines.count - 1 {
+                result += "\n"
+            }
+        }
+        return result
+    }
+
+    private static func expandingImageEmbeds(inLine line: String, baseURL: URL?) -> String {
+        var result = line
+
+        // 1. Obsidian wiki 嵌入（优先：与后续标准图片语法不重叠）
+        result = replacingRegexMatches(
+            in: result,
+            pattern: "!\\[\\[([^\\]|\\r\\n]+?)(?:\\|([^\\]\\r\\n]*))?\\]\\]"
+        ) { groups in
+            let target = groups[0]
+            let params = groups.count > 1 ? groups[1] : ""
+            let parsed = imageEmbedParameters(fromPipeText: params)
+            return imageEmbedHTML(
+                source: target,
+                alt: parsed.alt,
+                width: parsed.width,
+                alignment: parsed.alignment,
+                baseURL: baseURL
+            )
+        }
+
+        // 2. alt 管道参数 ![alt|40|left](url)
+        result = replacingRegexMatches(
+            in: result,
+            pattern: "!\\[([^|\\]\\r\\n]*)\\|([^\\]\\r\\n]*)\\]\\(([^)\\r\\n]+)\\)"
+        ) { groups in
+            let parsed = imageEmbedParameters(fromPipeText: groups[1])
+            guard parsed.width != nil || parsed.alignment != nil else { return nil }
+            let combinedAlt = [groups[0], parsed.alt].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+            return imageEmbedHTML(
+                source: groups[2],
+                alt: combinedAlt.isEmpty ? nil : combinedAlt,
+                width: parsed.width,
+                alignment: parsed.alignment,
+                baseURL: baseURL
+            )
+        }
+
+        // 3. kramdown/Pandoc 属性 ![alt](url){: .align-left} / {width=40}
+        result = replacingRegexMatches(
+            in: result,
+            pattern: "!\\[([^\\]\\r\\n]*)\\]\\(([^)\\r\\n]+?)\\)\\s*\\{([^}\\r\\n]*)\\}"
+        ) { groups in
+            let parsed = imageEmbedAttributes(fromAttrText: groups[2])
+            guard parsed.width != nil || parsed.alignment != nil else { return nil }
+            return imageEmbedHTML(
+                source: groups[1],
+                alt: groups[0].isEmpty ? nil : groups[0],
+                width: parsed.width,
+                alignment: parsed.alignment,
+                baseURL: baseURL
+            )
+        }
+
+        // 4. Typora 尺寸 ![alt](url =40x30)
+        result = replacingRegexMatches(
+            in: result,
+            pattern: "!\\[([^\\]\\r\\n]*)\\]\\(([^)\\r\\n]+?)\\s+=\\s*(\\d{1,5})(?:x(\\d{1,5}))?\\s*\\)"
+        ) { groups in
+            guard let width = Int(groups[2]), width > 0 else { return nil }
+            return imageEmbedHTML(
+                source: groups[1],
+                alt: groups[0].isEmpty ? nil : groups[0],
+                width: width,
+                alignment: nil,
+                baseURL: baseURL
+            )
+        }
+
+        return result
+    }
+
+    /// 正则替换工具：transform 返回 nil 表示放弃该匹配（保留原文）。
+    private static func replacingRegexMatches(
+        in text: String,
+        pattern: String,
+        transform: ([String]) -> String?
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        var result = ""
+        var cursor = text.startIndex
+        var didModify = false
+
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match, let matchRange = Range(match.range, in: text) else { return }
+            var groups: [String] = []
+            for index in 1..<match.numberOfRanges {
+                if let groupRange = Range(match.range(at: index), in: text) {
+                    groups.append(String(text[groupRange]))
+                } else {
+                    groups.append("")
+                }
+            }
+            guard let replacement = transform(groups) else { return }
+            didModify = true
+            result += text[cursor..<matchRange.lowerBound]
+            result += replacement
+            cursor = matchRange.upperBound
+        }
+
+        guard didModify else { return text }
+        result += text[cursor...]
+        return result
+    }
+
+    /// 解析管道参数（`40|left`、`300x200`、`caption|40`）为宽度 / 对齐 / 备选 alt。
+    private static func imageEmbedParameters(fromPipeText pipeText: String) -> (width: Int?, alignment: String?, alt: String?) {
+        var width: Int?
+        var alignment: String?
+        var altParts: [String] = []
+
+        for rawParam in pipeText.split(separator: "|") {
+            let param = rawParam.trimmingCharacters(in: .whitespaces)
+            guard !param.isEmpty else { continue }
+            if let tokenAlignment = imageAlignment(fromToken: param) {
+                alignment = tokenAlignment
+            } else if let tokenWidth = parseImageSideLength(param) {
+                width = tokenWidth
+            } else {
+                altParts.append(param)
+            }
+        }
+
+        let alt = altParts.isEmpty ? nil : altParts.joined(separator: " ")
+        return (width, alignment, alt)
+    }
+
+    /// 解析 kramdown/Pandoc 属性串（`width=40 align=left`、`.align-left #anchor`）。
+    private static func imageEmbedAttributes(fromAttrText attrText: String) -> (width: Int?, alignment: String?) {
+        var width: Int?
+        var alignment: String?
+
+        // key=value 形式：width=40 / width="40" / align=left
+        let keyValuePattern = "([a-zA-Z]+)\\s*=\\s*\"?([^\"\\s}]+)\"?"
+        if let keyValueRegex = try? NSRegularExpression(pattern: keyValuePattern) {
+            let range = NSRange(attrText.startIndex..., in: attrText)
+            keyValueRegex.enumerateMatches(in: attrText, range: range) { match, _, _ in
+                guard let match,
+                      let keyRange = Range(match.range(at: 1), in: attrText),
+                      let valueRange = Range(match.range(at: 2), in: attrText) else { return }
+                let key = attrText[keyRange].lowercased()
+                let value = String(attrText[valueRange])
+                if key == "width" || key == "w" {
+                    width = parseImageSideLength(value) ?? width
+                } else if key == "align" || key == "alignment" || key == "position" {
+                    alignment = imageAlignment(fromToken: value) ?? alignment
+                }
+            }
+        }
+
+        // .class 形式：.align-left / .left
+        let classPattern = "\\.([a-zA-Z0-9_-]+)"
+        if let classRegex = try? NSRegularExpression(pattern: classPattern) {
+            let range = NSRange(attrText.startIndex..., in: attrText)
+            classRegex.enumerateMatches(in: attrText, range: range) { match, _, _ in
+                guard let match,
+                      let nameRange = Range(match.range(at: 1), in: attrText) else { return }
+                alignment = imageAlignment(fromToken: String(attrText[nameRange])) ?? alignment
+            }
+        }
+
+        return (width, alignment)
+    }
+
+    /// 解析尺寸标记：`40` / `40px` / `40x` / `40X30` → 宽度（高度交给阅读器按比例自适应）。
+    private static func parseImageSideLength(_ value: String) -> Int? {
+        var cleaned = value.trimmingCharacters(in: .whitespaces).lowercased()
+        if cleaned.hasSuffix("px") {
+            cleaned = String(cleaned.dropLast(2))
+        }
+        if cleaned.hasSuffix("x") {
+            cleaned = String(cleaned.dropLast())
+        }
+        let widthPart = cleaned.split(whereSeparator: { $0 == "x" }).first ?? cleaned[...]
+        guard let number = Int(widthPart), number > 0, number <= 10_000 else { return nil }
+        return number
+    }
+
+    /// 对齐语义词表（与 ArticleExtractor.sanitizedAttributes 的归一化词表保持一致）。
+    private static func imageAlignment(fromToken token: String) -> String? {
+        let normalized = token.trimmingCharacters(in: .whitespaces).lowercased()
+        let leftTokens: Set<String> = ["align-left", "alignleft", "left", "float-left", "floatleft", "image-left", "img-left", "align-l"]
+        let rightTokens: Set<String> = ["align-right", "alignright", "right", "float-right", "floatright", "image-right", "img-right", "align-r"]
+        let centerTokens: Set<String> = ["align-center", "aligncenter", "center", "image-center", "img-center", "align-c", "center-block", "block-center", "middle"]
+        if leftTokens.contains(normalized) { return "left" }
+        if rightTokens.contains(normalized) { return "right" }
+        if centerTokens.contains(normalized) { return "center" }
+        return nil
+    }
+
+    /// 解析嵌入目标为绝对 http(s) URL。
+    /// 绝对 URL 直接复用；裸文件名/相对路径按 baseURL join（best-effort，wiki 裸名可能指向站点根）。
+    /// 非 http(s) 协议一律拒绝。
+    private static func resolvingImageEmbedTarget(_ target: String, baseURL: URL?) -> String? {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowercased = trimmed.lowercased()
+        if lowercased.hasPrefix("http://") || lowercased.hasPrefix("https://") {
+            return URL(string: trimmed)?.absoluteString
+        }
+        if lowercased.contains(":") {
+            // data:、javascript:、file: 等其他协议一律不嵌入
+            return nil
+        }
+
+        guard let baseURL else { return nil }
+
+        // 逐段百分号编码，兼容 Obsidian 常见的含空格/中文文件名
+        let hasLeadingSlash = trimmed.hasPrefix("/")
+        let encodedPath = trimmed
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "/")
+        let relativePath = (hasLeadingSlash ? "/" : "") + encodedPath
+        guard !relativePath.isEmpty,
+              let url = URL(string: relativePath, relativeTo: baseURL)?.absoluteURL,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return url.absoluteString
+    }
+
+    /// 生成受控 <img> HTML（属性逐一转义；width/class 交给 sanitizer 与阅读器 CSS 消费）。
+    private static func imageEmbedHTML(
+        source: String,
+        alt: String?,
+        width: Int?,
+        alignment: String?,
+        baseURL: URL?
+    ) -> String? {
+        guard let resolvedSource = resolvingImageEmbedTarget(source, baseURL: baseURL) else { return nil }
+        var html = "<img src=\"\(escapeHTML(resolvedSource))\""
+        if let alt, !alt.isEmpty {
+            html += " alt=\"\(escapeHTML(alt))\""
+        }
+        if let width {
+            html += " width=\"\(width)\""
+        }
+        if let alignment {
+            html += " class=\"paper-align-\(alignment)\""
+        }
+        html += ">"
+        return html
+    }
+
     // MARK: - Format Detection Helpers
 
     private static func isEscapedHTML(_ text: String) -> Bool {
@@ -310,6 +592,7 @@ enum ArticleMarkupNormalizer: Sendable {
             "(?m)^\\s*(?:---|_{3,}|\\*{3,})\\s*$",                   // 分割线
             "(?m)^\\|?(?:\\s*:?-+:?\\s*\\|)+\\s*$",                  // GFM 表格分隔行
             "!?\\[[^\\]\\r\\n]+\\]\\([^\\)\\r\\n]+\\)",              // 链接与图片 [text](url)
+            "!\\[\\[[^\\]\\r\\n]+\\]\\]",                            // Obsidian wiki 图片嵌入 ![[name|40|left]]
             "(?<!\\\\)\\*\\*[^*\\r\\n]+?\\*\\*",                     // **粗体**
             "(?<!\\\\)~~[^~\\r\\n]+?~~",                             // ~~删除线~~
             "(?<![\\\\*\\w])\\*[^*\\r\\n\\s]+?\\*(?![*\\w])",        // *斜体强调*

@@ -878,6 +878,9 @@ public enum ArticleExtractor {
             if let height = attrMap["height"], let num = Int(height), num > 0, num <= 10_000 {
                 attributes.append(" height=\"\(num)\"")
             }
+            if let alignment = extractImageAlignment(attrMap: attrMap) {
+                attributes.append(" class=\"paper-align-\(alignment)\"")
+            }
 
             attributes.append(" loading=\"\(eagerImage ? "eager" : "lazy")\"")
             attributes.append(" decoding=\"async\"")
@@ -943,6 +946,44 @@ public enum ArticleExtractor {
             if !seenNames.contains("allowfullscreen") { attributes.append(" allowfullscreen") }
         }
         return attributes.joined()
+    }
+
+    /// 提取图片对齐语义并归一化为受控 class 名（left/right/center）。
+    /// 来源覆盖三类常见写法：
+    /// 1. `align="left|right|center"` 属性
+    /// 2. `class` 中的常见对齐类名（align-left / alignleft / float-right 等）
+    /// 3. `style` 内联样式的 `float:left|right`
+    /// 只输出归一化 class，不透传原始 style/class，保证幂等（二次 sanitize 结果不变）。
+    private static func extractImageAlignment(attrMap: [String: String]) -> String? {
+        let leftClasses: Set<String> = ["align-left", "alignleft", "left", "float-left", "floatleft", "image-left", "img-left", "align-l"]
+        let rightClasses: Set<String> = ["align-right", "alignright", "right", "float-right", "floatright", "image-right", "img-right", "align-r"]
+        let centerClasses: Set<String> = ["align-center", "aligncenter", "center", "image-center", "img-center", "align-c", "center-block", "block-center"]
+
+        // 已归一化的受控类直接复用（幂等）
+        if let classTokens = attrMap["class"]?.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init),
+           let existing = classTokens.first(where: { $0.hasPrefix("paper-align-") }) {
+            let suffix = existing.dropFirst("paper-align-".count)
+            if suffix == "left" || suffix == "right" || suffix == "center" { return String(suffix) }
+        }
+
+        if let align = attrMap["align"]?.lowercased().trimmingCharacters(in: .whitespaces) {
+            if align == "left" || align == "right" || align == "center" { return align }
+            if align == "middle" { return "center" }
+        }
+
+        if let classTokens = attrMap["class"]?.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init) {
+            if classTokens.contains(where: leftClasses.contains) { return "left" }
+            if classTokens.contains(where: rightClasses.contains) { return "right" }
+            if classTokens.contains(where: centerClasses.contains) { return "center" }
+        }
+
+        if let style = attrMap["style"]?.lowercased() {
+            if style.range(of: "float\\s*:\\s*left", options: .regularExpression) != nil { return "left" }
+            if style.range(of: "float\\s*:\\s*right", options: .regularExpression) != nil { return "right" }
+            // margin 左右同时 auto 的居中与阅读器默认样式一致，无需专门归一化
+        }
+
+        return nil
     }
 
     private static func isSafeHeadingID(_ value: String) -> Bool {

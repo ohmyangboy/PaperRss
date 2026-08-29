@@ -1668,6 +1668,16 @@ img, video {
   border-radius: 6px;
   cursor: pointer;
 }
+/* 图片对齐语法（Obsidian ![[x|40|left]] / HTML align）归一化后的受控类：
+   块级独占一行，仅改变水平对齐方向（居中为默认） */
+img.paper-align-left {
+  margin-left: 0;
+  margin-right: auto;
+}
+img.paper-align-right {
+  margin-left: auto;
+  margin-right: 0;
+}
 figure {
   margin: 1.2em auto;
   text-align: center;

@@ -270,6 +270,113 @@ final class ArticleMarkupNormalizationTests: XCTestCase {
         XCTAssertEqual(ArticleMarkupNormalizer.detectFormat(page), .html)
     }
 
+    // MARK: - 7.8 图片对齐语法（Obsidian wiki 嵌入 / kramdown 属性 / Typora 尺寸 / HTML 对齐归一化）
+
+    func testDetectFormatRecognizesWikiImageEmbed() {
+        XCTAssertEqual(ArticleMarkupNormalizer.detectFormat("![[paper-blog-icon.png|40|left]]"), .markdown)
+    }
+
+    func testObsidianWikiEmbedWithSizeAndAlignmentEndToEnd() {
+        let raw = "前言段落。\n\n![[paper-blog-icon.png|40|left]]\n\n正文继续描述内容，用于模拟真实博客中图标左浮动、文字环绕的排版意图，保证文本量充足。"
+        let content = ArticleExtractor.content(from: raw, baseURL: URL(string: "https://blog.example.com/")!)
+        XCTAssertTrue(content.html.contains("width=\"40\""), "wiki 嵌入的尺寸参数必须落到 width 属性")
+        XCTAssertTrue(content.html.contains("class=\"paper-align-left\""), "对齐参数必须归一化为受控 class")
+        XCTAssertTrue(content.html.contains("src=\"https://blog.example.com/paper-blog-icon.png\""), "裸文件名必须按 baseURL 解析")
+        XCTAssertEqual(content.imageURLs.map(\.absoluteString), ["https://blog.example.com/paper-blog-icon.png"])
+        XCTAssertFalse(content.html.contains("![[") || content.html.contains("|40|"), "wiki 语法标记不得残留在最终文档中")
+    }
+
+    func testObsidianWikiEmbedSizeOnlyAndChineseFilename() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[我的 图片.png|300]]", baseURL: URL(string: "https://blog.example.com/notes/")!)
+        XCTAssertTrue(normalized.contains("width=\"300\""))
+        XCTAssertFalse(normalized.contains("paper-align-"), "未声明对齐时不得输出对齐 class")
+        XCTAssertTrue(normalized.contains("%E6%88%91"), "含中文与空格的文件名必须按路径段百分号编码")
+    }
+
+    func testObsidianWikiEmbedWithAbsoluteURLAndRightAlignment() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[https://cdn.example.com/pic.png|right]]", baseURL: nil)
+        XCTAssertTrue(normalized.contains("src=\"https://cdn.example.com/pic.png\""))
+        XCTAssertTrue(normalized.contains("class=\"paper-align-right\""))
+    }
+
+    func testUnresolvableWikiEmbedStaysLiteral() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[mystery.png|40|left]]", baseURL: nil)
+        XCTAssertFalse(normalized.contains("<img"), "无 baseURL 时无法解析裸文件名，不得产出失效图片")
+        XCTAssertTrue(normalized.contains("![[mystery.png|40|left]]"))
+    }
+
+    func testWikiEmbedInsideFencedCodeUntouched() {
+        let raw = "```\n![[demo.png|40|left]]\n```"
+        let content = ArticleExtractor.content(from: raw, baseURL: URL(string: "https://example.com/")!)
+        XCTAssertFalse(content.html.contains("<img"), "fenced code 内的 wiki 语法属于展示文本，严禁被转换")
+        XCTAssertTrue(content.html.contains("![[demo.png|40|left]]"))
+    }
+
+    func testKramdownAttributeSuffixAlignment() {
+        let normalized = ArticleMarkupNormalizer.normalize("![截图](https://example.com/shot.png){: .align-right}", baseURL: nil)
+        XCTAssertTrue(normalized.contains("class=\"paper-align-right\""))
+        XCTAssertTrue(normalized.contains("src=\"https://example.com/shot.png\""))
+        XCTAssertTrue(normalized.contains("alt=\"截图\""))
+        XCTAssertFalse(normalized.contains("{:"), "kramdown 属性串不得残留在输出中")
+    }
+
+    func testPandocWidthAttribute() {
+        let normalized = ArticleMarkupNormalizer.normalize("![cover](https://example.com/cover.png){width=240}", baseURL: nil)
+        XCTAssertTrue(normalized.contains("width=\"240\""))
+        XCTAssertFalse(normalized.contains("paper-align-"))
+    }
+
+    func testTyporaSizeSuffix() {
+        let normalized = ArticleMarkupNormalizer.normalize("![diagram](https://example.com/d.png =640x480)", baseURL: nil)
+        XCTAssertTrue(normalized.contains("width=\"640\""), "Typora 尺寸后缀必须解析为宽度")
+        let queryURL = ArticleMarkupNormalizer.normalize("![x](https://example.com/a?b=1&c=2)", baseURL: nil)
+        XCTAssertTrue(queryURL.contains("src=\"https://example.com/a?b=1&amp;c=2\""), "含查询参数的普通图片 URL 严禁被误判为尺寸后缀")
+        XCTAssertFalse(queryURL.contains("width=\""), "查询串中的 = 不得被解析为尺寸")
+    }
+
+    func testPipeAltParamsWithAlignment() {
+        let normalized = ArticleMarkupNormalizer.normalize("![图标|48|left](https://example.com/icon.png)", baseURL: nil)
+        XCTAssertTrue(normalized.contains("width=\"48\""))
+        XCTAssertTrue(normalized.contains("class=\"paper-align-left\""))
+        XCTAssertTrue(normalized.contains("alt=\"图标\""))
+    }
+
+    func testPlainImageWithoutSemanticsUntouched() {
+        let normalized = ArticleMarkupNormalizer.normalize("![alt](https://example.com/plain.png)", baseURL: nil)
+        XCTAssertTrue(normalized.contains("src=\"https://example.com/plain.png\""))
+        XCTAssertFalse(normalized.contains("paper-align-"), "无对齐语义的普通图片必须走标准 AST 渲染")
+        XCTAssertFalse(normalized.contains("width=\""))
+    }
+
+    func testHTMLAlignAttributeNormalizedToControlledClass() {
+        let raw = "<img src=\"https://example.com/i.png\" align=\"left\">"
+        let content = ArticleExtractor.content(from: raw, baseURL: nil)
+        XCTAssertTrue(content.html.contains("class=\"paper-align-left\""), "HTML align 属性必须归一化为受控 class")
+        XCTAssertFalse(content.html.contains("align="), "原始 align 属性不得透传")
+    }
+
+    func testHTMLFloatStyleNormalizedAndStyleStripped() {
+        let raw = "<img src=\"https://example.com/i.png\" style=\"float:right;border:1px solid red\">"
+        let content = ArticleExtractor.content(from: raw, baseURL: nil)
+        XCTAssertTrue(content.html.contains("class=\"paper-align-right\""), "style 内 float 对齐语义必须被归一化保留")
+        XCTAssertFalse(content.html.contains("style="), "原始 style 不得透传（否则绕过样式沙箱）")
+    }
+
+    func testHTMLAlignmentClassNormalizedAndUnknownClassStripped() {
+        let raw = "<img src=\"https://example.com/i.png\" class=\"alignleft some-theme-hook\">"
+        let content = ArticleExtractor.content(from: raw, baseURL: nil)
+        XCTAssertTrue(content.html.contains("class=\"paper-align-left\""))
+        XCTAssertFalse(content.html.contains("some-theme-hook"), "未知主题 class 不得透传")
+    }
+
+    func testSanitizerAlignmentOutputIsIdempotent() {
+        let raw = "<img src=\"https://example.com/i.png\" align=\"left\">"
+        let firstPass = ArticleExtractor.content(from: raw, baseURL: nil).html
+        let secondPass = ArticleExtractor.content(from: firstPass, baseURL: nil).html
+        XCTAssertEqual(firstPass, secondPass, "对齐归一化必须幂等：二次 sanitize 结果不变")
+        XCTAssertEqual(secondPass.components(separatedBy: "paper-align-left").count - 1, 1, "受控 class 不得重复堆叠")
+    }
+
     // MARK: - 8. No Site Branches in Production Code
     func testProductionCodeDoesNotContainSiteBranches() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
