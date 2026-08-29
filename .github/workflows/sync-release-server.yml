@@ -1,0 +1,54 @@
+name: Sync Release to Server
+
+on:
+  # 发布正式 Release 时立即触发
+  release:
+    types:
+      - published
+
+  # 允许在 GitHub Actions 页面手动测试
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    # 手动运行允许执行；
+    # Release 自动触发时只处理正式版，不处理 prerelease
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.release.prerelease == false
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PAPERRSS_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.PAPERRSS_SERVER_HOST }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync latest PaperRss release
+        env:
+          SERVER_HOST: ${{ secrets.PAPERRSS_SERVER_HOST }}
+          SERVER_USER: ${{ secrets.PAPERRSS_SERVER_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "$SERVER_USER@$SERVER_HOST" \
+            "sync-paperrss"
