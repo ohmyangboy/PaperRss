@@ -1,6 +1,6 @@
 # PaperRss 第三方软件声明 / Third-Party Software Notices
 
-**更新日期 / Updated:** 2026-08-27
+**更新日期 / Updated:** 2026-08-29
 
 PaperRss 本身依据 [GNU General Public License v3.0](LICENSE) 发布。以下组件由各自权利人依据各自许可证提供；PaperRss 的 GPL-3.0 不会替代、限制或重新许可这些独立组件的许可证。第三方名称和商标仅用于识别相关组件，不表示其对 PaperRss 的背书。
 
@@ -15,6 +15,7 @@ PaperRss itself is distributed under the [GNU General Public License v3.0](LICEN
 | swift-markdown | 0.8.0 | Copyright © 2021 Apple Inc. and the Swift project authors | Apache License 2.0 | [Source](https://github.com/swiftlang/swift-markdown/tree/0.8.0) · [License](https://github.com/swiftlang/swift-markdown/blob/0.8.0/LICENSE.txt) · [NOTICE](https://github.com/swiftlang/swift-markdown/blob/0.8.0/NOTICE.txt) |
 | swift-cmark | 0.8.0 | John MacFarlane and other identified contributors | BSD-style licenses and separately identified component licenses | [Source](https://github.com/swiftlang/swift-cmark/tree/0.8.0) · [Complete notices](https://github.com/swiftlang/swift-cmark/blob/0.8.0/COPYING) |
 | MathJax `tex-mml-svg-mathjax-tex` runtime | 4.1.2 | MathJax project contributors | Apache License 2.0 | [Bundled component record](PaperRss/Resources/MathJax/README.md) · [Bundled license](PaperRss/Resources/MathJax/LICENSE) · [Project](https://github.com/mathjax/MathJax) |
+| highlight.js `highlight.min.js` (common build) | 11.11.2 | Copyright (c) 2006, Ivan Sagalaev; Josh Goebel and other contributors | BSD 3-Clause | [Bundled component record](PaperRss/Resources/Highlight/README.md) · [Bundled license](PaperRss/Resources/Highlight/LICENSE) · [Project](https://github.com/highlightjs/highlight.js) |
 
 ## Required attribution text retained by this distribution
 
@@ -35,9 +36,21 @@ PaperRss itself is distributed under the [GNU General Public License v3.0](LICEN
 > Licensed under the Apache License, Version 2.0.  
 > This product contains a derivation of the cmark-gfm project available through swift-cmark.
 
-The complete Apache License 2.0 text is retained in [PaperRss/Resources/MathJax/LICENSE](PaperRss/Resources/MathJax/LICENSE). Complete upstream notices for Sparkle and swift-cmark are linked in the table because they include multiple separately attributed source files. Release packaging must retain the licenses embedded by those packages and the bundled MathJax license; this document must be distributed with source releases and remain publicly accessible with binary releases.
+### highlight.js — BSD 3-Clause License
 
-Apache License 2.0 的完整文本保存在 [PaperRss/Resources/MathJax/LICENSE](PaperRss/Resources/MathJax/LICENSE)。Sparkle 与 swift-cmark 的上游许可证包含多个独立文件的署名，完整文本见表格中的固定版本链接。发布打包时必须保留依赖自身携带的许可证和 MathJax 许可证；本说明应随源码发布，并在二进制发布时保持公开可访问。
+> Copyright (c) 2006, Ivan Sagalaev. All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+> 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The complete Apache License 2.0 text is retained in [PaperRss/Resources/MathJax/LICENSE](PaperRss/Resources/MathJax/LICENSE). The complete BSD 3-Clause text for highlight.js is retained in [PaperRss/Resources/Highlight/LICENSE](PaperRss/Resources/Highlight/LICENSE). Complete upstream notices for Sparkle and swift-cmark are linked in the table because they include multiple separately attributed source files. Release packaging must retain the licenses embedded by those packages and the bundled MathJax and highlight.js licenses; this document must be distributed with source releases and remain publicly accessible with binary releases.
+
+Apache License 2.0 的完整文本保存在 [PaperRss/Resources/MathJax/LICENSE](PaperRss/Resources/MathJax/LICENSE)。highlight.js 的 BSD 3-Clause 完整文本保存在 [PaperRss/Resources/Highlight/LICENSE](PaperRss/Resources/Highlight/LICENSE)。Sparkle 与 swift-cmark 的上游许可证包含多个独立文件的署名，完整文本见表格中的固定版本链接。发布打包时必须保留依赖自身携带的许可证和 MathJax、highlight.js 许可证；本说明应随源码发布，并在二进制发布时保持公开可访问。
 
 ## Website fonts and external services
 

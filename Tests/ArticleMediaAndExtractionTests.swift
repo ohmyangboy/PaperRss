@@ -284,4 +284,26 @@ final class ArticleMediaAndExtractionTests: XCTestCase {
         XCTAssertTrue(sanitized.contains("href=\"#toc-1\""))
         XCTAssertFalse(sanitized.contains("https://example.com/post#toc-1"))
     }
+
+    // MARK: - 12. Twitter Profile Avatar Stripping
+
+    /// x.com 网页抽取会把作者头像壳作为正文首块带进阅读器（大图顶在推文前）。
+    /// sanitizer 必须整标签剔除 pbs.twimg.com/profile_images/ 头像，
+    /// 同时保留推文媒体（/media/、/amplify_video_thumb/）。
+    func testSanitizerStripsTwitterProfileAvatarButKeepsTweetMedia() {
+        let html = """
+        <div><div><div><a href="https://x.com/dotey"><div><img src="https://pbs.twimg.com/profile_images/561086911561736192/6_g58vEs_400x400.jpeg" alt="user avatar" loading="eager" decoding="async"></div></a></div></div>
+        <div><span>推文正文内容。</span></div>
+        <div><img src="https://pbs.twimg.com/amplify_video_thumb/2093539587096211456/img/zgvZdrM6wTPwPEho?format=webp&amp;name=medium" alt=""></div>
+        <div><img src="https://pbs.twimg.com/media/GAbcdef.jpeg?format=jpg&amp;name=medium" alt="推文配图"></div>
+        """
+
+        let sanitized = ArticleExtractor.sanitizedHTML(html, baseURL: URL(string: "https://x.com/dotey/status/1"))
+
+        XCTAssertFalse(sanitized.contains("profile_images"), "作者头像必须整标签剔除")
+        XCTAssertFalse(sanitized.contains("user avatar"), "头像 alt 不得残留")
+        XCTAssertTrue(sanitized.contains("amplify_video_thumb"), "推文视频封面必须保留")
+        XCTAssertTrue(sanitized.contains("pbs.twimg.com/media"), "推文配图必须保留")
+        XCTAssertTrue(sanitized.contains("推文正文内容"), "推文正文必须保留")
+    }
 }

@@ -298,7 +298,14 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
 }
 
 public struct ArticleCache: Codable, Hashable, Sendable {
-    public static let currentNormalizationRevision = 1
+    /// Revision 2: sanitizer now preserves language-annotating `class` on `<code>`
+    /// (feed 语言标注此前被整体剥离，导致阅读器代码高亮无从消费)，缓存需重清洗。
+    /// Revision 3: sanitizer 剔除 Twitter 作者头像（pbs.twimg.com/profile_images/）。
+    /// x.com 网页抽取曾把头像壳写进缓存正文首块，需重清洗以自愈。
+    /// Revision 4: 特殊自包含 feed（Twitter/RSSHub）的 revision 刷新改走 feed 候选，
+    /// 不再网页升级。此前的 x.com 抽取缓存携带作者行/时间戳/Views/互动数等
+    /// 页面 chrome，需重清洗换回干净推文正文。
+    public static let currentNormalizationRevision = 4
 
     public var entryID: String
     public var text: String

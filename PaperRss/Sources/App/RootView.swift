@@ -1756,6 +1756,13 @@ private struct EntryListView: View {
                     Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
                 }
                 .disabled(store.activeRefetchEntryIDs.contains(entry.id))
+                Divider()
+                Button {
+                    AppInfo.copyToClipboard(entry.id)
+                    onFeedback(I18N.shared.localized("已复制文章 ID"))
+                } label: {
+                    Label(I18N.shared.localized("复制文章 ID"), systemImage: "doc.on.doc")
+                }
             }
             .onAppear {
                 if entry.id == loadedEntries.last?.id {

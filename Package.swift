@@ -40,7 +40,8 @@ let package = Package(
             resources: [
                 .process("../../Resources/Assets.xcassets"),
                 .process("../../Resources/Localization/Localizable.xcstrings"),
-                .copy("../../Resources/MathJax")
+                .copy("../../Resources/MathJax"),
+                .copy("../../Resources/Highlight")
             ]
         ),
         .testTarget(
@@ -52,8 +53,10 @@ let package = Package(
             path: "Tests",
             exclude: [
                 "fixtures",
+                "CodeHighlightWebKitProbe.swift",
                 "MathJaxWebKitProbe.swift",
                 "mathjax-runtime.test.mjs",
+                "code-highlighting.test.mjs",
                 "reader-shortcuts.test.mjs",
                 "reader-toc.test.mjs",
                 "repository-policy.test.mjs",

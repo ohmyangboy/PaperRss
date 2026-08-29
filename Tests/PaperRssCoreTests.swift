@@ -326,6 +326,42 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(output.localizedCaseInsensitiveContains("javascript:"))
     }
 
+    func testSanitizerPreservesLanguageClassOnCodeBlocks() {
+        let html = #"<pre><code class="language-python">import numpy as np</code></pre><pre><code class="lang-ts">const x = 1</code></pre>"#
+        let output = ArticleExtractor.sanitizedHTML(html)
+
+        XCTAssertTrue(output.contains(#"<code class="language-python">"#), "code 的 language-* 语言标注必须保留（阅读器代码高亮依赖）")
+        XCTAssertTrue(output.contains(#"<code class="lang-ts">"#), "code 的 lang-* 语言标注必须保留")
+    }
+
+    func testSanitizerStripsReaderNamespaceClassesFromCode() {
+        let html = #"<code class="paper-img-row language-python">x = 1</code><code class="paper-align-right">y = 2</code>"#
+        let output = ArticleExtractor.sanitizedHTML(html)
+
+        XCTAssertTrue(output.contains(#"<code class="language-python">"#), "paper-* 之外的语言标注保留")
+        XCTAssertFalse(output.contains("paper-img-row"), "code 不得透传阅读器内部样式命名空间 paper-*")
+        XCTAssertFalse(output.contains("paper-align-right"), "code 不得透传阅读器内部样式命名空间 paper-*")
+        XCTAssertFalse(output.contains(#"<code class="paper"#))
+    }
+
+    func testSanitizerCodeClassIsIdempotent() {
+        let html = #"<pre><code class="language-python paper-align-left">import numpy as np</code></pre>"#
+        let once = ArticleExtractor.sanitizedHTML(html)
+        let twice = ArticleExtractor.sanitizedHTML(once)
+
+        XCTAssertEqual(once, twice, "code class 清洗必须幂等（二次清洗结果不变）")
+        XCTAssertTrue(once.contains(#"<code class="language-python">"#))
+    }
+
+    func testSanitizerStillStripsClassesOnNonCodeTags() {
+        let html = #"<pre class="language-python"><code class="language-python">x = 1</code></pre><span class="kn">import</span>"#
+        let output = ArticleExtractor.sanitizedHTML(html)
+
+        XCTAssertTrue(output.contains("<pre><code"), "pre 的 class 仍应剥离（语言标注约定在 code 上）")
+        XCTAssertTrue(output.contains(#"<code class="language-python">"#))
+        XCTAssertTrue(output.contains("<span>import</span>"), "span 的 class 仍应剥离（feed 高亮标记由阅读器统一重着色）")
+    }
+
     func testHTMLReaderSanitizerPercentEncodesSpacesInRemoteImagePaths() {
         let html = """
         <p><img src="https://ohmyangboy.github.io/blog/assets/Pasted image 20260813144954.png"></p>

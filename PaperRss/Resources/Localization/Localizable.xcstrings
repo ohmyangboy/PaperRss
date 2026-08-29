@@ -1432,6 +1432,16 @@
         }
       }
     },
+    "复制文章 ID" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Article ID"
+          }
+        }
+      }
+    },
     "外观" : {
       "localizations" : {
         "en" : {
@@ -2955,6 +2965,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Article Text Size"
+          }
+        }
+      }
+    },
+    "已复制文章 ID" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article ID Copied"
           }
         }
       }

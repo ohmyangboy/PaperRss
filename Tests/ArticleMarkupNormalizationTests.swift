@@ -377,6 +377,53 @@ final class ArticleMarkupNormalizationTests: XCTestCase {
         XCTAssertEqual(secondPass.components(separatedBy: "paper-align-left").count - 1, 1, "受控 class 不得重复堆叠")
     }
 
+    // MARK: - 7.9 多图 wrap 行分组
+
+    func testSameLineMultipleEmbedsGroupedIntoWrapRow() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[a.png|120]] ![[b.png|120]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertTrue(normalized.contains("<div class=\"paper-img-row\">"), "同行多图必须归入 wrap 行容器")
+        XCTAssertEqual(normalized.components(separatedBy: "<img").count - 1, 2)
+        XCTAssertEqual(normalized.components(separatedBy: "width=\"120\"").count - 1, 2, "每张图的原文宽度必须保留")
+    }
+
+    func testWrapRowClassSurvivesSanitizerEndToEnd() {
+        let content = ArticleExtractor.content(from: "![[a.png|120]] ![[b.png|120]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertTrue(content.html.contains("<div class=\"paper-img-row\">"), "行容器受控 class 必须穿过 sanitizer")
+        XCTAssertEqual(content.imageURLs.count, 2, "行内两张图的 URL 都必须进入图片清单")
+    }
+
+    func testConsecutiveImageOnlyLinesGroupedIntoOneRow() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[a.png|120]]\n![[b.png|120]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertTrue(normalized.contains("paper-img-row"), "紧邻的纯图片行必须合并为同一 wrap 行")
+        XCTAssertEqual(normalized.components(separatedBy: "paper-img-row").count - 1, 1)
+    }
+
+    func testImageLinesSeparatedByBlankLineNotGrouped() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[a.png|120]]\n\n![[b.png|120]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertFalse(normalized.contains("paper-img-row"), "空行分隔的图片属于不同段落，不得强行同行")
+        XCTAssertEqual(normalized.components(separatedBy: "<img").count - 1, 2)
+    }
+
+    func testMixedTextAndImagesLineNotGrouped() {
+        let normalized = ArticleMarkupNormalizer.normalize("文字说明 ![[a.png|40]] 后续 ![[b.png|40]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertFalse(normalized.contains("paper-img-row"), "图文混排行不得强制分组")
+        XCTAssertTrue(normalized.contains("文字说明"))
+        XCTAssertTrue(normalized.contains("后续"))
+    }
+
+    func testSingleImageLineNotWrappedInRow() {
+        let normalized = ArticleMarkupNormalizer.normalize("![[solo.png|300]]", baseURL: URL(string: "https://example.com/")!)
+        XCTAssertFalse(normalized.contains("paper-img-row"), "单图保持独立块，不得包行容器")
+        XCTAssertTrue(normalized.contains("width=\"300\""))
+    }
+
+    func testSanitizerStripsNonControlledDivClass() {
+        let raw = "<div class=\"some-theme-hook\"><p>正文段落内容，用于通过容器提取的文本量门槛要求，继续补充说明文字。</p></div>"
+        let content = ArticleExtractor.content(from: raw, baseURL: nil)
+        XCTAssertFalse(content.html.contains("some-theme-hook"), "div 仅放行 paper-img-row 受控 class，其余一律剥离")
+        XCTAssertTrue(content.html.contains("正文段落内容"))
+    }
+
     // MARK: - 8. No Site Branches in Production Code
     func testProductionCodeDoesNotContainSiteBranches() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)

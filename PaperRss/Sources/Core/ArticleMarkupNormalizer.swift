@@ -297,28 +297,70 @@ enum ArticleMarkupNormalizer: Sendable {
     /// - alt 管道参数：`![alt|40|left](url)`
     /// - kramdown/Pandoc 属性：`![alt](url){: .align-left}`、`![alt](url){width=40}`
     /// - Typora 尺寸：`![alt](url =40x)`、`![alt](url =40x30)`
+    /// 分组规则：同一行内多图，或紧邻的纯图片行，归入同一 `paper-img-row` wrap 行容器
+    /// （总宽不超正文宽度则同行展示，超出自然换行）；单图保持独立块（宽度尊重原文、整体居中）。
     /// fenced code 块内不转换；提取不到对齐/尺寸语义时保持原文，交给 AST 正常渲染。
     static func expandingImageEmbeds(in text: String, baseURL: URL?) -> String {
         guard text.contains("![") else { return text }
 
-        var result = ""
+        var blocks: [String] = []
+        var pendingRowImages: [String] = []
         var inFence = false
-        let lines = text.components(separatedBy: "\n")
-        for (index, line) in lines.enumerated() {
+
+        func flushPendingRow() {
+            guard !pendingRowImages.isEmpty else { return }
+            if pendingRowImages.count == 1 {
+                // 单图保持独立块：宽度尊重原文，默认整体居中（对齐 class 仍然生效）
+                blocks.append(pendingRowImages[0])
+            } else {
+                // 多图归入同一 wrap 行容器
+                blocks.append("<div class=\"paper-img-row\">" + pendingRowImages.joined() + "</div>")
+            }
+            pendingRowImages.removeAll()
+        }
+
+        for line in text.components(separatedBy: "\n") {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
+                flushPendingRow()
                 inFence.toggle()
-                result += line
+                blocks.append(line)
             } else if inFence {
-                result += line
+                blocks.append(line)
             } else {
-                result += expandingImageEmbeds(inLine: line, baseURL: baseURL)
-            }
-            if index < lines.count - 1 {
-                result += "\n"
+                let transformedLine = expandingImageEmbeds(inLine: line, baseURL: baseURL)
+                if let lineImages = imageOnlyLineEmbeds(fromTransformedLine: transformedLine) {
+                    pendingRowImages.append(contentsOf: lineImages)
+                } else {
+                    flushPendingRow()
+                    blocks.append(transformedLine)
+                }
             }
         }
-        return result
+        flushPendingRow()
+        return blocks.joined(separator: "\n")
+    }
+
+    /// 判断一行转换结果是否完全由 <img> 标签构成（允许标签间空白）。
+    /// 是则拆分出 img 标签数组供多图同行分组；否则返回 nil 走普通文本/行内混排路径。
+    /// 约束：本转换器生成的 img 属性值均经 HTML 转义且 URL 百分号编码，标签内部不含 `>`。
+    private static func imageOnlyLineEmbeds(fromTransformedLine line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("<img") else { return nil }
+
+        var images: [String] = []
+        var cursor = trimmed.startIndex
+        while cursor < trimmed.endIndex {
+            while cursor < trimmed.endIndex, trimmed[cursor].isWhitespace {
+                cursor = trimmed.index(after: cursor)
+            }
+            guard cursor < trimmed.endIndex else { break }
+            guard trimmed[cursor...].hasPrefix("<img") else { return nil }
+            guard let tagEnd = trimmed[cursor...].firstIndex(of: ">") else { return nil }
+            images.append(String(trimmed[cursor...tagEnd]))
+            cursor = trimmed.index(after: tagEnd)
+        }
+        return images.isEmpty ? nil : images
     }
 
     private static func expandingImageEmbeds(inLine line: String, baseURL: URL?) -> String {

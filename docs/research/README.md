@@ -12,6 +12,7 @@
 | 第三方服务 | [`freshrss-api-research.md`](freshrss-api-research.md) | FreshRSS Google Reader 兼容接口与鉴权 |
 | 阅读与过滤 | [`rss-keyword-filtering.md`](rss-keyword-filtering.md) | RSS 关键词过滤产品与实现模式 |
 | 分发与发布 | [`app-beta-soft-launch-channels.md`](app-beta-soft-launch-channels.md) | macOS Beta 软启动渠道与规则 |
+| 跨平台迁移 | [`tauri-cross-platform-v2-assessment.md`](tauri-cross-platform-v2-assessment.md) | V2 Windows/Linux Tauri 迁移可行性与垂直原型计划 |
 
 ## 写作要求
 

@@ -8,6 +8,7 @@
 #   ./scripts/verify.sh --feature     # 仅执行 App 核心功能回归测试 (AppFeatureRegressionTests)
 #   ./scripts/verify.sh --web         # 仅执行 Web Reader / JS Bridge / 快捷键策略测试
 #   ./scripts/verify.sh --mathjax-webkit # 执行需拉起 WebKit 的 MathJax Tier 3 探针
+#   ./scripts/verify.sh --highlight-webkit # 执行需拉起 WebKit 的代码高亮 Tier 3 探针
 #   ./scripts/verify.sh --core        # 仅执行 Swift Core 数据与性能全量回归测试
 #   ./scripts/verify.sh --filter <名> # 运行指定测试类或测试方法
 #
@@ -62,6 +63,12 @@ run_mathjax_webkit_test() {
     echo -e "${GREEN}✔ MathJax WKWebView 探针通过！${NC}"
 }
 
+run_highlight_webkit_test() {
+    echo -e "\n${BLUE}▶ 执行代码高亮真实 WKWebView 完成态探针...${NC}"
+    ./scripts/test-highlight-webkit.sh
+    echo -e "${GREEN}✔ 代码高亮 WKWebView 探针通过！${NC}"
+}
+
 run_core_tests() {
     echo -e "\n${BLUE}▶ 执行 Swift 全量单元与集成测试 (Core/Data/FreshRSS/Performance)...${NC}"
     swift test
@@ -97,6 +104,9 @@ case "$MODE" in
     --mathjax-webkit)
         run_mathjax_webkit_test
         ;;
+    --highlight-webkit)
+        run_highlight_webkit_test
+        ;;
     --core)
         run_core_tests
         ;;
@@ -124,6 +134,7 @@ case "$MODE" in
         echo -e "  ./scripts/verify.sh --feature     # 仅回归 App 核心功能 (AppFeatureRegressionTests)" >&2
         echo -e "  ./scripts/verify.sh --web         # 仅回归 Web / JS Bridge" >&2
         echo -e "  ./scripts/verify.sh --mathjax-webkit # MathJax Tier 3 WebKit 探针" >&2
+        echo -e "  ./scripts/verify.sh --highlight-webkit # 代码高亮 Tier 3 WebKit 探针" >&2
         echo -e "  ./scripts/verify.sh --core        # 仅回归 Swift Core 测试" >&2
         echo -e "  ./scripts/verify.sh --filter <名> # 运行指定测试类/方法" >&2
         exit 1

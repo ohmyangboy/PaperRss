@@ -474,6 +474,13 @@ public enum ArticleExtractor {
             if isClosingTag {
                 if !voidTags.contains(name) { result += "</\(name)>" }
             } else {
+                if name == "img",
+                   isProfileAvatarImage(String(withoutExecutableBlocks[attributesRange]), baseURL: baseURL) {
+                    // 作者头像是页面装饰而非文章内容：x.com 网页抽取会把头像壳
+                    // 作为正文首块带进阅读器（大图顶在推文前）。整标签剔除，
+                    // 推文媒体（/media/、/amplify_video_thumb/）不受影响。
+                    return
+                }
                 let eagerImage = name == "img" && imageIndex < 2
                 if name == "img" { imageIndex += 1 }
                 result += "<\(name)\(sanitizedAttributes(String(withoutExecutableBlocks[attributesRange]), for: name, baseURL: baseURL, eagerImage: eagerImage))>"
@@ -855,6 +862,14 @@ public enum ArticleExtractor {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// 判断 img 属性串是否指向 Twitter/X 的作者头像。
+    /// `pbs.twimg.com/profile_images/` 路径专用于头像；推文媒体在
+    /// `/media/` 与 `/amplify_video_thumb/` 下，不会误伤正文图。
+    private static func isProfileAvatarImage(_ attributes: String, baseURL: URL?) -> Bool {
+        guard let url = extractBestImageURL(from: attributes, baseURL: baseURL) else { return false }
+        return url.host?.lowercased() == "pbs.twimg.com" && url.path.lowercased().hasPrefix("/profile_images/")
+    }
+
     private static func sanitizedAttributes(_ source: String, for tag: String, baseURL: URL?, eagerImage: Bool = false) -> String {
         if tag == "img" {
             var attributes: [String] = []
@@ -890,11 +905,13 @@ public enum ArticleExtractor {
         let allowed: Set<String>
         switch tag {
         case "a": allowed = ["href", "title"]
+        case "code": allowed = ["class"]
         case "video": allowed = ["src", "poster", "controls", "autoplay", "loop", "muted", "playsinline", "webkit-playsinline", "allowfullscreen", "preload", "width", "height"]
         case "source": allowed = ["src", "type"]
         case "audio": allowed = ["src", "controls", "autoplay", "loop", "muted", "preload"]
         case "th", "td": allowed = ["colspan", "rowspan"]
         case "h1", "h2", "h3", "h4", "h5", "h6": allowed = ["id"]
+        case "div": allowed = ["class"]
         case "math": allowed = ["display"]
         case "mi", "mn", "mo", "mtext", "mstyle": allowed = ["mathvariant"]
         case "mspace": allowed = ["width", "height", "depth"]
@@ -929,6 +946,24 @@ public enum ArticleExtractor {
                 } else if name == "width" || name == "height" || name == "colspan" || name == "rowspan" {
                     guard let number = Int(value), number > 0, number <= 10_000 else { return }
                     value = String(number)
+                } else if name == "class" {
+                    let tokens = value
+                        .split(whereSeparator: { $0.isWhitespace })
+                        .map(String.init)
+                    if tag == "div" {
+                        // div 的 class 只放行受控的图片行容器标记，其余一律剥离
+                        let controlledTokens = tokens.filter { $0.lowercased() == "paper-img-row" }
+                        guard !controlledTokens.isEmpty else { return }
+                        value = controlledTokens.joined(separator: " ")
+                    } else if tag == "code" {
+                        // code 的 class 透传语言标注（language-* / lang-* 等，供阅读器代码高亮消费），
+                        // 但剥离阅读器自身命名空间 paper-*，防止 feed 伪造阅读器内部样式钩子。
+                        let passthroughTokens = tokens.filter { !$0.lowercased().hasPrefix("paper-") }
+                        guard !passthroughTokens.isEmpty else { return }
+                        value = passthroughTokens.joined(separator: " ")
+                    } else {
+                        return
+                    }
                 } else if name == "id" {
                     guard isSafeHeadingID(value) else { return }
                 }

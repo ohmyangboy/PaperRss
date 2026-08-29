@@ -23,6 +23,8 @@
 		A10000000000000000000022 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"Resources/Highlight/LICENSE",
+				"Resources/Highlight/README.md",
 				"Resources/iOS-Info.plist",
 				"Resources/macOS-Info.plist",
 			);
@@ -31,6 +33,8 @@
 		A10000000000000000000023 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"Resources/Highlight/LICENSE",
+				"Resources/Highlight/README.md",
 				"Resources/iOS-Info.plist",
 				"Resources/macOS-Info.plist",
 			);

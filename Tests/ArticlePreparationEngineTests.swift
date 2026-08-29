@@ -505,8 +505,47 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertFalse(result.prepared.html.contains("<em>"))
     }
 
-    func testLegacyCorruptedMathCacheNetworkFailureRemainsRetryableFallback() async {
+    /// 特殊自包含 feed（Twitter/RSSHub）的 revision 刷新必须走 feed 候选：
+    /// 严禁抓 x.com 网页升级——抽取产物携带作者行/时间戳/Views/互动数等
+    /// 页面 chrome，会顶替干净推文正文（头像类渲染缺陷的根源）。
+    func testSpecialSelfContainedFeedRefreshesFromFeedWithoutWebFetch() async {
         let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entryID = "entry-twitter-stale-cache"
+        let statusURL = URL(string: "https://x.com/thdxr/status/1234")!
+        let tweetText = "this is the best account on x rn"
+        // 旧 revision 缓存模拟 x.com 网页抽取产物（页面 chrome 污染）
+        let staleChromeCache = ArticleCache(
+            entryID: entryID,
+            text: "dax\n\n@thdxr\n\n\(tweetText)\n\n3h\n\n2.2万 Views\n\n12\n\n1\n\n122\n\n11",
+            html: "<div><a href=\"https://x.com/thdxr\">dax @thdxr</a></div><div>3h</div><p>\(tweetText)</p><div>3:23 · 2026年8月29日 2.2万 Views</div><div>12</div><div>1</div><div>122</div><div>11</div>",
+            imageURLs: [],
+            sourceURL: statusURL,
+            isSanitized: true,
+            normalizationRevision: ArticleCache.currentNormalizationRevision - 1
+        )
+        let entry = Entry(
+            id: entryID,
+            feedID: defaultFeedID,
+            title: "this is the best account on x rn",
+            url: statusURL,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(tweetText)</p><p>OpenCode Jr: touch grass eat grass smear grass over body</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: staleChromeCache, policy: .foregroundRefresh)
+
+        XCTAssertEqual(loader.requestCount, 0, "特殊自包含 feed 的 revision 刷新严禁触发网页抓取")
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertEqual(result.cacheState, .current)
+        XCTAssertFalse(result.prepared.html.contains("Views"), "x.com 页面 chrome 不得进入正文")
+        XCTAssertFalse(result.prepared.html.contains("@thdxr"), "作者行 chrome 不得进入正文")
+        XCTAssertTrue(result.prepared.text.contains(tweetText), "推文正文必须来自 feed")
+        XCTAssertEqual(result.updatedCache?.normalizationRevision, ArticleCache.currentNormalizationRevision, "刷新必须把缓存升级到当前 revision 实现自愈")
+    }
+
+    func testLegacyCorruptedMathCacheNetworkFailureRemainsRetryableFallback() async {        let loader = MockPageLoader()
         let url = URL(string: "https://example.com/legacy-math-offline")!
         loader.errorMap[url] = URLError(.notConnectedToInternet)
         let engine = ArticlePreparationEngine(pageLoader: loader)

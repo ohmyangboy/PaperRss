@@ -1426,6 +1426,11 @@ private let paperArticleStyle = """
   --paper-wash: rgba(95, 115, 85, .10);
   --paper-code: rgba(100, 88, 65, .09);
   --paper-card: rgba(250, 248, 240, .97);
+  --paper-code-comment: #8a8172;
+  --paper-code-keyword: #a04c33;
+  --paper-code-string: #55713e;
+  --paper-code-number: #8a651f;
+  --paper-code-title: #47688f;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -1437,6 +1442,11 @@ private let paperArticleStyle = """
     --paper-wash: rgba(158, 175, 145, .10);
     --paper-code: rgba(224, 211, 185, .08);
     --paper-card: rgba(48, 45, 40, .97);
+    --paper-code-comment: #8f8778;
+    --paper-code-keyword: #d18b73;
+    --paper-code-string: #9eaf91;
+    --paper-code-number: #d0a95f;
+    --paper-code-title: #8fb0cc;
   }
 }
 html {
@@ -1678,6 +1688,24 @@ img.paper-align-right {
   margin-left: auto;
   margin-right: 0;
 }
+/* 多图 wrap 行容器：有声明宽度的图尊重原文尺寸、总宽超行时自然换行；
+   无声明宽度的图均分共享一行（画廊语义）；整行居中 */
+.paper-img-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: .75em;
+  margin: 1.2em 0;
+}
+.paper-img-row img {
+  flex: 1 1 0;      /* 无声明宽度：basis 0 + 均分，全部并入同一行各占等宽（画廊语义） */
+  min-width: 0;     /* 覆盖 flex 自动最小尺寸（固有宽），否则图片拒绝收缩 */
+  margin: 0;
+}
+.paper-img-row img[width] {
+  flex: 0 0 auto;   /* 有声明宽度：尊重原文尺寸，总宽超出行时自然换行 */
+}
 figure {
   margin: 1.2em auto;
   text-align: center;
@@ -1801,6 +1829,30 @@ pre {
   border-radius: 6px;
 }
 code { font-size: .92em; }
+pre code .hljs-comment, pre code .hljs-quote {
+  color: var(--paper-code-comment);
+  font-style: italic;
+}
+pre code .hljs-keyword, pre code .hljs-selector-tag,
+pre code .hljs-built_in, pre code .hljs-doctag {
+  color: var(--paper-code-keyword);
+}
+pre code .hljs-string, pre code .hljs-regexp, pre code .hljs-addition {
+  color: var(--paper-code-string);
+}
+pre code .hljs-number, pre code .hljs-literal, pre code .hljs-symbol,
+pre code .hljs-bullet, pre code .hljs-link, pre code .hljs-meta {
+  color: var(--paper-code-number);
+}
+pre code .hljs-title, pre code .hljs-title.function_, pre code .hljs-title.class_,
+pre code .hljs-section, pre code .hljs-name,
+pre code .hljs-selector-id, pre code .hljs-selector-class {
+  color: var(--paper-code-title);
+  font-weight: 600;
+}
+pre code .hljs-deletion { color: var(--paper-code-keyword); }
+pre code .hljs-emphasis { font-style: italic; }
+pre code .hljs-strong { font-weight: 700; }
 hr {
   height: 1px;
   border: 0;
@@ -3895,6 +3947,32 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
+    /// 画廊归一：博客 feed 常以原生 HTML `<div><img><img></div>` 输出多图画廊，
+    /// 阅读器默认样式会把每个 img 拉成全宽竖排。此脚本把「子元素全部为 ≥2 个 IMG
+    /// 且无可见文本」的 div 归一为 `paper-img-row` wrap 行容器，与 Markdown 管线
+    /// 的分组产物共用同一套布局语义（对已缓存的旧文章同样生效）。
+    static let imageGalleryScript = WKUserScript(
+        source: """
+        (() => {
+          const isGalleryContainer = element => {
+            if (!element || element.tagName !== "DIV") return false;
+            if (element.classList.contains("paper-img-row")) return false;
+            if (typeof element.closest === "function" && element.closest("pre, code")) return false;
+            const children = Array.from(element.children || []);
+            if (children.length < 2) return false;
+            if (!children.every(child => child && child.tagName === "IMG")) return false;
+            return String(element.textContent || "").trim() === "";
+          };
+          document.querySelectorAll("div").forEach(element => {
+            if (isGalleryContainer(element)) element.classList.add("paper-img-row");
+          });
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
     static let nextArticleMessageName = "paperRssNextArticle"
     static let focusListMessageName = "paperRssFocusList"
     static let readerShortcutMessageName = "paperRssReaderShortcut"
@@ -4345,6 +4423,38 @@ enum PaperReaderBridge {
         return nil
     }
 
+    private static var _cachedHighlightSource: String?
+
+    /// 加载本地打包的 highlight.js 运行时（common 语言集，约 125KB）。
+    /// 回退顺序与 MathJax 一致：App Bundle → SPM Bundle.module → 源码目录相对路径。
+    public static func loadHighlightRuntimeSource() -> String? {
+        if let cached = _cachedHighlightSource {
+            return cached
+        }
+        // 1. 尝试从 App Bundle / Resources 加载
+        if let url = Bundle.main.url(forResource: "highlight.min", withExtension: "js", subdirectory: "Highlight") ??
+                     Bundle.main.url(forResource: "highlight.min", withExtension: "js"),
+           let content = try? String(contentsOf: url, encoding: .utf8), !content.isEmpty {
+            _cachedHighlightSource = content
+            return content
+        }
+        #if SWIFT_PACKAGE
+        if let moduleURL = Bundle.module.url(forResource: "highlight.min", withExtension: "js", subdirectory: "Resources/Highlight") ??
+                            Bundle.module.url(forResource: "highlight.min", withExtension: "js"),
+           let content = try? String(contentsOf: moduleURL, encoding: .utf8), !content.isEmpty {
+            _cachedHighlightSource = content
+            return content
+        }
+        #endif
+        // 2. 本地开发源码目录相对路径兜底
+        let localPath = "PaperRss/Resources/Highlight/highlight.min.js"
+        if let text = try? String(contentsOfFile: localPath, encoding: .utf8), !text.isEmpty {
+            _cachedHighlightSource = text
+            return text
+        }
+        return nil
+    }
+
     public static func mathUserScripts(containsMath: Bool) -> [WKUserScript] {
         guard containsMath else { return [] }
         // 仅注入轻量配置脚本。TeX 运行时（tex-mml-svg.js，约 1.8MB）不再作为
@@ -4362,6 +4472,7 @@ enum PaperReaderBridge {
         #endif
         controller.addUserScript(selectionScript)
         controller.addUserScript(imageRecoveryScript)
+        controller.addUserScript(imageGalleryScript)
         #if os(macOS)
         controller.addUserScript(readerShortcutScript)
         #endif
@@ -4434,6 +4545,81 @@ enum PaperReaderBridge {
             )
         }
         return renderedCount
+    }
+
+    /// 代码高亮着色脚本：仅处理带 `language-*` / `lang-*` 标注的 `pre code` 块。
+    /// 不做语言自动猜测（对任意代码误判率高，与 Folo `guessCodeLanguage` 默认关闭一致）；
+    /// 通过 `data-paper-hljs` 标记保证幂等，完成后派发布局刷新事件。
+    private static let codeHighlightScriptBody = """
+    const targets = [];
+    for (const element of document.querySelectorAll('pre code')) {
+      if (element.dataset.paperHljs === "1") continue;
+      const classes = (element.className || "").split(/\\s+/);
+      let language = null;
+      for (const cls of classes) {
+        const match = /^(?:language|lang)-([A-Za-z0-9_+#.-]+)$/.exec(cls);
+        if (match) { language = match[1]; break; }
+      }
+      if (!language || !window.hljs.getLanguage(language)) continue;
+      targets.push({ element, language });
+    }
+    if (!targets.length) return 0;
+    let highlighted = 0;
+    for (const { element, language } of targets) {
+      try {
+        element.innerHTML = window.hljs.highlight(element.textContent, {
+          language,
+          ignoreIllegals: true
+        }).value;
+        element.dataset.paperHljs = "1";
+        highlighted += 1;
+      } catch (error) { /* 单块失败不阻断其余块 */ }
+    }
+    if (highlighted > 0) {
+      window.dispatchEvent(new CustomEvent("paperRssLayoutRefresh"));
+    }
+    return highlighted;
+    """
+
+    /// 文档导航完成后按需注入 highlight.js 并为带语言标注的代码块着色。
+    /// 门控：文档没有带语言标注的 `pre code` 时不求值运行时（约 125KB），零成本返回。
+    /// 注意 `[class*="lang-"]` 匹配不到 `language-python`（子串不含 `lang-`），
+    /// 因此必须同时覆盖 `language-` 与 `lang-` 两种前缀。
+    /// 原生求值不受页面 CSP（script-src 'none'）约束，与 MathJax 运行时注入同构。
+    @MainActor
+    static func injectCodeHighlightRuntime(in webView: WKWebView) async throws -> Int {
+        let taggedCount = (try? await webView.evaluateJavaScript(
+            "document.querySelectorAll('pre code[class*=\"language-\"], pre code[class*=\"lang-\"]').length"
+        ) as? Int) ?? 0
+        guard taggedCount > 0 else { return 0 }
+
+        let hasRuntime = (try? await webView.evaluateJavaScript("Boolean(window.hljs)")) as? Bool ?? false
+        if !hasRuntime {
+            guard let runtimeSource = loadHighlightRuntimeSource() else {
+                throw NSError(
+                    domain: "PaperRss.Highlight",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "highlight.js runtime resource is unavailable"]
+                )
+            }
+            _ = try await webView.evaluateJavaScript(runtimeSource)
+        }
+        let runtimeReady = (try? await webView.evaluateJavaScript("Boolean(window.hljs)")) as? Bool ?? false
+        guard runtimeReady else {
+            throw NSError(
+                domain: "PaperRss.Highlight",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "highlight.js runtime evaluation failed"]
+            )
+        }
+
+        let value = try await webView.callAsyncJavaScript(
+            codeHighlightScriptBody,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        return (value as? NSNumber)?.intValue ?? 0
     }
 
     static func isSameDocumentAnchor(_ url: URL, baseURL: URL?) -> Bool {
@@ -4998,6 +5184,25 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var lastMathInjectionKey: String?
         private var mathInjectionAttempts: [String: Int] = [:]
 
+        /// 已注入 highlight.js 的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
+        private var lastCodeHighlightInjectionKey: String?
+
+        /// 导航完成后按需注入 highlight.js：文档无带语言标注代码块时运行时零求值。
+        /// 运行时约 125KB 且求值为同步幂等着色，无需 MathJax 式重试。
+        private func injectCodeHighlightingIfNeeded(in webView: WKWebView) {
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
+            guard lastCodeHighlightInjectionKey != injectionKey else { return }
+            lastCodeHighlightInjectionKey = injectionKey
+            Task { @MainActor [weak webView] in
+                guard let webView else { return }
+                do {
+                    _ = try await PaperReaderBridge.injectCodeHighlightRuntime(in: webView)
+                } catch {
+                    print("[PaperRss][Highlight] runtime evaluation failed: \(error.localizedDescription)")
+                }
+            }
+        }
+
         /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
         /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
         private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
@@ -5160,6 +5365,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
+                self.injectCodeHighlightingIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset = self.pendingScrollOffset,
@@ -5752,6 +5958,25 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var lastMathInjectionKey: String?
         private var mathInjectionAttempts: [String: Int] = [:]
 
+        /// 已注入 highlight.js 的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
+        private var lastCodeHighlightInjectionKey: String?
+
+        /// 导航完成后按需注入 highlight.js：文档无带语言标注代码块时运行时零求值。
+        /// 运行时约 125KB 且求值为同步幂等着色，无需 MathJax 式重试。
+        private func injectCodeHighlightingIfNeeded(in webView: WKWebView) {
+            let injectionKey = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
+            guard lastCodeHighlightInjectionKey != injectionKey else { return }
+            lastCodeHighlightInjectionKey = injectionKey
+            Task { @MainActor [weak webView] in
+                guard let webView else { return }
+                do {
+                    _ = try await PaperReaderBridge.injectCodeHighlightRuntime(in: webView)
+                } catch {
+                    print("[PaperRss][Highlight] runtime evaluation failed: \(error.localizedDescription)")
+                }
+            }
+        }
+
         /// 导航完成后经原生求值注入 MathJax 运行时：原生 evaluateJavaScript 不受
         /// 页面 CSP 约束，也规避大体量 WKUserScript 被静默丢弃的风险。
         private func injectMathJaxRuntimeIfNeeded(in webView: WKWebView) {
@@ -5916,6 +6141,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 self.synchronizeReaderAppearance(in: webView, force: true)
                 self.pendingContentOffset = nil
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
+                self.injectCodeHighlightingIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset {
