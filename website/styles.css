@@ -170,6 +170,7 @@ body {
 .hero {
   padding: 5.5rem 0 3.5rem 0;
   position: relative;
+  z-index: 20;
 }
 
 .hero-content {
@@ -181,6 +182,8 @@ body {
   text-align: center;
   transform-origin: center top;
   will-change: transform, filter, opacity;
+  position: relative;
+  z-index: 20;
 }
 
 .hero-app-icon {
@@ -269,6 +272,8 @@ body {
   gap: 0.75rem;
   width: 100%;
   margin-bottom: 1.5rem;
+  position: relative;
+  z-index: 20;
 }
 
 /* Split Download Button (Universal macOS) */
@@ -276,6 +281,7 @@ body {
   position: relative;
   display: inline-flex;
   align-items: stretch;
+  z-index: 20;
 }
 
 .dl-main {

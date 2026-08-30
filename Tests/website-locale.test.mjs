@@ -22,24 +22,42 @@ test('invalid stored values are ignored', () => {
 
 test('website showcases the supplied full-resolution product screenshots', async () => {
   const expectedScreenshots = new Map([
-    ['paper-rss-main.webp', [2160, 1357]],
-    ['paper-rss-second.webp', [2160, 1357]],
-    ['full-screen.webp', [2160, 1357]],
-    ['bilingual-translation.webp', [1344, 1545]],
-    ['ai-question-popover.webp', [732, 216]],
-    ['ai-translate-popover.webp', [896, 852]],
-    ['ai-explain-popover.webp', [926, 836]],
+    ['paper-rss-main.webp', [2160, 1417]],
+    ['paper-rss-main-en.webp', [2160, 1417]],
+    ['paper-rss-second.webp', [2160, 1417]],
+    ['paper-rss-second-en.webp', [2160, 1417]],
+    ['full-screen.webp', [2160, 1417]],
+    ['bilingual-translation.webp', [1344, 646]],
+    ['ai-question-popover.webp', [650, 270]],
+    ['ai-translate-popover.webp', [990, 642]],
+    ['ai-explain-popover.webp', [954, 928]],
   ]);
-  const localePages = await Promise.all([
+  const [zhPage, enPage] = await Promise.all([
     readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
     readFile(new URL('../website/en/index.html', import.meta.url), 'utf8'),
   ]);
+  const localePages = [zhPage, enPage];
 
-  for (const [filename, [expectedWidth, expectedHeight]] of expectedScreenshots) {
-    for (const page of localePages) {
+  assert.match(zhPage, /assets\/screenshots\/paper-rss-main\.webp/);
+  assert.match(zhPage, /assets\/screenshots\/paper-rss-second\.webp/);
+  assert.match(enPage, /assets\/screenshots\/paper-rss-main-en\.webp/);
+  assert.match(enPage, /assets\/screenshots\/paper-rss-second-en\.webp/);
+
+  const sharedScreenshots = [
+    'full-screen.webp',
+    'bilingual-translation.webp',
+    'ai-question-popover.webp',
+    'ai-translate-popover.webp',
+    'ai-explain-popover.webp',
+  ];
+
+  for (const filename of sharedScreenshots) {
+    for (const page of [zhPage, enPage]) {
       assert.match(page, new RegExp(`assets/screenshots/${filename.replaceAll('.', '\\.')}`));
     }
+  }
 
+  for (const [filename, [expectedWidth, expectedHeight]] of expectedScreenshots) {
     const img = await readFile(new URL(`../website/assets/screenshots/${filename}`, import.meta.url));
     assert.equal(img.toString('ascii', 0, 4), 'RIFF');
     assert.equal(img.toString('ascii', 8, 12), 'WEBP');
@@ -57,7 +75,7 @@ test('website showcases the supplied full-resolution product screenshots', async
     assert.match(page, /class="scramble-target"/);
     assert.match(page, /src="\.\.\/scramble-title\.js"/);
     assert.match(page, /id="ai-assistant"/);
-    assert.match(page, /02 \/ EXPLAIN &amp; ASK|02 \/ EXPLAIN & ASK/);
+    assert.match(page, /03 \/ EXPLAIN &amp; ASK|03 \/ EXPLAIN & ASK/);
     assert.match(page, /feature-card-gallery[\s\S]*ai-question-popover\.webp[\s\S]*ai-explain-popover\.webp/);
   }
 });
