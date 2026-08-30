@@ -44,9 +44,9 @@ For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 
 ### Immersive Paper-like Reading
 
-![PaperRss main window](assets/screenshots/paper-rss-main.png)
+![PaperRss main window](assets/screenshots/paper-rss-main-en.png)
 
-![PaperRss reading view](assets/screenshots/paper-rss-second.png)
+![PaperRss reading view](assets/screenshots/paper-rss-second-en.png)
 
 ![PaperRss full-screen reading](assets/screenshots/full-screen.png)
 
