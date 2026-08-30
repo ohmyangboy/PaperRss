@@ -376,4 +376,22 @@ process.exit(9);
   assert.match(resumeCommands[3], /release download v2\.0\.0/);
   assert.equal(resumeCommands.some((command) => /release (create|upload|edit)/.test(command)), false);
   assert.match(resumeCommands.slice(4).join('\n'), /api --method PUT repos\/example\/PaperRss\/contents\/website\/appcast\/stable\.xml/);
+
+  // beta 必须在首次公开前标记为预发布，不能触发稳定版镜像同步。
+  const beta = await manifestFixture(parent, { version: '2.1.0-beta.1', build: 21, channel: 'beta' });
+  await writeFile(releaseState, 'absent');
+  await writeFile(log, '');
+  await runShell(releasePublisher, [
+    '--execute', '--repo', 'example/PaperRss', '--channel', 'beta', '--tag', 'v2.1.0-beta.1',
+    '--manifest', beta.manifest, '--public-key', beta.publicKeyPath,
+    '--target-commit', beta.sourceCommit, '--appcast-repo', 'example/PaperRss',
+    '--appcast-branch', 'main', '--appcast-path', 'website/appcast/beta.xml',
+    '--output-dir', join(parent, 'beta-output'),
+  ], { ...environment, PAPERRSS_RELEASE_CONFIRM: 'PUBLISH v2.1.0-beta.1' });
+  const betaCommands = (await readFile(log, 'utf8')).trim().split('\n');
+  const createBeta = betaCommands.find((command) => command.startsWith('release create '));
+  assert.match(createBeta, /--prerelease(?:\s|$)/);
+  assert.match(createBeta, /--latest=false(?:\s|$)/);
+  assert.match(betaCommands.find((command) => command.startsWith('release edit ')), /--latest=false/);
+  assert.doesNotMatch(betaCommands.join('\n'), /contents\/website\/appcast\/stable\.xml/);
 });

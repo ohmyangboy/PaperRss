@@ -35,6 +35,11 @@ struct PaperRssApp: App {
             RootView(store: store, navigation: navigation, updateCoordinator: updateCoordinator)
                 .onAppear {
                     let application = NSApplication.shared
+                    // 从当前包读取，避免开发构建复用系统缓存中的旧图标。
+                    if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+                       let icon = NSImage(contentsOf: iconURL) {
+                        application.applicationIconImage = icon
+                    }
                     attention.start(application: application)
                     application.activate(ignoringOtherApps: true)
                     updateCoordinator.start()

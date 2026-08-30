@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Download Latest v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.3.2-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.1) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -70,6 +70,8 @@ For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 ![PaperRss multi-account settings](assets/screenshots/accounts.png)
 
 ## Download and Installation
+
+**Beta v1.3.2-beta.1 (Build 18)** updates the app icon, fixes stale icons at launch, and includes code highlighting, image layout improvements, and X/Twitter avatar cleanup. This is a preview release; stay on v1.3.1 for the stable channel. See the [changelog](CHANGELOG.md) for details.
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

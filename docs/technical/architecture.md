@@ -176,12 +176,14 @@ CloudKit 同步代码已经存在，但设置页明确标记为“同步功能�
 
 发布链路由 [`scripts/release.sh`](../../scripts/release.sh) 编排：
 
-1. 运行 `swift test`。
-2. 调用 Xcode archive/export 生成 macOS App。
-3. 构建 DMG；优先使用 `create-dmg`，失败时回退 `hdiutil`。
-4. 正式模式创建并推送 Git Tag，再通过 GitHub CLI 创建或更新 Release。
+1. 更新 Xcode 版本与 build、`CHANGELOG.md`、中英文 README 和官网；确认发布范围并提交，从干净工作树构建。
+2. 执行 `scripts/release.sh build --version <版本> --build <构建号> --channel stable|beta`：运行 Core 测试，归档并注入更新源、公钥和源提交信息。
+3. Developer ID 导出后检查签名与 Hardened Runtime、启动冒烟、Apple 公证及 Staple；生成并公证 DMG，同时生成 Sparkle ZIP、EdDSA 签名及 manifest。
+4. 使用 `scripts/release.sh verify` 复验产物；另行执行 `scripts/verify.sh --web`、受影响功能测试与真实 App 检查。
+5. 先运行 `scripts/release.sh publish` 的 dry-run，再在明确授权下执行 `--execute`：绑定远端源提交，创建 draft、上传资产、公开 Release、发布并读回对应通道 appcast。
+6. beta 在公开前标记为 GitHub prerelease，且不设置为 latest；只更新 `website/appcast/beta.xml`，不覆盖稳定版更新源或触发稳定镜像同步。
 
-当前脚本不会运行 Node 测试，也没有 Apple notarization 步骤；网站部署由独立 Pages workflow 完成。因此“发布完成”仍需分别核对 Swift/Node 测试、签名、DMG、Release 和线上网站。
+官网由独立 Pages workflow 从 `website/` 部署，并同步至镜像站。发布后仍需核对远端资产散列、更新源、工作流状态及中英文页面。正式发布不得跳过公证；`--skip-notarization` 只用于本机演练。
 
 ## 8. 验证结构
 

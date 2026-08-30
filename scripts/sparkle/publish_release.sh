@@ -223,6 +223,10 @@ else
 
   RELEASE_TITLE="${TITLE:-PaperRss $TAG}"
   CREATE_ARGS=(release create "$TAG" --repo "$REPO" --draft --target "$TARGET_COMMIT" --title "$RELEASE_TITLE")
+  # 在公开前标记 beta，避免进入 latest 或触发稳定版镜像同步。
+  if [[ "$CHANNEL" == "beta" ]]; then
+    CREATE_ARGS+=(--prerelease --latest=false)
+  fi
   if [[ -n "$NOTES_FILE" ]]; then
     [[ -f "$NOTES_FILE" ]] || { echo "错误: notes 文件不存在: $NOTES_FILE" >&2; exit 1; }
     CREATE_ARGS+=(--notes-file "$NOTES_FILE")
@@ -231,7 +235,9 @@ else
   fi
   gh "${CREATE_ARGS[@]}"
   gh release upload "$TAG" "$ZIP_PATH" "$DMG_PATH" --repo "$REPO"
-  gh release edit "$TAG" --repo "$REPO" --draft=false
+  EDIT_ARGS=(release edit "$TAG" --repo "$REPO" --draft=false)
+  [[ "$CHANNEL" == "beta" ]] && EDIT_ARGS+=(--latest=false)
+  gh "${EDIT_ARGS[@]}"
 fi
 
 APPCAST_TARGET="$APPCAST_REPO:$APPCAST_BRANCH:$APPCAST_REMOTE_PATH"

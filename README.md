@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [下载最新版 v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [测试版 v1.3.2-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.1) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -70,6 +70,8 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 ![PaperRss 多账号设置](assets/screenshots/accounts.png)
 
 ## 下载与安装
+
+**测试版 v1.3.2-beta.1（Build 18）** 更新 App 图标并修复启动后仍显示旧图标的问题，同时包含代码高亮、多图排版和 X/Twitter 头像过滤改进。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

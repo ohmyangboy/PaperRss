@@ -200,6 +200,19 @@ body {
   box-shadow: var(--shadow-md);
 }
 
+.release-note {
+  margin: 1.1rem 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+.release-note a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* Scramble Title — Zine Poster Typography (Mono/Serif Hybrid, Pure Ink) */
 .hero h1,
 .hero-brand-name,
