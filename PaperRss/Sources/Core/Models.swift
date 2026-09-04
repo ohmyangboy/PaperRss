@@ -395,11 +395,24 @@ public struct BilingualSegment: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var original: String
     public var translation: String
+    public var providerID: String?
+    public var modelID: String?
+    public var configurationFingerprint: String?
 
-    public init(id: String, original: String, translation: String) {
+    public init(
+        id: String,
+        original: String,
+        translation: String,
+        providerID: String? = nil,
+        modelID: String? = nil,
+        configurationFingerprint: String? = nil
+    ) {
         self.id = id
         self.original = original
         self.translation = translation
+        self.providerID = providerID
+        self.modelID = modelID
+        self.configurationFingerprint = configurationFingerprint
     }
 }
 
@@ -439,6 +452,8 @@ public struct AIArtifact: Identifiable, Codable, Hashable, Sendable {
     public var model: String
     public var targetLanguage: String
     public var promptVersion: Int
+    public var providerID: String?
+    public var configurationFingerprint: String?
     public var content: String
     public var segments: [BilingualSegment]
     public var selectionText: String?
@@ -449,7 +464,7 @@ public struct AIArtifact: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
 
-    public init(id: UUID = UUID(), entryID: String, kind: AIArtifactKind, contentHash: String, model: String, targetLanguage: String, promptVersion: Int = 1, content: String = "", segments: [BilingualSegment] = [], selectionText: String? = nil, selectionArticleHash: String? = nil, selectionAnchor: AISelectionAnchor? = nil, isComplete: Bool = false, isDeleted: Bool = false, createdAt: Date = .now, updatedAt: Date = .now) {
+    public init(id: UUID = UUID(), entryID: String, kind: AIArtifactKind, contentHash: String, model: String, targetLanguage: String, promptVersion: Int = 1, providerID: String? = nil, configurationFingerprint: String? = nil, content: String = "", segments: [BilingualSegment] = [], selectionText: String? = nil, selectionArticleHash: String? = nil, selectionAnchor: AISelectionAnchor? = nil, isComplete: Bool = false, isDeleted: Bool = false, createdAt: Date = .now, updatedAt: Date = .now) {
         self.id = id
         self.entryID = entryID
         self.kind = kind
@@ -457,6 +472,8 @@ public struct AIArtifact: Identifiable, Codable, Hashable, Sendable {
         self.model = model
         self.targetLanguage = targetLanguage
         self.promptVersion = promptVersion
+        self.providerID = providerID
+        self.configurationFingerprint = configurationFingerprint
         self.content = content
         self.segments = segments
         self.selectionText = selectionText
@@ -470,6 +487,7 @@ public struct AIArtifact: Identifiable, Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, entryID, kind, contentHash, model, targetLanguage, promptVersion
+        case providerID, configurationFingerprint
         case content, segments, selectionText, selectionArticleHash, selectionAnchor
         case isComplete, isDeleted, createdAt, updatedAt
     }
@@ -483,6 +501,8 @@ public struct AIArtifact: Identifiable, Codable, Hashable, Sendable {
         model = try container.decode(String.self, forKey: .model)
         targetLanguage = try container.decode(String.self, forKey: .targetLanguage)
         promptVersion = try container.decodeIfPresent(Int.self, forKey: .promptVersion) ?? 1
+        providerID = try container.decodeIfPresent(String.self, forKey: .providerID)
+        configurationFingerprint = try container.decodeIfPresent(String.self, forKey: .configurationFingerprint)
         content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
         segments = try container.decodeIfPresent([BilingualSegment].self, forKey: .segments) ?? []
         selectionText = try container.decodeIfPresent(String.self, forKey: .selectionText)
@@ -511,6 +531,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var showsSelectionTranslation: Bool
 
     public var customPrompt: String
+    public var providerKind: AIProviderKind?
 
     public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false, showsSelectionExplanation: true, showsSelectionAsk: true, showsSelectionTranslation: true, customPrompt: "")
 
@@ -535,11 +556,18 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     )
 
     public var usesDeepSeekAPI: Bool {
+        if let providerKind { return providerKind == .deepSeek }
         guard let host = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
         return host == "api.deepseek.com"
     }
 
-    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "") {
+    public var usesGeminiAPI: Bool {
+        if let providerKind { return providerKind == .gemini }
+        guard let host = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
+        return host == "generativelanguage.googleapis.com"
+    }
+
+    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "", providerKind: AIProviderKind? = nil) {
         self.providerName = providerName
         self.providerDescription = providerDescription
         self.baseURL = baseURL
@@ -554,9 +582,10 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         self.showsSelectionAsk = showsSelectionAsk
         self.showsSelectionTranslation = showsSelectionTranslation
         self.customPrompt = customPrompt
+        self.providerKind = providerKind
     }
 
-    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt }
+    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt, providerKind }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -574,6 +603,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         showsSelectionAsk = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionAsk) ?? true
         showsSelectionTranslation = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true
         customPrompt = try container.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
+        providerKind = try container.decodeIfPresent(AIProviderKind.self, forKey: .providerKind)
     }
 }
 

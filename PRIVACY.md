@@ -34,11 +34,11 @@ Extracted article caches are stored in the local database and can be cleared fro
 ## 2. 凭据保存 / Credential storage
 
 - FreshRSS 等服务凭据通过 macOS Keychain 保存。
-- 用户配置的 AI API Key 当前保存在该 Mac 的 PaperRss 本地应用偏好（`UserDefaults`）中，不同步到 PaperRss 服务器，也不以 Keychain 级别加密。请勿在共享的 macOS 用户账户中保存敏感 API Key。
+- 用户配置的 AI API Key 当前按供应商保存在该 Mac 的 PaperRss 本地应用偏好（`UserDefaults`）中，不同步到 PaperRss 服务器或 iCloud，也不以 Keychain 级别加密。升级迁移会保留旧的单一 API Key 用于兼容回滚；清空某个供应商的新键不会把旧键重新写回该供应商。请勿在共享的 macOS 用户账户中保存敏感 API Key。
 - PaperRss 不会把 API Key 写入公开仓库、反馈内容或文章导出。
 
 - Credentials for services such as FreshRSS are stored in macOS Keychain.
-- A user-configured AI API key is currently stored in PaperRss's local app preferences (`UserDefaults`) on that Mac. It is not synchronized to a PaperRss server and is not encrypted at the level provided by Keychain. Do not store a sensitive API key in a shared macOS user account.
+- User-configured AI API keys are currently stored per provider in PaperRss's local app preferences (`UserDefaults`) on that Mac. They are not synchronized to a PaperRss server or iCloud and are not encrypted at the level provided by Keychain. Upgrade migration retains the former single key for rollback compatibility; clearing a provider's new key does not repopulate it from that legacy key. Do not store a sensitive API key in a shared macOS user account.
 - PaperRss does not intentionally include API keys in the public repository, feedback content, or article exports.
 
 ## 3. 应用发生的网络请求 / Network requests made by the app
@@ -120,4 +120,3 @@ PaperRss is not directed specifically to children and does not require a PaperRs
 本政策可能随功能、数据流或法律要求更新。重大变更将通过仓库、官网或版本说明公布。有关隐私、数据删除或安全问题，请联系 [ohmyangboy@gmail.com](mailto:ohmyangboy@gmail.com) 或提交不含敏感数据的 [GitHub Issue](https://github.com/ohmyangboy/PaperRss/issues)。请勿在公开 Issue 中粘贴 API Key、订阅密钥、私人 Feed 地址或文章中的敏感信息。
 
 This policy may be updated as features, data flows, or legal requirements change. Material changes will be announced through the repository, website, or release notes. For privacy, deletion, or security questions, contact [ohmyangboy@gmail.com](mailto:ohmyangboy@gmail.com) or open a [GitHub Issue](https://github.com/ohmyangboy/PaperRss/issues) without sensitive data. Never paste API keys, subscription secrets, private feed URLs, or sensitive article content into a public issue.
-

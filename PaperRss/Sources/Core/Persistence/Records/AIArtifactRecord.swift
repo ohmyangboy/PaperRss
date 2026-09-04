@@ -16,6 +16,8 @@ public struct AIArtifactRecord: Codable, FetchableRecord, PersistableRecord, Tab
     public var model: String
     public var targetLanguage: String
     public var promptVersion: Int
+    public var providerID: String?
+    public var configurationFingerprint: String?
     public var content: String
     public var segmentsJSON: String?
     public var selectionText: String?
@@ -36,6 +38,8 @@ public struct AIArtifactRecord: Codable, FetchableRecord, PersistableRecord, Tab
         model: String,
         targetLanguage: String,
         promptVersion: Int = 1,
+        providerID: String? = nil,
+        configurationFingerprint: String? = nil,
         content: String = "",
         segmentsJSON: String? = nil,
         selectionText: String? = nil,
@@ -55,6 +59,8 @@ public struct AIArtifactRecord: Codable, FetchableRecord, PersistableRecord, Tab
         self.model = model
         self.targetLanguage = targetLanguage
         self.promptVersion = promptVersion
+        self.providerID = providerID
+        self.configurationFingerprint = configurationFingerprint
         self.content = content
         self.segmentsJSON = segmentsJSON
         self.selectionText = selectionText
@@ -76,6 +82,8 @@ public struct AIArtifactRecord: Codable, FetchableRecord, PersistableRecord, Tab
         case model
         case targetLanguage = "target_language"
         case promptVersion = "prompt_version"
+        case providerID = "provider_id"
+        case configurationFingerprint = "configuration_fingerprint"
         case content
         case segmentsJSON = "segments_json"
         case selectionText = "selection_text"

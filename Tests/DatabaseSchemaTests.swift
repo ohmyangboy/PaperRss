@@ -115,6 +115,10 @@ final class DatabaseSchemaTests: XCTestCase {
             XCTAssertEqual(aiDict["id"]?.pk, 1)
             XCTAssertEqual(aiDict["account_id"]?.notnull, 0, "ai_artifacts.account_id 必须允许 NULL 以支持全局翻译记忆")
             XCTAssertEqual(aiDict["item_id"]?.notnull, 0, "ai_artifacts.item_id 必须允许 NULL")
+            XCTAssertEqual(aiDict["provider_id"]?.type.uppercased(), "TEXT")
+            XCTAssertEqual(aiDict["provider_id"]?.notnull, 0, "旧 AI 产物迁移后允许没有 Provider 身份")
+            XCTAssertEqual(aiDict["configuration_fingerprint"]?.type.uppercased(), "TEXT")
+            XCTAssertEqual(aiDict["configuration_fingerprint"]?.notnull, 0, "旧 AI 产物迁移后允许没有执行指纹")
 
             // 8. account_sync_state
             let syncColumns = try ColumnInfo.fetchAll(db, sql: "PRAGMA table_info(account_sync_state);")
@@ -153,6 +157,66 @@ final class DatabaseSchemaTests: XCTestCase {
             XCTAssertEqual(row?["text"] as String?, "legacy body")
             XCTAssertEqual(row?["html"] as String?, "<p>legacy body</p>")
             XCTAssertEqual(row?["normalization_revision"] as Int?, 0)
+        }
+    }
+
+    func testV5MigrationPreservesLegacyAIArtifactWithoutMakingItReusable() throws {
+        let legacyURL = temporaryDirectoryURL.appendingPathComponent("legacy-v4.sqlite")
+        let pool = try DatabasePool(path: legacyURL.path)
+        let migrator = DatabaseMigrations.migrator
+        try migrator.migrate(pool, upTo: "v4-add-article-cache-normalization-revision")
+        try pool.write { db in
+            try db.execute(sql: """
+            INSERT INTO ai_artifacts (
+                id, account_id, item_id, subject_key, kind, content_hash,
+                model, target_language, prompt_version, content, is_complete,
+                created_at, updated_at
+            ) VALUES (
+                'legacy-ai', NULL, NULL, 'legacy-subject', 'summary', 'legacy-hash',
+                'legacy-model', 'zh-Hans', 1, 'legacy content', 1, 1, 1
+            );
+            """)
+        }
+
+        try migrator.migrate(pool)
+
+        try pool.read { db in
+            let row = try Row.fetchOne(db, sql: """
+                SELECT content, provider_id, configuration_fingerprint
+                FROM ai_artifacts WHERE id = 'legacy-ai';
+                """)
+            XCTAssertEqual(row?["content"] as String?, "legacy content")
+            XCTAssertNil(row?["provider_id"] as String?)
+            XCTAssertNil(row?["configuration_fingerprint"] as String?)
+        }
+    }
+
+    func testV6MigrationKeepsOnlyNewestCompleteSummaryVisible() throws {
+        let legacyURL = temporaryDirectoryURL.appendingPathComponent("legacy-v5.sqlite")
+        let pool = try DatabasePool(path: legacyURL.path)
+        let migrator = DatabaseMigrations.migrator
+        try migrator.migrate(pool, upTo: "v5-add-ai-artifact-execution-fingerprint")
+        try pool.write { db in
+            try db.execute(sql: """
+            INSERT INTO ai_artifacts (
+                id, subject_key, kind, content_hash, model, target_language,
+                content, is_complete, is_deleted, created_at, updated_at
+            ) VALUES
+                ('old', '1248257672826666390', 'summary', 'hash', 'deepseek', 'zh', 'old', 1, 0, 1, 1),
+                ('new', '1248257672826666390', 'summary', 'hash', 'gemini', 'zh', 'new', 1, 0, 2, 2),
+                ('partial', '1248257672826666390', 'summary', 'hash', 'gemini', 'zh', 'partial', 0, 0, 3, 3);
+            """)
+        }
+
+        try migrator.migrate(pool)
+
+        try pool.read { db in
+            let visible = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM ai_artifacts WHERE subject_key = ? AND is_deleted = 0",
+                arguments: ["1248257672826666390"]
+            )
+            XCTAssertEqual(visible, ["new"])
         }
     }
 

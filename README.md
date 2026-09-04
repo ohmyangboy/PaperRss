@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [测试版 v1.3.2-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.1) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [测试版 v1.3.2-beta.2](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.2) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -35,10 +35,16 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 - **渲染引擎与数学公式（LaTeX）**：重构富文本准备引擎，原生集成 MathJax 排版与公式防转义保护，完美呈现学术长文。
 - **按需 AI 摘要**：所有功能完全可以选用，如果你不喜欢AI，干掉它；或者在需要的时候按下V键
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
-- **自由模型接入**：支持自定义配置DeepSeek、OpenAI 兼容 API KEY，提供设置个性化prompt
+- **自由模型接入**：支持按供应商保存 OpenAI 兼容接口、DeepSeek 与 Google Gemini API Key；摘要、双语和三种划词能力可分别选择模型，切换配置不会隐藏已有 AI 产物。
 - **多账户接入**：支持本地账户与 FreshRSS 服务，提供双向未读/星标同步。
 
 更多功能升级和 Bugfix 计划见 [weekly.md](./weekly.md)
+
+### AI 服务配置
+
+在“设置 → AI 功能”中，“供应商与模型”只管理 OpenAI 兼容接口、DeepSeek、Google Gemini 或自定义端点的连接、API Key 与模型目录；远端模型经多选确认后才加入配置。“功能配置”分别为摘要、双语翻译、划词翻译、解释和提问设置开关与模型。Google Gemini 使用官方 OpenAI-compatible 地址 `https://generativelanguage.googleapis.com/v1beta/openai`，需要填入 Gemini API Key。
+
+旧版本的单一 AI 配置会在首次启动时绑定到五项功能，原有 API Key、模型、开关和自定义 Prompt 都会保留；旧配置键仍保留用于兼容回滚。API Key 只保存在本机应用偏好，不参与 iCloud 同步。
 
 ## 真实界面
 
@@ -71,7 +77,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**测试版 v1.3.2-beta.1（Build 18）** 更新 App 图标并修复启动后仍显示旧图标的问题，同时包含代码高亮、多图排版和 X/Twitter 头像过滤改进。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
+**测试版 v1.3.2-beta.2（Build 19）** 新增 Gemini、多供应商与按功能选模型，支持最多六个后台摘要/翻译任务，并修复切换文章时 AI 结果串台及切换模型后已有产物消失的问题。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

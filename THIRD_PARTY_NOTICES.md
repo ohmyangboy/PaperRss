@@ -1,6 +1,6 @@
 # PaperRss 第三方软件声明 / Third-Party Software Notices
 
-**更新日期 / Updated:** 2026-08-29
+**更新日期 / Updated:** 2026-09-04
 
 PaperRss 本身依据 [GNU General Public License v3.0](LICENSE) 发布。以下组件由各自权利人依据各自许可证提供；PaperRss 的 GPL-3.0 不会替代、限制或重新许可这些独立组件的许可证。第三方名称和商标仅用于识别相关组件，不表示其对 PaperRss 的背书。
 
@@ -52,6 +52,12 @@ The complete Apache License 2.0 text is retained in [PaperRss/Resources/MathJax/
 
 Apache License 2.0 的完整文本保存在 [PaperRss/Resources/MathJax/LICENSE](PaperRss/Resources/MathJax/LICENSE)。highlight.js 的 BSD 3-Clause 完整文本保存在 [PaperRss/Resources/Highlight/LICENSE](PaperRss/Resources/Highlight/LICENSE)。Sparkle 与 swift-cmark 的上游许可证包含多个独立文件的署名，完整文本见表格中的固定版本链接。发布打包时必须保留依赖自身携带的许可证和 MathJax、highlight.js 许可证；本说明应随源码发布，并在二进制发布时保持公开可访问。
 
+## AI provider brand marks
+
+The OpenAI Blossom, DeepSeek mark, and Google Gemini sparkle bundled under `PaperRss/Resources/Assets.xcassets/AIProvider*.imageset` remain trademarks of their respective owners. PaperRss displays them only beside the matching provider configuration to identify the service selected by the user; their inclusion does not imply sponsorship or endorsement. The marks retain their published geometry and should not be reused as PaperRss branding. See the [OpenAI design guidelines](https://openai.com/brand/), [DeepSeek website](https://www.deepseek.com/), and [Google Gemini public brand asset](https://www.gstatic.com/lamda/images/gemini_sparkle_aurora_33f86dc0c0257da337c63.svg).
+
+打包在 `PaperRss/Resources/Assets.xcassets/AIProvider*.imageset` 下的 OpenAI Blossom、DeepSeek 标志和 Google Gemini 四角星仍归各自权利人所有。PaperRss 只在对应供应商配置旁显示它们，用于识别用户选择的服务；收录这些标志不表示供应商对 PaperRss 的赞助或背书。图形保留其公开品牌轮廓，不得作为 PaperRss 自身品牌使用。相关公开资源见 [OpenAI 设计规范](https://openai.com/brand/)、[DeepSeek 官网](https://www.deepseek.com/) 与 [Google Gemini 公开品牌资源](https://www.gstatic.com/lamda/images/gemini_sparkle_aurora_33f86dc0c0257da337c63.svg)。
+
 ## Website fonts and external services
 
 The project website requests Inter, JetBrains Mono, and Noto Serif SC from Google Fonts. Those fonts and the Google Fonts service are governed by their respective licenses and terms. The website also links to GitHub and PayPal; those services are not bundled with PaperRss and operate under their own terms and privacy policies.
@@ -61,4 +67,3 @@ The project website requests Inter, JetBrains Mono, and Noto Serif SC from Googl
 If a bundled dependency, version, or license changes, update this file before release. Questions about attribution may be sent to [ohmyangboy@gmail.com](mailto:ohmyangboy@gmail.com).
 
 如果打包依赖、版本或许可证发生变化，应在发布前更新本文件。署名相关问题可联系 [ohmyangboy@gmail.com](mailto:ohmyangboy@gmail.com)。
-

@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.3.2-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.1) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.3.2-beta.2](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.2) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -35,10 +35,16 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 - **Rendering Engine & LaTeX Math**: Re-engineered article preparation pipeline with native MathJax typesetting and markdown formula shielding for technical articles.
 - **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
-- **Custom Model Integration**: Bring your own DeepSeek or OpenAI-compatible API keys, with customizable system prompts.
+- **Feature-routed AI Integration**: Store separate API keys and model catalogs for OpenAI-compatible endpoints, DeepSeek, and Google Gemini; summaries, bilingual reading, and each selection action can use different models without hiding existing artifacts.
 - **Multi-Account Support**: Supports local accounts and FreshRSS server synchronization.
 
 For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
+
+### AI service configuration
+
+Open **Settings → AI Features**. **Providers & Models** manages only connections, local API keys, and confirmed model catalogs for the built-in OpenAI-compatible, DeepSeek, and Google Gemini providers or custom endpoints. **Feature Routing** independently enables and selects a model for summaries, bilingual translation, selection translation, explanation, and Q&A. Google Gemini uses the official OpenAI-compatible endpoint `https://generativelanguage.googleapis.com/v1beta/openai` and requires a Gemini API key.
+
+On first launch after upgrading, the former single AI configuration is bound to all five features without dropping its API key, model, toggles, or custom prompt. Legacy settings keys remain for rollback compatibility. API keys stay in local app preferences and are not included in iCloud sync.
 
 ## Screenshots
 
@@ -71,7 +77,7 @@ For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 
 ## Download and Installation
 
-**Beta v1.3.2-beta.1 (Build 18)** updates the app icon, fixes stale icons at launch, and includes code highlighting, image layout improvements, and X/Twitter avatar cleanup. This is a preview release; stay on v1.3.1 for the stable channel. See the [changelog](CHANGELOG.md) for details.
+**Beta v1.3.2-beta.2 (Build 19)** adds Gemini, multi-provider feature routing, and up to six background summary/translation jobs. It also prevents AI results from leaking across articles and keeps existing artifacts visible when models change. This is a preview release; stay on v1.3.1 for the stable channel. See the [changelog](CHANGELOG.md) for details.
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

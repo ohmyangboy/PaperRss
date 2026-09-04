@@ -375,15 +375,26 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         }
     }
 
-    public func fetchArtifact(entryID: String, kind: AIArtifactKind, isCompleteOnly: Bool = false) throws -> AIArtifact? {
+    public func fetchArtifact(entryID: String, kind: AIArtifactKind, isCompleteOnly: Bool = false, configurationFingerprint: String? = nil) throws -> AIArtifact? {
         try database.read { db in
-            try self.artifactRepository.fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, in: db)
+            try self.artifactRepository.fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, configurationFingerprint: configurationFingerprint, in: db)
         }
     }
 
-    public func fetchBilingualArtifact(entryID: String, contentHash: String, model: String) throws -> AIArtifact? {
+    public func fetchBilingualArtifact(entryID: String, contentHash: String, model: String, configurationFingerprint: String? = nil) throws -> AIArtifact? {
         try database.read { db in
-            try self.artifactRepository.fetchBilingualArtifactModel(entryID: entryID, contentHash: contentHash, model: model, in: db)
+            try self.artifactRepository.fetchBilingualArtifactModel(entryID: entryID, contentHash: contentHash, model: model, configurationFingerprint: configurationFingerprint, in: db)
+        }
+    }
+
+    public func fetchBilingualArtifact(entryID: String, contentHash: String, targetLanguage: String) throws -> AIArtifact? {
+        try database.read { db in
+            try self.artifactRepository.fetchBilingualArtifactModel(
+                entryID: entryID,
+                contentHash: contentHash,
+                targetLanguage: targetLanguage,
+                in: db
+            )
         }
     }
 
@@ -402,6 +413,16 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
     public func saveArtifact(_ artifact: AIArtifact) throws {
         try database.write { db in
             try self.artifactRepository.saveArtifactModel(artifact, accountID: self.accountID, in: db)
+        }
+    }
+
+    public func replaceCurrentSummary(with artifact: AIArtifact) throws {
+        try database.write { db in
+            try self.artifactRepository.replaceCurrentSummary(
+                with: artifact,
+                accountID: self.accountID,
+                in: db
+            )
         }
     }
 

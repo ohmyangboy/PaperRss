@@ -65,6 +65,7 @@ public final class AIArtifactRepository: Sendable {
         entryID: String,
         kind: AIArtifactKind,
         isCompleteOnly: Bool = false,
+        configurationFingerprint: String? = nil,
         in db: Database
     ) throws -> AIArtifact? {
         var query = AIArtifactRecord
@@ -76,6 +77,9 @@ public final class AIArtifactRepository: Sendable {
         if isCompleteOnly {
             query = query.filter(Column("is_complete") == true)
         }
+        if let configurationFingerprint {
+            query = query.filter(Column("configuration_fingerprint") == configurationFingerprint)
+        }
         guard let record = try query.order(Column("updated_at").desc).fetchOne(db) else { return nil }
         return domainArtifactFromRecord(record)
     }
@@ -84,6 +88,28 @@ public final class AIArtifactRepository: Sendable {
         entryID: String,
         contentHash: String,
         model: String,
+        configurationFingerprint: String? = nil,
+        in db: Database
+    ) throws -> AIArtifact? {
+        var query = AIArtifactRecord
+            .filter(
+                (Column("item_id") == entryID || Column("subject_key") == entryID) &&
+                Column("kind") == AIArtifactKind.bilingual.rawValue &&
+                Column("content_hash") == contentHash &&
+                Column("model") == model &&
+                Column("is_deleted") == false
+            )
+        if let configurationFingerprint {
+            query = query.filter(Column("configuration_fingerprint") == configurationFingerprint)
+        }
+        let record = try query.order(Column("updated_at").desc).fetchOne(db)
+        return record.flatMap { domainArtifactFromRecord($0) }
+    }
+
+    public func fetchBilingualArtifactModel(
+        entryID: String,
+        contentHash: String,
+        targetLanguage: String,
         in db: Database
     ) throws -> AIArtifact? {
         let record = try AIArtifactRecord
@@ -91,7 +117,7 @@ public final class AIArtifactRepository: Sendable {
                 (Column("item_id") == entryID || Column("subject_key") == entryID) &&
                 Column("kind") == AIArtifactKind.bilingual.rawValue &&
                 Column("content_hash") == contentHash &&
-                Column("model") == model &&
+                Column("target_language") == targetLanguage &&
                 Column("is_deleted") == false
             )
             .order(Column("updated_at").desc)
@@ -139,7 +165,9 @@ public final class AIArtifactRepository: Sendable {
         let segmentsJSON = (try? LegacyMigrationJSONEncoder.encodeString(artifact.segments)) ?? "[]"
         let anchorJSON: String? = try artifact.selectionAnchor.flatMap { try LegacyMigrationJSONEncoder.encodeString($0) }
 
-        let isGlobalTM = artifact.entryID.hasPrefix("translation-memory-v2:")
+        let isGlobalTM = artifact.entryID.hasPrefix("translation-memory-v2:") ||
+            artifact.entryID.hasPrefix("translation-memory-v3:") ||
+            artifact.entryID.hasPrefix("translation-memory-v4:")
         var effectiveAccountID: String? = nil
         var effectiveItemID: String? = nil
 
@@ -164,6 +192,8 @@ public final class AIArtifactRepository: Sendable {
             model: artifact.model,
             targetLanguage: artifact.targetLanguage,
             promptVersion: artifact.promptVersion,
+            providerID: artifact.providerID,
+            configurationFingerprint: artifact.configurationFingerprint,
             content: artifact.content,
             segmentsJSON: segmentsJSON,
             selectionText: artifact.selectionText,
@@ -175,6 +205,27 @@ public final class AIArtifactRepository: Sendable {
             updatedAt: artifact.updatedAt.timeIntervalSince1970
         )
         try saveArtifact(record, in: db)
+    }
+
+    /// A successful regeneration is published as one transaction: readers
+    /// either observe the previous complete summary or the replacement, never
+    /// an empty/intermediate state.
+    public func replaceCurrentSummary(
+        with artifact: AIArtifact,
+        accountID: String? = "local-default",
+        in db: Database
+    ) throws {
+        precondition(artifact.kind == .summary && artifact.isComplete)
+        try AIArtifactRecord
+            .filter(
+                (Column("item_id") == artifact.entryID || Column("subject_key") == artifact.entryID) &&
+                Column("kind") == AIArtifactKind.summary.rawValue &&
+                Column("id") != artifact.id.uuidString
+            )
+            .updateAll(db, Column("is_deleted").set(to: true))
+        var published = artifact
+        published.isDeleted = false
+        try saveArtifactModel(published, accountID: accountID, in: db)
     }
 
     private func domainArtifactFromRecord(_ record: AIArtifactRecord) -> AIArtifact? {
@@ -196,6 +247,8 @@ public final class AIArtifactRepository: Sendable {
             model: record.model,
             targetLanguage: record.targetLanguage,
             promptVersion: record.promptVersion,
+            providerID: record.providerID,
+            configurationFingerprint: record.configurationFingerprint,
             content: record.content,
             segments: segments,
             selectionText: record.selectionText,
@@ -213,20 +266,22 @@ public final class AIArtifactRepository: Sendable {
     public func fetchLatestArtifactModel(
         entryID: String,
         kind: AIArtifactKind,
-        isCompleteOnly: Bool = false
+        isCompleteOnly: Bool = false,
+        configurationFingerprint: String? = nil
     ) async throws -> AIArtifact? {
         try database.read { db in
-            try fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, in: db)
+            try fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, configurationFingerprint: configurationFingerprint, in: db)
         }
     }
 
     public func fetchBilingualArtifactModel(
         entryID: String,
         contentHash: String,
-        model: String
+        model: String,
+        configurationFingerprint: String? = nil
     ) async throws -> AIArtifact? {
         try database.read { db in
-            try fetchBilingualArtifactModel(entryID: entryID, contentHash: contentHash, model: model, in: db)
+            try fetchBilingualArtifactModel(entryID: entryID, contentHash: contentHash, model: model, configurationFingerprint: configurationFingerprint, in: db)
         }
     }
 

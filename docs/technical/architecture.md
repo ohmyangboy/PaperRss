@@ -1,7 +1,7 @@
 # PaperRss 技术架构
 
 > 文档状态：当前实现说明
-> 核对日期：2026-08-21
+> 核对日期：2026-09-01
 > 适用范围：PaperRss macOS 主产品、共享 Core、仓库内网站与发布链路
 
 本文描述当前仓库已经实现的结构和运行边界。`docs/drafts/` 与 `docs/research/` 中的方案不是实现证据；代码、配置、脚本和运行结果与本文冲突时，以可执行事实为准并同步修正文档。
@@ -55,7 +55,9 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 ### Core 层
 
 - [`Models.swift`](../../PaperRss/Sources/Core/Models.swift)：可持久化领域模型和向后兼容解码。
-- [`AppStore.swift`](../../PaperRss/Sources/Core/AppStore.swift)：`@MainActor ObservableObject`，拥有数据库、派生索引、刷新、阅读状态、正文缓存、AI 任务和同步编排。
+- [`AIProviderModels.swift`](../../PaperRss/Sources/Core/AIProviderModels.swift)：多供应商连接、启用状态、手动确认的模型目录、五类功能路由、功能级思考深度与旧配置迁移。
+- [`ArticleAIWorkspace.swift`](../../PaperRss/Sources/Core/ArticleAIWorkspace.swift)：应用级 AI 作业身份、六槽 FIFO 后台队列、文档代次取消和文章投影。
+- [`AppStore.swift`](../../PaperRss/Sources/Core/AppStore.swift)：`@MainActor ObservableObject`，拥有数据库、派生索引、刷新、阅读状态、正文缓存和同步编排，并向 AI Workspace 转发功能请求。
 - [`FeedService.swift`](../../PaperRss/Sources/Core/FeedService.swift) 与 [`FeedParser.swift`](../../PaperRss/Sources/Core/FeedParser.swift)：条件请求和 RSS、Atom、RDF、JSON Feed 解析。
 - [`ArticleExtractor.swift`](../../PaperRss/Sources/Core/ArticleExtractor.swift)：正文提取、HTML 白名单清洗、图片 URL 归一化和段落稳定标识。
 - [`LLMService.swift`](../../PaperRss/Sources/Core/LLMService.swift)：OpenAI 兼容 Chat Completions、SSE、摘要、翻译和划词问答。
@@ -80,8 +82,11 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 | `Entry` | 文章元数据、Feed 正文、已读与收藏投影 | ID 为 `feed UUID + 源条目 ID` 的稳定摘要 |
 | `ReadingState` | 独立保存已读/收藏状态 | 刷新重建 Entry 时保留用户状态；按更新时间合并 |
 | `ArticleCache` | 清洗后的正文文本、HTML、图片和来源 URL | 与 Entry ID 关联；旧缓存加载时惰性迁移与重新清洗 |
-| `AIArtifact` | 摘要、双语段落、划词结果、文章上下文和翻译记忆 | 由内容 hash、模型、语言和 Prompt 版本判定可复用性 |
-| `LLMConfiguration` | 服务地址、模型、语言、推理与功能开关 | 新字段使用兼容默认值解码旧数据库 |
+| `AIArtifact` | 摘要、双语段落、划词结果、文章上下文和翻译记忆 | 用户可见产物按文章语义稳定；内部缓存按完整执行指纹隔离 |
+| `AIProviderProfile` | 单个供应商的启用状态、名称、协议地址和已确认模型目录 | 以稳定 `providerID` 保存，不表达活动模型；停用后不可用于新请求 |
+| `AIFeatureConfiguration` | 单项能力的开关与 `providerID/modelID` 引用 | 五项能力分别路由，入队后冻结执行上下文 |
+| `AISettings` | 供应商、模型、功能路由和个性化偏好的 v5 文档 | 首次启动从旧配置迁移；摘要路由提供旧字段兼容投影 |
+| `LLMConfiguration` | 现有调用方使用的当前供应商运行时快照 | 新字段使用兼容默认值解码旧数据库；v2 保存时同步写回旧投影 |
 
 `EntryLibraryIndex` 是不持久化的派生读模型。每次数据库发生结构性变化时统一重建，预先生成今天、未读、收藏、按 Feed/文件夹分组的数组和计数，避免 SwiftUI 重绘时重复排序和过滤完整文章库。文章列表使用精简的 `EntryListItem`，不携带大段正文 HTML。
 
@@ -97,8 +102,8 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 ### 偏好与凭据
 
 - 刷新频率、启动刷新、主题、字号、忽略版本、语言和部分 macOS 设置保存在 `UserDefaults`。
-- API Key 通过 [`KeychainStore.swift`](../../PaperRss/Sources/Core/KeychainStore.swift) 中的 `LocalAPIKeyStore` 保存，但当前底层也是 `UserDefaults`：它不会进入 `AppDatabase` 或 CloudKit，也不会触发系统密码提示，但不具备 Keychain 的静态加密强度。
-- `LLMConfiguration` 保存在本地 JSON；AI 输出语言独立于应用界面语言。
+- API Key 通过 [`KeychainStore.swift`](../../PaperRss/Sources/Core/KeychainStore.swift) 中的 `LocalAPIKeyStore` 按 `providerID` 保存，但当前底层也是 `UserDefaults`：它不会进入 `AppDatabase` 或 CloudKit，也不会触发系统密码提示，但不具备 Keychain 的静态加密强度。旧的 `PaperRss.localAPIKey` 首次迁移到当前供应商后仍保留；清空新键不会在后续启动时被旧键重新填回。
+- `AISettings` v5 与兼容用的 `LLMConfiguration` 保存在本地应用偏好；AI 输出语言独立于应用界面语言。旧投影始终成对跟随摘要功能的模型与密钥。
 
 ## 5. 主要运行链路
 
@@ -143,14 +148,16 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 ### 5.4 AI 管线
 
-`LLMService` 将配置的 Base URL 归一化到 `/chat/completions`，使用 Bearer API Key 和 OpenAI 兼容消息结构：
+`AppStore` 按功能解析 Provider 与模型，入队时冻结不可变运行时快照；`ArticleAIWorkspace` 让摘要和已请求双语批次共享六个 FIFO 后台槽，划词走独立文档代次通道。`LLMService` 将 Base URL 归一化到 `/chat/completions`：
 
 - 摘要支持 SSE 增量输出；若服务接受 `stream: true` 却返回普通 JSON，会只针对空流结果回退到非流式请求。
 - 划词解释与提问组合所选文本、附近段落和文章上下文；同一内容、模型、语言和 Prompt 版本命中本地 `AIArtifact` 时直接复用。
 - 双语阅读按可见段落触发，最多四段、约 1,200 字符一批；批量响应必须保持有序 JSON，否则退回逐段翻译。
 - 翻译记忆按标准化文本、Base URL、模型、目标语言和 Prompt 版本寻址，跨文章复用，并限制为最多 2,000 条。
-- DeepSeek 可配置推理强度；翻译和交互式划词请求会关闭隐藏推理，以减少首个可见结果的等待。
-- AI 网络失败只影响对应任务；已经完成并落盘的段落或历史 Artifact 仍可复用。
+- 思考深度属于功能配置并实际进入每个请求；Provider adapter 只执行协议能力限制，设置界面不暴露 temperature。
+- Google Gemini 通过官方 OpenAI-compatible 根地址（`/v1beta/openai`）复用同一消息与 SSE 解析；Gemini 3.x 映射 `reasoning_effort`，并省略已废弃的 `temperature` 参数。
+- 供应商详情支持 `GET /models` 拉取候选目录；只有用户确认添加并保存草稿后模型才进入已配置目录，失败时不覆盖已有目录。
+- 切换 Provider 或模型不隐藏已有摘要、译文和划词标注；摘要重生成成功后事务替换，失败时保留旧摘要。
 
 ### 5.5 CloudKit
 

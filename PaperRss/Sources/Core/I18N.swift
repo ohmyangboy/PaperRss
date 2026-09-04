@@ -128,6 +128,7 @@ public final class I18N: ObservableObject {
         "本机独立存储与离线阅读": "On-device storage and offline reading",
         "OpenAI 兼容接口": "OpenAI-Compatible Endpoint",
         "DeepSeek OpenAI 兼容接口": "DeepSeek OpenAI-Compatible Endpoint",
+        "模型列表（%lld 个，%lld 个已启用）": "Models (%lld total, %lld enabled)",
         "用于翻译、总结和解读文章": "For translation, summarization, and article analysis",
         "再按一次 C 切换对照翻译": "Press C again to toggle bilingual translation",
         "再按一次 V 查看 AI 摘要": "Press V again to view the AI summary",

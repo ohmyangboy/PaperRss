@@ -22,6 +22,8 @@ private enum ReaderSelectionKind: String, Sendable {
 
 private struct ReaderSelectionRequest: Sendable {
     let id: String
+    let documentIdentity: String
+    let documentGeneration: Int
     let selection: String
     let question: String?
     let localContext: String
@@ -89,6 +91,7 @@ private struct FloatingCapsuleHost<Content: View>: NSViewRepresentable {
 
 struct ArticleReaderView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var aiWorkspace: ArticleAIWorkspace
     let entry: Entry
     var appearanceMode: ReaderAppearanceMode?
     var shortcutInvocation: ReaderShortcutInvocation?
@@ -123,12 +126,7 @@ struct ArticleReaderView: View {
     /// overlong text, provider outage) stops being re-requested after a few
     /// tries instead of burning paid API calls on every scroll.
     @State private var failedBilingualParagraphIDs: [String: Int] = [:]
-    /// Streamed partial translations that have not yet been persisted.
-    /// Cleared for failed paragraphs so a truncated result never renders as
-    /// a final translation (and never blocks an automatic retry).
-    @State private var streamingBilingualTranslations: [String: String] = [:]
-    @State private var streamingSummary: String?
-    @State private var activeTranslationTask: Task<Void, Never>?
+    @State private var activeAIGeneration: AIDocumentGeneration?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -143,7 +141,8 @@ struct ArticleReaderView: View {
     }
 
     private var effectiveSummaryArtifact: AIArtifact? {
-        if let streaming = streamingSummary {
+        if aiWorkspace.projection.entryID == entry.id,
+           let streaming = aiWorkspace.projection.summary?.content {
             var art = store.summaryArtifact(for: entry) ?? AIArtifact(
                 id: UUID(),
                 entryID: entry.id,
@@ -162,10 +161,8 @@ struct ArticleReaderView: View {
     }
 
     private func cancelBilingualTranslationLocal() {
-        activeTranslationTask?.cancel()
-        activeTranslationTask = nil
         pendingBilingualParagraphIDs.removeAll()
-        store.cancelBilingualTranslation()
+        aiWorkspace.cancel(.background(entryID: entry.id, kind: .bilingual))
     }
 
     private var paperTopMargin: CGFloat {
@@ -196,7 +193,8 @@ struct ArticleReaderView: View {
         let persistedIDs = Set(persisted.map(\.id))
         let streamed = readerParagraphs.compactMap { paragraph -> BilingualSegment? in
             guard !persistedIDs.contains(paragraph.id),
-                  let translation = streamingBilingualTranslations[paragraph.id],
+                  aiWorkspace.projection.entryID == entry.id,
+                  let translation = aiWorkspace.projection.bilingualTranslations[paragraph.id],
                   !translation.isEmpty else { return nil }
             return BilingualSegment(id: paragraph.id, original: paragraph.original, translation: translation)
         }
@@ -262,17 +260,6 @@ struct ArticleReaderView: View {
         .navigationTitle(entry.title)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .onChange(of: store.activeAIRequest == nil) { _, isIdle in
-            // Translation requests are silently skipped while another AI
-            // operation (auto summary, selection explanation, selection
-            // translation) holds the single request lock. Without this
-            // recovery the viewport chain would stay stalled until the user
-            // scrolls again — toggling bilingual mode during a summary
-            // appeared to do nothing.
-            if isIdle {
-                requestVisibleTranslationsIfPossible()
-            }
-        }
         .onChange(of: text) { _, newText in
             if !newText.isEmpty {
                 requestVisibleTranslationsIfPossible()
@@ -295,11 +282,14 @@ struct ArticleReaderView: View {
             articleReloadToken += 1
         }
         .task(id: "\(entry.id)-\(articleReloadToken)") {
-            cancelBilingualTranslationLocal()
             store.dismissError()
             let requestedEntry = entry
             articleLoadSession += 1
             let requestedLoadSession = articleLoadSession
+            let requestedAIGeneration = aiWorkspace.attach(
+                ReaderAIDocument(entryID: requestedEntry.id, text: requestedEntry.sourceText)
+            )
+            activeAIGeneration = requestedAIGeneration
             activeLoadEntryID = requestedEntry.id
             // 内存命中：跳过 loading 遮罩直接换页（WebKit 保持旧页直到新文档 commit）；
             // 未命中：维持既有 loading 行为，150ms 后才显示文案。
@@ -312,8 +302,6 @@ struct ArticleReaderView: View {
             visibleBilingualParagraphIDs = []
             pendingBilingualParagraphIDs = []
             failedBilingualParagraphIDs = [:]
-            streamingBilingualTranslations = [:]
-            streamingSummary = nil
             // markRead 含同步 DB 写 + 侧栏聚合 + objectWillChange，
             // 推迟到过渡帧之后执行，避免切换瞬间叠加额外渲染压力。
             Task { @MainActor in
@@ -368,13 +356,12 @@ struct ArticleReaderView: View {
                store.artifact(for: requestedEntry, kind: .summary) == nil,
                !text.isEmpty {
                 isSummaryExpanded = true
-                await store.generateSummary(entry: requestedEntry, text: text) { partial in
-                    await MainActor.run {
-                        guard self.activeLoadEntryID == requestedEntry.id else { return }
-                        self.streamingSummary = partial
-                    }
-                }
-                self.streamingSummary = nil
+                submitSummary(
+                    entry: requestedEntry,
+                    text: text,
+                    force: false,
+                    generation: requestedAIGeneration
+                )
             }
         }
     }
@@ -878,7 +865,7 @@ struct ArticleReaderView: View {
             switch ReaderShortcutPolicy.summaryDecision(
                 showsAISummary: store.llmConfiguration.showsAISummary,
                 hasCachedSummary: store.summaryArtifact(for: entry) != nil,
-                isAIRequestActive: store.activeSummaryRequest != nil
+                isAIRequestActive: aiWorkspace.isWorking(entryID: entry.id, kind: .summary)
             ) {
             case .promptToEnable:
                 onShortcutFeedback(I18N.shared.localized("请先在设置中开启 AI 摘要模块。"))
@@ -928,26 +915,29 @@ struct ArticleReaderView: View {
             onShortcutFeedback(I18N.shared.localized("文章暂无正文内容，无法生成摘要。"))
             return
         }
-        if store.activeSummaryRequest != nil {
-            onShortcutFeedback(I18N.shared.localized("已有 AI 摘要任务正在进行，请稍后再试。"))
-            return
-        }
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
             isSummaryExpanded = true
         }
-        let requestedEntry = entry
-        Task {
-            await store.generateSummary(entry: requestedEntry, text: targetText, force: force) { partial in
-                await MainActor.run {
-                    guard self.entry.id == requestedEntry.id else { return }
-                    self.streamingSummary = partial
+        guard let generation = activeAIGeneration,
+              aiWorkspace.isCurrent(generation) else { return }
+        submitSummary(entry: entry, text: targetText, force: force, generation: generation)
+    }
+
+    private func submitSummary(
+        entry requestedEntry: Entry,
+        text targetText: String,
+        force: Bool,
+        generation: AIDocumentGeneration
+    ) {
+        do {
+            try aiWorkspace.submit(.summary(force: force), in: generation) { emit in
+                await store.generateSummary(entry: requestedEntry, text: targetText, force: force) { partial in
+                    await emit(.summary(partial))
                 }
             }
-            await MainActor.run {
-                if self.entry.id == requestedEntry.id {
-                    self.streamingSummary = nil
-                }
-            }
+        } catch {
+            // A stale generation means navigation won the race before the
+            // request could start. It is a normal lifecycle outcome.
         }
     }
 
@@ -967,38 +957,49 @@ struct ArticleReaderView: View {
         guard isDisplayedDocumentInteractive else {
             return ReaderSelectionResponse(text: "", isError: true)
         }
+        guard let generation = activeAIGeneration,
+              aiWorkspace.isCurrent(generation) else {
+            return ReaderSelectionResponse(text: "", isError: true)
+        }
+        let isRequestCurrent: @MainActor @Sendable () -> Bool = {
+            aiWorkspace.isCurrent(generation)
+        }
         do {
-            let result: String
-            switch request.kind {
-            case .explanation:
-                if let question = request.question, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    result = try await store.askSelection(
+            let workspaceRequest = SelectionAIRequest {
+                switch request.kind {
+                case .explanation:
+                    if let question = request.question, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return try await store.askSelection(
+                            entry: entry,
+                            selection: request.selection,
+                            question: question,
+                            localContext: request.localContext,
+                            articleText: text,
+                            selectionAnchor: request.anchor,
+                            onDelta: onDelta,
+                            isRequestCurrent: isRequestCurrent
+                        )
+                    }
+                    return try await store.explainSelection(
                         entry: entry,
                         selection: request.selection,
-                        question: question,
                         localContext: request.localContext,
                         articleText: text,
                         selectionAnchor: request.anchor,
-                        onDelta: onDelta
+                        onDelta: onDelta,
+                        isRequestCurrent: isRequestCurrent
                     )
-                } else {
-                    result = try await store.explainSelection(
+                case .translation:
+                    return try await store.translateSelection(
                         entry: entry,
                         selection: request.selection,
-                        localContext: request.localContext,
-                        articleText: text,
-                        selectionAnchor: request.anchor,
-                        onDelta: onDelta
+                        onDelta: onDelta,
+                        isRequestCurrent: isRequestCurrent
                     )
                 }
-            case .translation:
-                result = try await store.translateSelection(
-                    entry: entry,
-                    selection: request.selection,
-                    onDelta: onDelta
-                )
             }
-            return ReaderSelectionResponse(text: result, isError: false)
+            let response = try await aiWorkspace.perform(workspaceRequest, in: generation)
+            return ReaderSelectionResponse(text: response.text, isError: false)
         } catch {
             return ReaderSelectionResponse(
                 text: error.localizedDescription,
@@ -1020,17 +1021,10 @@ struct ArticleReaderView: View {
         requestVisibleTranslationsIfPossible()
     }
 
-    /// Whether another AI operation (summary, selection explanation, etc.)
-    /// is currently holding the store's single request lock.
-    private var isAIRequestInFlight: Bool {
-        store.activeAIRequest != nil
-    }
-
     private func requestVisibleTranslationsIfPossible() {
         guard isDisplayedDocumentInteractive,
               readerMode == .bilingual,
-              !text.isEmpty,
-              !isAIRequestInFlight else { return }
+              !text.isEmpty else { return }
 
         let translatedIDs = Set(bilingualSegments.map(\.id))
         let batch = Array(
@@ -1046,42 +1040,54 @@ struct ArticleReaderView: View {
 
         pendingBilingualParagraphIDs.formUnion(batch)
         let paragraphs = readerParagraphs
-        activeTranslationTask = Task {
-            await store.translateBilingualParagraphs(
-                entry: entry,
-                text: text,
-                paragraphs: paragraphs,
-                paragraphIDs: batch,
-                onDelta: { id, delta in
-                    await MainActor.run {
-                        streamingBilingualTranslations[id, default: ""] += delta
-                    }
-                }
-            )
+        guard let generation = activeAIGeneration,
+              aiWorkspace.isCurrent(generation) else { return }
+        let requestedEntry = entry
+        let requestedText = text
+        do {
+            try aiWorkspace.submit(.bilingual(paragraphIDs: batch), in: generation) { emit in
+                await store.translateBilingualParagraphs(
+                    entry: requestedEntry,
+                    text: requestedText,
+                    paragraphs: paragraphs,
+                    paragraphIDs: batch,
+                    onDelta: { id, delta in
+                        await emit(.bilingual(paragraphID: id, text: delta))
+                    },
+                    isRequestCurrent: { true }
+                )
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, aiWorkspace.isCurrent(generation) else { return }
             let completedIDs = Set(
-                store.bilingualArtifact(for: entry, text: text)?.segments.map(\.id) ?? []
+                store.bilingualArtifact(for: requestedEntry, text: requestedText)?.segments.map(\.id) ?? []
             )
             let unsuccessfulIDs = Set(batch).subtracting(completedIDs)
             pendingBilingualParagraphIDs.subtract(batch)
             for id in batch where completedIDs.contains(id) {
-                streamingBilingualTranslations.removeValue(forKey: id)
                 failedBilingualParagraphIDs.removeValue(forKey: id)
             }
             for id in unsuccessfulIDs {
-                streamingBilingualTranslations.removeValue(forKey: id)
                 failedBilingualParagraphIDs[id, default: 0] += 1
             }
-            requestVisibleTranslationsIfPossible()
+            Task { @MainActor in
+                await Task.yield()
+                guard aiWorkspace.isCurrent(generation) else { return }
+                requestVisibleTranslationsIfPossible()
+            }
+            }
+        } catch {
+            pendingBilingualParagraphIDs.subtract(batch)
         }
     }
 
     private static let maximumTranslationFailures = 2
 
     private func activeAIStatus(for kind: AIArtifactKind) -> AIRequestStatus? {
-        guard store.isGeneratingAI(for: entry, kind: kind) else { return nil }
-        return store.activeAIRequest
+        guard aiWorkspace.isWorking(entryID: entry.id, kind: kind) else { return nil }
+        if let status = store.activeAIStatus(for: kind), status.entryID == entry.id {
+            return status
+        }
+        return AIRequestStatus(entryID: entry.id, kind: kind, phase: .generating)
     }
 
     private func aiProgress(_ status: AIRequestStatus) -> some View {
@@ -1129,6 +1135,7 @@ private enum PaperReaderHeaderBuilder {
         isSummaryExpanded: Bool,
         isGeneratingSummary: Bool,
         aiStatusMessage: String?,
+        isSummaryStale: Bool = false,
         showsAISummary: Bool = true,
         isBilingualMode: Bool = false,
         titleSegment: BilingualSegment? = nil,
@@ -1176,7 +1183,8 @@ private enum PaperReaderHeaderBuilder {
                 isSummaryExpanded: isSummaryExpanded,
                 isGeneratingSummary: isGeneratingSummary,
                 aiStatusMessage: aiStatusMessage,
-                errorMessage: nil
+                errorMessage: nil,
+                isStale: isSummaryStale
             )
         } else {
             summaryCardHTMLString = ""
@@ -1239,7 +1247,8 @@ private enum PaperReaderHeaderBuilder {
         isSummaryExpanded: Bool,
         isGeneratingSummary: Bool,
         aiStatusMessage: String?,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        isStale: Bool = false
     ) -> String {
         let chevronRightSVG = """
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1273,6 +1282,8 @@ private enum PaperReaderHeaderBuilder {
                     noticeHTML = "<span class=\"paper-summary-error\">\(errorMessage.htmlEscaped)</span> "
                 } else if !summary.isComplete {
                     noticeHTML = "<span>\(I18N.localized("上次生成未完成").htmlEscaped)</span> "
+                } else if isStale {
+                    noticeHTML = "<span>\(I18N.localized("正文已更新，摘要可能过期").htmlEscaped)</span> "
                 } else {
                     noticeHTML = ""
                 }
@@ -4936,7 +4947,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
-                errorMessage: parent.errorMessage
+                errorMessage: parent.errorMessage,
+                isStale: parent.summaryArtifact.map { $0.contentHash != parent.article.text.stableDigest } ?? false
             )
             guard let data = try? JSONEncoder().encode(summaryHTML),
                   let jsonEncoded = String(data: data, encoding: .utf8) else { return }
@@ -5106,6 +5118,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 }
                 let request = ReaderSelectionRequest(
                     id: id,
+                    documentIdentity: loadedDocumentIdentity ?? parent.entry.id,
+                    documentGeneration: currentLoadGeneration,
                     selection: selection,
                     question: question,
                     localContext: localContext,
@@ -5137,21 +5151,24 @@ private struct ArticleHTMLView: NSViewRepresentable {
             }
         }
 
-        /// Closing a popover is purely presentational. Requests run to
-        /// completion so an already-sent request can populate the cached
-        /// explanation/translation even if the reader moves on.
         private func startNextSelectionExplanationIfNeeded() {
             guard selectionExplanationTask == nil,
                   !pendingSelectionExplanationRequests.isEmpty else { return }
             let request = pendingSelectionExplanationRequests.removeFirst()
+            guard isCurrentSelectionRequest(request) else {
+                startNextSelectionExplanationIfNeeded()
+                return
+            }
             activeSelectionExplanationID = request.id
             selectionExplanationTask = Task { @MainActor [weak self] in
-                guard let self, let webView = self.webView else { return }
+                guard let self, let webView = self.webView,
+                      self.isCurrentSelectionRequest(request) else { return }
                 let response = await self.parent.onSelectionRequest(request) { [weak self] delta in
                     guard let self else { return }
                     await self.sendSelectionDelta(delta, for: request)
                 }
-                guard self.activeSelectionExplanationID == request.id else { return }
+                guard self.activeSelectionExplanationID == request.id,
+                      self.isCurrentSelectionRequest(request) else { return }
                 _ = try? await webView.callAsyncJavaScript(
                     "window.paperRssSelectionAssistant?.resolve(id, text, isError, kind)",
                     arguments: [
@@ -5171,13 +5188,27 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         @MainActor
         private func sendSelectionDelta(_ delta: String, for request: ReaderSelectionRequest) async {
-            guard let webView else { return }
+            guard let webView,
+                  activeSelectionExplanationID == request.id,
+                  isCurrentSelectionRequest(request) else { return }
             _ = try? await webView.callAsyncJavaScript(
                 "window.paperRssSelectionAssistant?.append(id, text, kind)",
                 arguments: ["id": request.id, "text": delta, "kind": request.kind.rawValue],
                 in: nil,
                 contentWorld: .defaultClient
             )
+        }
+
+        private func isCurrentSelectionRequest(_ request: ReaderSelectionRequest) -> Bool {
+            request.documentIdentity == loadedDocumentIdentity &&
+                request.documentGeneration == currentLoadGeneration
+        }
+
+        private func invalidateSelectionRequests() {
+            selectionExplanationTask?.cancel()
+            selectionExplanationTask = nil
+            activeSelectionExplanationID = nil
+            pendingSelectionExplanationRequests.removeAll()
         }
 
         /// 已注入 TeX 运行时的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
@@ -5307,6 +5338,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
+                isSummaryStale: parent.summaryArtifact.map { $0.contentHash != parent.article.text.stableDigest } ?? false,
                 showsAISummary: parent.showsAISummary,
                 isBilingualMode: parent.isBilingualMode,
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
@@ -5326,6 +5358,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             )
             renderedSummarySignature = nil
             renderedSelectionOptionsJSON = nil
+            invalidateSelectionRequests()
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
             loadedArticle = parent.article
@@ -5764,7 +5797,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
-                errorMessage: parent.errorMessage
+                errorMessage: parent.errorMessage,
+                isStale: parent.summaryArtifact.map { $0.contentHash != parent.article.text.stableDigest } ?? false
             )
             guard let data = try? JSONEncoder().encode(summaryHTML),
                   let jsonEncoded = String(data: data, encoding: .utf8) else { return }
@@ -5894,6 +5928,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 }
                 let request = ReaderSelectionRequest(
                     id: id,
+                    documentIdentity: loadedDocumentIdentity ?? parent.entry.id,
+                    documentGeneration: currentLoadGeneration,
                     selection: selection,
                     question: question,
                     localContext: localContext,
@@ -5918,14 +5954,20 @@ private struct ArticleHTMLView: UIViewRepresentable {
             guard selectionExplanationTask == nil,
                   !pendingSelectionExplanationRequests.isEmpty else { return }
             let request = pendingSelectionExplanationRequests.removeFirst()
+            guard isCurrentSelectionRequest(request) else {
+                startNextSelectionExplanationIfNeeded()
+                return
+            }
             activeSelectionExplanationID = request.id
             selectionExplanationTask = Task { @MainActor [weak self] in
-                guard let self, let webView = self.webView else { return }
+                guard let self, let webView = self.webView,
+                      self.isCurrentSelectionRequest(request) else { return }
                 let response = await self.parent.onSelectionRequest(request) { [weak self] delta in
                     guard let self else { return }
                     await self.sendSelectionDelta(delta, for: request)
                 }
-                guard self.activeSelectionExplanationID == request.id else { return }
+                guard self.activeSelectionExplanationID == request.id,
+                      self.isCurrentSelectionRequest(request) else { return }
                 _ = try? await webView.callAsyncJavaScript(
                     "window.paperRssSelectionAssistant?.resolve(id, text, isError, kind)",
                     arguments: [
@@ -5945,13 +5987,27 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         @MainActor
         private func sendSelectionDelta(_ delta: String, for request: ReaderSelectionRequest) async {
-            guard let webView else { return }
+            guard let webView,
+                  activeSelectionExplanationID == request.id,
+                  isCurrentSelectionRequest(request) else { return }
             _ = try? await webView.callAsyncJavaScript(
                 "window.paperRssSelectionAssistant?.append(id, text, kind)",
                 arguments: ["id": request.id, "text": delta, "kind": request.kind.rawValue],
                 in: nil,
                 contentWorld: .defaultClient
             )
+        }
+
+        private func isCurrentSelectionRequest(_ request: ReaderSelectionRequest) -> Bool {
+            request.documentIdentity == loadedDocumentIdentity &&
+                request.documentGeneration == currentLoadGeneration
+        }
+
+        private func invalidateSelectionRequests() {
+            selectionExplanationTask?.cancel()
+            selectionExplanationTask = nil
+            activeSelectionExplanationID = nil
+            pendingSelectionExplanationRequests.removeAll()
         }
 
         /// 已注入 TeX 运行时的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
@@ -6081,6 +6137,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 isSummaryExpanded: parent.isSummaryExpanded,
                 isGeneratingSummary: parent.isGeneratingSummary,
                 aiStatusMessage: parent.aiStatusMessage,
+                isSummaryStale: parent.summaryArtifact.map { $0.contentHash != parent.article.text.stableDigest } ?? false,
                 showsAISummary: parent.showsAISummary,
                 isBilingualMode: parent.isBilingualMode,
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
@@ -6100,6 +6157,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             )
             renderedSummarySignature = nil
             renderedSelectionOptionsJSON = nil
+            invalidateSelectionRequests()
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
             loadedArticle = parent.article

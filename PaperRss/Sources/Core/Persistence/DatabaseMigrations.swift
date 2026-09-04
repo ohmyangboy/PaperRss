@@ -311,6 +311,45 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v5-add-ai-artifact-execution-fingerprint") { db in
+            guard try db.tableExists("ai_artifacts") else { return }
+            try db.execute(sql: "ALTER TABLE ai_artifacts ADD COLUMN provider_id TEXT;")
+            try db.execute(sql: "ALTER TABLE ai_artifacts ADD COLUMN configuration_fingerprint TEXT;")
+            try db.execute(sql: """
+            CREATE INDEX idx_ai_artifacts_exact_execution
+            ON ai_artifacts(item_id, kind, content_hash, configuration_fingerprint, updated_at DESC);
+            """)
+            try db.execute(sql: """
+            CREATE INDEX idx_ai_artifacts_subject_execution
+            ON ai_artifacts(subject_key, kind, content_hash, configuration_fingerprint, updated_at DESC);
+            """)
+        }
+
+        migrator.registerMigration("v6-canonicalize-current-ai-summaries") { db in
+            guard try db.tableExists("ai_artifacts") else { return }
+            try db.execute(sql: """
+            WITH ranked AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY subject_key
+                           ORDER BY updated_at DESC, created_at DESC, id DESC
+                       ) AS position
+                FROM ai_artifacts
+                WHERE kind = 'summary'
+                  AND is_complete = 1
+                  AND is_deleted = 0
+            )
+            UPDATE ai_artifacts
+            SET is_deleted = 1
+            WHERE kind = 'summary'
+              AND id NOT IN (SELECT id FROM ranked WHERE position = 1);
+            """)
+            try db.execute(sql: """
+            CREATE INDEX idx_ai_artifacts_current_summary
+            ON ai_artifacts(subject_key, kind, is_complete, is_deleted, updated_at DESC);
+            """)
+        }
+
         return migrator
     }
 }

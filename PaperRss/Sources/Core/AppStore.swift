@@ -41,11 +41,13 @@ public enum AIRequestPhase: Sendable, Equatable {
 }
 
 public struct AIRequestStatus: Sendable, Equatable {
+    public let requestID: UUID
     public let entryID: String
     public let kind: AIArtifactKind
     public let phase: AIRequestPhase
 
-    public init(entryID: String, kind: AIArtifactKind, phase: AIRequestPhase) {
+    public init(requestID: UUID = UUID(), entryID: String, kind: AIArtifactKind, phase: AIRequestPhase) {
+        self.requestID = requestID
         self.entryID = entryID
         self.kind = kind
         self.phase = phase
@@ -88,6 +90,11 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var articleRefreshSignal: ArticleRefreshSignal?
     @Published public private(set) var activeRefetchEntryIDs: Set<String> = []
     @Published public var llmConfiguration: LLMConfiguration = .default
+    /// Persisted provider profiles plus reader-facing AI preferences. The
+    /// legacy `llmConfiguration` property remains as the active runtime
+    /// projection for existing callers.
+    @Published public private(set) var aiSettings: AISettings = .default
+    public let aiWorkspace = ArticleAIWorkspace(maximumBackgroundConcurrency: 6)
 
     /// 进程内已准备正文 LRU 缓存：命中时 Reader 可跳过 prepare 管线即时换页。
     public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
@@ -161,11 +168,7 @@ public final class AppStore: ObservableObject {
         }
     }
 
-    private var activeBilingualTask: Task<Void, Never>?
-
     public func cancelBilingualTranslation() {
-        activeBilingualTask?.cancel()
-        activeBilingualTask = nil
         activeBilingualRequest = nil
     }
 
@@ -179,6 +182,7 @@ public final class AppStore: ObservableObject {
         if activeBilingualEntryIDs.contains(entryID) {
             activeBilingualEntryIDs.remove(entryID)
             cancelBilingualTranslation()
+            aiWorkspace.cancel(.background(entryID: entryID, kind: .bilingual))
         } else {
             activeBilingualEntryIDs.insert(entryID)
         }
@@ -196,8 +200,9 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
 
     private let persistenceURL: URL
+    private let shouldPersistAISettings: Bool
     private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
-    private let llm = LLMService()
+    private let llm: LLMService
     private let preparationEngine: ArticlePreparationEngine
     private var automaticRefreshTask: Task<Void, Never>?
     /// 当前刷新轮次中已经启动的本地 Feed 抓取任务。删除 Feed 时主动取消对应任务，
@@ -215,6 +220,9 @@ public final class AppStore: ObservableObject {
         static let articleFontSize = "PaperRss.articleFontSize"
         static let readerAppearance = "PaperRss.readerAppearance"
         static let llmConfiguration = "PaperRss.llmConfiguration"
+        static let aiSettings = "PaperRss.aiSettings.v5"
+        static let legacyAISettingsV4 = "PaperRss.aiSettings.v4"
+        static let legacyAISettings = "PaperRss.aiSettings.v2"
     }
 
     private static func loadReaderAppearance(from preferences: UserDefaults) -> ReaderAppearance {
@@ -248,12 +256,17 @@ public final class AppStore: ObservableObject {
         let actualFetcher = feedFetcher ?? { try await FeedService.fetch($0) }
         self.feedFetcher = actualFetcher
         self.customSession = customSession
+        self.llm = LLMService(port: URLSessionAIModelAdapter(session: customSession ?? .shared))
         self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
         let applicationSupport = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
         let directory = applicationSupport.appendingPathComponent("PaperRss", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
         self.persistenceURL = persistenceURL ?? directory.appendingPathComponent("library.json")
+        // Tests and preview callers pass isolated database/persistence URLs. Do
+        // not leak the v2 provider snapshot into the process-wide defaults in
+        // those cases; the real app uses the default locations and persists it.
+        self.shouldPersistAISettings = databaseURL == nil && persistenceURL == nil
         let sqliteURL = databaseURL ?? directory.appendingPathComponent("library.sqlite")
 
         do {
@@ -306,11 +319,52 @@ public final class AppStore: ObservableObject {
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         readerAppearance = Self.loadReaderAppearance(from: preferences)
 
+        let legacyConfiguration: LLMConfiguration
         if let data = preferences.data(forKey: PreferenceKey.llmConfiguration),
            let savedConfig = try? JSONDecoder().decode(LLMConfiguration.self, from: data) {
-            llmConfiguration = savedConfig
+            legacyConfiguration = savedConfig
         } else {
-            llmConfiguration = .default
+            legacyConfiguration = llmConfiguration
+        }
+
+        if let data = preferences.data(forKey: PreferenceKey.aiSettings)
+            ?? preferences.data(forKey: PreferenceKey.legacyAISettingsV4)
+            ?? preferences.data(forKey: PreferenceKey.legacyAISettings),
+           let savedSettings = try? JSONDecoder().decode(AISettings.self, from: data),
+           !savedSettings.providers.isEmpty {
+            let migratedSettings = savedSettings.migratedToCurrentSchema()
+            for builtInID in [AIProviderID.openAI, AIProviderID.deepSeek, AIProviderID.gemini] {
+                let customID = AISettings.migratedCustomProviderID(for: builtInID)
+                if migratedSettings.provider(id: customID) != nil,
+                   LocalAPIKeyStore.loadAPIKey(for: customID).isEmpty {
+                    _ = LocalAPIKeyStore.saveAPIKey(LocalAPIKeyStore.loadAPIKey(for: builtInID), for: customID)
+                }
+            }
+            aiSettings = migratedSettings
+            if let summaryConfiguration = migratedSettings.resolvedConfiguration(for: .summary) {
+                llmConfiguration = summaryConfiguration
+            } else {
+                llmConfiguration = legacyConfiguration
+            }
+            persistAISettings(migratedSettings)
+            // Keep the old projection current for an older build that does
+            // not know about the v2 provider document yet.
+            if let summaryReference = migratedSettings.configuration(for: .summary)?.model,
+               let summaryConfiguration = migratedSettings.resolvedConfiguration(for: .summary) {
+                persistLegacyCompatibilityPairIfPossible(
+                    configuration: summaryConfiguration,
+                    providerID: summaryReference.providerID
+                )
+            }
+        } else {
+            let migrated = AISettings.migrated(from: legacyConfiguration)
+            aiSettings = migrated
+            llmConfiguration = legacyConfiguration
+            // Migrate the legacy key before writing v2. If the process is
+            // interrupted, the next launch can safely repeat this idempotent
+            // step; a newly-added empty provider will never inherit it later.
+            _ = LocalAPIKeyStore.migrateLegacyAPIKeyIfNeeded(to: migrated.activeProviderID)
+            persistAISettings(migrated)
         }
 
         let storedICloudSyncEnabled = UserDefaults.standard.bool(forKey: "PaperRss.iCloudSyncEnabled")
@@ -335,15 +389,18 @@ public final class AppStore: ObservableObject {
         testDatabase: AppDatabase,
         feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
         credentialStore: CredentialStore? = nil,
-        pageLoader: (any ArticlePageLoading)? = nil
+        pageLoader: (any ArticlePageLoading)? = nil,
+        aiModelPort: (any AIModelPort)? = nil
     ) {
         self.feedFetcher = feedFetcher
         self.customSession = nil
+        self.llm = LLMService(port: aiModelPort ?? URLSessionAIModelAdapter())
         self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         self.persistenceURL = tempDir.appendingPathComponent("library.json")
+        self.shouldPersistAISettings = false
         let sqliteURL = tempDir.appendingPathComponent("library.sqlite")
 
         do {
@@ -390,6 +447,7 @@ public final class AppStore: ObservableObject {
         let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         readerAppearance = Self.loadReaderAppearance(from: preferences)
+        aiSettings = AISettings.migrated(from: testDatabase.llmConfiguration)
         llmConfiguration = testDatabase.llmConfiguration
 
         if migrationSucceededOrNotNeeded {
@@ -1665,17 +1723,68 @@ public final class AppStore: ObservableObject {
 
     // MARK: - AI Artifacts
 
+    private func currentAIExecutionContext(
+        for feature: AIFeatureKind = .summary,
+        configuration: LLMConfiguration? = nil
+    ) -> AIExecutionContext {
+        let reference = aiSettings.configuration(for: feature)?.model
+        let provider = reference.flatMap { aiSettings.provider(id: $0.providerID) }
+        return AIExecutionContext(
+            providerID: provider?.id ?? AIProviderID.migratedLegacy,
+            providerKind: provider?.kind ?? .customOpenAICompatible,
+            configuration: configuration ?? aiSettings.resolvedConfiguration(for: feature) ?? llmConfiguration
+        )
+    }
+
+    private func executionSnapshot(for feature: AIFeatureKind) -> (AIExecutionContext, String)? {
+        guard aiSettings.configuration(for: feature)?.isEnabled == true,
+              aiSettings.resolvedConfiguration(for: feature) != nil else { return nil }
+        let execution = currentAIExecutionContext(for: feature)
+        return (execution, apiKey(for: execution.providerID))
+    }
+
+    private func artifactPromptVersion(for kind: AIArtifactKind) -> Int {
+        kind == .bilingual || kind == .translation ? Self.translationPromptVersion : 1
+    }
+
+    private func currentArtifactFingerprint(for kind: AIArtifactKind, configuration: LLMConfiguration? = nil) -> String {
+        currentAIExecutionContext(configuration: configuration)
+            .fingerprint(for: kind, promptVersion: artifactPromptVersion(for: kind))
+    }
+
+    private func providerRequiresAPIKey(_ kind: AIProviderKind) -> Bool {
+        kind != .customOpenAICompatible
+    }
+
     public func artifact(for entry: Entry, kind: AIArtifactKind) -> AIArtifact? {
-        try? localProvider.fetchArtifact(entryID: entry.id, kind: kind, isCompleteOnly: true)
+        try? localProvider.fetchArtifact(
+            entryID: entry.id,
+            kind: kind,
+            isCompleteOnly: true,
+            configurationFingerprint: currentArtifactFingerprint(for: kind)
+        )
     }
 
     public func summaryArtifact(for entry: Entry) -> AIArtifact? {
-        try? localProvider.fetchArtifact(entryID: entry.id, kind: .summary, isCompleteOnly: false)
+        try? localProvider.fetchArtifact(
+            entryID: entry.id,
+            kind: .summary,
+            isCompleteOnly: true
+        )
+    }
+
+    public func isSummaryStale(for entry: Entry, text: String) -> Bool {
+        guard let summary = summaryArtifact(for: entry) else { return false }
+        return summary.contentHash != text.stableDigest
     }
 
     public func bilingualArtifact(for entry: Entry, text: String) -> AIArtifact? {
         let hash = text.stableDigest
-        return try? localProvider.fetchBilingualArtifact(entryID: entry.id, contentHash: hash, model: llmConfiguration.model)
+        return try? localProvider.fetchBilingualArtifact(
+            entryID: entry.id,
+            contentHash: hash,
+            targetLanguage: llmConfiguration.targetLanguage
+        )
     }
 
     public func selectionArtifacts(for entry: Entry, articleHash: String) -> [AIArtifact] {
@@ -1693,25 +1802,25 @@ public final class AppStore: ObservableObject {
         force: Bool = false,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async {
-        let configuration = llmConfiguration
+        guard let (execution, apiKey) = executionSnapshot(for: .summary) else { return }
+        let configuration = execution.configuration
+        let fingerprint = execution.fingerprint(for: .summary, promptVersion: 1)
         let hash = text.stableDigest
-        if !force, let existing = summaryArtifact(for: entry), existing.isComplete && existing.contentHash == hash && existing.model == configuration.model {
+        if !force, summaryArtifact(for: entry) != nil {
             return
         }
-        guard activeSummaryRequest == nil else { return }
-
         lastError = nil
-        activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
-        let apiKey = loadAPIKey()
-        guard !apiKey.isEmpty else {
-            activeSummaryRequest = nil
+        let requestID = UUID()
+        activeSummaryRequest = AIRequestStatus(requestID: requestID, entryID: entry.id, kind: .summary, phase: .loadingLocalConfiguration)
+        guard !apiKey.isEmpty || !providerRequiresAPIKey(execution.providerKind) else {
+            if activeSummaryRequest?.requestID == requestID { activeSummaryRequest = nil }
             let error = LLMServiceError.missingAPIKey
             reportError(error, module: .ai)
             lastError = error.localizedDescription
             return
         }
 
-        activeSummaryRequest = AIRequestStatus(entryID: entry.id, kind: .summary, phase: .generating)
+        activeSummaryRequest = AIRequestStatus(requestID: requestID, entryID: entry.id, kind: .summary, phase: .generating)
 
         let targetArtifactID = UUID()
         let tracker = SummaryStreamTracker(
@@ -1723,6 +1832,8 @@ public final class AppStore: ObservableObject {
                 model: configuration.model,
                 targetLanguage: configuration.targetLanguage,
                 promptVersion: 1,
+                providerID: execution.providerID,
+                configurationFingerprint: fingerprint,
                 content: "",
                 isComplete: false
             )
@@ -1752,10 +1863,14 @@ public final class AppStore: ObservableObject {
             finalArtifact.content = result
             finalArtifact.isComplete = true
             finalArtifact.updatedAt = .now
-            try? localProvider.saveArtifact(finalArtifact)
-            activeSummaryRequest = nil
+            try? localProvider.replaceCurrentSummary(with: finalArtifact)
+            if activeSummaryRequest?.requestID == requestID { activeSummaryRequest = nil }
         } catch {
-            activeSummaryRequest = nil
+            var abandonedArtifact = tracker.currentArtifact
+            abandonedArtifact.isDeleted = true
+            abandonedArtifact.updatedAt = .now
+            try? localProvider.saveArtifact(abandonedArtifact)
+            if activeSummaryRequest?.requestID == requestID { activeSummaryRequest = nil }
             if !Task.isCancelled {
                 reportError(error, module: .ai)
                 lastError = error.localizedDescription
@@ -1763,14 +1878,15 @@ public final class AppStore: ObservableObject {
         }
     }
 
-    public func generateBilingualTranslation(entry: Entry, text: String, targetLanguage: String = "zh-Hans") async {
+    public func generateBilingualTranslation(entry: Entry, text: String, targetLanguage: String? = nil) async {
         let paragraphs = ArticleExtractor.readerParagraphs(in: text, title: entry.title)
         guard !paragraphs.isEmpty else { return }
         await translateBilingualParagraphs(
             entry: entry,
             text: text,
             paragraphs: paragraphs,
-            paragraphIDs: paragraphs.map(\.id)
+            paragraphIDs: paragraphs.map(\.id),
+            targetLanguage: targetLanguage
         )
     }
 
@@ -1813,7 +1929,8 @@ public final class AppStore: ObservableObject {
         localContext: String = "",
         articleText: String = "",
         selectionAnchor: AISelectionAnchor? = nil,
-        onDelta: (@Sendable (String) async -> Void)? = nil
+        onDelta: (@Sendable (String) async -> Void)? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool = { true }
     ) async throws -> String {
         // hash 基准与 articleContext 相同；正常路径下 == preparedArticle.text
         // 的 digest，与划词标注恢复查询 (savedSelectionAnnotations) 严格同源。
@@ -1824,6 +1941,7 @@ public final class AppStore: ObservableObject {
             selectionText: selection,
             selectionAnchor: selectionAnchor,
             selectionArticleHash: anchorArticleHash,
+            isRequestCurrent: isRequestCurrent,
             operation: { [weak self] apiKey, config in
                 guard let self else { return nil }
                 return try await self.llm.explainSelection(
@@ -1846,17 +1964,24 @@ public final class AppStore: ObservableObject {
     public func translateSelection(
         entry: Entry,
         selection: String,
-        targetLanguage: String = "zh-Hans",
-        onDelta: (@Sendable (String) async -> Void)? = nil
+        targetLanguage: String? = nil,
+        onDelta: (@Sendable (String) async -> Void)? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool = { true }
     ) async throws -> String {
         let opResult = await executeSelectionAI(
             entry: entry,
             kind: .translation,
             selectionText: selection,
+            isRequestCurrent: isRequestCurrent,
             operation: { [weak self] apiKey, config in
                 guard let self else { return nil }
                 var updatedConfig = config
-                updatedConfig.targetLanguage = targetLanguage
+                if let targetLanguage {
+                    let normalizedLanguage = targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !normalizedLanguage.isEmpty {
+                        updatedConfig.targetLanguage = normalizedLanguage
+                    }
+                }
                 return try await self.llm.translate(
                     paragraph: selection,
                     configuration: updatedConfig,
@@ -1879,7 +2004,8 @@ public final class AppStore: ObservableObject {
         localContext: String = "",
         articleText: String = "",
         selectionAnchor: AISelectionAnchor? = nil,
-        onDelta: (@Sendable (String) async -> Void)? = nil
+        onDelta: (@Sendable (String) async -> Void)? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool = { true }
     ) async throws -> String {
         // 与 explainSelection 相同的 hash 基准；缺失该字段的提问 artifact
         // 无法被划词标注恢复链路检索（切换文章后提问图标消失的根因）。
@@ -1890,6 +2016,7 @@ public final class AppStore: ObservableObject {
             selectionText: selection,
             selectionAnchor: selectionAnchor,
             selectionArticleHash: anchorArticleHash,
+            isRequestCurrent: isRequestCurrent,
             operation: { [weak self] apiKey, config in
                 guard let self else { return nil }
                 return try await self.llm.askSelection(
@@ -1914,20 +2041,39 @@ public final class AppStore: ObservableObject {
         text: String,
         paragraphs: [ReaderParagraph],
         paragraphIDs: [String],
-        onDelta: (@Sendable (String, String) async -> Void)? = nil
+        targetLanguage: String? = nil,
+        onDelta: (@Sendable (String, String) async -> Void)? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool = { true }
     ) async {
-        guard !paragraphs.isEmpty, !paragraphIDs.isEmpty else { return }
+        guard !paragraphs.isEmpty, !paragraphIDs.isEmpty, isRequestCurrent() else { return }
 
-        let configuration = llmConfiguration
+        guard let (baseExecution, apiKey) = executionSnapshot(for: .bilingualTranslation) else { return }
+        var configuration = baseExecution.configuration
+        if let targetLanguage {
+            let normalizedLanguage = targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedLanguage.isEmpty {
+                configuration.targetLanguage = normalizedLanguage
+            }
+        }
         let hash = text.stableDigest
+        let execution = AIExecutionContext(
+            providerID: baseExecution.providerID,
+            providerKind: baseExecution.providerKind,
+            configuration: configuration
+        )
+        let fingerprint = execution.fingerprint(for: .bilingual, promptVersion: Self.translationPromptVersion)
         let requestedIDsSet = Set(paragraphIDs)
         let targetParagraphs = paragraphs.filter { requestedIDsSet.contains($0.id) }
         guard !targetParagraphs.isEmpty else { return }
 
         let paragraphOrder: [String: Int] = Dictionary(uniqueKeysWithValues: paragraphs.enumerated().map { ($1.id, $0) })
 
-        // 1. 获取或创建 Artifact（根据 entryID + contentHash + model）
-        var artifact = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false))
+        // 1. 用户可见双语产物按正文与目标语言稳定复用；模型只记录来源。
+        var artifact = (try? localProvider.fetchBilingualArtifact(
+            entryID: entry.id,
+            contentHash: hash,
+            targetLanguage: configuration.targetLanguage
+        ))
             ?? AIArtifact(
                 id: UUID(),
                 entryID: entry.id,
@@ -1936,17 +2082,12 @@ public final class AppStore: ObservableObject {
                 model: configuration.model,
                 targetLanguage: configuration.targetLanguage,
                 promptVersion: Self.translationPromptVersion,
+                providerID: execution.providerID,
+                configurationFingerprint: fingerprint,
                 content: "",
                 segments: [],
                 isComplete: false
             )
-
-        // 保证模型和 targetLanguage 同步
-        if artifact.contentHash != hash || artifact.model != configuration.model {
-            artifact.contentHash = hash
-            artifact.model = configuration.model
-            artifact.targetLanguage = configuration.targetLanguage
-        }
 
         let existingSegmentMap: [String: BilingualSegment] = Dictionary(
             uniqueKeysWithValues: artifact.segments.map { ($0.id, $0) }
@@ -1960,16 +2101,22 @@ public final class AppStore: ObservableObject {
             if let existing = existingSegmentMap[paragraph.id] {
                 // 已有该段落翻译，通知 onDelta
                 if let onDelta {
-                    Task { await onDelta(paragraph.id, existing.translation) }
+                    await onDelta(paragraph.id, existing.translation)
                 }
+                guard isRequestCurrent(), !Task.isCancelled else { return }
                 continue
             }
-            if let tmTranslation = cachedTranslation(for: paragraph.original, configuration: configuration) {
+            if let tmTranslation = cachedTranslation(
+                for: paragraph.original,
+                configuration: configuration,
+                executionContext: execution
+            ) {
                 let seg = BilingualSegment(id: paragraph.id, original: paragraph.original, translation: tmTranslation)
                 newResolvedSegments.append(seg)
                 if let onDelta {
-                    Task { await onDelta(paragraph.id, tmTranslation) }
+                    await onDelta(paragraph.id, tmTranslation)
                 }
+                guard isRequestCurrent(), !Task.isCancelled else { return }
             } else {
                 uncachedParagraphs.append(paragraph)
             }
@@ -1977,6 +2124,7 @@ public final class AppStore: ObservableObject {
 
         // 如果有 TM 命中的段落，先合并
         if !newResolvedSegments.isEmpty {
+            guard isRequestCurrent(), !Task.isCancelled else { return }
             for seg in newResolvedSegments {
                 if let idx = artifact.segments.firstIndex(where: { $0.id == seg.id }) {
                     artifact.segments[idx] = seg
@@ -1996,10 +2144,10 @@ public final class AppStore: ObservableObject {
         guard !uncachedParagraphs.isEmpty else {
             return
         }
+        guard isRequestCurrent(), !Task.isCancelled else { return }
 
         // 4. 检查 API Key
-        let apiKey = loadAPIKey()
-        guard !apiKey.isEmpty else {
+        guard !apiKey.isEmpty || !providerRequiresAPIKey(execution.providerKind) else {
             let error = LLMServiceError.missingAPIKey
             reportError(error, module: .ai)
             // 未配置 API Key 属于可预期的环境状态，且翻译随滚动批量触发，
@@ -2008,37 +2156,56 @@ public final class AppStore: ObservableObject {
             return
         }
 
-        activeBilingualRequest = AIRequestStatus(entryID: entry.id, kind: .bilingual, phase: .generating)
+        let requestID = UUID()
+        activeBilingualRequest = AIRequestStatus(requestID: requestID, entryID: entry.id, kind: .bilingual, phase: .generating)
         defer {
-            activeBilingualRequest = nil
+            if activeBilingualRequest?.requestID == requestID { activeBilingualRequest = nil }
         }
 
         // 5. 按批次执行模型翻译并直接 await
         let batches = translationBatches(from: uncachedParagraphs)
         do {
             for batch in batches {
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled, isRequestCurrent() else { break }
                 let translatedTexts = try await llm.translateBatch(
                     paragraphs: batch.map(\.original),
                     configuration: configuration,
                     apiKey: apiKey
                 )
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled, isRequestCurrent() else { break }
 
                 let batchSegments = zip(batch, translatedTexts).map {
-                    BilingualSegment(id: $0.id, original: $0.original, translation: $1)
+                    BilingualSegment(
+                        id: $0.id,
+                        original: $0.original,
+                        translation: $1,
+                        providerID: execution.providerID,
+                        modelID: configuration.model,
+                        configurationFingerprint: fingerprint
+                    )
                 }
-                cacheTranslations(batchSegments, configuration: configuration)
+                cacheTranslations(
+                    batchSegments,
+                    configuration: configuration,
+                    executionContext: execution
+                )
 
                 // 触发 onDelta
                 if let onDelta {
                     for seg in batchSegments {
                         await onDelta(seg.id, seg.translation)
+                        guard isRequestCurrent(), !Task.isCancelled else { return }
                     }
                 }
 
+                guard isRequestCurrent(), !Task.isCancelled else { return }
+
                 // 合并入当前 artifact
-                var current = (try? localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false)) ?? artifact
+                var current = (try? localProvider.fetchBilingualArtifact(
+                    entryID: entry.id,
+                    contentHash: hash,
+                    targetLanguage: configuration.targetLanguage
+                )) ?? artifact
                 for seg in batchSegments {
                     if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
                         current.segments[idx] = seg
@@ -2055,7 +2222,7 @@ public final class AppStore: ObservableObject {
                 artifact = current
             }
         } catch {
-            if !Task.isCancelled {
+            if !Task.isCancelled, isRequestCurrent() {
                 reportError(error, module: .ai)
                 // 翻译失败随滚动批量触发，走非阻断 toast 并冷却去重。
                 emitTransientNotice(error.localizedDescription)
@@ -2069,23 +2236,37 @@ public final class AppStore: ObservableObject {
         selectionText: String? = nil,
         selectionAnchor: AISelectionAnchor? = nil,
         selectionArticleHash: String? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool,
         operation: @Sendable @escaping (String, LLMConfiguration) async throws -> String?
     ) async -> String? {
-        let configuration = llmConfiguration
+        let feature: AIFeatureKind
+        switch kind {
+        case .translation: feature = .selectionTranslation
+        case .selectionExplanation: feature = .selectionExplanation
+        case .interpretation, .articleContext: feature = .selectionAsk
+        case .summary: feature = .summary
+        case .bilingual: feature = .bilingualTranslation
+        }
+        guard let (execution, apiKey) = executionSnapshot(for: feature) else { return nil }
+        let configuration = execution.configuration
         guard activeSelectionRequest == nil else { return nil }
         lastError = nil
-        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: kind, phase: .loadingLocalConfiguration)
-        let apiKey = loadAPIKey()
-        guard !apiKey.isEmpty else {
-            activeSelectionRequest = nil
+        let requestID = UUID()
+        activeSelectionRequest = AIRequestStatus(requestID: requestID, entryID: entry.id, kind: kind, phase: .loadingLocalConfiguration)
+        guard !apiKey.isEmpty || !providerRequiresAPIKey(execution.providerKind) else {
+            if activeSelectionRequest?.requestID == requestID { activeSelectionRequest = nil }
             let error = LLMServiceError.missingAPIKey
             reportError(error, module: .ai)
             lastError = error.localizedDescription
             return nil
         }
-        activeSelectionRequest = AIRequestStatus(entryID: entry.id, kind: kind, phase: .generating)
+        activeSelectionRequest = AIRequestStatus(requestID: requestID, entryID: entry.id, kind: kind, phase: .generating)
         do {
             let result = try await operation(apiKey, configuration)
+            guard isRequestCurrent(), !Task.isCancelled else {
+                if activeSelectionRequest?.requestID == requestID { activeSelectionRequest = nil }
+                return nil
+            }
             if let result {
                 let artifact = AIArtifact(
                     entryID: entry.id,
@@ -2094,6 +2275,8 @@ public final class AppStore: ObservableObject {
                     model: configuration.model,
                     targetLanguage: configuration.targetLanguage,
                     promptVersion: 1,
+                    providerID: execution.providerID,
+                    configurationFingerprint: execution.fingerprint(for: kind, promptVersion: 1),
                     content: result,
                     selectionText: selectionText,
                     selectionArticleHash: selectionArticleHash,
@@ -2102,10 +2285,10 @@ public final class AppStore: ObservableObject {
                 )
                 try? localProvider.saveArtifact(artifact)
             }
-            activeSelectionRequest = nil
+            if activeSelectionRequest?.requestID == requestID { activeSelectionRequest = nil }
             return result
         } catch {
-            activeSelectionRequest = nil
+            if activeSelectionRequest?.requestID == requestID { activeSelectionRequest = nil }
             if !Task.isCancelled {
                 reportError(error, module: .ai)
                 lastError = error.localizedDescription
@@ -2116,15 +2299,33 @@ public final class AppStore: ObservableObject {
 
     // MARK: - Translation Memory Helpers
 
-    private func cachedTranslation(for source: String, configuration: LLMConfiguration) -> String? {
-        let key = translationMemoryKey(for: source, configuration: configuration)
+    private func cachedTranslation(
+        for source: String,
+        configuration: LLMConfiguration,
+        executionContext: AIExecutionContext
+    ) -> String? {
+        let key = translationMemoryKey(
+            for: source,
+            configuration: configuration,
+            executionContext: executionContext
+        )
         let entryID = translationMemoryEntryID(for: key)
         return (try? localProvider.fetchGlobalTranslationMemory(key: entryID))?.content
     }
 
-    func cacheTranslations(_ segments: [BilingualSegment], configuration: LLMConfiguration) {
+    func cacheTranslations(
+        _ segments: [BilingualSegment],
+        configuration: LLMConfiguration,
+        executionContext: AIExecutionContext? = nil
+    ) {
+        let execution = executionContext ?? currentAIExecutionContext(configuration: configuration)
+        let fingerprint = execution.fingerprint(for: .translation, promptVersion: Self.translationPromptVersion)
         for segment in segments {
-            let key = translationMemoryKey(for: segment.original, configuration: configuration)
+            let key = translationMemoryKey(
+                for: segment.original,
+                configuration: configuration,
+                executionContext: execution
+            )
             let entryID = translationMemoryEntryID(for: key)
             let artifact = AIArtifact(
                 entryID: entryID,
@@ -2133,6 +2334,8 @@ public final class AppStore: ObservableObject {
                 model: configuration.model,
                 targetLanguage: configuration.targetLanguage,
                 promptVersion: Self.translationPromptVersion,
+                providerID: execution.providerID,
+                configurationFingerprint: fingerprint,
                 content: segment.translation,
                 isComplete: true
             )
@@ -2161,14 +2364,18 @@ public final class AppStore: ObservableObject {
         return batches
     }
 
-    private func translationMemoryKey(for source: String, configuration: LLMConfiguration) -> String {
+    private func translationMemoryKey(
+        for source: String,
+        configuration: LLMConfiguration,
+        executionContext: AIExecutionContext
+    ) -> String {
         [
             Self.translationMemoryEntryPrefix,
             source.paperRssNormalizedWhitespace,
-            configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-            configuration.model,
-            configuration.targetLanguage,
-            String(Self.translationPromptVersion)
+            executionContext.fingerprint(
+                for: .translation,
+                promptVersion: Self.translationPromptVersion
+            )
         ].joined(separator: "|").stableDigest
     }
 
@@ -2177,7 +2384,7 @@ public final class AppStore: ObservableObject {
     }
 
     private static let translationPromptVersion = 2
-    private static let translationMemoryEntryPrefix = "translation-memory-v2:"
+    private static let translationMemoryEntryPrefix = "translation-memory-v4:"
     private static let maximumParagraphsPerTranslationBatch = 4
     private static let maximumCharactersPerTranslationBatch = 1_200
 
@@ -2218,21 +2425,197 @@ public final class AppStore: ObservableObject {
 
     // MARK: - Preferences & Configuration
 
+    public var activeAIProvider: AIProviderProfile? {
+        aiSettings.configuration(for: .summary)?.model
+            .flatMap { aiSettings.provider(id: $0.providerID) }
+    }
+
+    public func aiProvider(id: String) -> AIProviderProfile? {
+        aiSettings.provider(id: id)
+    }
+
+    public func apiKey(for providerID: String) -> String {
+        LocalAPIKeyStore.loadAPIKey(for: providerID)
+    }
+
+    public func activeAPIKey() -> String {
+        guard let providerID = aiSettings.configuration(for: .summary)?.model?.providerID else { return "" }
+        return apiKey(for: providerID)
+    }
+
+    /// Persists the v2 settings document while updating the compatibility
+    /// projection consumed by the existing AI actions.
+    public func saveAISettings(_ settings: AISettings) {
+        guard !settings.providers.isEmpty else { return }
+        let normalized = settings.migratedToCurrentSchema()
+        aiSettings = normalized
+        persistAISettings(normalized)
+        // The old configuration and key are one rollback snapshot. Only
+        // advance them when the summary route resolves to an enabled provider;
+        // disabling a provider must never pair its key with a fallback URL.
+        if let summaryConfiguration = normalized.resolvedConfiguration(for: .summary) {
+            llmConfiguration = summaryConfiguration
+            if let summaryProviderID = normalized.configuration(for: .summary)?.model?.providerID,
+               !LocalAPIKeyStore.loadAPIKey(for: summaryProviderID).isEmpty {
+                persistLegacyCompatibilityPairIfPossible(
+                    configuration: summaryConfiguration,
+                    providerID: summaryProviderID
+                )
+            }
+        }
+    }
+
+    public func saveAIProvider(_ provider: AIProviderProfile, apiKey: String? = nil) {
+        let settings = aiSettings.updatingProvider(provider)
+        if let apiKey {
+            _ = saveAIProviderKey(apiKey, for: provider.id)
+        }
+        saveAISettings(settings)
+    }
+
+    @discardableResult
+    public func saveAIProviderKey(_ apiKey: String, for providerID: String) -> LocalAPIKeyStore.Storage {
+        let storage = LocalAPIKeyStore.saveAPIKey(apiKey, for: providerID)
+        // Keep the old single-provider projection aligned only for the active
+        // provider. This lets an older build start safely, while keys for
+        // inactive providers never overwrite one another. An empty v2 key is
+        // deliberately not mirrored: the legacy value is the rollback copy
+        // retained for the first compatible release.
+        if providerID == aiSettings.configuration(for: .summary)?.model?.providerID,
+           !apiKey.isEmpty,
+           let summaryConfiguration = aiSettings.resolvedConfiguration(for: .summary) {
+            persistLegacyCompatibilityPairIfPossible(
+                configuration: summaryConfiguration,
+                providerID: providerID
+            )
+        }
+        return storage
+    }
+
+    public func setActiveAIProvider(id: String) {
+        guard let provider = aiSettings.provider(id: id), let modelID = provider.models.first?.id else { return }
+        let reference = AIModelReference(providerID: id, modelID: modelID)
+        var settings = aiSettings.selectingProvider(id: id)
+        for kind in AIFeatureKind.allCases {
+            let existing = settings.configuration(for: kind)
+            let enabled = existing?.isEnabled ?? true
+            settings = settings.updatingFeature(
+                kind,
+                configuration: AIFeatureConfiguration(
+                    isEnabled: enabled,
+                    model: reference,
+                    reasoningMode: existing?.reasoningMode ?? "自动"
+                )
+            )
+        }
+        saveAISettings(settings)
+        let key = apiKey(for: id)
+        if !key.isEmpty,
+           let summaryConfiguration = aiSettings.resolvedConfiguration(for: .summary) {
+            persistLegacyCompatibilityPairIfPossible(
+                configuration: summaryConfiguration,
+                providerID: id
+            )
+        }
+    }
+
+    public func setAIModelEnabled(_ enabled: Bool, modelID: String, providerID: String) {
+        guard var provider = aiSettings.provider(id: providerID), provider.selectedModelID != modelID,
+              let index = provider.models.firstIndex(where: { $0.id == modelID }) else { return }
+        provider.models[index].isEnabled = enabled
+        saveAIProvider(provider)
+    }
+
+    public func addAIProvider(_ provider: AIProviderProfile, apiKey: String = "") {
+        _ = LocalAPIKeyStore.saveAPIKey(apiKey, for: provider.id)
+        saveAISettings(aiSettings.addingProvider(provider))
+    }
+
+    @discardableResult
+    public func deleteAIProvider(id: String) -> Bool {
+        guard let provider = aiSettings.provider(id: id), !provider.isBuiltIn else {
+            return false
+        }
+        let next = aiSettings.deletingProvider(id: id)
+        guard next.providers.count < aiSettings.providers.count else { return false }
+        _ = LocalAPIKeyStore.saveAPIKey("", for: id)
+        saveAISettings(next)
+        return true
+    }
+
+    private func persistAISettings(_ settings: AISettings) {
+        guard shouldPersistAISettings,
+              let data = try? JSONEncoder().encode(settings) else { return }
+        UserDefaults.standard.set(data, forKey: PreferenceKey.aiSettings)
+    }
+
+    private func persistLegacyCompatibilityPairIfPossible(
+        configuration: LLMConfiguration,
+        providerID: String
+    ) {
+        guard shouldPersistAISettings else { return }
+        let key = LocalAPIKeyStore.loadAPIKey(for: providerID)
+        guard !key.isEmpty,
+              let data = try? JSONEncoder().encode(configuration) else { return }
+        // The old configuration and key form one rollback snapshot. Never
+        // advance only the endpoint/model side when the new provider has no
+        // credential, which could send the previous provider's secret away.
+        _ = LocalAPIKeyStore.saveAPIKey(key)
+        UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
+    }
+
     @discardableResult
     public func saveLLMConfiguration(_ configuration: LLMConfiguration, apiKey: String) -> LocalAPIKeyStore.Storage {
-        let storage = LocalAPIKeyStore.saveAPIKey(apiKey)
+        // The compatibility entry point may be called by an older settings
+        // surface with an empty key. Clear only the provider-scoped v2 value;
+        // the legacy key remains as the rollback copy for this release.
+        let storage: LocalAPIKeyStore.Storage = apiKey.isEmpty
+            ? .localAppConfiguration
+            : LocalAPIKeyStore.saveAPIKey(apiKey)
+        let destination = compatibilityProviderID(for: configuration)
+        var settings = aiSettings
+        let source = settings.provider(id: destination)
+            ?? AISettings.migrated(from: configuration).provider(id: destination)
+            ?? AIProviderProfile(id: destination, kind: .customOpenAICompatible, configuration: configuration)
+        let profile = source.replacing(
+            name: configuration.providerName,
+            description: configuration.providerDescription,
+            baseURL: configuration.baseURL,
+            selectedModelID: configuration.model,
+            reasoningMode: configuration.reasoningMode,
+            temperature: configuration.temperature,
+            allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
+        ).selectingModel(configuration.model)
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration))
+        _ = LocalAPIKeyStore.saveAPIKey(apiKey, for: destination)
         self.llmConfiguration = configuration
-        if let data = try? JSONEncoder().encode(configuration) {
-            UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
+        self.aiSettings = settings
+        persistAISettings(settings)
+        if !apiKey.isEmpty {
+            persistLegacyCompatibilityPairIfPossible(configuration: configuration, providerID: destination)
         }
         return storage
     }
 
     public func updateLLMConfiguration(_ configuration: LLMConfiguration) {
+        let destination = compatibilityProviderID(for: configuration)
+        var settings = aiSettings
+        let source = settings.provider(id: destination)
+            ?? AISettings.migrated(from: configuration).provider(id: destination)
+            ?? AIProviderProfile(id: destination, kind: .customOpenAICompatible, configuration: configuration)
+        let profile = source.replacing(
+            name: configuration.providerName,
+            description: configuration.providerDescription,
+            baseURL: configuration.baseURL,
+            selectedModelID: configuration.model,
+            reasoningMode: configuration.reasoningMode,
+            temperature: configuration.temperature,
+            allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
+        ).selectingModel(configuration.model)
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration))
+        self.aiSettings = settings
         self.llmConfiguration = configuration
-        if let data = try? JSONEncoder().encode(configuration) {
-            UserDefaults.standard.set(data, forKey: PreferenceKey.llmConfiguration)
-        }
+        persistAISettings(settings)
     }
 
     public func resetLLMConfiguration() {
@@ -2240,10 +2623,68 @@ public final class AppStore: ObservableObject {
         updateLLMConfiguration(defaultConfig)
     }
 
-    public func loadAPIKey() -> String { LocalAPIKeyStore.loadAPIKey() }
+    public func loadAPIKey() -> String { activeAPIKey() }
 
     public func testLLM(configuration: LLMConfiguration, apiKey: String) async throws {
         try await llm.test(configuration: configuration, apiKey: apiKey)
+    }
+
+    public func fetchAIModels(providerID: String) async throws -> [AIModelOption] {
+        guard let provider = aiSettings.provider(id: providerID) else {
+            throw LLMServiceError.invalidBaseURL
+        }
+        let requestedAPIKey = apiKey(for: providerID)
+        // A remote catalog is only a candidate list. The settings editor must
+        // explicitly confirm selected identifiers before they enter a draft,
+        // and saving that draft is the only persistence boundary.
+        return try await fetchAIModels(provider: provider, apiKey: requestedAPIKey)
+    }
+
+    public func fetchAIModels(provider: AIProviderProfile, apiKey: String) async throws -> [AIModelOption] {
+        try provider.validateConnection(requireModel: false)
+        if provider.kind != .customOpenAICompatible && apiKey.isEmpty {
+            throw LLMServiceError.missingAPIKey
+        }
+        let configuration = provider.runtimeConfiguration(features: aiSettings.features)
+        let ids = try await llm.fetchModels(configuration: configuration, apiKey: apiKey)
+        return provider.updatingModels(from: ids).models
+    }
+
+    public func testAIProvider(providerID: String, modelID: String? = nil) async throws {
+        guard let provider = aiSettings.provider(id: providerID) else {
+            throw LLMServiceError.invalidBaseURL
+        }
+        var configuration = provider.runtimeConfiguration(features: aiSettings.features)
+        if let modelID {
+            let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedModelID.isEmpty {
+                configuration.model = trimmedModelID
+            }
+        }
+        let draft = provider.replacing(selectedModelID: configuration.model).selectingModel(configuration.model)
+        try await testAIProvider(provider: draft, apiKey: apiKey(for: providerID))
+    }
+
+    public func testAIProvider(provider: AIProviderProfile, apiKey: String) async throws {
+        try provider.validateConnection(requireModel: true)
+        if provider.kind != .customOpenAICompatible && apiKey.isEmpty {
+            throw LLMServiceError.missingAPIKey
+        }
+        try await testLLM(
+            configuration: provider.runtimeConfiguration(features: aiSettings.features),
+            apiKey: apiKey
+        )
+    }
+
+    private func compatibilityProviderID(for configuration: LLMConfiguration) -> String {
+        let migratedID = AISettings.migrated(from: configuration).activeProviderID
+        if migratedID != AIProviderID.migratedLegacy {
+            return migratedID
+        }
+        if let active = aiSettings.activeProvider, !active.isBuiltIn {
+            return active.id
+        }
+        return AIProviderID.migratedLegacy
     }
 
     public func setRefreshInterval(_ interval: FeedRefreshInterval) {

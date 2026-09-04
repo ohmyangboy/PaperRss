@@ -1,5 +1,64 @@
 import Foundation
 
+public struct AIModelHTTPResponse: Sendable {
+    public let statusCode: Int
+    public let data: Data
+
+    public init(statusCode: Int, data: Data) {
+        self.statusCode = statusCode
+        self.data = data
+    }
+}
+
+public struct AIModelEventResponse: Sendable {
+    public let statusCode: Int
+    public let lines: AsyncThrowingStream<String, Error>
+
+    public init(statusCode: Int, lines: AsyncThrowingStream<String, Error>) {
+        self.statusCode = statusCode
+        self.lines = lines
+    }
+}
+
+public protocol AIModelPort: Sendable {
+    func data(for request: URLRequest) async throws -> AIModelHTTPResponse
+    func events(for request: URLRequest) async throws -> AIModelEventResponse
+}
+
+public struct URLSessionAIModelAdapter: AIModelPort, @unchecked Sendable {
+    private let session: URLSession
+
+    public init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    public func data(for request: URLRequest) async throws -> AIModelHTTPResponse {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw LLMServiceError.invalidResponse }
+        return AIModelHTTPResponse(statusCode: http.statusCode, data: data)
+    }
+
+    public func events(for request: URLRequest) async throws -> AIModelEventResponse {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw LLMServiceError.invalidResponse }
+        let lines = AsyncThrowingStream<String, Error> { continuation in
+            let task = Task {
+                do {
+                    for try await line in bytes.lines {
+                        guard !Task.isCancelled else { break }
+                        continuation.yield(line)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+        return AIModelEventResponse(statusCode: http.statusCode, lines: lines)
+    }
+}
+
 public enum LLMServiceError: LocalizedError, Sendable {
     case invalidBaseURL
     case insecureEndpoint
@@ -17,7 +76,10 @@ public enum LLMServiceError: LocalizedError, Sendable {
         case .insecureEndpoint: I18N.localized("仅允许 HTTPS；局域网 HTTP 需在设置中明确开启。")
         case .invalidResponse: I18N.localized("模型返回的内容无法识别。")
         case .emptyResponse: I18N.localized("模型没有返回文本。")
-        case .authenticationFailed: I18N.localized("身份验证失败。请在设置中检查 DeepSeek API Key 是否有效、完整且仍有权限。")
+        case .authenticationFailed: I18N.localized(
+            "身份验证失败。请在设置中检查当前供应商的 API Key 是否有效、完整且仍有权限。",
+            englishFallback: "Authentication failed. Check that the current provider's API key is complete, valid, and still authorized."
+        )
         case .rateLimited: I18N.localized("请求过于频繁或当前额度受限。请稍后重试，并检查服务商账户额度。")
         case .missingAPIKey: I18N.localized("尚未设置 API Key。请先在设置中完成 AI 服务配置。")
         case .requestInProgress: I18N.localized("已有 AI 任务正在进行，请稍后再试。")
@@ -27,10 +89,33 @@ public enum LLMServiceError: LocalizedError, Sendable {
 }
 
 public struct LLMService: Sendable {
-    public init() {}
+    private let port: any AIModelPort
+
+    public init(port: any AIModelPort = URLSessionAIModelAdapter()) {
+        self.port = port
+    }
 
     public func test(configuration: LLMConfiguration, apiKey: String) async throws {
         _ = try await complete(prompt: "Reply with exactly OK.", system: "You are a connectivity test.", configuration: configuration, apiKey: apiKey)
+    }
+
+    /// Fetches the OpenAI-compatible model catalog for a provider. Gemini's
+    /// official compatibility endpoint exposes the same `/models` shape, so a
+    /// single request contract works for built-in and custom providers.
+    public func fetchModels(configuration: LLMConfiguration, apiKey: String) async throws -> [String] {
+        let request = try makeModelsRequest(configuration: configuration, apiKey: apiKey)
+        let response = try await port.data(for: request)
+        try validate(statusCode: response.statusCode, data: response.data)
+        struct Model: Decodable { let id: String }
+        struct Response: Decodable { let data: [Model] }
+        guard let decoded = try? JSONDecoder().decode(Response.self, from: response.data) else {
+            throw LLMServiceError.invalidResponse
+        }
+        let ids = decoded.data.map(\.id)
+            .map { normalizedModelID($0, configuration: configuration) }
+            .filter { !$0.isEmpty }
+        guard !ids.isEmpty else { throw LLMServiceError.invalidResponse }
+        return ids
     }
 
     public func complete(
@@ -79,8 +164,7 @@ public struct LLMService: Sendable {
         try await complete(
             prompt: "Article:\n\n\(ArticleChunker.truncate(text, maximumCharacters: 28_000))",
             system: "Summarize the article in \(configuration.targetLanguage). Start with one concise conclusion, then give 3 to 7 factual bullets. Do not invent sources or facts.",
-            configuration: configuration, apiKey: apiKey, onDelta: onDelta,
-            overrideTemperature: 0.1
+            configuration: configuration, apiKey: apiKey, onDelta: onDelta
         )
     }
 
@@ -97,8 +181,7 @@ public struct LLMService: Sendable {
             """,
             system: "Create a compact reusable context memo for later questions about this article, in \(configuration.targetLanguage). Preserve the thesis, section structure, key entities, definitions, evidence, and relationships between claims. State only what the article says. Use concise structured prose and keep the memo under 1,200 words.",
             configuration: configuration,
-            apiKey: apiKey,
-            overrideTemperature: 0.1
+            apiKey: apiKey
         )
     }
 
@@ -137,12 +220,7 @@ public struct LLMService: Sendable {
             system: systemPrompt,
             configuration: configuration,
             apiKey: apiKey,
-            onDelta: onDelta,
-            // Selection explanations are an interactive reader gesture. Keep
-            // DeepSeek's hidden reasoning off so the first visible delta is
-            // not delayed by a reasoning trace the reader never sees.
-            forceDisableReasoning: true,
-            overrideTemperature: 0.2
+            onDelta: onDelta
         )
     }
 
@@ -185,9 +263,7 @@ public struct LLMService: Sendable {
             system: systemPrompt,
             configuration: configuration,
             apiKey: apiKey,
-            onDelta: onDelta,
-            forceDisableReasoning: true,
-            overrideTemperature: 0.2
+            onDelta: onDelta
         )
     }
 
@@ -202,12 +278,7 @@ public struct LLMService: Sendable {
             system: "Translate the following passage into \(configuration.targetLanguage). Preserve meaning, tone, numbers, names, links, and Markdown. Return only the translation.",
             configuration: configuration,
             apiKey: apiKey,
-            onDelta: onDelta,
-            // Translation is an extraction task rather than a reasoning task.
-            // DeepSeek's automatic thinking can materially delay the first
-            // visible paragraph while adding no reader-facing value.
-            forceDisableReasoning: true,
-            overrideTemperature: 0.0
+            onDelta: onDelta
         )
     }
 
@@ -234,9 +305,7 @@ public struct LLMService: Sendable {
             prompt: prompt,
             system: "You are a precise translation engine. The response must be valid JSON and must contain exactly one translated string for every input string.",
             configuration: configuration,
-            apiKey: apiKey,
-            forceDisableReasoning: true,
-            overrideTemperature: 0.0
+            apiKey: apiKey
         )
         let translations = try Self.decodeBatchTranslations(output)
         guard translations.count == paragraphs.count,
@@ -285,7 +354,7 @@ public struct LLMService: Sendable {
         overrideTemperature: Double? = nil
     ) throws -> URLRequest {
         guard var base = URLComponents(string: configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw LLMServiceError.invalidBaseURL }
-        guard base.scheme == "https" || (configuration.allowInsecureLocalEndpoint && base.scheme == "http") else { throw LLMServiceError.insecureEndpoint }
+        try validateEndpoint(base, allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint)
         let root = base.path.hasSuffix("/") ? String(base.path.dropLast()) : base.path
         base.path = root + "/chat/completions"
         guard let url = base.url else { throw LLMServiceError.invalidBaseURL }
@@ -294,7 +363,7 @@ public struct LLMService: Sendable {
         struct Body: Encodable {
             let model: String
             let messages: [Message]
-            let temperature: Double
+            let temperature: Double?
             let stream: Bool
             let thinking: Thinking?
             let reasoningEffort: String?
@@ -324,24 +393,108 @@ public struct LLMService: Sendable {
         } else {
             deepSeekReasoning = (nil, nil)
         }
-        let temp = overrideTemperature ?? configuration.temperature
-        request.httpBody = try JSONEncoder().encode(Body(model: configuration.model, messages: [Message(role: "system", content: system), Message(role: "user", content: prompt)], temperature: temp, stream: stream, thinking: deepSeekReasoning.0, reasoningEffort: deepSeekReasoning.1))
+        // Gemini's OpenAI-compatible endpoint accepts the standard
+        // `reasoning_effort` field. Gemini 3 models cannot disable thinking,
+        // so "关闭"/automatic intentionally omit the field and let Google
+        // choose the model default.
+        let geminiReasoningEffort: String?
+        if configuration.usesGeminiAPI {
+            let geminiModel = configuration.model
+                .replacingOccurrences(of: "models/", with: "")
+                .lowercased()
+            switch configuration.reasoningMode {
+            case "关闭" where geminiModel.hasPrefix("gemini-2.5") && !geminiModel.contains("pro"):
+                geminiReasoningEffort = "none"
+            case "低": geminiReasoningEffort = "low"
+            case "中": geminiReasoningEffort = "medium"
+            case "高": geminiReasoningEffort = "high"
+            default: geminiReasoningEffort = nil
+            }
+        } else {
+            geminiReasoningEffort = nil
+        }
+        // Gemini 3.x rejects the deprecated sampling knobs (temperature,
+        // top_p and top_k). Keep the setting for other providers and omit it
+        // for the official Gemini 3 compatibility endpoint.
+        let normalizedModel = normalizedModelID(configuration.model, configuration: configuration)
+        let supportsTemperature = !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3"))
+        let temp = supportsTemperature ? (overrideTemperature ?? configuration.temperature) : nil
+        request.httpBody = try JSONEncoder().encode(Body(model: normalizedModel, messages: [Message(role: "system", content: system), Message(role: "user", content: prompt)], temperature: temp, stream: stream, thinking: deepSeekReasoning.0, reasoningEffort: deepSeekReasoning.1 ?? geminiReasoningEffort))
         return request
     }
 
+    private func normalizedModelID(_ modelID: String, configuration: LLMConfiguration) -> String {
+        let cleanID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard configuration.usesGeminiAPI, cleanID.hasPrefix("models/") else { return cleanID }
+        return String(cleanID.dropFirst("models/".count))
+    }
+
+    func makeModelsRequest(configuration: LLMConfiguration, apiKey: String) throws -> URLRequest {
+        guard var base = URLComponents(string: configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw LLMServiceError.invalidBaseURL }
+        try validateEndpoint(base, allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint)
+        let root = base.path.hasSuffix("/") ? String(base.path.dropLast()) : base.path
+        base.path = root + "/models"
+        guard let url = base.url else { throw LLMServiceError.invalidBaseURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
+    private func validateEndpoint(
+        _ components: URLComponents,
+        allowInsecureLocalEndpoint: Bool
+    ) throws {
+        guard let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased(),
+              !host.isEmpty else { throw LLMServiceError.invalidBaseURL }
+        let normalizedPath = components.path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !normalizedPath.hasSuffix("models"),
+              !normalizedPath.hasSuffix("chat/completions") else {
+            throw LLMServiceError.invalidBaseURL
+        }
+        if scheme == "https" { return }
+        guard scheme == "http", allowInsecureLocalEndpoint else {
+            throw LLMServiceError.insecureEndpoint
+        }
+        let isLocalName = host == "localhost" || host.hasSuffix(".local")
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        let isPrivateIPv4 = octets.count == 4 && (
+            octets[0] == 10
+                || (octets[0] == 172 && (16...31).contains(octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+                || (octets[0] == 127)
+                || (octets[0] == 169 && octets[1] == 254)
+        )
+        let isLocalIPv6 = host == "::1" || host.hasPrefix("fe80:") || host.hasPrefix("fc") || host.hasPrefix("fd")
+        guard isLocalName || isPrivateIPv4 || isLocalIPv6 else {
+            throw LLMServiceError.insecureEndpoint
+        }
+    }
+
     private func nonStreaming(request: URLRequest) async throws -> String {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try validate(response: response, data: data)
+        let response = try await port.data(for: request)
+        try validate(statusCode: response.statusCode, data: response.data)
         struct Response: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message }; let choices: [Choice] }
-        guard let result = try? JSONDecoder().decode(Response.self, from: data), let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { throw LLMServiceError.invalidResponse }
+        guard let result = try? JSONDecoder().decode(Response.self, from: response.data), let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { throw LLMServiceError.invalidResponse }
         return text
     }
 
     private func stream(request: URLRequest, onDelta: @Sendable (String) async -> Void) async throws -> String {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw LLMServiceError.invalidResponse }
+        let response = try await port.events(for: request)
+        guard (200...299).contains(response.statusCode) else {
+            // URLSession.bytes exposes the response before its body. Preserve
+            // the same stable error categories as the JSON path without
+            // buffering or logging a provider's response (which may contain
+            // sensitive request context).
+            if response.statusCode == 401 || response.statusCode == 403 { throw LLMServiceError.authenticationFailed }
+            if response.statusCode == 429 { throw LLMServiceError.rateLimited }
+            throw LLMServiceError.httpStatus(response.statusCode, "")
+        }
         var output = ""
-        for try await line in bytes.lines {
+        for try await line in response.lines {
             guard line.hasPrefix("data:") else { continue }
             let value = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if value == "[DONE]" { break }
@@ -356,13 +509,12 @@ public struct LLMService: Sendable {
         return output
     }
 
-    private func validate(response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else { throw LLMServiceError.invalidResponse }
-        guard (200...299).contains(http.statusCode) else {
-            if http.statusCode == 401 || http.statusCode == 403 { throw LLMServiceError.authenticationFailed }
-            if http.statusCode == 429 { throw LLMServiceError.rateLimited }
+    private func validate(statusCode: Int, data: Data) throws {
+        guard (200...299).contains(statusCode) else {
+            if statusCode == 401 || statusCode == 403 { throw LLMServiceError.authenticationFailed }
+            if statusCode == 429 { throw LLMServiceError.rateLimited }
             let body = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?.description ?? String(data: data.prefix(500), encoding: .utf8) ?? ""
-            throw LLMServiceError.httpStatus(http.statusCode, body)
+            throw LLMServiceError.httpStatus(statusCode, body)
         }
     }
 }

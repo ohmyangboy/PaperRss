@@ -646,6 +646,7 @@ struct RootView: View {
             if let selectedEntry {
                 ArticleReaderView(
                     store: store,
+                    aiWorkspace: store.aiWorkspace,
                     entry: selectedEntry,
                     appearanceMode: appearanceMode,
                     shortcutInvocation: readerShortcutInvocation,

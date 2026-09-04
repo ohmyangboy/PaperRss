@@ -18,8 +18,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case accounts
     case aiService
     case refresh
-    case language
-    case feedback
     case about
 
     var id: Self { self }
@@ -31,8 +29,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .accounts: I18N.shared.localized("账号", "Accounts")
         case .aiService: I18N.shared.localized("AI 功能", "AI Features")
         case .refresh: I18N.shared.localized("刷新", "Refresh")
-        case .language: I18N.shared.localized("语言", "Language")
-        case .feedback: I18N.shared.localized("反馈与赞赏", "Feedback & Sponsor")
         case .about: I18N.shared.localized("关于", "About")
         }
     }
@@ -43,8 +39,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .accounts: "person.crop.circle"
         case .aiService: "sparkles"
         case .refresh: "arrow.clockwise.circle"
-        case .language: "globe"
-        case .feedback: "heart.circle"
         case .about: "info.circle"
         }
     }
@@ -53,7 +47,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
 private enum SettingsMetrics {
     static let sidebarWidth: CGFloat = 224
-    static let contentMaxWidth: CGFloat = 720
+    static let contentMaxWidth: CGFloat = 980
     static let contentHorizontalPadding: CGFloat = 34
     static let contentTopPadding: CGFloat = 26
     static let groupSpacing: CGFloat = 22
@@ -61,6 +55,63 @@ private enum SettingsMetrics {
     static let rowMinimumHeight: CGFloat = 52
     static let rowHorizontalPadding: CGFloat = 18
     static let rowVerticalPadding: CGFloat = 11
+}
+
+private enum AISettingsPane: String, CaseIterable, Identifiable {
+    case features
+    case providers
+    var id: Self { self }
+
+    @MainActor var title: String {
+        switch self {
+        case .features: I18N.shared.localized("功能配置", "Feature Routing")
+        case .providers: I18N.shared.localized("供应商与模型", "Providers & Models")
+        }
+    }
+}
+
+private func providerSymbolName(_ kind: AIProviderKind) -> String {
+    switch kind {
+    case .deepSeek: "AIProviderDeepSeek"
+    case .gemini: "AIProviderGemini"
+    case .openAICompatible: "AIProviderOpenAI"
+    case .customOpenAICompatible: "server.rack"
+    }
+}
+
+private struct AIProviderIcon: View {
+    let kind: AIProviderKind
+    var size: CGFloat = 24
+
+    private var color: Color {
+        switch kind {
+        case .deepSeek: Color(red: 0.30, green: 0.42, blue: 0.99)
+        case .gemini: .primary
+        case .openAICompatible: .primary
+        case .customOpenAICompatible: .orange
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.primary.opacity(0.055))
+            Circle().stroke(Color.primary.opacity(0.12), lineWidth: 0.8)
+            if kind == .customOpenAICompatible {
+                Image(systemName: providerSymbolName(kind))
+                    .font(.system(size: size * 0.48, weight: .semibold))
+                    .foregroundStyle(color)
+            } else {
+                Image(providerSymbolName(kind))
+                    .resizable()
+                    .renderingMode(kind == .gemini ? .original : .template)
+                    .scaledToFit()
+                    .foregroundStyle(color)
+                    .padding(size * 0.24)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
 }
 
 private struct SettingsInfoButton: View {
@@ -98,9 +149,34 @@ struct SettingsView: View {
     @State private var configuration = LLMConfiguration.default
     @State private var apiKey = ""
     @State private var showsAPIKey = false
-    @State private var usesCustomModel = false
+    @State private var selectedProviderID = AIProviderID.deepSeek
+    @State private var draftProviderEnabled = true
+    @State private var selectedAISettingsPane: AISettingsPane = .features
+    @State private var providerSearchText = ""
+    @State private var isAddingProvider = false
+    @State private var newProviderName = ""
+    @State private var newProviderDescription = ""
+    @State private var newProviderBaseURL = ""
+    @State private var newProviderModel = ""
+    @State private var newProviderAPIKey = ""
+    @State private var manualModelID = ""
+    @State private var draftModels: [AIModelOption] = []
+    @State private var isShowingAddModelsSheet = false
+    @State private var fetchedModelCandidates: [AIModelOption] = []
+    @State private var selectedCandidateModelIDs = Set<String>()
+    @State private var modelCandidateSearchText = ""
+    @State private var draftRevision = 0
+    @State private var pendingProviderSelectionID: String?
+    @State private var isShowingUnsavedProviderDialog = false
+    @State private var providerPendingDeletion: AIProviderProfile?
+    @State private var providerModelPendingDeletion: AIModelOption?
+    @State private var isShowingDeleteProviderAlert = false
+    @State private var showsAIModelList = false
+    @State private var isFetchingModels = false
+    @State private var modelFetchRequestID: UUID?
     @State private var status = ""
     @State private var isTesting = false
+    @State private var testRequestID: UUID?
     @State private var showingTargetLanguagePopover = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -120,7 +196,6 @@ struct SettingsView: View {
     @State private var isClearingCache = false
     @State private var cacheStats: ArticleCacheStats?
     @State private var hoveredSection: SettingsSection?
-    @State private var showsAIAdvancedOptions = false
     @State private var isFontPickerPresented = false
     @State private var fontSearchText = ""
     @FocusState private var isFontSearchFocused: Bool
@@ -146,10 +221,72 @@ struct SettingsView: View {
         .toggleStyle(.switch)
         .environment(\.paperAppearancePalette, settingsAppearancePalette)
         .onChange(of: configuration) {
-            save(updateStatus: false)
+            draftRevision += 1
+            modelFetchRequestID = UUID()
+            testRequestID = UUID()
+            status = ""
         }
         .onChange(of: apiKey) {
-            save(updateStatus: false)
+            draftRevision += 1
+            modelFetchRequestID = UUID()
+            testRequestID = UUID()
+            status = ""
+        }
+        .confirmationDialog(
+            I18N.shared.localized("当前供应商有未保存修改", "This provider has unsaved changes"),
+            isPresented: $isShowingUnsavedProviderDialog,
+            titleVisibility: .visible
+        ) {
+            Button(I18N.shared.localized("保存并切换", "Save and switch")) {
+                if saveSelectedProvider(updateStatus: false) {
+                    completePendingProviderSelection()
+                }
+            }
+            Button(I18N.shared.localized("丢弃并切换", "Discard and switch"), role: .destructive) {
+                completePendingProviderSelection()
+            }
+            Button(I18N.shared.localized("取消", "Cancel"), role: .cancel) {
+                pendingProviderSelectionID = nil
+            }
+        }
+        .alert(
+            I18N.shared.localized("删除 AI 供应商？", "Delete AI provider?"),
+            isPresented: $isShowingDeleteProviderAlert,
+            presenting: providerPendingDeletion
+        ) { provider in
+            Button(I18N.shared.localized("删除", "Delete"), role: .destructive) {
+                if store.deleteAIProvider(id: provider.id) {
+                    loadProvider(store.aiSettings.providers.first?.id ?? AIProviderID.deepSeek)
+                    status = I18N.shared.localized("已删除供应商", "Provider deleted")
+                }
+                providerPendingDeletion = nil
+            }
+            Button(I18N.shared.localized("取消", "Cancel"), role: .cancel) {
+                providerPendingDeletion = nil
+            }
+        } message: { provider in
+            Text(providerDeletionMessage(provider))
+        }
+        .confirmationDialog(
+            I18N.shared.localized("从供应商中删除模型？", "Remove model from provider?"),
+            isPresented: Binding(
+                get: { providerModelPendingDeletion != nil },
+                set: { if !$0 { providerModelPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: providerModelPendingDeletion
+        ) { model in
+            Button(I18N.shared.localized("删除模型", "Remove Model"), role: .destructive) {
+                draftModels.removeAll { $0.id == model.id }
+                if configuration.model == model.id { configuration.model = draftModels.first?.id ?? "" }
+                providerModelPendingDeletion = nil
+            }
+            Button(I18N.shared.localized("取消", "Cancel"), role: .cancel) {}
+        } message: { model in
+            Text(modelDeletionMessage(model))
+        }
+        .sheet(isPresented: $isShowingAddModelsSheet) {
+            addModelsSheet
         }
     }
 
@@ -176,7 +313,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(settingsWindowBackground)
-        .frame(minWidth: 900, idealWidth: 980, minHeight: 620, idealHeight: 720)
+        .frame(minWidth: 1120, idealWidth: 1260, minHeight: 680, idealHeight: 780)
         .controlSize(.regular)
         .buttonBorderShape(.roundedRectangle(radius: 8))
         .onAppear(perform: loadConfiguration)
@@ -357,10 +494,6 @@ struct SettingsView: View {
                 aiServiceSettings
             case .refresh:
                 refreshSettings
-            case .language:
-                languageSettings
-            case .feedback:
-                feedbackSettings
             case .about:
                 aboutSettings
             }
@@ -777,6 +910,8 @@ struct SettingsView: View {
                     .disabled(store.readerAppearance == .default)
                 }
             }
+
+            languageSettings
         }
     }
 
@@ -1076,282 +1211,935 @@ struct SettingsView: View {
 
     private var aiServiceSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            settingsGroup(
-                "服务商与连接",
-                info: I18N.shared.localized(
-                    "API Key 只保存在这台设备，不会参与 iCloud 同步。",
-                    "Your API key stays on this device and is not included in iCloud sync."
-                )
-            ) {
-                HStack(spacing: 12) {
-                    Image(systemName: "wand.and.stars")
-                        .font(.title3)
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 28)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(I18N.localized("DeepSeek 推荐配置"))
-                            .font(.body.weight(.medium))
-                    }
-
-                    Spacer(minLength: 16)
-
-                    Button(I18N.localized("使用推荐配置")) { useDeepSeekDefaults() }
-                        .buttonStyle(.bordered)
+            HStack {
+                Picker(I18N.shared.localized("AI 设置页面", "AI settings page"), selection: $selectedAISettingsPane) {
+                    ForEach(AISettingsPane.allCases) { pane in Text(pane.title).tag(pane) }
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer(minLength: 0)
+            }
 
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("名称") {
-                    TextField(I18N.localized("例如：DeepSeek"), text: localizedProviderNameBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 340)
+            if selectedAISettingsPane == .features {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(I18N.shared.localized("AI 能力", "AI Capabilities"))
+                        .font(.system(size: 27, weight: .bold))
+                    Text(I18N.shared.localized(
+                        "为摘要、翻译和划词工具选择各自的模型。",
+                        "Choose a model for summaries, translation, and selection tools."
+                    ))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
+                .padding(.top, 2)
 
-                Divider().padding(.horizontal, 18).opacity(0.18)
+                Divider().opacity(0.35)
 
-                settingsRow("描述") {
-                    TextField(I18N.localized("例如：个人阅读助手"), text: localizedProviderDescriptionBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 340)
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("API Key") {
-                    HStack(spacing: 8) {
-                        Group {
-                            if showsAPIKey {
-                                TextField(I18N.localized("局域网模型可留空"), text: $apiKey)
-                            } else {
-                                SecureField(I18N.localized("局域网模型可留空"), text: $apiKey)
-                            }
-                        }
-                        .textFieldStyle(.roundedBorder)
-
-                        Button {
-                            showsAPIKey.toggle()
-                        } label: {
-                            Image(systemName: showsAPIKey ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel(I18N.shared.localized(showsAPIKey ? "隐藏密钥" : "显示密钥"))
-                    }
-                    .frame(maxWidth: 360)
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("Base URL") {
-                    TextField(I18N.localized("https://api.deepseek.com"), text: $configuration.baseURL)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 360)
-                }
-
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("模型") {
-                    if configuration.usesDeepSeekAPI && !usesCustomModel {
-                        Picker(I18N.localized("模型"), selection: $configuration.model) {
-                            Text(I18N.localized("deepseek-v4-flash（推荐）")).tag("deepseek-v4-flash")
-                            Text(I18N.localized("deepseek-v4-pro")).tag("deepseek-v4-pro")
-                        }
-                        .labelsHidden()
-                        .frame(maxWidth: 300, alignment: .trailing)
-                    } else {
-                        TextField(
-                            configuration.usesDeepSeekAPI ? "deepseek-v4-flash" : "例如：gpt-4o-mini",
-                            text: $configuration.model
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 300)
+                aiFeatureSection(I18N.shared.localized("文章能力", "Article Features")) {
+                    LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
+                        featureConfigurationRow(.summary)
+                        featureConfigurationRow(.bilingualTranslation)
                     }
                 }
 
-                if configuration.usesDeepSeekAPI {
-                    Divider().padding(.horizontal, 18).opacity(0.18)
+                aiFeatureSection(I18N.shared.localized("划词能力", "Selection Features")) {
+                    LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
+                        featureConfigurationRow(.selectionTranslation)
+                        featureConfigurationRow(.selectionExplanation)
+                        featureConfigurationRow(.selectionAsk)
+                    }
+                }
 
-                    settingsRow("自定义模型") {
-                        Toggle(I18N.localized("输入自定义模型名称"), isOn: $usesCustomModel)
+                settingsGroup(I18N.shared.localized("摘要偏好", "Summary Preferences")) {
+                    settingsRow(I18N.shared.localized("打开文章时自动生成", "Generate when opening an article")) {
+                        Toggle("", isOn: featurePreferenceBinding(\.automaticallyGenerateSummary))
                             .labelsHidden()
                     }
                 }
-            }
 
-            settingsGroup(
-                "阅读助手：摘要"
-            ) {
-                settingsRow(
-                    "展示 AI 摘要模块"
-                ) {
-                    Toggle(I18N.localized("展示 AI 摘要模块"), isOn: $configuration.showsAISummary)
-                        .labelsHidden()
-                }
+                settingsGroup(I18N.shared.localized("翻译目标语言", "Translation Language")) {
+                    settingsRow(I18N.shared.localized("目标语言", "Target Language")) {
+                        HStack(spacing: 8) {
+                            Button { showingTargetLanguagePopover.toggle() } label: {
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(.secondary)
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(I18N.shared.localized("显示说明", "Show information"))
+                            .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
+                                Text(I18N.shared.localized("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。", "Enter any target language, such as Chinese, English, or French."))
+                                    .font(.subheadline)
+                                    .padding(12)
+                                    .frame(width: 240)
+                            }
 
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow(
-                    "打开文章时自动生成 AI 摘要"
-                ) {
-                    Toggle(I18N.localized("自动生成摘要"), isOn: $configuration.automaticallyGenerateSummary)
-                        .labelsHidden()
-                }
-            }
-
-            settingsGroup(
-                "阅读助手：翻译与划词"
-            ) {
-                settingsRow("翻译目标语言") {
-                    HStack(spacing: 8) {
-                        Button {
-                            showingTargetLanguagePopover.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(.secondary)
-                                .font(.system(size: 13, weight: .semibold))
+                            TextField(I18N.shared.localized("简体中文", "Simplified Chinese"), text: featurePreferenceBinding(\.targetLanguage))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 200)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(I18N.shared.localized("显示说明", "Show information"))
-                        .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
-                            Text(I18N.localized("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。"))
-                                .font(.subheadline)
-                                .padding(12)
-                                .frame(width: 220)
-                        }
-
-                        TextField(I18N.localized("简体中文"), text: $configuration.targetLanguage)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 200)
                     }
                 }
 
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("划词解释按钮") {
-                    Toggle(I18N.localized("划词解释按钮"), isOn: $configuration.showsSelectionExplanation)
-                        .labelsHidden()
+                settingsGroup(I18N.shared.localized("个性化", "Personalization")) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(I18N.shared.localized("自定义摘要提示词", "Custom Summary Instructions"))
+                            .font(.subheadline.weight(.medium))
+                        TextEditor(text: featurePreferenceBinding(\.customPrompt))
+                            .font(.body)
+                            .frame(minHeight: 70, maxHeight: 120)
+                            .padding(4)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
+                            )
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
                 }
-
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow("划词提问按钮") {
-                    Toggle(I18N.localized("划词提问按钮"), isOn: $configuration.showsSelectionAsk)
-                        .labelsHidden()
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(I18N.shared.localized("供应商与模型", "Providers & Models"))
+                        .font(.system(size: 27, weight: .bold))
+                    Text(I18N.shared.localized(
+                        "管理模型连接。只有已启用供应商的模型会出现在功能配置中。",
+                        "Manage model connections. Only enabled providers appear in feature routing."
+                    ))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
+                .padding(.top, 2)
 
-                Divider().padding(.horizontal, 18).opacity(0.18)
+                Divider().opacity(0.35)
 
-                settingsRow("划词翻译按钮") {
-                    Toggle(I18N.localized("划词翻译按钮"), isOn: $configuration.showsSelectionTranslation)
-                        .labelsHidden()
-                }
+                providerPickerAndEditor
             }
-
-            settingsGroup(
-                "个性化 Prompt"
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextEditor(text: $configuration.customPrompt)
-                        .font(.body)
-                        .frame(minHeight: 70, maxHeight: 120)
-                        .padding(4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
-                        )
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-            }
-
-            advancedOptionsDisclosure
         }
     }
 
-    private var advancedOptionsDisclosure: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showsAIAdvancedOptions.toggle()
+    private var providerPickerAndEditor: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            providerMasterDetail
+
+            if isAddingProvider {
+                addProviderForm
+            }
+        }
+    }
+
+    private var providerMasterDetail: some View {
+        HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(filteredAIProviders) { provider in
+                    providerSidebarRow(provider)
                 }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: showsAIAdvancedOptions ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
+                addProviderButton
+            }
+            .frame(width: 292, alignment: .topLeading)
 
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 13, weight: .semibold))
+            if selectedAIProvider != nil {
+                providerDetailPanel
+            } else {
+                Text(I18N.shared.localized("请选择一个供应商", "Select a provider"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 420, alignment: .center)
+            }
+        }
+    }
+
+    private var aiFeatureColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 330, maximum: 480), spacing: 16, alignment: .top)]
+    }
+
+    private func aiFeatureSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Capsule()
+                    .fill(settingsAccentColor)
+                    .frame(width: 4, height: 23)
+                Text(title)
+                    .font(.system(size: 18, weight: .bold))
+            }
+            content()
+        }
+    }
+
+    private func featureConfigurationRow(_ kind: AIFeatureKind) -> some View {
+        aiFeatureCard(kind)
+    }
+
+    private func aiFeatureCard(_ kind: AIFeatureKind) -> some View {
+        let configuration = store.aiSettings.configuration(for: kind)
+            ?? AIFeatureConfiguration(isEnabled: false, model: nil)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle().fill(settingsAccentColor.opacity(0.11))
+                    Image(systemName: featureIconName(kind))
+                        .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(settingsAccentColor)
-                        .frame(width: 28, height: 28)
-                        .background(settingsAccentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .frame(width: 42, height: 42)
 
-                    Text(I18N.shared.localized("高级选项", "Advanced Options"))
-                        .font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(featureTitle(kind))
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(featureDescription(kind))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-                    Spacer(minLength: 0)
+                Spacer(minLength: 8)
+
+                Toggle("", isOn: Binding(
+                    get: { store.aiSettings.configuration(for: kind)?.isEnabled ?? false },
+                    set: { enabled in
+                        var next = store.aiSettings.configuration(for: kind)
+                            ?? AIFeatureConfiguration(isEnabled: enabled, model: nil)
+                        next.isEnabled = enabled
+                        store.saveAISettings(store.aiSettings.updatingFeature(kind, configuration: next))
+                    }
+                ))
+                .labelsHidden()
+            }
+
+            Divider().opacity(0.28)
+
+            HStack(spacing: 10) {
+                featureModelMenu(kind, configuration: configuration)
+                    .frame(maxWidth: .infinity)
+                featureReasoningMenu(kind, configuration: configuration)
+                    .frame(width: 112)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.8)
+        }
+        .opacity(configuration.isEnabled ? 1 : 0.62)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func featureModelMenu(
+        _ kind: AIFeatureKind,
+        configuration: AIFeatureConfiguration
+    ) -> some View {
+        Menu {
+            ForEach(store.aiSettings.providers.filter(\.isEnabled)) { provider in
+                Menu {
+                    ForEach(provider.models) { model in
+                        Button {
+                            store.saveAISettings(store.aiSettings.updatingFeature(
+                                kind,
+                                configuration: AIFeatureConfiguration(
+                                    isEnabled: configuration.isEnabled,
+                                    model: AIModelReference(providerID: provider.id, modelID: model.id),
+                                    reasoningMode: configuration.reasoningMode
+                                )
+                            ))
+                        } label: {
+                            if configuration.model == AIModelReference(providerID: provider.id, modelID: model.id) {
+                                Label(model.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(model.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        AIProviderIcon(kind: provider.kind, size: 16)
+                        Text(localizedBuiltInProviderName(provider.name))
+                    }
+                }
+            }
+            Divider()
+            Button(I18N.shared.localized("管理模型…", "Manage Models…")) {
+                selectedAISettingsPane = .providers
+            }
+        } label: {
+            HStack(spacing: 7) {
+                if let reference = configuration.model,
+                   let provider = store.aiProvider(id: reference.providerID) {
+                    AIProviderIcon(kind: provider.kind, size: 21)
+                }
+                Text(featureModelLabel(configuration.model))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(!configuration.isEnabled || availableModelReferences.isEmpty)
+    }
+
+    private func featureReasoningMenu(
+        _ kind: AIFeatureKind,
+        configuration: AIFeatureConfiguration
+    ) -> some View {
+        Menu {
+            ForEach(["自动", "低", "中", "高"], id: \.self) { mode in
+                Button {
+                    var next = configuration
+                    next.reasoningMode = mode
+                    store.saveAISettings(store.aiSettings.updatingFeature(kind, configuration: next))
+                } label: {
+                    if configuration.reasoningMode == mode {
+                        Label(localizedReasoningMode(mode), systemImage: "checkmark")
+                    } else {
+                        Text(localizedReasoningMode(mode))
+                    }
+                }
+            }
+        } label: {
+            Text(I18N.shared.localizedFormat("思考：%@", localizedReasoningMode(configuration.reasoningMode)))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(!configuration.isEnabled)
+    }
+
+    private func featureIconName(_ kind: AIFeatureKind) -> String {
+        switch kind {
+        case .summary: "doc.text"
+        case .bilingualTranslation: "character.bubble"
+        case .selectionTranslation: "text.magnifyingglass"
+        case .selectionExplanation: "text.book.closed"
+        case .selectionAsk: "questionmark.bubble"
+        }
+    }
+
+    private var availableModelReferences: [AIModelReference] {
+        store.aiSettings.availableModelReferences
+    }
+
+    private func featureModelLabel(_ reference: AIModelReference?) -> String {
+        guard let reference,
+              let provider = store.aiProvider(id: reference.providerID),
+              let model = provider.models.first(where: { $0.id == reference.modelID }) else {
+            return I18N.shared.localized("需要配置模型", "Model required")
+        }
+        guard provider.isEnabled else {
+            return I18N.shared.localized("供应商已停用", "Provider disabled")
+        }
+        return "\(localizedBuiltInProviderName(provider.name)) / \(model.displayName)"
+    }
+
+    private func localizedReasoningMode(_ mode: String) -> String {
+        switch mode {
+        case "低": I18N.shared.localized("低", "Low")
+        case "中": I18N.shared.localized("中", "Medium")
+        case "高": I18N.shared.localized("高", "High")
+        default: I18N.shared.localized("自动", "Auto")
+        }
+    }
+
+    private func featureTitle(_ kind: AIFeatureKind) -> String {
+        switch kind {
+        case .summary: I18N.shared.localized("文章摘要", "Article Summary")
+        case .bilingualTranslation: I18N.shared.localized("双语翻译", "Bilingual Translation")
+        case .selectionTranslation: I18N.shared.localized("划词翻译", "Selection Translation")
+        case .selectionExplanation: I18N.shared.localized("划词解释", "Selection Explanation")
+        case .selectionAsk: I18N.shared.localized("划词提问", "Selection Q&A")
+        }
+    }
+
+    private func featureDescription(_ kind: AIFeatureKind) -> String {
+        switch kind {
+        case .summary: I18N.shared.localized("为当前文章生成可长期保留的摘要。", "Generate a durable summary for the article.")
+        case .bilingualTranslation: I18N.shared.localized("按可见段落生成原文与译文对照。", "Translate visible paragraphs alongside the original.")
+        case .selectionTranslation: I18N.shared.localized("翻译阅读器中选中的文字。", "Translate selected text in the reader.")
+        case .selectionExplanation: I18N.shared.localized("结合上下文解释选中的内容。", "Explain selected text using its context.")
+        case .selectionAsk: I18N.shared.localized("围绕选中内容继续提问。", "Ask follow-up questions about selected text.")
+        }
+    }
+
+    private func affectedFeatureTitles(providerID: String, modelID: String? = nil) -> [String] {
+        AIFeatureKind.allCases.compactMap { kind in
+            guard let reference = store.aiSettings.configuration(for: kind)?.model,
+                  reference.providerID == providerID,
+                  modelID == nil || reference.modelID == modelID else { return nil }
+            return featureTitle(kind)
+        }
+    }
+
+    private func providerDeletionMessage(_ provider: AIProviderProfile) -> String {
+        let affected = affectedFeatureTitles(providerID: provider.id)
+        let suffix = affected.isEmpty
+            ? ""
+            : I18N.shared.isEnglish
+                ? " Affected features: \(affected.joined(separator: ", "))."
+                : " 受影响功能：\(affected.joined(separator: "、"))。"
+        return (I18N.shared.isEnglish
+            ? "The provider \(provider.name) and its locally stored API key will be removed."
+            : "供应商 \(provider.name) 及其本地保存的 API Key 将被删除。") + suffix
+    }
+
+    private func modelDeletionMessage(_ model: AIModelOption) -> String {
+        let affected = affectedFeatureTitles(providerID: selectedProviderID, modelID: model.id)
+        guard !affected.isEmpty else {
+            return I18N.shared.localized("该修改将在保存供应商后生效。", "This change takes effect after saving the provider.")
+        }
+        return I18N.shared.isEnglish
+            ? "Affected features: \(affected.joined(separator: ", ")). They will be rebound when you save."
+            : "受影响功能：\(affected.joined(separator: "、"))。保存后会自动改绑。"
+    }
+
+    private func featurePreferenceBinding<Value>(_ keyPath: WritableKeyPath<AIFeaturePreferences, Value>) -> Binding<Value> {
+        Binding(
+            get: { store.aiSettings.features[keyPath: keyPath] },
+            set: { value in
+                var features = store.aiSettings.features
+                features[keyPath: keyPath] = value
+                store.saveAISettings(store.aiSettings.updatingFeatures(features))
+            }
+        )
+    }
+
+    private var filteredAIProviders: [AIProviderProfile] {
+        let query = providerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return store.aiSettings.providers }
+        return store.aiSettings.providers.filter {
+            $0.name.lowercased().contains(query) || $0.description.lowercased().contains(query) || $0.baseURL.lowercased().contains(query)
+        }
+    }
+
+    private var selectedAIProvider: AIProviderProfile? {
+        store.aiProvider(id: selectedProviderID)
+    }
+
+    private var draftAIProvider: AIProviderProfile? {
+        guard let stored = selectedAIProvider else { return nil }
+        return stored.replacing(
+            isEnabled: draftProviderEnabled,
+            name: stored.isBuiltIn ? stored.name : configuration.providerName,
+            description: stored.isBuiltIn ? stored.description : configuration.providerDescription,
+            baseURL: stored.isBuiltIn ? stored.baseURL : configuration.baseURL,
+            selectedModelID: configuration.model,
+            models: draftModels,
+            reasoningMode: configuration.reasoningMode,
+            temperature: configuration.temperature,
+            allowInsecureLocalEndpoint: stored.isBuiltIn ? false : configuration.allowInsecureLocalEndpoint
+        ).selectingModel(configuration.model)
+    }
+
+    private func providerSidebarRow(_ provider: AIProviderProfile) -> some View {
+        let isSelected = provider.id == selectedProviderID
+        let isEnabled = isSelected ? draftProviderEnabled : provider.isEnabled
+
+        return ZStack(alignment: .trailing) {
+            Button { selectProvider(provider.id) } label: {
+                HStack(spacing: 12) {
+                    AIProviderIcon(kind: provider.kind, size: 42)
+                        .opacity(isEnabled ? 1 : 0.48)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(localizedBuiltInProviderName(provider.name))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(I18N.shared.localizedFormat("%lld 个模型", provider.models.count))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 64)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 26)
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
-                        .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
+                .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(I18N.shared.localized("高级选项", "Advanced Options"))
-            .accessibilityValue(
-                showsAIAdvancedOptions
-                    ? I18N.shared.localized("已展开", "Expanded")
-                    : I18N.shared.localized("已收起", "Collapsed")
+
+            Toggle("", isOn: Binding(
+                get: { provider.id == selectedProviderID ? draftProviderEnabled : provider.isEnabled },
+                set: { setProviderEnabled(provider, enabled: $0) }
+            ))
+            .labelsHidden()
+            .accessibilityLabel(I18N.shared.localized("启用供应商", "Enable Provider"))
+            .padding(.trailing, 46)
+        }
+        .background(
+            isSelected ? settingsAccentColor.opacity(0.13) : settingsGroupBackground,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isSelected ? settingsAccentColor.opacity(0.25) : Color.primary.opacity(0.09), lineWidth: 0.8)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var addProviderButton: some View {
+        Button {
+            isAddingProvider.toggle()
+            if isAddingProvider {
+                newProviderName = I18N.shared.localized("我的供应商", "My provider")
+                newProviderDescription = I18N.shared.localized("自定义 OpenAI 兼容接口", "Custom OpenAI-compatible endpoint")
+                newProviderBaseURL = "https://"
+                newProviderModel = ""
+                newProviderAPIKey = ""
+            }
+        } label: {
+            Label(
+                I18N.shared.localized("添加供应商", "Add Provider"),
+                systemImage: isAddingProvider ? "xmark" : "plus"
             )
-            .accessibilityAddTraits(.isToggle)
+            .font(.system(size: 14, weight: .medium))
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.11), lineWidth: 0.8)
+        }
+    }
 
-            if showsAIAdvancedOptions {
-                VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
-                    settingsGroup(
-                        "生成偏好（高级）"
-                    ) {
-                        settingsRow(
-                            "推理偏好"
-                        ) {
-                            Picker(I18N.localized("推理偏好"), selection: $configuration.reasoningMode) {
-                                Text(I18N.localized("自动")).tag("自动")
-                                Text(I18N.localized("关闭")).tag("关闭")
-                                Text(I18N.localized("低")).tag("低")
-                                Text(I18N.localized("中")).tag("中")
-                                Text(I18N.localized("高")).tag("高")
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 150, alignment: .trailing)
-                        }
+    private func setProviderEnabled(_ provider: AIProviderProfile, enabled: Bool) {
+        if provider.id == selectedProviderID {
+            draftProviderEnabled = enabled
+        }
+        store.saveAIProvider(provider.replacing(isEnabled: enabled))
+    }
+
+    private var providerDetailPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 13) {
+                if let provider = selectedAIProvider {
+                    AIProviderIcon(kind: provider.kind, size: 46)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(localizedBuiltInProviderName(selectedAIProvider?.name ?? ""))
+                        .font(.system(size: 19, weight: .semibold))
+                    Text(localizedBuiltInProviderDescription(selectedAIProvider?.description ?? ""))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Circle()
+                    .fill(draftProviderEnabled ? Color.green : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text(draftProviderEnabled
+                    ? I18N.shared.localized("已启用", "Enabled")
+                    : I18N.shared.localized("已停用", "Disabled"))
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider().opacity(0.35)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(I18N.shared.localized("基础配置", "Connection"))
+                    .font(.system(size: 16, weight: .semibold))
+                Text(I18N.shared.localized(
+                    "配置供应商连接，保存后即可添加和使用模型。",
+                    "Configure the provider connection before adding and using models."
+                ))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 11) {
+                providerEditorRow(I18N.shared.localized("名称", "Name")) {
+                    if selectedAIProvider?.isBuiltIn == true {
+                        providerReadOnlyValue(localizedBuiltInProviderName(configuration.providerName))
+                    } else {
+                        TextField(I18N.shared.localized("例如：Gemini", "For example: Gemini"), text: localizedProviderNameBinding)
+                            .textFieldStyle(.roundedBorder)
                     }
+                }
 
-                    settingsGroup(
-                        "连接安全（高级）",
-                        info: I18N.shared.localized(
-                            "仅用于模型 Base URL。HTTP 未加密，只有在你信任的局域网环境中才建议开启。",
-                            "Applies only to the model Base URL. HTTP is unencrypted; enable it only on a trusted local network."
-                        )
-                    ) {
-                        settingsRow("允许局域网 HTTP（不安全）") {
-                            Toggle(I18N.localized("允许局域网 HTTP"), isOn: $configuration.allowInsecureLocalEndpoint)
-                                .labelsHidden()
+                providerEditorRow(I18N.shared.localized("描述", "Description")) {
+                    if selectedAIProvider?.isBuiltIn == true {
+                        providerReadOnlyValue(localizedBuiltInProviderDescription(configuration.providerDescription))
+                    } else {
+                        TextField(I18N.shared.localized("例如：个人阅读助手", "For example: Reading assistant"), text: localizedProviderDescriptionBinding)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                providerEditorRow("API Key") {
+                    HStack(spacing: 8) {
+                        Group {
+                            if showsAPIKey {
+                                TextField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: $apiKey)
+                            } else {
+                                SecureField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: $apiKey)
+                            }
+                        }
+                        .textFieldStyle(.roundedBorder)
+
+                        Button { showsAPIKey.toggle() } label: {
+                            Image(systemName: showsAPIKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(I18N.shared.localized(showsAPIKey ? "隐藏密钥" : "显示密钥", showsAPIKey ? "Hide key" : "Show key"))
+                    }
+                }
+
+                providerEditorRow("Base URL") {
+                    if selectedAIProvider?.isBuiltIn == true {
+                        providerReadOnlyValue(configuration.baseURL)
+                            .textSelection(.enabled)
+                    } else {
+                        TextField(I18N.shared.localized("供应商 API 根地址", "Provider API root URL"), text: $configuration.baseURL)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
+            }
+
+            Divider().opacity(0.35)
+
+            providerModelManagementSection
+
+            HStack(spacing: 9) {
+                if let provider = selectedAIProvider, !provider.isBuiltIn {
+                    Button(I18N.shared.localized("删除供应商", "Delete Provider"), role: .destructive) {
+                        providerPendingDeletion = provider
+                        isShowingDeleteProviderAlert = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if selectedAIProvider?.kind == .deepSeek {
+                    Button(I18N.shared.localized("恢复推荐配置", "Restore Defaults")) { useDeepSeekDefaults() }
+                        .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                Button(I18N.shared.localized(isTesting ? "正在测试…" : "测试连接", isTesting ? "Testing…" : "Test Connection")) {
+                    test()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isTesting || configuration.model.isEmpty)
+
+                Button(I18N.shared.localized("保存更改", "Save Changes")) {
+                    saveSelectedProvider()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isProviderDraftDirty)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.8)
+        }
+    }
+
+    private var providerModelManagementSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(I18N.shared.localized("模型管理", "Models"))
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(I18N.shared.localized(
+                        "添加后，模型即可在各项 AI 功能中选择。",
+                        "Added models become available to individual AI features."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showAddModelsSheet()
+                } label: {
+                    Label(I18N.shared.localized("添加模型", "Add Model"), systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            if draftModels.isEmpty {
+                Text(I18N.shared.localized("尚未添加模型。", "No models added yet."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 58, alignment: .center)
+                    .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(draftModels) { model in
+                        HStack(spacing: 11) {
+                            ZStack {
+                                Circle().fill(Color.primary.opacity(0.05))
+                                Image(systemName: "cube")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(width: 36, height: 36)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.displayName)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .lineLimit(1)
+                                Text(model.source == .manual
+                                    ? I18N.shared.localized("手动添加", "Manually added")
+                                    : I18N.shared.localized("供应商目录", "Provider catalog"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            if configuration.model == model.id {
+                                Text(I18N.shared.localized("默认", "Default"))
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(settingsAccentColor)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 5)
+                                    .background(settingsAccentColor.opacity(0.10), in: Capsule())
+                            }
+
+                            Menu {
+                                Button(I18N.shared.localized("测试模型", "Test Model")) { test(modelID: model.id) }
+                                Button(I18N.shared.localized("删除模型", "Remove Model"), role: .destructive) {
+                                    providerModelPendingDeletion = model
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(Color.primary.opacity(0.028), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
                         }
                     }
                 }
-                .padding(.top, 8)
+            }
+        }
+    }
+
+    private func showAddModelsSheet() {
+        selectedCandidateModelIDs.removeAll()
+        fetchedModelCandidates.removeAll()
+        modelCandidateSearchText = ""
+        isShowingAddModelsSheet = true
+        fetchModels()
+    }
+
+    private func providerEditorRow<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 92, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 34)
+    }
+
+    private func providerReadOnlyValue(_ value: String) -> some View {
+        Text(value)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .padding(.horizontal, 8)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
+            }
+    }
+
+    private var addProviderForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(I18N.shared.localized("新增自定义供应商", "Add custom provider"))
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 8) {
+                TextField(I18N.shared.localized("名称", "Name"), text: $newProviderName)
+                TextField(I18N.shared.localized("Base URL", "Base URL"), text: $newProviderBaseURL)
+            }
+            HStack(spacing: 8) {
+                TextField(I18N.shared.localized("模型 ID（可选）", "Model ID (optional)"), text: $newProviderModel)
+                SecureField("API Key", text: $newProviderAPIKey)
+            }
+            TextField(I18N.shared.localized("描述", "Description"), text: $newProviderDescription)
+            HStack {
+                Spacer()
+                Button(I18N.shared.localized("取消", "Cancel")) { isAddingProvider = false }
+                    .buttonStyle(.borderless)
+                Button(I18N.shared.localized("保存供应商", "Save provider")) { addProvider() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(10)
+        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func modelListDisclosure(_ provider: AIProviderProfile) -> some View {
+        return VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showsAIModelList.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: showsAIModelList ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    Text(I18N.shared.localizedFormat(
+                        "已配置模型（%lld 个）",
+                        provider.models.count
+                    ))
+                    .font(.subheadline.weight(.medium))
+
+                    Spacer(minLength: 8)
+
+                    Text(showsAIModelList
+                        ? I18N.shared.localized("收起", "Collapse")
+                        : I18N.shared.localized("展开", "Expand"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(I18N.shared.localized("模型列表", "Model list"))
+            .accessibilityValue(showsAIModelList
+                ? I18N.shared.localized("已展开", "Expanded")
+                : I18N.shared.localized("已收起", "Collapsed"))
+            .accessibilityAddTraits(.isToggle)
+
+            if showsAIModelList {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(provider.models) { model in
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(spacing: 8) {
+                                Text(model.displayName)
+                                    .font(.system(.body, design: .monospaced))
+                                    .lineLimit(1)
+                                Spacer()
+                                Button(I18N.shared.localized("测试", "Test")) { test(modelID: model.id) }
+                                    .controlSize(.small)
+                                Button(role: .destructive) {
+                                    providerModelPendingDeletion = model
+                                } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.borderless)
+                            }
+                        }
+                        .padding(9)
+                        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+                .padding(.leading, 26)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .tint(settingsAccentColor)
+        .padding(.top, 2)
+    }
+
+    private var addModelsSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(I18N.shared.localized("添加模型", "Add Models")).font(.title3.weight(.semibold))
+                    Text(localizedBuiltInProviderName(selectedAIProvider?.name ?? ""))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isFetchingModels { ProgressView().controlSize(.small) }
+            }
+            .padding(20)
+
+            TextField(I18N.shared.localized("搜索远端模型", "Search remote models"), text: $modelCandidateSearchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+            List(filteredModelCandidates) { model in
+                let alreadyConfigured = draftModels.contains(where: { $0.id == model.id })
+                Button {
+                    guard !alreadyConfigured else { return }
+                    if selectedCandidateModelIDs.contains(model.id) {
+                        selectedCandidateModelIDs.remove(model.id)
+                    } else {
+                        selectedCandidateModelIDs.insert(model.id)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: alreadyConfigured ? "checkmark.circle.fill" : selectedCandidateModelIDs.contains(model.id) ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(alreadyConfigured ? .secondary : settingsAccentColor)
+                        Text(model.displayName).font(.system(.body, design: .monospaced))
+                        Spacer()
+                        if alreadyConfigured {
+                            Text(I18N.shared.localized("已配置", "Configured"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(alreadyConfigured)
+            }
+            .overlay {
+                if !isFetchingModels && fetchedModelCandidates.isEmpty {
+                    ContentUnavailableView(
+                        I18N.shared.localized("未获取到模型目录", "No Model Catalog"),
+                        systemImage: "server.rack",
+                        description: Text(I18N.shared.localized("可检查连接后重试，或在下方手动填写模型 ID。", "Check the connection and retry, or enter a model ID below."))
+                    )
+                }
+            }
+
+            Divider()
+            HStack(spacing: 8) {
+                TextField(I18N.shared.localized("手动输入模型 ID", "Enter model ID manually"), text: $manualModelID)
+                    .textFieldStyle(.roundedBorder)
+                Button(I18N.shared.localized("手动添加", "Add Manually")) { addManualModel() }
+                    .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Spacer()
+                Button(I18N.shared.localized("重新拉取", "Refresh")) { fetchModels() }
+                    .disabled(isFetchingModels)
+                Button(I18N.shared.localized("取消", "Cancel")) { isShowingAddModelsSheet = false }
+                Button(I18N.shared.localizedFormat("添加 %lld 个", selectedCandidateModelIDs.count)) {
+                    confirmCandidateModels()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedCandidateModelIDs.isEmpty)
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 620, minHeight: 520)
+    }
+
+    private var filteredModelCandidates: [AIModelOption] {
+        let query = modelCandidateSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return fetchedModelCandidates }
+        return fetchedModelCandidates.filter {
+            $0.id.lowercased().contains(query) || $0.displayName.lowercased().contains(query)
+        }
     }
 
     private var aboutSettings: some View {
@@ -1447,6 +2235,8 @@ struct SettingsView: View {
                     .padding(.vertical, 10)
                 }
             }
+
+            feedbackSettings
         }
     }
 
@@ -1871,7 +2661,9 @@ struct SettingsView: View {
     private func localizedBuiltInProviderName(_ value: String) -> String {
         switch value {
         case "OpenAI 兼容接口":
-            I18N.localized("OpenAI 兼容接口")
+            I18N.shared.localized("OpenAI 兼容接口", "OpenAI-Compatible Endpoint")
+        case "Google Gemini":
+            I18N.shared.localized("Google Gemini", "Google Gemini")
         case "DeepSeek":
             value
         default:
@@ -1884,7 +2676,9 @@ struct SettingsView: View {
         case "用于翻译、总结和解读文章":
             I18N.localized("用于翻译、总结和解读文章")
         case "DeepSeek OpenAI 兼容接口":
-            I18N.localized("DeepSeek OpenAI 兼容接口")
+            I18N.shared.localized("DeepSeek OpenAI 兼容接口", "DeepSeek OpenAI-Compatible Endpoint")
+        case "Google Gemini 官方 OpenAI 兼容接口":
+            I18N.shared.localized("Google Gemini 官方 OpenAI 兼容接口", "Google Gemini official OpenAI-compatible endpoint")
         default:
             value
         }
@@ -1904,10 +2698,6 @@ struct SettingsView: View {
 
             Spacer()
 
-            if selectedSection == .aiService {
-                Button(I18N.shared.localized(isTesting ? "正在测试…" : "测试连接")) { test() }
-                    .disabled(isTesting)
-            }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 11)
@@ -1915,7 +2705,7 @@ struct SettingsView: View {
     }
 
     private var showsActionBar: Bool {
-        selectedSection == .aiService || !status.isEmpty
+        !status.isEmpty
     }
 
     private var settingsSidebarBackground: Color {
@@ -1944,51 +2734,212 @@ struct SettingsView: View {
 
     private var statusIsSuccess: Bool {
         status.hasPrefix("成功") || status.hasPrefix("已保存") || status.hasPrefix("已填入")
+            || status.hasPrefix("已切换") || status.hasPrefix("已更新") || status.hasPrefix("已添加")
             || status.hasPrefix("Success") || status.hasPrefix("Saved") || status.hasPrefix("Recommended")
+            || status.hasPrefix("Active") || status.hasPrefix("Updated") || status.hasPrefix("Added")
     }
 
     private func loadConfiguration() {
         selectedSection = .appearance
-        configuration = store.llmConfiguration
-        apiKey = store.loadAPIKey()
-        usesCustomModel = !["deepseek-v4-flash", "deepseek-v4-pro"].contains(configuration.model)
+        loadProvider(store.aiSettings.activeProviderID)
     }
 
-    private func save(updateStatus: Bool = true) {
-        let storage = store.saveLLMConfiguration(configuration, apiKey: apiKey)
-        if updateStatus {
-            status = storage.savedMessage
+    private func selectProvider(_ providerID: String) {
+        guard providerID != selectedProviderID else { return }
+        if isProviderDraftDirty {
+            pendingProviderSelectionID = providerID
+            isShowingUnsavedProviderDialog = true
+            return
         }
+        loadProvider(providerID)
+    }
+
+    private func completePendingProviderSelection() {
+        guard let providerID = pendingProviderSelectionID else { return }
+        pendingProviderSelectionID = nil
+        loadProvider(providerID)
+    }
+
+    private func loadProvider(_ providerID: String) {
+        guard let provider = store.aiProvider(id: providerID) else { return }
+        modelFetchRequestID = UUID()
+        testRequestID = UUID()
+        isFetchingModels = false
+        isTesting = false
+        showsAIModelList = false
+        selectedProviderID = provider.id
+        draftProviderEnabled = provider.isEnabled
+        configuration = provider.runtimeConfiguration(features: store.aiSettings.features)
+        apiKey = store.apiKey(for: provider.id)
+        draftModels = provider.models
+        manualModelID = ""
+        showsAPIKey = false
+        status = ""
+    }
+
+    private var isProviderDraftDirty: Bool {
+        guard let stored = selectedAIProvider, let draft = draftAIProvider else { return false }
+        return draft != stored || apiKey != store.apiKey(for: selectedProviderID)
+    }
+
+    @discardableResult
+    private func saveSelectedProvider(updateStatus: Bool = true) -> Bool {
+        guard let provider = draftAIProvider else { return false }
+        do {
+            try provider.validateConnection(requireModel: false)
+            store.saveAIProvider(provider, apiKey: apiKey)
+        } catch {
+            status = error.localizedDescription
+            return false
+        }
+
+        if updateStatus {
+            status = I18N.shared.localized("已保存当前供应商配置", "Current provider configuration saved")
+        }
+        return true
     }
 
     private func useDeepSeekDefaults() {
-        let currentKey = apiKey
-        let automaticallyGenerateSummary = configuration.automaticallyGenerateSummary
-        let showsSelectionExplanation = configuration.showsSelectionExplanation
-        let showsSelectionAsk = configuration.showsSelectionAsk
-        let showsSelectionTranslation = configuration.showsSelectionTranslation
-        configuration = .deepSeek
-        configuration.automaticallyGenerateSummary = automaticallyGenerateSummary
-        configuration.showsSelectionExplanation = showsSelectionExplanation
-        configuration.showsSelectionAsk = showsSelectionAsk
-        configuration.showsSelectionTranslation = showsSelectionTranslation
-        apiKey = currentKey
-        usesCustomModel = false
-        status = I18N.shared.localized("已填入 DeepSeek 推荐配置；保存后即可测试。")
+        if selectedProviderID != AIProviderID.deepSeek {
+            saveSelectedProvider(updateStatus: false)
+        }
+        guard let provider = store.aiProvider(id: AIProviderID.deepSeek) else { return }
+
+        let currentFeatures = AIFeaturePreferences(configuration: configuration)
+        var recommended = provider.runtimeConfiguration(features: currentFeatures)
+        recommended.targetLanguage = currentFeatures.targetLanguage
+        recommended.showsAISummary = currentFeatures.showsAISummary
+        recommended.automaticallyGenerateSummary = currentFeatures.automaticallyGenerateSummary
+        recommended.showsSelectionExplanation = currentFeatures.showsSelectionExplanation
+        recommended.showsSelectionAsk = currentFeatures.showsSelectionAsk
+        recommended.showsSelectionTranslation = currentFeatures.showsSelectionTranslation
+        recommended.customPrompt = currentFeatures.customPrompt
+
+        selectedProviderID = provider.id
+        draftProviderEnabled = provider.isEnabled
+        configuration = recommended
+        apiKey = store.apiKey(for: provider.id)
+        draftModels = provider.models
+        status = I18N.shared.localized("已填入 DeepSeek 推荐配置；保存后即可测试。", "DeepSeek defaults filled in; save to test.")
+    }
+
+    private func addManualModel() {
+        let modelID = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modelID.isEmpty, var provider = draftAIProvider else { return }
+        provider = provider.addingManualModel(id: modelID)
+        draftModels = provider.models
+        configuration.model = modelID
+        showsAIModelList = true
+        manualModelID = ""
+        status = I18N.shared.localized("已添加模型", "Model added")
+    }
+
+    private func confirmCandidateModels() {
+        for model in fetchedModelCandidates where selectedCandidateModelIDs.contains(model.id) {
+            guard !draftModels.contains(where: { $0.id == model.id }) else { continue }
+            draftModels.append(model)
+        }
+        if configuration.model.isEmpty { configuration.model = draftModels.first?.id ?? "" }
+        selectedCandidateModelIDs.removeAll()
+        showsAIModelList = true
+        isShowingAddModelsSheet = false
+        status = I18N.shared.localized("已加入供应商草稿，保存更改后生效", "Added to the provider draft. Save changes to apply.")
+    }
+
+    private func setModelEnabled(_ modelID: String, enabled: Bool) {
+        guard var provider = draftAIProvider else { return }
+        provider = provider.updatingModel(id: modelID, isEnabled: enabled)
+        draftModels = provider.models
+    }
+
+    private func fetchModels() {
+        guard let provider = draftAIProvider else { return }
+        isFetchingModels = true
+        status = ""
+        let providerID = selectedProviderID
+        let requestID = UUID()
+        let revision = draftRevision
+        let requestedAPIKey = apiKey
+        modelFetchRequestID = requestID
+        Task { @MainActor in
+            defer {
+                if modelFetchRequestID == requestID {
+                    isFetchingModels = false
+                }
+            }
+            do {
+                let models = try await store.fetchAIModels(provider: provider, apiKey: requestedAPIKey)
+                guard modelFetchRequestID == requestID, selectedProviderID == providerID, draftRevision == revision else { return }
+                fetchedModelCandidates = models
+                status = I18N.shared.isEnglish ? "Fetched \(models.count) models" : "已拉取 \(models.count) 个候选模型"
+            } catch {
+                guard modelFetchRequestID == requestID,
+                      selectedProviderID == providerID,
+                      draftRevision == revision else { return }
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func addProvider() {
+        let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !baseURL.isEmpty else { return }
+
+        let provider = AIProviderProfile.custom(
+            name: name,
+            description: newProviderDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+            baseURL: baseURL,
+            modelID: newProviderModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        do {
+            try provider.validateConnection(requireModel: false)
+        } catch {
+            status = error.localizedDescription
+            return
+        }
+        store.addAIProvider(provider, apiKey: newProviderAPIKey)
+        isAddingProvider = false
+        newProviderName = ""
+        newProviderDescription = ""
+        newProviderBaseURL = ""
+        newProviderModel = ""
+        newProviderAPIKey = ""
+        selectProvider(provider.id)
+        status = I18N.shared.localized("已添加供应商", "Provider added")
     }
 
     private func test() {
-        save()
+        test(modelID: configuration.model)
+    }
+
+    private func test(modelID: String) {
+        guard let provider = draftAIProvider else { return }
         isTesting = true
         status = ""
-        Task {
+        let providerID = selectedProviderID
+        let requestID = UUID()
+        let revision = draftRevision
+        let requestedAPIKey = apiKey
+        testRequestID = requestID
+        Task { @MainActor in
+            defer {
+                if testRequestID == requestID {
+                    isTesting = false
+                }
+            }
             do {
-                try await store.testLLM(configuration: configuration, apiKey: apiKey)
-                status = I18N.shared.localized("成功：接口可以响应。")
+                var requestedProvider = provider.selectingModel(modelID)
+                requestedProvider = requestedProvider.replacing(selectedModelID: modelID)
+                try await store.testAIProvider(provider: requestedProvider, apiKey: requestedAPIKey)
+                guard testRequestID == requestID, selectedProviderID == providerID, draftRevision == revision else { return }
+                status = I18N.shared.localized("成功：当前模型可以响应。", "Success: selected model responded.")
             } catch {
+                guard testRequestID == requestID,
+                      selectedProviderID == providerID,
+                      draftRevision == revision else { return }
                 status = error.localizedDescription
             }
-            isTesting = false
         }
     }
 }
