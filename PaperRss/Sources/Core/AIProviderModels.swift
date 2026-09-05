@@ -507,7 +507,7 @@ public struct AISettings: Codable, Hashable, Sendable {
             ($0, AIFeatureConfiguration(
                 isEnabled: true,
                 model: AIModelReference(providerID: AIProviderID.deepSeek, modelID: "deepseek-v4-flash"),
-                reasoningMode: "自动"
+                reasoningMode: $0 == .bilingualTranslation || $0 == .selectionTranslation ? "关闭" : "自动"
             ))
         })
     )
@@ -533,7 +533,16 @@ public struct AISettings: Codable, Hashable, Sendable {
     }
 
     public func configuration(for kind: AIFeatureKind) -> AIFeatureConfiguration? {
-        if let configured = featureConfigurations?[kind] { return configured }
+        if var configured = featureConfigurations?[kind] {
+            if configured.reasoningMode == "关闭",
+               let reference = configured.model,
+               let provider = provider(id: reference.providerID),
+               !provider.runtimeConfiguration(modelID: reference.modelID, features: features).supportsDisablingReasoning {
+                // 换到不支持关闭的模型时，界面和执行都显示其实际使用的自动模式。
+                configured.reasoningMode = "自动"
+            }
+            return configured
+        }
         guard let provider = activeProvider else { return nil }
         let reference = AIModelReference(providerID: provider.id, modelID: provider.selectedModelID)
         return AIFeatureConfiguration(

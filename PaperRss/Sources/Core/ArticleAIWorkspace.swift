@@ -114,9 +114,8 @@ public enum ArticleAIWorkspaceError: Error, Equatable, Sendable {
     case staleDocument
 }
 
-/// Owns reader AI request identity and lifecycle independently from SwiftUI's
-/// value-type view instances. Summary and already-requested bilingual work use
-/// one six-slot FIFO background pool. Only selection work is document-scoped.
+/// 管理阅读器 AI 请求的身份与生命周期。摘要和双语翻译分别限流，
+/// 翻译等待队列优先处理当前文章；划词请求仍随文档切换取消。
 @MainActor
 public final class ArticleAIWorkspace: ObservableObject {
     public typealias EventSink = @Sendable (ReaderAIEvent) async -> Void
@@ -145,9 +144,11 @@ public final class ArticleAIWorkspace: ObservableObject {
     private var pendingBackground: [PendingBackgroundRequest] = []
     private var activeBackground = Set<AIRequestID>()
     private let maximumBackgroundConcurrency: Int
+    private let maximumTranslationConcurrency: Int
 
-    public init(maximumBackgroundConcurrency: Int = 6) {
+    public init(maximumBackgroundConcurrency: Int = 6, maximumTranslationConcurrency: Int = 3) {
         self.maximumBackgroundConcurrency = max(1, maximumBackgroundConcurrency)
+        self.maximumTranslationConcurrency = max(1, maximumTranslationConcurrency)
         let generation = AIDocumentGeneration(entryID: "")
         projection = ArticleAIProjection(entryID: "", generation: generation)
     }
@@ -293,12 +294,20 @@ public final class ArticleAIWorkspace: ObservableObject {
     }
 
     private func startPendingBackgroundWorkIfPossible() {
-        while activeBackground.count < maximumBackgroundConcurrency,
-              !pendingBackground.isEmpty {
-            let next = pendingBackground.removeFirst()
-            guard requests[next.requestID] != nil else { continue }
-            activeBackground.insert(next.requestID)
-            start(requestID: next.requestID, operation: next.operation)
+        for kind in [AIArtifactKind.summary, .bilingual] {
+            let limit = kind == .bilingual ? maximumTranslationConcurrency : maximumBackgroundConcurrency
+            while activeBackground.filter({ requests[$0]?.intent.artifactKind == kind }).count < limit {
+                let matching = pendingBackground.indices.filter {
+                    requests[pendingBackground[$0].requestID]?.intent.artifactKind == kind
+                }
+                let foreground = kind == .bilingual ? matching.first {
+                    requests[pendingBackground[$0].requestID]?.generation.entryID == projection.entryID
+                } : nil
+                guard let index = foreground ?? matching.first else { break }
+                let next = pendingBackground.remove(at: index)
+                activeBackground.insert(next.requestID)
+                start(requestID: next.requestID, operation: next.operation)
+            }
         }
     }
 
@@ -362,7 +371,10 @@ public final class ArticleAIWorkspace: ObservableObject {
             let next = followups.removeFirst()
             bilingualFollowupsByEntryID[metadata.generation.entryID] = followups.isEmpty ? nil : followups
             tasks.removeValue(forKey: requestID)
-            start(requestID: requestID, operation: next)
+            // 每轮可见段落完成后归还额度，让当前文章优先于旧文章的后续批次。
+            activeBackground.remove(requestID)
+            pendingBackground.append(PendingBackgroundRequest(requestID: requestID, operation: next))
+            startPendingBackgroundWorkIfPossible()
             return
         }
         requests.removeValue(forKey: requestID)

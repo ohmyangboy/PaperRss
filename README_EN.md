@@ -77,7 +77,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Beta v1.3.2-beta.3 (Build 20)** adds unread article filtering within folders and feeds, retains articles read during the current session, and keeps pagination and keyboard navigation consistent. This is a preview release; the stable channel remains on v1.3.1. See the [changelog](CHANGELOG.md) for details.
+**Beta v1.3.2-beta.3 (Build 20)** adds unread filtering and saved reading line spacing, and improves AI settings, default model configuration, and translation scheduling. This is a preview release; the stable channel remains on v1.3.1. See the [changelog](CHANGELOG.md) for details.
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

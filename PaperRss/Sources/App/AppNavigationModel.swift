@@ -2,6 +2,8 @@ import SwiftUI
 
 @MainActor
 final class AppNavigationModel: ObservableObject {
+    var opensSettingsOnNextWindow = false
+
     enum Destination: Equatable {
         case unread
     }

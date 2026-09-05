@@ -133,6 +133,7 @@ struct ToolbarActions {
 /// 3. NSToolbarItem.Identifier.toggleSidebar 作为首项 — 系统自动贴合红绿灯
 /// 4. NSTrackingSeparatorToolbarItem — 工具栏项跟踪分割线位置
 struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewControllerRepresentable {
+    var isReaderActive = true
     let sidebar: Sidebar
     let content: Content
     let detail: Detail
@@ -204,6 +205,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
             MainActor.assumeIsolated {
                 if let window = view.window, let coord = coordinator, !coord.toolbarConfigured {
                     coord.configureToolbar(on: window, splitView: splitVC.splitView)
+                    coord.applyReaderPresentation(to: window)
                 }
                 if let coord = coordinator, view.window != nil, !coord.didInitializeFocus {
                     coord.didInitializeFocus = true
@@ -227,6 +229,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     }
 
     func updateNSViewController(_ splitVC: NSSplitViewController, context: Context) {
+        context.coordinator.setReaderActive(isReaderActive)
         // 更新工具栏动作状态
         context.coordinator.actions = toolbarActions
         context.coordinator.appearance = appearance
@@ -313,6 +316,32 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         var appTheme: AppTheme
         let columnFocusState: PaperColumnFocusState
         weak var splitViewController: NSSplitViewController?
+        var isReaderActive = true
+        private var retainedReaderToolbar: NSToolbar?
+        private let settingsToolbar = NSToolbar(identifier: "PaperRssSettingsToolbar")
+
+        func setReaderActive(_ active: Bool) {
+            guard isReaderActive != active else { return }
+            isReaderActive = active
+            guard let window = splitViewController?.view.window else { return }
+            applyReaderPresentation(to: window)
+        }
+
+        fileprivate func applyReaderPresentation(to window: NSWindow) {
+            if isReaderActive {
+                guard let retainedReaderToolbar else { return }
+                window.toolbar = retainedReaderToolbar
+                self.retainedReaderToolbar = nil
+                window.makeFirstResponder(splitViewController?.view)
+            } else {
+                guard window.toolbar !== settingsToolbar else { return }
+                retainedReaderToolbar = window.toolbar
+                window.makeFirstResponder(nil)
+                settingsToolbar.isVisible = false
+                window.toolbar = settingsToolbar
+            }
+        }
+
         var toolbarConfigured = false
         var windowObservation: NSKeyValueObservation?
         var sidebarObservation: NSKeyValueObservation?
@@ -387,7 +416,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private func setupLocalKeyMonitor() {
             guard eventMonitor == nil else { return }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self = self else { return event }
+                guard let self = self, self.isReaderActive,
+                      event.window === self.splitViewController?.view.window else { return event }
 
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
@@ -540,6 +570,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 进入文章列表且无选中时自动选中第一篇。
         @MainActor
         func setActiveColumn(_ index: Int, makeFirstResponder: Bool = true, autoSelect: Bool = true) {
+            guard isReaderActive else { return }
             guard let splitVC = splitViewController,
                   splitVC.splitViewItems.indices.contains(index),
                   !splitVC.splitViewItems[index].isCollapsed else { return }
@@ -726,7 +757,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private func setupMouseDownMonitor() {
             guard mouseDownMonitor == nil else { return }
             mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-                guard let self = self else { return event }
+                guard let self = self, self.isReaderActive else { return event }
                 guard let window = MainActor.assumeIsolated({ self.splitViewController?.view.window ?? NSApp.keyWindow }),
                       (event.window ?? NSApp.keyWindow) === window,
                       window.attachedSheet == nil,
@@ -919,7 +950,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 覆盖重建时机。退出全屏时清理背板防止残留。
         private func scheduleFullScreenChromeSync(for window: NSWindow) {
             reconcileWindowChrome(for: window)
-            if window.styleMask.contains(.fullScreen) {
+            if isReaderActive && window.styleMask.contains(.fullScreen) {
                 // 密集的早期补偿，配合 viewDidLayout 钩子把背板在首个白条帧前就位
                 for delay in [0.05, 0.15, 0.35, 0.6] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak window] in
@@ -1370,6 +1401,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
         /// 同步禅模式下工具栏其他按钮的显隐与原生居中对齐（借助 centeredItemIdentifier 强制让阅读胶囊位于窗口及内容正上方）
         func syncZenModeState() {
+            guard isReaderActive else { return }
             guard let toolbar = splitViewController?.view.window?.toolbar else { return }
             let isZenMode = actions.isZenMode
 

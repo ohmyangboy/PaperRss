@@ -567,6 +567,13 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         return host == "generativelanguage.googleapis.com"
     }
 
+    /// 只为请求适配器能够明确关闭推理的模型提供“关闭”。
+    public var supportsDisablingReasoning: Bool {
+        if usesDeepSeekAPI { return true }
+        let normalizedModel = model.replacingOccurrences(of: "models/", with: "").lowercased()
+        return usesGeminiAPI && normalizedModel.hasPrefix("gemini-2.5") && !normalizedModel.contains("pro")
+    }
+
     public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "", providerKind: AIProviderKind? = nil) {
         self.providerName = providerName
         self.providerDescription = providerDescription

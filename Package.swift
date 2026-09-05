@@ -73,7 +73,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PaperRssAppTests",
-            dependencies: ["PaperRssUpdateSupport"],
+            dependencies: ["PaperRssUpdateSupport", "PaperRssDesktop", "PaperRssCore"],
             path: "AppTests"
         )
     ]

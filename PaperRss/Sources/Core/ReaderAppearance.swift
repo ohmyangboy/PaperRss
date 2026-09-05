@@ -50,11 +50,13 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
     public static let defaultFontSize = 17
     public static let minimumFontSize = 13
     public static let maximumFontSize = 25
+    public static let defaultLineHeight = 1.72
     public static let `default` = ReaderAppearance()
 
     public private(set) var preset: ReaderThemePreset
     public private(set) var fontFamilyName: String?
     public private(set) var fontSize: Int
+    public private(set) var lineHeight: Double
     public private(set) var customLightBackgroundHex: String?
     public private(set) var customDarkBackgroundHex: String?
 
@@ -62,18 +64,40 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
         preset: ReaderThemePreset = .paper,
         fontFamilyName: String? = nil,
         fontSize: Int = ReaderAppearance.defaultFontSize,
+        lineHeight: Double = ReaderAppearance.defaultLineHeight,
         customLightBackgroundHex: String? = nil,
         customDarkBackgroundHex: String? = nil
     ) {
         self.preset = preset
         self.fontFamilyName = Self.normalizedFontFamily(fontFamilyName)
         self.fontSize = Self.clampedFontSize(fontSize)
+        self.lineHeight = lineHeight.isFinite ? min(2.4, max(1.2, lineHeight)) : Self.defaultLineHeight
         self.customLightBackgroundHex = Self.normalizedHex(customLightBackgroundHex)
         self.customDarkBackgroundHex = Self.normalizedHex(customDarkBackgroundHex)
     }
 
     public var isCustom: Bool {
         customLightBackgroundHex != nil || customDarkBackgroundHex != nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case preset, fontFamilyName, fontSize, lineHeight, customLightBackgroundHex, customDarkBackgroundHex
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            preset: try values.decodeIfPresent(ReaderThemePreset.self, forKey: .preset) ?? .paper,
+            fontFamilyName: try values.decodeIfPresent(String.self, forKey: .fontFamilyName),
+            fontSize: try values.decodeIfPresent(Int.self, forKey: .fontSize) ?? Self.defaultFontSize,
+            lineHeight: try values.decodeIfPresent(Double.self, forKey: .lineHeight) ?? Self.defaultLineHeight,
+            customLightBackgroundHex: try values.decodeIfPresent(String.self, forKey: .customLightBackgroundHex),
+            customDarkBackgroundHex: try values.decodeIfPresent(String.self, forKey: .customDarkBackgroundHex)
+        )
+    }
+
+    public mutating func setLineHeight(_ value: Double) {
+        lineHeight = value.isFinite ? min(2.4, max(1.2, value)) : Self.defaultLineHeight
     }
 
     public mutating func selectPreset(_ preset: ReaderThemePreset) {
@@ -180,6 +204,7 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
             preset: preset,
             fontFamilyName: fontFamilyName,
             fontSize: fontSize,
+            lineHeight: lineHeight,
             customLightBackgroundHex: customLightBackgroundHex,
             customDarkBackgroundHex: customDarkBackgroundHex
         )

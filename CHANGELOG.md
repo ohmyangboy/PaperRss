@@ -2,19 +2,23 @@
 
 ## v1.3.2-beta.3 · Build 20 · 2026-09-05
 
-本次为未读筛选预发布版本；建议希望按文件夹或订阅源集中阅读未读文章的用户升级，稳定通道仍为 v1.3.1。
+本次为阅读与 AI 设置体验预发布版本；建议希望体验未读筛选、阅读行距和翻译优化的用户升级，稳定通道仍为 v1.3.1。
 
-- 未读筛选：文章列表顶部新增过滤按钮，支持文件夹、单个订阅源和多选订阅源。
-- 阅读连续性：切换订阅范围保持筛选，本轮点开后变为已读的文章继续留在列表；重启后默认显示全部。
-- 导航一致性：分页、上一篇／下一篇和键盘导航遵循同一筛选范围，支持中英文提示与主题色。
+- 未读筛选：文件夹、单个及多选订阅源可仅显示未读文章；本轮已阅读文章继续保留，分页与快捷键导航保持一致。
+- AI 设置：设置页在主窗口内切换，保留尚未保存的供应商编辑；隔离未保存配置与运行时请求，并避免过期测试结果覆盖新编辑。
+- 模型配置：修正首次使用时的默认供应商绑定；翻译默认关闭受支持模型的思考，不支持关闭的模型显示实际可用模式。
+- 翻译调度：摘要和翻译使用独立并发额度，优先处理当前文章；翻译分批并行、去重并逐批显示结果。
+- 阅读外观：新增可保存的正文与译文行距设置，划词浮层跟随阅读字体与字号。
 
 ---
 
-This prerelease adds unread filtering within folders and feeds. Upgrade to try focused unread reading; the stable channel remains on v1.3.1.
+This prerelease improves reading and AI settings. Upgrade to try unread filtering, adjustable line spacing, and translation improvements; the stable channel remains on v1.3.1.
 
-- Unread filtering: Added a filter button above the article list for folders, individual feeds, and multiple selected feeds.
-- Reading continuity: Keep the filter enabled when switching scopes and retain articles read during the current session. Restarting defaults to showing all articles.
-- Consistent navigation: Pagination, previous/next actions, and keyboard navigation follow the same filter, with localized labels and theme colors.
+- Unread filtering: Filter folders, individual feeds, or selected feeds; retain articles read during the session and keep pagination and keyboard navigation consistent.
+- AI settings: Switch to settings within the main window while preserving unsaved provider edits. Keep drafts separate from runtime requests and reject stale connection-test results.
+- Model configuration: Correct first-launch provider defaults. Translation disables reasoning by default where supported, while other models show their available mode.
+- Translation scheduling: Separate summary and translation concurrency, prioritize the current article, and deduplicate and translate batches concurrently with incremental results.
+- Reading appearance: Save line spacing for original text and translations. Selection popovers follow the reader font and text size.
 
 ## v1.3.2-beta.2 · Build 19 · 2026-09-04
 

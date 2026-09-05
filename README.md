@@ -77,7 +77,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**测试版 v1.3.2-beta.3（Build 20）** 新增当前文件夹和订阅源的未读文章筛选，阅读后保留本轮文章，并统一分页与快捷键导航。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
+**测试版 v1.3.2-beta.3（Build 20）** 新增当前文件夹和订阅源的未读文章筛选、可保存的阅读行距，改进 AI 设置编辑体验、默认模型配置及翻译并发调度。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

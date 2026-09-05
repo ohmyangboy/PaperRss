@@ -290,7 +290,8 @@ public final class AppStore: ObservableObject {
         }
 
         // 1. Recover LLM Configuration from legacy JSON if needed (Independent of SQLite migration state)
-        if let recovered = LegacyPreferenceMigrator.recoverLLMConfigurationIfNeeded(from: self.persistenceURL, fileManager: fileManager) {
+        let recoveredLegacyConfiguration = LegacyPreferenceMigrator.recoverLLMConfigurationIfNeeded(from: self.persistenceURL, fileManager: fileManager)
+        if let recovered = recoveredLegacyConfiguration {
             self.llmConfiguration = recovered
         }
 
@@ -320,9 +321,11 @@ public final class AppStore: ObservableObject {
         readerAppearance = Self.loadReaderAppearance(from: preferences)
 
         let legacyConfiguration: LLMConfiguration
+        var hasLegacyConfiguration = recoveredLegacyConfiguration != nil || !LocalAPIKeyStore.loadAPIKey().isEmpty
         if let data = preferences.data(forKey: PreferenceKey.llmConfiguration),
            let savedConfig = try? JSONDecoder().decode(LLMConfiguration.self, from: data) {
             legacyConfiguration = savedConfig
+            hasLegacyConfiguration = true
         } else {
             legacyConfiguration = llmConfiguration
         }
@@ -357,9 +360,9 @@ public final class AppStore: ObservableObject {
                 )
             }
         } else {
-            let migrated = AISettings.migrated(from: legacyConfiguration)
+            let migrated = hasLegacyConfiguration ? AISettings.migrated(from: legacyConfiguration) : .default
             aiSettings = migrated
-            llmConfiguration = legacyConfiguration
+            llmConfiguration = migrated.resolvedConfiguration(for: .summary) ?? legacyConfiguration
             // Migrate the legacy key before writing v2. If the process is
             // interrupted, the next launch can safely repeat this idempotent
             // step; a newly-added empty provider will never inherit it later.
@@ -2168,64 +2171,88 @@ public final class AppStore: ObservableObject {
             if activeBilingualRequest?.requestID == requestID { activeBilingualRequest = nil }
         }
 
-        // 5. 按批次执行模型翻译并直接 await
-        let batches = translationBatches(from: uncachedParagraphs)
+        // 5. 完全相同的原文只发送一次；每篇最多两个批次并行，先返回的先显示。
+        // 不折叠原文空白，避免合并代码或空白具有含义的段落。
+        let paragraphsBySource = Dictionary(grouping: uncachedParagraphs, by: \.original)
+        var seenSources = Set<String>()
+        let uniqueParagraphs = uncachedParagraphs.filter { seenSources.insert($0.original).inserted }
+        let batches = translationBatches(from: uniqueParagraphs)
+        let batchConfiguration = configuration
+        let service = llm
         do {
-            for batch in batches {
-                guard !Task.isCancelled, isRequestCurrent() else { break }
-                let translatedTexts = try await llm.translateBatch(
-                    paragraphs: batch.map(\.original),
-                    configuration: configuration,
-                    apiKey: apiKey
-                )
-                guard !Task.isCancelled, isRequestCurrent() else { break }
+            try await withThrowingTaskGroup(of: ([ReaderParagraph], [String]).self) { group in
+                var nextBatchIndex = 0
+                func enqueueNextBatch() {
+                    guard nextBatchIndex < batches.count else { return }
+                    let batch = batches[nextBatchIndex]
+                    nextBatchIndex += 1
+                    group.addTask {
+                        try Task.checkCancellation()
+                        let translations = try await service.translateBatch(
+                            paragraphs: batch.map(\.original),
+                            configuration: batchConfiguration,
+                            apiKey: apiKey
+                        )
+                        return (batch, translations)
+                    }
+                }
+                for _ in 0..<min(2, batches.count) { enqueueNextBatch() }
+                for try await (batch, translatedTexts) in group {
+                    guard !Task.isCancelled, isRequestCurrent() else {
+                        group.cancelAll()
+                        return
+                    }
 
-                let batchSegments = zip(batch, translatedTexts).map {
-                    BilingualSegment(
-                        id: $0.id,
-                        original: $0.original,
-                        translation: $1,
-                        providerID: execution.providerID,
-                        modelID: configuration.model,
-                        configurationFingerprint: fingerprint
+                    let batchSegments = zip(batch, translatedTexts).flatMap { paragraph, translation in
+                        (paragraphsBySource[paragraph.original] ?? [paragraph]).map {
+                            BilingualSegment(
+                                id: $0.id,
+                                original: $0.original,
+                                translation: translation,
+                                providerID: execution.providerID,
+                                modelID: batchConfiguration.model,
+                                configurationFingerprint: fingerprint
+                            )
+                        }
+                    }
+                    cacheTranslations(
+                        batchSegments,
+                        configuration: configuration,
+                        executionContext: execution
                     )
-                }
-                cacheTranslations(
-                    batchSegments,
-                    configuration: configuration,
-                    executionContext: execution
-                )
 
-                // 触发 onDelta
-                if let onDelta {
+                    // 触发 onDelta
+                    if let onDelta {
+                        for seg in batchSegments {
+                            await onDelta(seg.id, seg.translation)
+                            guard isRequestCurrent(), !Task.isCancelled else { group.cancelAll(); return }
+                        }
+                    }
+
+                    guard isRequestCurrent(), !Task.isCancelled else { group.cancelAll(); return }
+
+                    // 合并入当前 artifact
+                    var current = (try? localProvider.fetchBilingualArtifact(
+                        entryID: entry.id,
+                        contentHash: hash,
+                        targetLanguage: configuration.targetLanguage
+                    )) ?? artifact
                     for seg in batchSegments {
-                        await onDelta(seg.id, seg.translation)
-                        guard isRequestCurrent(), !Task.isCancelled else { return }
+                        if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
+                            current.segments[idx] = seg
+                        } else {
+                            current.segments.append(seg)
+                        }
                     }
+                    current.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
+                    current.content = current.segments.map(\.translation).joined(separator: "\n\n")
+                    current.updatedAt = .now
+                    let allExpectedIDs = Set(paragraphs.map(\.id))
+                    current.isComplete = Set(current.segments.map(\.id)).isSuperset(of: allExpectedIDs)
+                    try? localProvider.saveArtifact(current)
+                    artifact = current
+                    enqueueNextBatch()
                 }
-
-                guard isRequestCurrent(), !Task.isCancelled else { return }
-
-                // 合并入当前 artifact
-                var current = (try? localProvider.fetchBilingualArtifact(
-                    entryID: entry.id,
-                    contentHash: hash,
-                    targetLanguage: configuration.targetLanguage
-                )) ?? artifact
-                for seg in batchSegments {
-                    if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
-                        current.segments[idx] = seg
-                    } else {
-                        current.segments.append(seg)
-                    }
-                }
-                current.segments.sort { paragraphOrder[$0.id, default: .max] < paragraphOrder[$1.id, default: .max] }
-                current.content = current.segments.map(\.translation).joined(separator: "\n\n")
-                current.updatedAt = .now
-                let allExpectedIDs = Set(paragraphs.map(\.id))
-                current.isComplete = Set(current.segments.map(\.id)).isSuperset(of: allExpectedIDs)
-                try? localProvider.saveArtifact(current)
-                artifact = current
             }
         } catch {
             if !Task.isCancelled, isRequestCurrent() {
@@ -2715,6 +2742,12 @@ public final class AppStore: ObservableObject {
     public func setArticleFontSize(_ size: Int) {
         var updated = readerAppearance
         updated.setFontSize(size)
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func setReaderLineHeight(_ value: Double) {
+        var updated = readerAppearance
+        updated.setLineHeight(value)
         saveReaderAppearanceIfNeeded(updated)
     }
 

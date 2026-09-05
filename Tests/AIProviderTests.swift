@@ -207,7 +207,142 @@ private final class AIActionCaptureURLProtocol: URLProtocol, @unchecked Sendable
     override func stopLoading() {}
 }
 
+private actor ParallelTranslationPort: AIModelPort {
+    private var inputs: [[String]] = []
+    private var released = Set<Int>()
+    private var cancelledCount = 0
+
+    func data(for request: URLRequest) async throws -> AIModelHTTPResponse {
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        let messages = body["messages"] as! [[String: String]]
+        let prompt = messages.last!["content"]!
+        let source = prompt.components(separatedBy: "\n\n").last!
+        let batch = try? JSONDecoder().decode([String].self, from: Data(source.utf8))
+        let paragraphs = batch ?? [prompt]
+        let index = inputs.count
+        inputs.append(paragraphs)
+        defer { if Task.isCancelled { cancelledCount += 1 } }
+        while !released.contains(index) { try await Task.sleep(for: .milliseconds(2)) }
+        let translations = paragraphs.map { "译：" + $0 }
+        let output = batch == nil ? translations[0] : String(decoding: try JSONEncoder().encode(translations), as: UTF8.self)
+        let data = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": output]]]])
+        return AIModelHTTPResponse(statusCode: 200, data: data)
+    }
+    func events(for request: URLRequest) async throws -> AIModelEventResponse { throw LLMServiceError.invalidResponse }
+    func snapshot() -> [[String]] { inputs }
+    func release(_ index: Int) { released.insert(index) }
+    func cancellations() -> Int { cancelledCount }
+}
+
+private actor TranslationDeltaRecorder {
+    private var ids: [String] = []
+    func append(_ id: String) { ids.append(id) }
+    func snapshot() -> [String] { ids }
+}
+
 final class AIProviderTests: XCTestCase {
+    @MainActor
+    func testCancellingBilingualCancelsBothBatchesBeforeSendingMore() async throws {
+        let port = ParallelTranslationPort()
+        let store = AppStore(testDatabase: .empty,
+            feedFetcher: { _ in FeedFetchResult.notModified(etag: nil, lastModified: nil) }, aiModelPort: port)
+        let provider = AIProviderProfile.custom(name: "Cancel fixture", description: "", baseURL: "https://cancel.example.test/v1", modelID: "fixture")
+        store.addAIProvider(provider, apiKey: "")
+        store.setActiveAIProvider(id: provider.id)
+        defer { LocalAPIKeyStore.saveAPIKey("", for: provider.id) }
+        let paragraphs = (0..<4).map { ReaderParagraph(id: "p\($0)", original: "Source \($0) " + String(repeating: "text ", count: 145)) }
+        let entry = Entry(id: "cancel-entry", feedID: UUID(), title: "Cancel", url: nil, publishedAt: .now, summary: "")
+        let text = paragraphs.map(\.original).joined(separator: "\n\n")
+        let task = Task { @MainActor in
+            await store.translateBilingualParagraphs(entry: entry, text: text, paragraphs: paragraphs, paragraphIDs: paragraphs.map(\.id))
+        }
+        for _ in 0..<500 {
+            if await port.snapshot().count == 2 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        task.cancel()
+        await task.value
+        let requests = await port.snapshot()
+        let cancellations = await port.cancellations()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(cancellations, 2)
+        XCTAssertNil(store.bilingualArtifact(for: entry, text: text))
+    }
+
+    func testReasoningOffIsOnlyAdvertisedWhenTheAdapterCanSendIt() throws {
+        XCTAssertTrue(LLMConfiguration.deepSeek.supportsDisablingReasoning)
+        var gemini = AISettings.default.providers.first { $0.kind == .gemini }!.runtimeConfiguration(features: .default)
+        XCTAssertFalse(gemini.supportsDisablingReasoning)
+        gemini.model = "models/gemini-2.5-flash"
+        XCTAssertTrue(gemini.supportsDisablingReasoning)
+        gemini.model = "gemini-2.5-pro"
+        XCTAssertFalse(gemini.supportsDisablingReasoning)
+        XCTAssertFalse(LLMConfiguration.default.supportsDisablingReasoning)
+
+        var settings = AISettings.default
+        let geminiReference = AIModelReference(providerID: AIProviderID.gemini, modelID: "gemini-3.8-flash")
+        settings = settings.updatingFeature(.bilingualTranslation, configuration: AIFeatureConfiguration(
+            isEnabled: true, model: geminiReference, reasoningMode: "关闭"
+        ))
+        XCTAssertEqual(settings.configuration(for: .bilingualTranslation)?.reasoningMode, "自动")
+        XCTAssertEqual(settings.resolvedConfiguration(for: .bilingualTranslation)?.reasoningMode, "自动")
+    }
+
+    @MainActor
+    func testBilingualBatchesRunTwoAtATimeDeduplicateAndPersistInDocumentOrder() async throws {
+        let port = ParallelTranslationPort()
+        let store = AppStore(testDatabase: .empty,
+            feedFetcher: { _ in FeedFetchResult.notModified(etag: nil, lastModified: nil) }, aiModelPort: port)
+        let provider = AIProviderProfile.custom(name: "Parallel fixture", description: "", baseURL: "https://parallel.example.test/v1", modelID: "fixture")
+        store.addAIProvider(provider, apiKey: "")
+        store.setActiveAIProvider(id: provider.id)
+        defer { LocalAPIKeyStore.saveAPIKey("", for: provider.id) }
+        let originals = (0..<4).map { "Source \($0) " + String(repeating: "text ", count: 145) + "end" }
+        let paragraphs = (originals + [originals[0], originals[1]]).enumerated().map {
+            ReaderParagraph(id: "p\($0.offset)", original: $0.element)
+        }
+        let entry = Entry(id: "parallel-entry", feedID: UUID(), title: "Parallel", url: nil, publishedAt: .now, summary: "")
+        let text = paragraphs.map(\.original).joined(separator: "\n\n")
+        let deltas = TranslationDeltaRecorder()
+        let task = Task { @MainActor in
+            await store.translateBilingualParagraphs(entry: entry, text: text, paragraphs: paragraphs,
+                paragraphIDs: paragraphs.map(\.id), onDelta: { id, _ in await deltas.append(id) })
+        }
+        for _ in 0..<500 {
+            if await port.snapshot().count == 2 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let firstRequests = await port.snapshot()
+        guard firstRequests.count == 2 else {
+            task.cancel()
+            await task.value
+            XCTFail("应同时启动两个翻译批次")
+            return
+        }
+        // 第二个批次先返回时即可显示，不必等待前一个慢批次。
+        await port.release(1)
+        for _ in 0..<500 {
+            if await port.snapshot().count == 3 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let firstVisible = await deltas.snapshot()
+        XCTAssertFalse(firstVisible.isEmpty)
+        let firstSource = firstRequests[1].first!
+        XCTAssertEqual(Set(firstVisible), Set(paragraphs.filter { $0.original == firstSource }.map(\.id)))
+        for index in 0..<4 { await port.release(index) }
+        await task.value
+        let requests = await port.snapshot()
+        XCTAssertEqual(requests.count, 4)
+        XCTAssertEqual(Set(requests.flatMap { $0 }), Set(originals))
+        let artifact = try XCTUnwrap(store.bilingualArtifact(for: entry, text: text))
+        XCTAssertEqual(artifact.segments.map(\.id), paragraphs.map(\.id))
+        XCTAssertEqual(artifact.segments.map(\.translation), paragraphs.map { "译：" + $0.original })
+        XCTAssertTrue(artifact.isComplete)
+        await store.translateBilingualParagraphs(entry: entry, text: text, paragraphs: paragraphs, paragraphIDs: paragraphs.map(\.id))
+        let afterCache = await port.snapshot()
+        XCTAssertEqual(afterCache.count, 4)
+    }
+
     @MainActor
     func testCurrentSummaryIsLatestCompleteArtifactAndDoesNotDependOnFeatureModel() throws {
         let store = AppStore(testDatabase: .empty, feedFetcher: { _ in
@@ -316,7 +451,7 @@ final class AIProviderTests: XCTestCase {
             let configuration = try XCTUnwrap(settings.configuration(for: kind))
             XCTAssertTrue(configuration.isEnabled)
             XCTAssertEqual(configuration.model, expected)
-            XCTAssertEqual(configuration.reasoningMode, "自动")
+            XCTAssertEqual(configuration.reasoningMode, kind == .bilingualTranslation || kind == .selectionTranslation ? "关闭" : "自动")
         }
         XCTAssertFalse(settings.features.automaticallyGenerateSummary)
     }

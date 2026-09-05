@@ -56,7 +56,7 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 - [`Models.swift`](../../PaperRss/Sources/Core/Models.swift)：可持久化领域模型和向后兼容解码。
 - [`AIProviderModels.swift`](../../PaperRss/Sources/Core/AIProviderModels.swift)：多供应商连接、启用状态、手动确认的模型目录、五类功能路由、功能级思考深度与旧配置迁移。
-- [`ArticleAIWorkspace.swift`](../../PaperRss/Sources/Core/ArticleAIWorkspace.swift)：应用级 AI 作业身份、六槽 FIFO 后台队列、文档代次取消和文章投影。
+- [`ArticleAIWorkspace.swift`](../../PaperRss/Sources/Core/ArticleAIWorkspace.swift)：应用级 AI 作业身份、独立的摘要与双语翻译并发额度、当前文章翻译优先、文档代次取消和文章投影。
 - [`AppStore.swift`](../../PaperRss/Sources/Core/AppStore.swift)：`@MainActor ObservableObject`，拥有数据库、派生索引、刷新、阅读状态、正文缓存和同步编排，并向 AI Workspace 转发功能请求。
 - [`FeedService.swift`](../../PaperRss/Sources/Core/FeedService.swift) 与 [`FeedParser.swift`](../../PaperRss/Sources/Core/FeedParser.swift)：条件请求和 RSS、Atom、RDF、JSON Feed 解析。
 - [`ArticleExtractor.swift`](../../PaperRss/Sources/Core/ArticleExtractor.swift)：正文提取、HTML 白名单清洗、图片 URL 归一化和段落稳定标识。
@@ -148,7 +148,7 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 
 ### 5.4 AI 管线
 
-`AppStore` 按功能解析 Provider 与模型，入队时冻结不可变运行时快照；`ArticleAIWorkspace` 让摘要和已请求双语批次共享六个 FIFO 后台槽，划词走独立文档代次通道。`LLMService` 将 Base URL 归一化到 `/chat/completions`：
+`AppStore` 按功能解析 Provider 与模型，开始执行时冻结不可变运行时快照；`ArticleAIWorkspace` 为摘要保留六个 FIFO 槽，双语翻译使用独立的三个文章任务槽，等待的翻译优先服务当前文章，划词走独立文档代次通道。每篇文章最多并行两个翻译批次（每批最多四段或约 1200 字符，单个超长段落独立成批），先完成的先显示，落盘时按原文顺序合并。相同原文在一次段落请求中只发送一次，已完成结果继续复用文章缓存和翻译记忆。已发起的旧文章翻译继续完成，后续轮次归还额度并重新排队；关闭双语时取消该文章的排队与执行中任务。`LLMService` 将 Base URL 归一化到 `/chat/completions`：
 
 - 摘要支持 SSE 增量输出；若服务接受 `stream: true` 却返回普通 JSON，会只针对空流结果回退到非流式请求。
 - 划词解释与提问组合所选文本、附近段落和文章上下文；同一内容、模型、语言和 Prompt 版本命中本地 `AIArtifact` 时直接复用。

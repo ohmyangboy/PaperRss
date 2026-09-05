@@ -21,6 +21,72 @@ private actor WorkspaceGate {
 
 final class ArticleAIWorkspaceTests: XCTestCase {
     @MainActor
+    func testTranslationLimitPrioritizesCurrentArticleWithoutBlockingSummary() async throws {
+        let workspace = ArticleAIWorkspace(maximumTranslationConcurrency: 1)
+        let gate = WorkspaceGate()
+        for id in 0..<3 {
+            let generation = workspace.attach(ReaderAIDocument(entryID: "translation-\(id)", text: ""))
+            try workspace.submit(.bilingual(paragraphIDs: ["p0"]), in: generation) { _ in
+                await gate.enter(id)
+            }
+        }
+        for _ in 0..<100 where await gate.snapshot().isEmpty { await Task.yield() }
+        let initial = await gate.snapshot()
+        XCTAssertEqual(initial, [0])
+        let current = workspace.attach(ReaderAIDocument(entryID: "translation-2", text: ""))
+        var summaryStarted = false
+        try workspace.submit(.summary(force: false), in: current) { _ in summaryStarted = true }
+        await eventually { summaryStarted }
+
+        await gate.release(0)
+        for _ in 0..<100 where !(await gate.snapshot().contains(2)) { await Task.yield() }
+        let prioritized = await gate.snapshot()
+        XCTAssertEqual(prioritized, [0, 2])
+        await gate.release(2)
+        for _ in 0..<100 where !(await gate.snapshot().contains(1)) { await Task.yield() }
+        let finished = await gate.snapshot()
+        XCTAssertEqual(finished, [0, 1, 2])
+        await gate.release(1)
+    }
+
+    @MainActor
+    func testCancellingQueuedTranslationDoesNotSendItLater() async throws {
+        let workspace = ArticleAIWorkspace(maximumTranslationConcurrency: 1)
+        let gate = WorkspaceGate()
+        let first = workspace.attach(ReaderAIDocument(entryID: "first", text: ""))
+        try workspace.submit(.bilingual(paragraphIDs: ["p0"]), in: first) { _ in await gate.enter(0) }
+        for _ in 0..<100 where await gate.snapshot().isEmpty { await Task.yield() }
+        let second = workspace.attach(ReaderAIDocument(entryID: "second", text: ""))
+        var cancelledRequestStarted = false
+        try workspace.submit(.bilingual(paragraphIDs: ["p0"]), in: second) { _ in cancelledRequestStarted = true }
+        workspace.cancel(.background(entryID: "second", kind: .bilingual))
+        await gate.release(0)
+        await eventually { !workspace.isWorking(entryID: "first", kind: .bilingual) }
+        XCTAssertFalse(cancelledRequestStarted)
+        XCTAssertFalse(workspace.isWorking(entryID: "second", kind: .bilingual))
+    }
+
+    @MainActor
+    func testBilingualStartsWhileAllSummarySlotsAreOccupied() async throws {
+        let workspace = ArticleAIWorkspace()
+        let gate = WorkspaceGate()
+        for id in 0..<6 {
+            let generation = workspace.attach(ReaderAIDocument(entryID: "summary-\(id)", text: ""))
+            try workspace.submit(.summary(force: false), in: generation) { _ in
+                await gate.enter(id)
+            }
+        }
+        for _ in 0..<100 where await gate.snapshot().count < 6 { await Task.yield() }
+        let foreground = workspace.attach(ReaderAIDocument(entryID: "translation", text: ""))
+        var started = false
+        try workspace.submit(.bilingual(paragraphIDs: ["p0"]), in: foreground) { _ in
+            started = true
+        }
+        await eventually { started }
+        for id in 0..<6 { await gate.release(id) }
+    }
+
+    @MainActor
     func testLateSummaryEventsRemainOwnedByTheOriginalArticle() async throws {
         let workspace = ArticleAIWorkspace()
         let articleA = workspace.attach(ReaderAIDocument(entryID: "article-a", text: "A"))
@@ -100,7 +166,7 @@ final class ArticleAIWorkspaceTests: XCTestCase {
 
     @MainActor
     func testSelectionChannelIsNotBlockedBySixBackgroundJobs() async throws {
-        let workspace = ArticleAIWorkspace(maximumBackgroundConcurrency: 6)
+        let workspace = ArticleAIWorkspace(maximumBackgroundConcurrency: 6, maximumTranslationConcurrency: 6)
         let gate = WorkspaceGate()
         for id in 0..<6 {
             let generation = workspace.attach(ReaderAIDocument(entryID: "background-\(id)", text: "\(id)"))

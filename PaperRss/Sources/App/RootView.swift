@@ -47,6 +47,8 @@ struct RootView: View {
     @ObservedObject var navigation: AppNavigationModel
     #if os(macOS)
     @ObservedObject var updateCoordinator: UpdateCoordinator
+    @ObservedObject var attention: MacSystemAttentionController
+    @ObservedObject var settingsEditor: AISettingsEditingSession
     #endif
     @State private var selection: SidebarSelection? = .today
     // Keep selection independent from the value-semantic Entry model. Reading an
@@ -75,7 +77,7 @@ struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        mainContent
+        windowContent
             .preferredColorScheme(store.appTheme.colorScheme)
             .environmentObject(store.iconStore)
             .task {
@@ -151,6 +153,34 @@ struct RootView: View {
             }
     }
 
+    @ViewBuilder
+    private var windowContent: some View {
+        #if os(macOS)
+        ZStack {
+            mainContent
+                .opacity(showsSettings ? 0 : 1)
+                .allowsHitTesting(!showsSettings)
+                .accessibilityHidden(showsSettings)
+            SettingsView(store: store, attention: attention, updateCoordinator: updateCoordinator,
+                         editor: settingsEditor, isActive: showsSettings, onReturn: { showsSettings = false })
+                .opacity(showsSettings ? 1 : 0)
+                .allowsHitTesting(showsSettings)
+                .accessibilityHidden(!showsSettings)
+        }
+        .focusedSceneValue(\.openPaperSettings, { showsSettings = true })
+        .background(SettingsWindowRoute(open: { showsSettings = true }))
+        .focusedSceneValue(\.paperReaderActive, !showsSettings)
+        .onAppear {
+            if navigation.opensSettingsOnNextWindow {
+                navigation.opensSettingsOnNextWindow = false
+                showsSettings = true
+            }
+        }
+        #else
+        mainContent
+        #endif
+    }
+
     // MARK: - 平台分支主内容
 
     @ViewBuilder
@@ -158,6 +188,7 @@ struct RootView: View {
         #if os(macOS)
         // macOS: 使用 AppKit NSSplitViewController + NSToolbar（NetNewsWire 方案）
         ThreeColumnSplitView(
+            isReaderActive: !showsSettings,
             sidebar: SidebarView(
                 store: store,
                 appearanceMode: appearanceMode,
@@ -461,7 +492,7 @@ struct RootView: View {
 
             let nextID = nextItem.id
             self.selectedEntryID = nextID
-            if currentTimelineScope == .unread {
+            if currentTimelineScope == .unread || effectiveUnreadOnly {
                 self.retainedEntryListIDs.insert(nextID)
             } else {
                 self.retainedEntryListIDs.removeAll()
@@ -525,7 +556,7 @@ struct RootView: View {
         guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
         let nextID = adjacentItem.id
         self.selectedEntryID = nextID
-        if currentTimelineScope == .unread {
+        if currentTimelineScope == .unread || effectiveUnreadOnly {
             self.retainedEntryListIDs.insert(nextID)
         } else {
             self.retainedEntryListIDs.removeAll()
@@ -790,7 +821,6 @@ private struct SidebarView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     #if os(macOS)
-    @Environment(\.openSettings) private var openSettings
     #endif
 
     private var collapsedAccounts: Set<String> {
@@ -1405,11 +1435,7 @@ private struct SidebarView: View {
     }
 
     private func showSettings() {
-        #if os(macOS)
-        openSettings()
-        #else
         showsSettings = true
-        #endif
     }
 
     private func copyToClipboard(_ text: String) {

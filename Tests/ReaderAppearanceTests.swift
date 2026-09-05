@@ -3,6 +3,20 @@ import XCTest
 @testable import PaperRssCore
 
 final class ReaderAppearanceTests: XCTestCase {
+    func testLineHeightDefaultsPersistenceAndBounds() throws {
+        let legacy = Data(#"{"preset":"paper","fontSize":20}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(ReaderAppearance.self, from: legacy).lineHeight, 1.72)
+        var appearance = ReaderAppearance(lineHeight: 2)
+        XCTAssertEqual(appearance.normalized.lineHeight, 2)
+        XCTAssertEqual(try JSONDecoder().decode(ReaderAppearance.self, from: JSONEncoder().encode(appearance)), appearance)
+        appearance.setLineHeight(9)
+        XCTAssertEqual(appearance.lineHeight, 2.4)
+        appearance.setLineHeight(0)
+        XCTAssertEqual(appearance.lineHeight, 1.2)
+        appearance.setLineHeight(.nan)
+        XCTAssertEqual(appearance.lineHeight, ReaderAppearance.defaultLineHeight)
+    }
+
     func testBuiltInPresetsExposeStableReaderPalettes() {
         XCTAssertEqual(ReaderThemePreset.allCases, [.paper, .white, .geek])
 
@@ -221,7 +235,10 @@ final class ReaderAppearanceTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(settings.contains("static let sidebarWidth: CGFloat = 224"))
+        XCTAssertTrue(settings.contains("static let sidebarWidth: CGFloat = 240"))
+        XCTAssertFalse(settings.contains("private var sidebarHeader: some View"))
+        XCTAssertTrue(settings.contains("静夜思 · 李白"))
+        XCTAssertTrue(settings.contains("赞赏与反馈"))
         XCTAssertTrue(settings.contains("static let cardCornerRadius: CGFloat = 14"))
         XCTAssertTrue(settings.contains("static let rowMinimumHeight: CGFloat = 52"))
         XCTAssertTrue(settings.contains(".background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius"))
@@ -233,7 +250,7 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(settings.contains("private func aiFeatureSection<Content: View>("))
         XCTAssertTrue(settings.contains("LazyVGrid(columns: aiFeatureColumns"))
         XCTAssertFalse(settings.contains(".frame(maxWidth: .infinity, minHeight: 176"))
-        XCTAssertTrue(settings.contains("private var providerMasterDetail: some View"))
+        XCTAssertTrue(settings.contains("private var providerPickerAndEditor: some View"))
         XCTAssertTrue(settings.contains("private func providerSidebarRow(_ provider: AIProviderProfile)"))
         XCTAssertTrue(settings.contains(".frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)"))
         XCTAssertTrue(settings.contains(".contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))"))
@@ -259,7 +276,8 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(settings.contains("private var appThemePicker: some View"))
         XCTAssertTrue(settings.contains("background(isSelected ? settingsAccentColor : Color.clear, in: Capsule())"))
         XCTAssertTrue(settings.contains("private var updateChannelPicker: some View"))
-        XCTAssertTrue(settings.contains("synchronizeSettingsWindowAppearance"))
+        XCTAssertFalse(settings.contains("synchronizeSettingsWindowAppearance"))
+        XCTAssertTrue(settings.contains("settings.return"))
         XCTAssertTrue(settings.contains("private struct SettingsInfoButton: View"))
         XCTAssertFalse(settings.contains("Tokyo Night"))
         XCTAssertFalse(settings.contains("contentHeader"))

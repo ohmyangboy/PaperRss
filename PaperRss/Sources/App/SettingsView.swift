@@ -14,10 +14,10 @@ import PaperRssUpdateSupport
 #endif
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
     case appearance
     case accounts
     case aiService
-    case refresh
     case about
 
     var id: Self { self }
@@ -25,20 +25,20 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     @MainActor
     var title: String {
         switch self {
+        case .general: I18N.shared.localized("常规", "General")
         case .appearance: I18N.shared.localized("外观", "Appearance")
         case .accounts: I18N.shared.localized("账号", "Accounts")
         case .aiService: I18N.shared.localized("AI 功能", "AI Features")
-        case .refresh: I18N.shared.localized("刷新", "Refresh")
         case .about: I18N.shared.localized("关于", "About")
         }
     }
 
     var icon: String {
         switch self {
+        case .general: "gearshape"
         case .appearance: "paintpalette"
         case .accounts: "person.crop.circle"
         case .aiService: "sparkles"
-        case .refresh: "arrow.clockwise.circle"
         case .about: "info.circle"
         }
     }
@@ -46,7 +46,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 private enum SettingsMetrics {
-    static let sidebarWidth: CGFloat = 224
+    static let sidebarWidth: CGFloat = 240
     static let contentMaxWidth: CGFloat = 980
     static let contentHorizontalPadding: CGFloat = 34
     static let contentTopPadding: CGFloat = 26
@@ -145,29 +145,60 @@ struct SettingsView: View {
     @ObservedObject var attention: MacSystemAttentionController
     @ObservedObject var updateCoordinator: UpdateCoordinator
     #endif
-    @State private var selectedSection: SettingsSection = SettingsSection.allCases.first ?? .appearance
-    @State private var configuration = LLMConfiguration.default
-    @State private var apiKey = ""
+    @State private var selectedSection: SettingsSection = SettingsSection.allCases.first ?? .general
+    @ObservedObject var editor = AISettingsEditingSession()
+    var isActive = true
+    var onReturn: (() -> Void)?
+    @FocusState private var isProviderNameFocused: Bool
+    @State private var showsCompactProviderDetail = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var accessibilityContrast
+
+    private var configuration: LLMConfiguration {
+        get { selectedAIProvider?.runtimeConfiguration(features: store.aiSettings.features) ?? .default }
+        nonmutating set {
+            editor.edit(selectedProviderID) { draft in
+                draft.provider = draft.provider.replacing(
+                    name: draft.provider.isBuiltIn ? draft.provider.name : newValue.providerName,
+                    description: draft.provider.isBuiltIn ? draft.provider.description : newValue.providerDescription,
+                    baseURL: draft.provider.isBuiltIn ? draft.provider.baseURL : newValue.baseURL,
+                    selectedModelID: newValue.model,
+                    reasoningMode: newValue.reasoningMode,
+                    temperature: newValue.temperature,
+                    allowInsecureLocalEndpoint: !draft.provider.isBuiltIn && newValue.allowInsecureLocalEndpoint
+                )
+            }
+        }
+    }
+    private var configurationBinding: Binding<LLMConfiguration> {
+        Binding(get: { configuration }, set: { configuration = $0 })
+    }
+    private var apiKey: String {
+        get { editor.drafts[selectedProviderID]?.apiKey ?? "" }
+        nonmutating set { editor.edit(selectedProviderID) { $0.apiKey = newValue } }
+    }
+    private var apiKeyBinding: Binding<String> {
+        Binding(get: { apiKey }, set: { apiKey = $0 })
+    }
+    private var draftProviderEnabled: Bool {
+        get { selectedAIProvider?.isEnabled ?? true }
+        nonmutating set { editor.edit(selectedProviderID) { $0.provider.isEnabled = newValue } }
+    }
+    private var draftModels: [AIModelOption] {
+        get { selectedAIProvider?.models ?? [] }
+        nonmutating set { editor.edit(selectedProviderID) { $0.provider.models = newValue } }
+    }
+    private var draftRevision: Int { editor.drafts[selectedProviderID]?.revision ?? 0 }
     @State private var showsAPIKey = false
     @State private var selectedProviderID = AIProviderID.deepSeek
-    @State private var draftProviderEnabled = true
     @State private var selectedAISettingsPane: AISettingsPane = .features
     @State private var providerSearchText = ""
-    @State private var isAddingProvider = false
-    @State private var newProviderName = ""
-    @State private var newProviderDescription = ""
-    @State private var newProviderBaseURL = ""
-    @State private var newProviderModel = ""
-    @State private var newProviderAPIKey = ""
     @State private var manualModelID = ""
-    @State private var draftModels: [AIModelOption] = []
     @State private var isShowingAddModelsSheet = false
     @State private var fetchedModelCandidates: [AIModelOption] = []
     @State private var selectedCandidateModelIDs = Set<String>()
     @State private var modelCandidateSearchText = ""
-    @State private var draftRevision = 0
-    @State private var pendingProviderSelectionID: String?
-    @State private var isShowingUnsavedProviderDialog = false
     @State private var providerPendingDeletion: AIProviderProfile?
     @State private var providerModelPendingDeletion: AIModelOption?
     @State private var isShowingDeleteProviderAlert = false
@@ -208,47 +239,23 @@ struct SettingsView: View {
             iOSBody
             #endif
         }
-        #if os(macOS)
-        .onAppear(perform: synchronizeSettingsWindowAppearance)
-        .onChange(of: store.appTheme) { _, _ in
-            synchronizeSettingsWindowAppearance()
-        }
-        #else
         .preferredColorScheme(store.appTheme.colorScheme)
-        #endif
         .tint(settingsAccentColor)
         .accentColor(settingsAccentColor)
         .toggleStyle(.switch)
         .environment(\.paperAppearancePalette, settingsAppearancePalette)
-        .onChange(of: configuration) {
-            draftRevision += 1
-            modelFetchRequestID = UUID()
-            testRequestID = UUID()
+        .onChange(of: draftRevision) { _, _ in
+            modelFetchRequestID = nil
+            testRequestID = nil
+            isFetchingModels = false
+            isTesting = false
             status = ""
         }
-        .onChange(of: apiKey) {
-            draftRevision += 1
-            modelFetchRequestID = UUID()
-            testRequestID = UUID()
-            status = ""
+        .onChange(of: isActive) { _, active in
+            if !active { cancelProviderOperations() }
         }
-        .confirmationDialog(
-            I18N.shared.localized("当前供应商有未保存修改", "This provider has unsaved changes"),
-            isPresented: $isShowingUnsavedProviderDialog,
-            titleVisibility: .visible
-        ) {
-            Button(I18N.shared.localized("保存并切换", "Save and switch")) {
-                if saveSelectedProvider(updateStatus: false) {
-                    completePendingProviderSelection()
-                }
-            }
-            Button(I18N.shared.localized("丢弃并切换", "Discard and switch"), role: .destructive) {
-                completePendingProviderSelection()
-            }
-            Button(I18N.shared.localized("取消", "Cancel"), role: .cancel) {
-                pendingProviderSelectionID = nil
-            }
-        }
+        .onChange(of: selectedSection) { _, _ in cancelProviderOperations() }
+        .onChange(of: selectedAISettingsPane) { _, _ in cancelProviderOperations() }
         .alert(
             I18N.shared.localized("删除 AI 供应商？", "Delete AI provider?"),
             isPresented: $isShowingDeleteProviderAlert,
@@ -256,6 +263,7 @@ struct SettingsView: View {
         ) { provider in
             Button(I18N.shared.localized("删除", "Delete"), role: .destructive) {
                 if store.deleteAIProvider(id: provider.id) {
+                    editor.discard(provider.id)
                     loadProvider(store.aiSettings.providers.first?.id ?? AIProviderID.deepSeek)
                     status = I18N.shared.localized("已删除供应商", "Provider deleted")
                 }
@@ -297,6 +305,17 @@ struct SettingsView: View {
                 .frame(width: SettingsMetrics.sidebarWidth)
 
             VStack(spacing: 0) {
+                if selectedSection == .aiService && selectedAISettingsPane == .providers {
+                    VStack(alignment: .leading, spacing: 16) {
+                        aiSettingsHeader
+                        providerPickerAndEditor
+                    }
+                    .frame(maxWidth: SettingsMetrics.contentMaxWidth, alignment: .leading)
+                    .padding(.horizontal, SettingsMetrics.contentHorizontalPadding)
+                    .padding(.top, SettingsMetrics.contentTopPadding)
+                    .padding(.bottom, 34)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
                 ScrollView {
                     settingsPage
                         .frame(maxWidth: SettingsMetrics.contentMaxWidth, alignment: .leading)
@@ -305,6 +324,7 @@ struct SettingsView: View {
                         .padding(.bottom, 34)
                 }
                 .scrollContentBackground(.hidden)
+                }
 
                 if showsActionBar {
                     actionBar
@@ -313,7 +333,8 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(settingsWindowBackground)
-        .frame(minWidth: 1120, idealWidth: 1260, minHeight: 680, idealHeight: 780)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .font(.system(size: 15))
         .controlSize(.regular)
         .buttonBorderShape(.roundedRectangle(radius: 8))
         .onAppear(perform: loadConfiguration)
@@ -366,7 +387,17 @@ struct SettingsView: View {
 
     private var sidebarView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sidebarHeader
+            if let onReturn {
+                Button(action: onReturn) {
+                    Label(I18N.shared.localized("返回 PaperRss", "Back to PaperRss"), systemImage: "chevron.left")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings.return")
+            }
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 4) {
@@ -391,37 +422,10 @@ struct SettingsView: View {
         }
     }
 
-    private var sidebarHeader: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(settingsAccentColor.opacity(0.13))
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(settingsAccentColor)
-            }
-            .frame(width: 30, height: 30)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(I18N.shared.localized("设置", "Settings"))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(I18N.shared.localized("PaperRss"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 16)
-    }
-
     private func sidebarItem(for section: SettingsSection) -> some View {
         let isSelected = selectedSection == section
         return Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                 selectedSection = section
                 status = ""
             }
@@ -432,19 +436,19 @@ struct SettingsView: View {
                     .frame(width: 3, height: 18)
 
                 Image(systemName: section.icon)
-                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
                     .frame(width: 20, alignment: .center)
                     .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
                 Text(section.title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.85))
 
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(minHeight: 38)
+            .frame(minHeight: 44)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(
@@ -470,9 +474,6 @@ struct SettingsView: View {
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Image(systemName: "doc.richtext")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
                 Text(I18N.localized("PaperRss"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -487,13 +488,15 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             switch selectedSection {
             case .accounts:
+                Text(I18N.shared.localized("账号", "Accounts")).font(.system(size: 26, weight: .bold))
                 accountsSettings
             case .appearance:
+                Text(I18N.shared.localized("外观", "Appearance")).font(.system(size: 26, weight: .bold))
                 appearanceSettings
             case .aiService:
                 aiServiceSettings
-            case .refresh:
-                refreshSettings
+            case .general:
+                generalSettings
             case .about:
                 aboutSettings
             }
@@ -689,7 +692,7 @@ struct SettingsView: View {
     private var feedbackSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
             settingsGroup(
-                I18N.shared.localized("赞赏与支持")
+                I18N.shared.localized("赞赏与反馈", "Support & Feedback")
             ) {
                 if store.appLanguage.resolvedLocalization() == .en {
                     HStack(spacing: 20) {
@@ -722,7 +725,7 @@ struct SettingsView: View {
                         Image("SponsorQR", bundle: nil)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(width: 150, height: 150)
+                            .frame(width: 112, height: 112)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
                             .overlay(
@@ -753,11 +756,8 @@ struct SettingsView: View {
                     .padding(.vertical, 14)
                     }
                 }
-            }
+                Divider().padding(.horizontal, 18).opacity(0.18)
 
-            settingsGroup(
-                I18N.shared.localized("问题反馈与建议", "Feedback & Issues")
-            ) {
                 settingsRow(
                     I18N.shared.localized("提交 GitHub Issue", "Submit GitHub Issue")
                 ) {
@@ -797,11 +797,21 @@ struct SettingsView: View {
 
     private var appearanceSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            AppearanceThreeColumnPreview(
-                appearance: store.readerAppearance,
-                mode: readerAppearanceMode,
-                bodyFont: readerPreviewFont
-            )
+            ViewThatFits(in: .horizontal) {
+                GeometryReader { geometry in
+                    let availableWidth = geometry.size.width - 16
+                    HStack(alignment: .top, spacing: 16) {
+                        appearancePreview.frame(width: availableWidth * 0.75)
+                        typographyPanel.frame(width: availableWidth * 0.25)
+                    }
+                }
+                .frame(minWidth: 736)
+                .frame(height: 300)
+                VStack(alignment: .leading, spacing: 16) {
+                    appearancePreview
+                    typographyPanel
+                }
+            }
 
             settingsGroup(
                 I18N.shared.localized("主题", "Theme")
@@ -864,54 +874,82 @@ struct SettingsView: View {
                 }
             }
 
-            settingsGroup(
-                I18N.shared.localized("排版", "Typography")
-            ) {
-                settingsRow(
-                    I18N.shared.localized("正文字体", "Body Font")
-                ) {
-                    readerFontPicker
+            HStack {
+                Spacer()
+                Button(I18N.shared.localized("重置", "Reset")) {
+                    store.resetReaderAppearanceToDefault()
                 }
-
-                Divider().padding(.horizontal, 18).opacity(0.18)
-
-                settingsRow(
-                    I18N.shared.localized("正文字号", "Body Size")
-                ) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "textformat.size.smaller")
-                            .foregroundStyle(.secondary)
-                        Slider(
-                            value: Binding(
-                                get: { Double(store.articleFontSize) },
-                                set: { store.setArticleFontSize(Int($0)) }
-                            ),
-                            in: 13...25,
-                            step: 1
-                        )
-                        .frame(width: 200)
-                        Image(systemName: "textformat.size.larger")
-                            .foregroundStyle(.secondary)
-
-                        Text("\(store.articleFontSize) pt")
-                            .font(.body.monospacedDigit().bold())
-                            .frame(width: 48, alignment: .trailing)
-                    }
-                }
+                .disabled(store.readerAppearance == .default)
+                .help(I18N.shared.localized("恢复 Paper、系统字体、17pt 与默认行间距", "Restore Paper, system font, 17pt, and default line spacing"))
+                Spacer()
             }
 
-            settingsGroup(I18N.shared.localized("重置内容外观", "Reset Content Appearance")) {
-                settingsRow(
-                    I18N.shared.localized("恢复 Paper、系统字体与 17pt", "Restore Paper, system font, and 17pt")
-                ) {
-                    Button(I18N.shared.localized("恢复默认内容外观", "Restore Content Defaults")) {
-                        store.resetReaderAppearanceToDefault()
-                    }
-                    .disabled(store.readerAppearance == .default)
-                }
-            }
+        }
+    }
 
-            languageSettings
+    private var appearancePreview: some View {
+        AppearanceThreeColumnPreview(
+            appearance: store.readerAppearance,
+            mode: readerAppearanceMode,
+            bodyFont: readerPreviewFont
+        )
+    }
+
+    private var typographyPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(I18N.shared.localized("排版", "Typography"))
+                .font(.system(size: 17, weight: .semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(I18N.shared.localized("正文字体", "Body Font"))
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                readerFontPicker
+            }
+            Divider().opacity(0.3)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(I18N.shared.localized("正文字号", "Body Size"))
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(store.articleFontSize) pt")
+                        .monospacedDigit()
+                        .fontWeight(.semibold)
+                }
+                Slider(
+                    value: Binding(
+                        get: { Double(store.articleFontSize) },
+                        set: { store.setArticleFontSize(Int($0)) }
+                    ),
+                    in: 13...25,
+                    step: 1
+                )
+                .accessibilityLabel(I18N.shared.localized("正文字号", "Body Size"))
+            }
+            Divider().opacity(0.3)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(I18N.shared.localized("行间距", "Line Spacing"))
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(store.readerAppearance.lineHeight, format: .number.precision(.fractionLength(2)))
+                        .monospacedDigit()
+                }
+                Slider(
+                    value: Binding(
+                        get: { store.readerAppearance.lineHeight },
+                        set: { store.setReaderLineHeight($0) }
+                    ),
+                    in: 1.2...2.4,
+                    step: 0.05
+                )
+                .accessibilityLabel(I18N.shared.localized("行间距", "Line Spacing"))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
+        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius)
+                .stroke(Color.primary.opacity(accessibilityContrast == .increased ? 0.45 : 0.075), lineWidth: 0.8)
         }
     }
 
@@ -963,7 +1001,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
-            .frame(width: 240, height: 32)
+            .frame(maxWidth: .infinity, minHeight: 32)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.bordered)
@@ -1078,35 +1116,6 @@ struct SettingsView: View {
         Color(paperHex: settingsAppearancePalette.accentHex)
     }
 
-    #if os(macOS)
-    /// SwiftUI 的 preferredColorScheme 在 Settings 场景从显式深色切回 nil 时，
-    /// 可能保留窗口级 NSAppearance。直接同步设置窗口，确保“跟随系统”真正
-    /// 回到当前 macOS 外观，同时保留窗口动态响应系统外观变化的能力。
-    private func synchronizeSettingsWindowAppearance() {
-        let apply = {
-            guard let window = NSApplication.shared.windows.first(where: {
-                $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window"
-            }) else { return }
-
-            switch store.appTheme {
-            case .system:
-                window.appearance = nil
-                window.contentView?.appearance = nil
-            case .light:
-                let appearance = NSAppearance(named: .aqua)
-                window.appearance = appearance
-                window.contentView?.appearance = appearance
-            case .dark:
-                let appearance = NSAppearance(named: .darkAqua)
-                window.appearance = appearance
-                window.contentView?.appearance = appearance
-            }
-        }
-
-        apply()
-    }
-    #endif
-
     private var readerPreviewFont: Font {
         if let family = store.readerAppearance.fontFamilyName {
             return .custom(family, size: CGFloat(store.articleFontSize))
@@ -1209,8 +1218,10 @@ struct SettingsView: View {
         }
     }
 
-    private var aiServiceSettings: some View {
-        VStack(alignment: .leading, spacing: 20) {
+    private var aiSettingsHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AI")
+                .font(.system(size: 26, weight: .bold))
             HStack {
                 Picker(I18N.shared.localized("AI 设置页面", "AI settings page"), selection: $selectedAISettingsPane) {
                     ForEach(AISettingsPane.allCases) { pane in Text(pane.title).tag(pane) }
@@ -1221,21 +1232,14 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
 
+
+        }
+    }
+
+    private var aiServiceSettings: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            aiSettingsHeader
             if selectedAISettingsPane == .features {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(I18N.shared.localized("AI 能力", "AI Capabilities"))
-                        .font(.system(size: 27, weight: .bold))
-                    Text(I18N.shared.localized(
-                        "为摘要、翻译和划词工具选择各自的模型。",
-                        "Choose a model for summaries, translation, and selection tools."
-                    ))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.top, 2)
-
-                Divider().opacity(0.35)
-
                 aiFeatureSection(I18N.shared.localized("文章能力", "Article Features")) {
                     LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
                         featureConfigurationRow(.summary)
@@ -1287,7 +1291,7 @@ struct SettingsView: View {
                         Text(I18N.shared.localized("自定义摘要提示词", "Custom Summary Instructions"))
                             .font(.subheadline.weight(.medium))
                         TextEditor(text: featurePreferenceBinding(\.customPrompt))
-                            .font(.body)
+                            .font(.system(size: 15))
                             .frame(minHeight: 70, maxHeight: 120)
                             .padding(4)
                             .overlay(
@@ -1319,31 +1323,41 @@ struct SettingsView: View {
     }
 
     private var providerPickerAndEditor: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            providerMasterDetail
-
-            if isAddingProvider {
-                addProviderForm
-            }
-        }
-    }
-
-    private var providerMasterDetail: some View {
-        HStack(alignment: .top, spacing: 18) {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(filteredAIProviders) { provider in
-                    providerSidebarRow(provider)
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 740
+            HStack(alignment: .top, spacing: 16) {
+                if !compact || !showsCompactProviderDetail {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(I18N.shared.localized("AI 供应商", "AI Providers"))
+                                .font(.system(size: 17, weight: .semibold))
+                            Spacer()
+                            addProviderButton
+                        }
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(filteredAIProviders) { provider in providerSidebarRow(provider) }
+                            }
+                        }
+                    }
+                    .frame(width: compact ? nil : min(292, max(240, geometry.size.width * 0.30)))
+                    .frame(maxWidth: compact ? .infinity : nil)
                 }
-                addProviderButton
-            }
-            .frame(width: 292, alignment: .topLeading)
-
-            if selectedAIProvider != nil {
-                providerDetailPanel
-            } else {
-                Text(I18N.shared.localized("请选择一个供应商", "Select a provider"))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 420, alignment: .center)
+                if !compact || showsCompactProviderDetail {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if compact {
+                            Button {
+                                showsCompactProviderDetail = false
+                                cancelProviderOperations()
+                            } label: {
+                                Label(I18N.shared.localized("返回供应商列表", "Back to providers"), systemImage: "chevron.left")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        providerDetailPanel
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
     }
@@ -1457,7 +1471,7 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 6) {
                         AIProviderIcon(kind: provider.kind, size: 16)
-                        Text(localizedBuiltInProviderName(provider.name))
+                        Text(provider.name.isEmpty ? I18N.shared.localized("新供应商", "New provider") : localizedBuiltInProviderName(provider.name))
                     }
                 }
             }
@@ -1485,7 +1499,11 @@ struct SettingsView: View {
         configuration: AIFeatureConfiguration
     ) -> some View {
         Menu {
-            ForEach(["自动", "低", "中", "高"], id: \.self) { mode in
+            ForEach(
+                store.aiSettings.resolvedConfiguration(for: kind)?.supportsDisablingReasoning == true
+                    ? ["关闭", "自动", "低", "中", "高"] : ["自动", "低", "中", "高"],
+                id: \.self
+            ) { mode in
                 Button {
                     var next = configuration
                     next.reasoningMode = mode
@@ -1534,6 +1552,7 @@ struct SettingsView: View {
 
     private func localizedReasoningMode(_ mode: String) -> String {
         switch mode {
+        case "关闭": I18N.shared.localized("关闭", "Off")
         case "低": I18N.shared.localized("低", "Low")
         case "中": I18N.shared.localized("中", "Medium")
         case "高": I18N.shared.localized("高", "High")
@@ -1604,31 +1623,16 @@ struct SettingsView: View {
     }
 
     private var filteredAIProviders: [AIProviderProfile] {
-        let query = providerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return store.aiSettings.providers }
-        return store.aiSettings.providers.filter {
-            $0.name.lowercased().contains(query) || $0.description.lowercased().contains(query) || $0.baseURL.lowercased().contains(query)
-        }
+        var providers = store.aiSettings.providers.map { editor.drafts[$0.id]?.provider ?? $0 }
+        if let id = editor.newProviderID, let draft = editor.drafts[id] { providers.append(draft.provider) }
+        return providers
     }
 
     private var selectedAIProvider: AIProviderProfile? {
-        store.aiProvider(id: selectedProviderID)
+        editor.drafts[selectedProviderID]?.provider ?? store.aiProvider(id: selectedProviderID)
     }
 
-    private var draftAIProvider: AIProviderProfile? {
-        guard let stored = selectedAIProvider else { return nil }
-        return stored.replacing(
-            isEnabled: draftProviderEnabled,
-            name: stored.isBuiltIn ? stored.name : configuration.providerName,
-            description: stored.isBuiltIn ? stored.description : configuration.providerDescription,
-            baseURL: stored.isBuiltIn ? stored.baseURL : configuration.baseURL,
-            selectedModelID: configuration.model,
-            models: draftModels,
-            reasoningMode: configuration.reasoningMode,
-            temperature: configuration.temperature,
-            allowInsecureLocalEndpoint: stored.isBuiltIn ? false : configuration.allowInsecureLocalEndpoint
-        ).selectingModel(configuration.model)
-    }
+    private var draftAIProvider: AIProviderProfile? { selectedAIProvider }
 
     private func providerSidebarRow(_ provider: AIProviderProfile) -> some View {
         let isSelected = provider.id == selectedProviderID
@@ -1640,15 +1644,17 @@ struct SettingsView: View {
                     AIProviderIcon(kind: provider.kind, size: 42)
                         .opacity(isEnabled ? 1 : 0.48)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(localizedBuiltInProviderName(provider.name))
+                        Text(provider.name.isEmpty ? I18N.shared.localized("新供应商", "New provider") : localizedBuiltInProviderName(provider.name))
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.primary)
-                        Text(I18N.shared.localizedFormat("%lld 个模型", provider.models.count))
+                        Text(editor.drafts[provider.id]?.isDirty == true
+                            ? I18N.shared.localized("未保存", "Unsaved")
+                            : I18N.shared.localizedFormat("%lld 个模型", provider.models.count))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
 
-                    Spacer(minLength: 64)
+                    Spacer(minLength: 48)
 
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
@@ -1682,46 +1688,37 @@ struct SettingsView: View {
 
     private var addProviderButton: some View {
         Button {
-            isAddingProvider.toggle()
-            if isAddingProvider {
-                newProviderName = I18N.shared.localized("我的供应商", "My provider")
-                newProviderDescription = I18N.shared.localized("自定义 OpenAI 兼容接口", "Custom OpenAI-compatible endpoint")
-                newProviderBaseURL = "https://"
-                newProviderModel = ""
-                newProviderAPIKey = ""
-            }
+            cancelProviderOperations()
+            selectedProviderID = editor.beginNewProvider()
+            showsCompactProviderDetail = true
+            showsAPIKey = false
+            status = ""
+            isProviderNameFocused = true
         } label: {
-            Label(
-                I18N.shared.localized("添加供应商", "Add Provider"),
-                systemImage: isAddingProvider ? "xmark" : "plus"
-            )
-            .font(.system(size: 14, weight: .medium))
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .contentShape(Rectangle())
+            Label(I18N.shared.localized("添加供应商", "Add Provider"), systemImage: "plus")
+                .font(.system(size: 13, weight: .medium))
         }
-        .buttonStyle(.plain)
-        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.11), lineWidth: 0.8)
-        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("settings.provider.add")
     }
 
     private func setProviderEnabled(_ provider: AIProviderProfile, enabled: Bool) {
-        if provider.id == selectedProviderID {
-            draftProviderEnabled = enabled
-        }
-        store.saveAIProvider(provider.replacing(isEnabled: enabled))
+        editor.load(provider, apiKey: store.apiKey(for: provider.id))
+        editor.edit(provider.id) { $0.provider.isEnabled = enabled }
     }
 
     private var providerDetailPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 13) {
                 if let provider = selectedAIProvider {
                     AIProviderIcon(kind: provider.kind, size: 46)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(localizedBuiltInProviderName(selectedAIProvider?.name ?? ""))
+                    Text(selectedAIProvider?.name.isEmpty == false
+                         ? localizedBuiltInProviderName(selectedAIProvider?.name ?? "")
+                         : I18N.shared.localized("新供应商", "New provider"))
                         .font(.system(size: 19, weight: .semibold))
                     Text(localizedBuiltInProviderDescription(selectedAIProvider?.description ?? ""))
                         .font(.footnote)
@@ -1742,7 +1739,7 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(I18N.shared.localized("基础配置", "Connection"))
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                 Text(I18N.shared.localized(
                     "配置供应商连接，保存后即可添加和使用模型。",
                     "Configure the provider connection before adding and using models."
@@ -1757,6 +1754,8 @@ struct SettingsView: View {
                         providerReadOnlyValue(localizedBuiltInProviderName(configuration.providerName))
                     } else {
                         TextField(I18N.shared.localized("例如：Gemini", "For example: Gemini"), text: localizedProviderNameBinding)
+                            .focused($isProviderNameFocused)
+                            .accessibilityIdentifier("settings.provider.name")
                             .textFieldStyle(.roundedBorder)
                     }
                 }
@@ -1774,9 +1773,9 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Group {
                             if showsAPIKey {
-                                TextField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: $apiKey)
+                                TextField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: apiKeyBinding)
                             } else {
-                                SecureField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: $apiKey)
+                                SecureField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: apiKeyBinding)
                             }
                         }
                         .textFieldStyle(.roundedBorder)
@@ -1794,7 +1793,7 @@ struct SettingsView: View {
                         providerReadOnlyValue(configuration.baseURL)
                             .textSelection(.enabled)
                     } else {
-                        TextField(I18N.shared.localized("供应商 API 根地址", "Provider API root URL"), text: $configuration.baseURL)
+                        TextField(I18N.shared.localized("供应商 API 根地址", "Provider API root URL"), text: configurationBinding.baseURL)
                             .textFieldStyle(.roundedBorder)
                     }
                 }
@@ -1808,10 +1807,22 @@ struct SettingsView: View {
 
             Divider().opacity(0.35)
 
+            if selectedAIProvider?.isBuiltIn == false {
+                Toggle(I18N.shared.localized("允许不安全的本地 HTTP 端点", "Allow insecure local HTTP endpoints"),
+                       isOn: configurationBinding.allowInsecureLocalEndpoint)
+                    .font(.system(size: 12))
+            }
             providerModelManagementSection
-
+            }
+            .padding(16)
+            }
+            Divider().opacity(0.35)
+            if !status.isEmpty {
+                Text(status).font(.system(size: 12)).foregroundStyle(statusIsSuccess ? Color.secondary : Color.red)
+                    .padding(.horizontal, 16).padding(.top, 8).textSelection(.enabled)
+            }
             HStack(spacing: 9) {
-                if let provider = selectedAIProvider, !provider.isBuiltIn {
+                if let provider = selectedAIProvider, !provider.isBuiltIn, editor.newProviderID != provider.id {
                     Button(I18N.shared.localized("删除供应商", "Delete Provider"), role: .destructive) {
                         providerPendingDeletion = provider
                         isShowingDeleteProviderAlert = true
@@ -1819,6 +1830,13 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                 }
 
+                if isProviderDraftDirty {
+                    Button(I18N.shared.localized(editor.newProviderID == selectedProviderID ? "取消新增" : "放弃更改",
+                                                 editor.newProviderID == selectedProviderID ? "Cancel New Provider" : "Discard Changes")) {
+                        discardSelectedProvider()
+                    }
+                    .buttonStyle(.bordered)
+                }
                 if selectedAIProvider?.kind == .deepSeek {
                     Button(I18N.shared.localized("恢复推荐配置", "Restore Defaults")) { useDeepSeekDefaults() }
                         .buttonStyle(.bordered)
@@ -1837,9 +1855,11 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isProviderDraftDirty)
+                .accessibilityIdentifier("settings.provider.save")
             }
+            .controlSize(.small)
+            .padding(12)
         }
-        .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
@@ -1853,7 +1873,7 @@ struct SettingsView: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(I18N.shared.localized("模型管理", "Models"))
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                     Text(I18N.shared.localized(
                         "添加后，模型即可在各项 AI 功能中选择。",
                         "Added models become available to individual AI features."
@@ -1927,7 +1947,7 @@ struct SettingsView: View {
                         .background(Color.primary.opacity(0.028), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
+                                .stroke(Color.primary.opacity(accessibilityContrast == .increased ? 0.45 : 0.075), lineWidth: 0.8)
                         }
                     }
                 }
@@ -1967,32 +1987,6 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
             }
-    }
-
-    private var addProviderForm: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(I18N.shared.localized("新增自定义供应商", "Add custom provider"))
-                .font(.subheadline.weight(.semibold))
-            HStack(spacing: 8) {
-                TextField(I18N.shared.localized("名称", "Name"), text: $newProviderName)
-                TextField(I18N.shared.localized("Base URL", "Base URL"), text: $newProviderBaseURL)
-            }
-            HStack(spacing: 8) {
-                TextField(I18N.shared.localized("模型 ID（可选）", "Model ID (optional)"), text: $newProviderModel)
-                SecureField("API Key", text: $newProviderAPIKey)
-            }
-            TextField(I18N.shared.localized("描述", "Description"), text: $newProviderDescription)
-            HStack {
-                Spacer()
-                Button(I18N.shared.localized("取消", "Cancel")) { isAddingProvider = false }
-                    .buttonStyle(.borderless)
-                Button(I18N.shared.localized("保存供应商", "Save provider")) { addProvider() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(newProviderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(10)
-        .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func modelListDisclosure(_ provider: AIProviderProfile) -> some View {
@@ -2144,51 +2138,35 @@ struct SettingsView: View {
 
     private var aboutSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(spacing: 12) {
+            Text(I18N.shared.localized("关于", "About"))
+                .font(.system(size: 26, weight: .bold))
+            HStack(alignment: .center, spacing: 20) {
                 appIconView
-
-                VStack(spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text(I18N.localized("PaperRss"))
-                            .font(.system(size: 22, weight: .bold))
-                        Text(I18N.localized("Beta"))
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(settingsAccentColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(settingsAccentColor.opacity(0.12), in: Capsule())
-                    }
-
-                    Text("Version \(AppInfo.currentVersion) (Build \(AppInfo.currentBuild))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
-            }
-
-            settingsGroup(
-                I18N.shared.localized("开源社区", "Open Source")
-            ) {
-                settingsRow(
-                    I18N.shared.localized("GitHub 官方仓库", "GitHub Repository")
-                ) {
-                    Button {
-                        AppInfo.openURL(AppInfo.githubRepositoryURL)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(I18N.shared.localized("前往 GitHub", "Open GitHub"))
-                            Image(systemName: "arrow.up.right")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("PaperRss").font(.system(size: 26, weight: .bold))
+                        if AppInfo.currentVersion.contains("beta") {
+                            Text("Beta")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(settingsAccentColor)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(settingsAccentColor.opacity(0.12), in: Capsule())
                         }
                     }
-                    .buttonStyle(.bordered)
+                    Text(I18N.shared.localized("专注阅读，连接你的信息世界。", "A focused home for your reading."))
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("Version \(AppInfo.currentVersion) · Build \(AppInfo.currentBuild)")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(settingsAccentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.primary.opacity(accessibilityContrast == .increased ? 0.4 : 0.08), lineWidth: 1)
             }
 
             settingsGroup(
@@ -2233,6 +2211,24 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
+                }
+            }
+
+            settingsGroup(
+                I18N.shared.localized("开源社区", "Open Source")
+            ) {
+                settingsRow(
+                    I18N.shared.localized("GitHub 官方仓库", "GitHub Repository")
+                ) {
+                    Button {
+                        AppInfo.openURL(AppInfo.githubRepositoryURL)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(I18N.shared.localized("前往 GitHub", "Open GitHub"))
+                            Image(systemName: "arrow.up.right")
+                        }
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
 
@@ -2437,9 +2433,18 @@ struct SettingsView: View {
         return I18N.shared.localizedFormat("已缓存 %lld 篇文章，大小 %.1f MB", cacheStats.count, mb)
     }
 
+    private var generalSettings: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Text(I18N.shared.localized("常规", "General"))
+                .font(.system(size: 26, weight: .bold))
+            languageSettings
+            refreshSettings
+        }
+    }
+
     private var refreshSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            settingsGroup("启动") {
+            settingsGroup(I18N.shared.localized("订阅刷新", "Feed Refresh")) {
                 settingsRow("打开应用时自动刷新") {
                     Toggle(I18N.localized("打开应用时自动刷新"), isOn: Binding(
                         get: { store.refreshOnLaunch },
@@ -2447,9 +2452,7 @@ struct SettingsView: View {
                     ))
                     .labelsHidden()
                 }
-            }
-
-            settingsGroup("运行期间") {
+                Divider().padding(.horizontal, 18).opacity(0.18)
                 settingsRow("自动刷新订阅") {
                     Picker(
                         "自动刷新订阅",
@@ -2466,9 +2469,7 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .frame(width: 220, alignment: .trailing)
                 }
-            }
-
-            settingsGroup("状态") {
+                Divider().padding(.horizontal, 18).opacity(0.18)
                 settingsRow("订阅源") {
                     VStack(alignment: .trailing, spacing: 4) {
                         Button {
@@ -2581,7 +2582,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(LocalizedStringKey(title))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary.opacity(0.82))
 
                 if let info, !info.isEmpty {
@@ -2598,7 +2599,7 @@ struct SettingsView: View {
             .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(0.075), lineWidth: 0.8)
+                    .stroke(Color.primary.opacity(accessibilityContrast == .increased ? 0.45 : 0.075), lineWidth: 0.8)
             }
 
         }
@@ -2623,11 +2624,11 @@ struct SettingsView: View {
         HStack(alignment: .center, spacing: 20) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(LocalizedStringKey(title))
-                    .font(.body)
+                    .font(.system(size: 15))
 
                 if let description, !description.isEmpty {
                     Text(LocalizedStringKey(description))
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -2705,12 +2706,12 @@ struct SettingsView: View {
     }
 
     private var showsActionBar: Bool {
-        !status.isEmpty
+        !status.isEmpty && !(selectedSection == .aiService && selectedAISettingsPane == .providers)
     }
 
     private var settingsSidebarBackground: Color {
         #if os(macOS)
-        Color(nsColor: .windowBackgroundColor)
+        reduceTransparency ? Color(nsColor: .windowBackgroundColor) : PaperTheme.chromeBackground(scheme: colorScheme)
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
@@ -2740,62 +2741,60 @@ struct SettingsView: View {
     }
 
     private func loadConfiguration() {
-        selectedSection = .appearance
-        loadProvider(store.aiSettings.activeProviderID)
+        for provider in store.aiSettings.providers { editor.load(provider, apiKey: store.apiKey(for: provider.id)) }
+        if selectedAIProvider == nil { selectedProviderID = store.aiSettings.providers.first?.id ?? AIProviderID.deepSeek }
+    }
+
+    private func cancelProviderOperations() {
+        editor.cancelOperations(for: selectedProviderID)
+        modelFetchRequestID = nil
+        testRequestID = nil
+        isFetchingModels = false
+        isTesting = false
     }
 
     private func selectProvider(_ providerID: String) {
-        guard providerID != selectedProviderID else { return }
-        if isProviderDraftDirty {
-            pendingProviderSelectionID = providerID
-            isShowingUnsavedProviderDialog = true
-            return
-        }
+        if providerID != selectedProviderID { cancelProviderOperations() }
         loadProvider(providerID)
-    }
-
-    private func completePendingProviderSelection() {
-        guard let providerID = pendingProviderSelectionID else { return }
-        pendingProviderSelectionID = nil
-        loadProvider(providerID)
+        showsCompactProviderDetail = true
     }
 
     private func loadProvider(_ providerID: String) {
-        guard let provider = store.aiProvider(id: providerID) else { return }
-        modelFetchRequestID = UUID()
-        testRequestID = UUID()
-        isFetchingModels = false
-        isTesting = false
-        showsAIModelList = false
-        selectedProviderID = provider.id
-        draftProviderEnabled = provider.isEnabled
-        configuration = provider.runtimeConfiguration(features: store.aiSettings.features)
-        apiKey = store.apiKey(for: provider.id)
-        draftModels = provider.models
+        cancelProviderOperations()
+        if let provider = store.aiProvider(id: providerID) {
+            editor.load(provider, apiKey: store.apiKey(for: providerID))
+        }
+        selectedProviderID = providerID
         manualModelID = ""
         showsAPIKey = false
         status = ""
     }
 
-    private var isProviderDraftDirty: Bool {
-        guard let stored = selectedAIProvider, let draft = draftAIProvider else { return false }
-        return draft != stored || apiKey != store.apiKey(for: selectedProviderID)
+    private var isProviderDraftDirty: Bool { editor.drafts[selectedProviderID]?.isDirty ?? false }
+
+    private func discardSelectedProvider() {
+        let id = selectedProviderID
+        editor.discard(id)
+        loadProvider(store.aiProvider(id: id)?.id ?? store.aiSettings.providers.first?.id ?? AIProviderID.deepSeek)
     }
 
     @discardableResult
     private func saveSelectedProvider(updateStatus: Bool = true) -> Bool {
         guard let provider = draftAIProvider else { return false }
         do {
+            guard !provider.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                status = I18N.shared.localized("请填写供应商名称", "Enter a provider name")
+                return false
+            }
             try provider.validateConnection(requireModel: false)
-            store.saveAIProvider(provider, apiKey: apiKey)
+            if editor.newProviderID == provider.id { store.addAIProvider(provider, apiKey: apiKey) }
+            else { store.saveAIProvider(provider, apiKey: apiKey) }
+            editor.markSaved(provider.id)
         } catch {
             status = error.localizedDescription
             return false
         }
-
-        if updateStatus {
-            status = I18N.shared.localized("已保存当前供应商配置", "Current provider configuration saved")
-        }
+        if updateStatus { status = I18N.shared.localized("已保存当前供应商配置", "Current provider configuration saved") }
         return true
     }
 
@@ -2857,11 +2856,11 @@ struct SettingsView: View {
         isFetchingModels = true
         status = ""
         let providerID = selectedProviderID
-        let requestID = UUID()
+        let requestID = editor.beginOperation(for: providerID)
         let revision = draftRevision
         let requestedAPIKey = apiKey
         modelFetchRequestID = requestID
-        Task { @MainActor in
+        let task = Task { @MainActor in
             defer {
                 if modelFetchRequestID == requestID {
                     isFetchingModels = false
@@ -2869,44 +2868,17 @@ struct SettingsView: View {
             }
             do {
                 let models = try await store.fetchAIModels(provider: provider, apiKey: requestedAPIKey)
-                guard modelFetchRequestID == requestID, selectedProviderID == providerID, draftRevision == revision else { return }
+                guard modelFetchRequestID == requestID, selectedProviderID == providerID, editor.accepts(requestID, for: providerID, revision: revision) else { return }
                 fetchedModelCandidates = models
                 status = I18N.shared.isEnglish ? "Fetched \(models.count) models" : "已拉取 \(models.count) 个候选模型"
             } catch {
                 guard modelFetchRequestID == requestID,
                       selectedProviderID == providerID,
-                      draftRevision == revision else { return }
+                      editor.accepts(requestID, for: providerID, revision: revision) else { return }
                 status = error.localizedDescription
             }
         }
-    }
-
-    private func addProvider() {
-        let name = newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL = newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !baseURL.isEmpty else { return }
-
-        let provider = AIProviderProfile.custom(
-            name: name,
-            description: newProviderDescription.trimmingCharacters(in: .whitespacesAndNewlines),
-            baseURL: baseURL,
-            modelID: newProviderModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        do {
-            try provider.validateConnection(requireModel: false)
-        } catch {
-            status = error.localizedDescription
-            return
-        }
-        store.addAIProvider(provider, apiKey: newProviderAPIKey)
-        isAddingProvider = false
-        newProviderName = ""
-        newProviderDescription = ""
-        newProviderBaseURL = ""
-        newProviderModel = ""
-        newProviderAPIKey = ""
-        selectProvider(provider.id)
-        status = I18N.shared.localized("已添加供应商", "Provider added")
+        editor.register(task, for: providerID, token: requestID)
     }
 
     private func test() {
@@ -2918,11 +2890,11 @@ struct SettingsView: View {
         isTesting = true
         status = ""
         let providerID = selectedProviderID
-        let requestID = UUID()
+        let requestID = editor.beginOperation(for: providerID)
         let revision = draftRevision
         let requestedAPIKey = apiKey
         testRequestID = requestID
-        Task { @MainActor in
+        let task = Task { @MainActor in
             defer {
                 if testRequestID == requestID {
                     isTesting = false
@@ -2932,15 +2904,16 @@ struct SettingsView: View {
                 var requestedProvider = provider.selectingModel(modelID)
                 requestedProvider = requestedProvider.replacing(selectedModelID: modelID)
                 try await store.testAIProvider(provider: requestedProvider, apiKey: requestedAPIKey)
-                guard testRequestID == requestID, selectedProviderID == providerID, draftRevision == revision else { return }
+                guard testRequestID == requestID, selectedProviderID == providerID, editor.accepts(requestID, for: providerID, revision: revision) else { return }
                 status = I18N.shared.localized("成功：当前模型可以响应。", "Success: selected model responded.")
             } catch {
                 guard testRequestID == requestID,
                       selectedProviderID == providerID,
-                      draftRevision == revision else { return }
+                      editor.accepts(requestID, for: providerID, revision: revision) else { return }
                 status = error.localizedDescription
             }
         }
+        editor.register(task, for: providerID, token: requestID)
     }
 }
 
@@ -2961,7 +2934,7 @@ private struct AppearanceThreeColumnPreview: View {
                 Spacer(minLength: 0)
             }
             .padding(12)
-            .frame(width: 82)
+            .frame(width: 90)
             .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(surface(.sidebar))
 
@@ -2978,28 +2951,38 @@ private struct AppearanceThreeColumnPreview: View {
                 Spacer(minLength: 0)
             }
             .padding(12)
-            .frame(width: 126)
+            .frame(width: 142)
             .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(surface(.articleList))
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(I18N.localized("The Morning Digest · 晨间速览"))
+                Text(I18N.shared.localized("静夜思 · 李白", "Quiet Night Thoughts · Li Bai"))
                     .font(.system(size: 15, weight: .bold, design: .serif))
                     .foregroundStyle(ink)
-                Text(I18N.localized("PaperRss 专为沉浸式阅读打造。三栏主题会保持一致，字号调整只作用于文章正文。"))
-                    .font(bodyFont)
-                    .lineLimit(3)
+                Text(I18N.shared.localized("唐诗选读 · 阅读预览", "Poetry · Reading Preview"))
+                    .font(.system(size: 12))
                     .foregroundStyle(muted)
+                Text("床前明月光，疑是地上霜。\n举头望明月，低头思故乡。")
+                    .font(bodyFont)
+                    .lineSpacing(CGFloat(appearance.fontSize) * max(0, appearance.lineHeight - 1.2))
+                    .foregroundStyle(ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(I18N.shared.localized("在文字间放慢脚步，让阅读回归专注。主题同步呈现于侧栏、文章列表与正文，字体设置仅影响阅读内容。", "Slow down between the lines. The theme follows you across the sidebar, article list, and reader; font preferences apply only to reading content."))
+                    .font(bodyFont)
+                    .lineSpacing(CGFloat(appearance.fontSize) * max(0, appearance.lineHeight - 1.2))
+                    .foregroundStyle(muted)
+                    .lineLimit(4)
                 Spacer(minLength: 0)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(surface(.reader))
         }
-        .frame(height: 132)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .frame(height: 300)
+        .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
                 .stroke(ink.opacity(0.14), lineWidth: 1)
         }
         .environment(\.colorScheme, palette.colorScheme == .dark ? .dark : .light)

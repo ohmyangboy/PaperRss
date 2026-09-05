@@ -12,8 +12,10 @@ import AppKit
 @main
 struct PaperRssApp: App {
     @StateObject private var store: AppStore
+    @StateObject private var settingsEditor = AISettingsEditingSession()
     @StateObject private var navigation: AppNavigationModel
     #if os(macOS)
+    @FocusedValue(\.paperReaderActive) private var readerActive
     @StateObject private var attention: MacSystemAttentionController
     @StateObject private var updateCoordinator: UpdateCoordinator
     #endif
@@ -30,9 +32,9 @@ struct PaperRssApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             #if os(macOS)
-            RootView(store: store, navigation: navigation, updateCoordinator: updateCoordinator)
+            RootView(store: store, navigation: navigation, updateCoordinator: updateCoordinator, attention: attention, settingsEditor: settingsEditor)
                 .onAppear {
                     let application = NSApplication.shared
                     // 从当前包读取，避免开发构建复用系统缓存中的旧图标。
@@ -67,21 +69,33 @@ struct PaperRssApp: App {
                     store.increaseArticleFontSize()
                 }
                 .keyboardShortcut("=", modifiers: .command)
+                #if os(macOS)
+                .disabled(readerActive == false)
+                #endif
 
                 Button(I18N.localized("放大正文字号")) {
                     store.increaseArticleFontSize()
                 }
                 .keyboardShortcut("+", modifiers: .command)
+                #if os(macOS)
+                .disabled(readerActive == false)
+                #endif
 
                 Button(I18N.localized("缩小正文字号")) {
                     store.decreaseArticleFontSize()
                 }
                 .keyboardShortcut("-", modifiers: .command)
+                #if os(macOS)
+                .disabled(readerActive == false)
+                #endif
 
                 Button(I18N.localized("默认正文字号")) {
                     store.resetArticleFontSize()
                 }
                 .keyboardShortcut("0", modifiers: .command)
+                #if os(macOS)
+                .disabled(readerActive == false)
+                #endif
             }
 
             #if os(macOS)
@@ -95,6 +109,7 @@ struct PaperRssApp: App {
                 }())
             }
 
+            SettingsNavigationCommands(navigation: navigation)
             KeyboardShortcutHelpCommands()
             #endif
         }
@@ -109,10 +124,6 @@ struct PaperRssApp: App {
         }
         .defaultSize(width: 560, height: 620)
 
-        Settings {
-            SettingsView(store: store, attention: attention, updateCoordinator: updateCoordinator)
-                .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
-        }
         #endif
     }
 }

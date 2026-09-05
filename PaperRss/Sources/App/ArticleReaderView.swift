@@ -576,10 +576,14 @@ struct ArticleReaderView: View {
                 // remains for SwiftUI's type-safe view construction only.
                 EmptyView()
                 #else
-                Text(text).font(.system(size: CGFloat(store.articleFontSize))).lineSpacing(7).textSelection(.enabled)
+                Text(text).font(.system(size: CGFloat(store.articleFontSize)))
+                    .lineSpacing(CGFloat(store.articleFontSize) * max(0, store.readerAppearance.lineHeight - 1.2))
+                    .textSelection(.enabled)
                 #endif
             } else {
-                Text(text).font(.system(size: CGFloat(store.articleFontSize))).lineSpacing(7).textSelection(.enabled)
+                Text(text).font(.system(size: CGFloat(store.articleFontSize)))
+                    .lineSpacing(CGFloat(store.articleFontSize) * max(0, store.readerAppearance.lineHeight - 1.2))
+                    .textSelection(.enabled)
             }
         case .bilingual:
             if let artifact, !artifact.segments.isEmpty {
@@ -1397,6 +1401,7 @@ private func readerAppearanceStyle(
         .joined(separator: " ")
     return """
     :root { color-scheme: \(palette.colorScheme.rawValue); \(variables) --paper-body-font-family: \(readerFontStack(for: appearance)); }
+    :root { --paper-line-height: \(appearance.lineHeight); }
     body { font-family: var(--paper-body-font-family); }
     .paper-header-container, .paper-summary-card, #paper-rss-toc-rail {
       font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
@@ -1411,6 +1416,7 @@ private func readerAppearanceJavaScript(
     let palette = appearance.palette(for: mode)
     var variables = palette.cssVariables
     variables["--paper-body-font-family"] = readerFontStack(for: appearance)
+    variables["--paper-line-height"] = String(appearance.lineHeight)
     guard let data = try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]),
           let json = String(data: data, encoding: .utf8) else { return "" }
     return """
@@ -1485,7 +1491,7 @@ body {
   font-size: 17px;
   font-family: var(--paper-body-font-family, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif);
   font-weight: 400;
-  line-height: 1.72;
+  line-height: var(--paper-line-height, 1.72);
   letter-spacing: .006em;
   overflow-wrap: anywhere;
   text-rendering: optimizeLegibility;
@@ -1884,14 +1890,14 @@ th, td {
 }
 .paper-rss-subparagraph {
   margin: 0 0 1em 0;
-  line-height: 1.6;
+  line-height: var(--paper-line-height, 1.72);
 }
 .paper-rss-translation {
   margin: -.5em 0 1.25em;
   padding: 0;
   color: var(--paper-muted);
   font-size: 0.96em;
-  line-height: 1.68;
+  line-height: var(--paper-line-height, 1.72);
 }
 .paper-rss-translation-label {
   position: relative;
@@ -2026,7 +2032,9 @@ th, td {
   box-shadow: 0 8px 24px rgba(35, 31, 25, .12);
   -webkit-backdrop-filter: blur(20px) saturate(1.2);
   backdrop-filter: blur(20px) saturate(1.2);
-  font: 14px/1.58 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-family: var(--paper-body-font-family, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif);
+  font-size: var(--paper-font-size, 17px);
+  line-height: 1.58;
   animation: paper-rss-materialize .20s ease-out both;
   transform-origin: top center;
 }
@@ -3663,7 +3671,7 @@ enum PaperReaderBridge {
             if (question) {
               const qBox = document.createElement("div");
               qBox.className = "paper-rss-question-tag";
-              qBox.style.cssText = "font-size:12px;opacity:0.8;margin:4px 0 8px;font-weight:600;";
+              qBox.style.cssText = "font-size:0.88em;opacity:0.8;margin:4px 0 8px;font-weight:600;";
               qBox.textContent = (window.paperRssSelectionOptions?.labels?.questionPrefix || "问：") + question;
               popover.append(qBox);
             }
