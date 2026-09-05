@@ -140,6 +140,32 @@ test('export_and_notarize 全链路：导出→签名门禁→公证→Staple �
   });
 });
 
+test('export_and_notarize 支持不依赖钥匙串的 App Store Connect API Key', () => {
+  withSandbox(({ dir, archive, makeBin, newCalls }) => {
+    const key = join(dir, 'AuthKey_TEST.p8');
+    const calls = newCalls('direct-key-calls.log');
+    writeFileSync(key, 'fixture-private-key');
+    const bin = makeBin({});
+    const out = run(join(SPARKLE, 'export_and_notarize.sh'), [
+      '--archive', archive,
+      '--output-dir', join(dir, 'out'),
+      '--team-id', 'TEAM',
+    ], {
+      PATH: `${bin}:${process.env.PATH}`,
+      FAKE_CALLS: calls,
+      PAPERRSS_NOTARY_KEY: key,
+      PAPERRSS_NOTARY_KEY_ID: 'KEYID12345',
+      PAPERRSS_NOTARY_ISSUER: '11111111-2222-3333-4444-555555555555',
+    });
+    assert.match(out, /\[PASS 5\][^\n]*Accepted/);
+    const log = readFileSync(calls, 'utf8');
+    assert.match(log, new RegExp(`notarytool submit .*--key ${key}`));
+    assert.match(log, /--key-id KEYID12345/);
+    assert.match(log, /--issuer 11111111-2222-3333-4444-555555555555/);
+    assert.doesNotMatch(log, /--keychain-profile/);
+  });
+});
+
 test('codesign 校验失败 → 立即终止，且不进入公证与 Staple', () => {
   withSandbox(({ dir, archive, makeBin }) => {
     const bin = makeBin({

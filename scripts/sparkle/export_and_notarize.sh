@@ -42,7 +42,9 @@ done
 [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$ROOT_DIR/dist/export"
 if [[ "$SKIP_NOTARIZATION" != true ]]; then
   [[ -n "$TEAM_ID" ]] || { echo "[FAIL] 缺少 --team-id" >&2; exit 2; }
-  [[ -n "$NOTARY_PROFILE" ]] || { echo "[FAIL] 缺少 --notary-profile（先 xcrun notarytool store-credentials）" >&2; exit 2; }
+  if [[ -z "${PAPERRSS_NOTARY_KEY:-}" || -z "${PAPERRSS_NOTARY_KEY_ID:-}" || -z "${PAPERRSS_NOTARY_ISSUER:-}" ]]; then
+    [[ -n "$NOTARY_PROFILE" ]] || { echo "[FAIL] 缺少公证凭据（App Store Connect API Key 或 keychain profile）" >&2; exit 2; }
+  fi
 fi
 
 pass() { echo "[PASS] $*"; }

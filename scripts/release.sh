@@ -68,6 +68,10 @@ if [[ -f "$GLOBAL_NOTARY_ENV" ]]; then
     esac
   done < <(grep -v '^[[:space:]]*$' "$GLOBAL_NOTARY_ENV" || true)
 fi
+if [[ "${PAPERRSS_NOTARY_KEY:-}" == '~/'* ]]; then
+  PAPERRSS_NOTARY_KEY="$HOME/${PAPERRSS_NOTARY_KEY#\~/}"
+fi
+export PAPERRSS_NOTARY_KEY PAPERRSS_NOTARY_KEY_ID PAPERRSS_NOTARY_ISSUER
 PAPERRSS_APPCAST_BASE_URL="${PAPERRSS_APPCAST_BASE_URL:-https://ohmyangboy.github.io/PaperRss/appcast}"
 
 # ══════════════════════════ build ══════════════════════════
@@ -187,7 +191,7 @@ if [[ "$CMD" == "build" ]]; then
   step "[PASS 3–6] Developer ID 导出 / 签名 / 公证 / Staple 门禁"
   NOTARIZE_ARGS=(--archive "$ARCHIVE_PATH" --output-dir "$EXPORT_DIR" --team-id "${PAPERRSS_TEAM_ID}")
   if [[ "$SKIP_NOTARIZATION" != true ]]; then
-    NOTARIZE_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
+    [[ -n "${PAPERRSS_NOTARY_PROFILE:-}" ]] && NOTARIZE_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
   else
     NOTARIZE_ARGS+=(--skip-notarization)
   fi
@@ -201,7 +205,7 @@ if [[ "$CMD" == "build" ]]; then
   if [[ "$SKIP_NOTARIZATION" == true ]]; then
     DMG_ARGS+=(--skip-notarization)
   else
-    DMG_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
+    [[ -n "${PAPERRSS_NOTARY_PROFILE:-}" ]] && DMG_ARGS+=(--notary-profile "${PAPERRSS_NOTARY_PROFILE}")
   fi
   "$SPARKLE/make_release_dmg.sh" "${DMG_ARGS[@]}"
 
