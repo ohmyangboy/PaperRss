@@ -51,6 +51,23 @@ if [[ -f "$SPARKLE/release.env" ]]; then
     esac
   done < <(grep -v '^[[:space:]]*$' "$SPARKLE/release.env" || true)
 fi
+
+# 全局 Apple 凭据（仓库外持久层）：~/.appstoreconnect/notary.env
+# 优先级：进程环境 > release.env > 全局文件；仅在变量为空时填充。
+GLOBAL_NOTARY_ENV="$HOME/.appstoreconnect/notary.env"
+if [[ -f "$GLOBAL_NOTARY_ENV" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    case "$line" in *=*) ;; *) continue ;; esac
+    k="${line%%=*}"
+    v="${line#*=}"
+    case "$k" in
+      PAPERRSS_TEAM_ID|PAPERRSS_NOTARY_KEY|PAPERRSS_NOTARY_KEY_ID|\
+      PAPERRSS_NOTARY_ISSUER|PAPERRSS_SIGNING_ACCOUNT)
+        if [[ -z "${!k:-}" ]]; then printf -v "$k" '%s' "$v"; fi ;;
+    esac
+  done < <(grep -v '^[[:space:]]*$' "$GLOBAL_NOTARY_ENV" || true)
+fi
 PAPERRSS_APPCAST_BASE_URL="${PAPERRSS_APPCAST_BASE_URL:-https://ohmyangboy.github.io/PaperRss/appcast}"
 
 # ══════════════════════════ build ══════════════════════════
