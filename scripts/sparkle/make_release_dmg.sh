@@ -112,10 +112,18 @@ else
   IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed -E 's/.*[)] ([A-F0-9]{40}).*/\1/')
   [[ -n "$IDENTITY" ]] || fail "找不到 Developer ID Application 证书"
   codesign --sign "$IDENTITY" --timestamp "$OUTPUT_PATH" || fail "DMG codesign 失败"
+  # 双模式公证，与 export_and_notarize.sh 一致（直传 .p8 优先，keychain 回退）。
+  if [[ -n "${PAPERRSS_NOTARY_KEY:-}" && -n "${PAPERRSS_NOTARY_KEY_ID:-}" && -n "${PAPERRSS_NOTARY_ISSUER:-}" ]]; then
+    [[ -f "${PAPERRSS_NOTARY_KEY}" ]] || fail "PAPERRSS_NOTARY_KEY 指向的 .p8 不存在"
+    AUTH_ARGS=(--key "${PAPERRSS_NOTARY_KEY}" --key-id "${PAPERRSS_NOTARY_KEY_ID}" --issuer "${PAPERRSS_NOTARY_ISSUER}")
+  else
+    [[ -n "$NOTARY_PROFILE" ]] || fail "缺少公证凭据（keychain profile 或 .p8 三元组）"
+    AUTH_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+  fi
   # 不用 `xcrun | tee | grep -q`：grep -q 匹配后早退会让 xcrun 收到 SIGPIPE，
   # 在 pipefail 下整条管线误判失败。先落盘再检查。
   set +e
-  xcrun notarytool submit "$OUTPUT_PATH" --keychain-profile "$NOTARY_PROFILE" --wait \
+  xcrun notarytool submit "$OUTPUT_PATH" "${AUTH_ARGS[@]}" --wait \
     > "$TMP_DIR/notary.log" 2>&1
   SUBMIT_RC=$?
   set -e

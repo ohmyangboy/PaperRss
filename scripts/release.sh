@@ -81,7 +81,7 @@ if [[ "$CMD" == "build" ]]; then
     || fail "版本号不符合 SemVer vX.Y.Z[-stage.N]: $VERSION"
   [[ "$BUILD" =~ ^[0-9]+$ ]] || fail "--build 必须是纯数字"
   if [[ "$CLEAN_VERSION" =~ -(alpha|beta|rc)\. ]] && [[ "$CHANNEL" == "stable" ]]; then
-    fail "prerelease 版本（$CLEAN_VERSION）必须使用 --channel beta；stable 通道不接受预发布版本"
+    fail "prerelease 版本（${CLEAN_VERSION}）必须使用 --channel beta；stable 通道不接受预发布版本"
   fi
 
   for tool in xcodebuild node git plutil ditto hdiutil codesign spctl; do
@@ -90,10 +90,16 @@ if [[ "$CMD" == "build" ]]; then
   command -v create-dmg >/dev/null 2>&1 && HAVE_CREATE_DMG=true || HAVE_CREATE_DMG=false
 
   if [[ "$SKIP_NOTARIZATION" != true ]]; then
-    for var in PAPERRSS_TEAM_ID PAPERRSS_NOTARY_PROFILE PAPERRSS_SUPUBLIC_ED_KEY; do
+    for var in PAPERRSS_TEAM_ID PAPERRSS_SUPUBLIC_ED_KEY; do
       [[ -n "${!var:-}" ]] || fail "缺少 ${var}（检查环境或 scripts/sparkle/release.env）"
     done
-    NOTARY_SET=yes
+    if [[ -n "${PAPERRSS_NOTARY_KEY:-}" && -n "${PAPERRSS_NOTARY_KEY_ID:-}" && -n "${PAPERRSS_NOTARY_ISSUER:-}" ]]; then
+      NOTARY_SET=direct-key
+    elif [[ -n "${PAPERRSS_NOTARY_PROFILE:-}" ]]; then
+      NOTARY_SET=yes
+    else
+      fail "缺少公证凭据：PAPERRSS_NOTARY_PROFILE 或 PAPERRSS_NOTARY_KEY/KEY_ID/ISSUER 三元组（二选一）"
+    fi
   else
     warn "公证已跳过：产物仅限本机演练，禁止对外分发"
     NOTARY_SET=skipped

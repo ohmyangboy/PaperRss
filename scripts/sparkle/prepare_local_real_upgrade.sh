@@ -270,7 +270,7 @@ if [[ "$PLAN_ONLY" == true ]]; then
 fi
 
 command -v "$XCODEBUILD_BIN" >/dev/null 2>&1 || [[ -x "$XCODEBUILD_BIN" ]] || fail "找不到 xcodebuild: $XCODEBUILD_BIN"
-[[ -x "$SPARKLE_SIGN_UPDATE" ]] || fail "找不到 Sparkle sign_update: $SPARKLE_SIGN_UPDATE；请先构建 Sparkle。"
+[[ -x "$SPARKLE_SIGN_UPDATE" ]] || fail "找不到 Sparkle sign_update: ${SPARKLE_SIGN_UPDATE}；请先构建 Sparkle。"
 SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
 
 build_archive() {

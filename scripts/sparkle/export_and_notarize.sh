@@ -110,7 +110,7 @@ pass "[PASS 4] 签名门禁通过（Developer ID + Hardened Runtime + secure tim
 step "[4b] 启动冒烟（3 秒存活探针）"
 if [[ -z "${PAPERRSS_SKIP_LAUNCH_SMOKE:-}" ]]; then
   LAUNCH_LOG="$TMP_DIR/launch-smoke.log"
-  open -n "$APP_PATH" >"$LAUNCH_LOG" 2>&1 || fail "App 无法启动（open 失败，见 $LAUNCH_LOG）"
+  open -n "$APP_PATH" >"$LAUNCH_LOG" 2>&1 || fail "App 无法启动（open 失败，见 ${LAUNCH_LOG}）"
   ALIVE=false
   for _ in 1 2 3 4 5 6; do
     sleep 0.7
@@ -140,9 +140,20 @@ else
   step "[5] Apple 公证（notarytool submit --wait）"
   SUBMIT_ZIP="$TMP_DIR/${APP_NAME}-notarize.zip"
   /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$SUBMIT_ZIP"
-  SUBMIT_OUT=$(xcrun notarytool submit "$SUBMIT_ZIP" \
-      --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) \
-    || { echo "$SUBMIT_OUT" >&2; fail "notarytool 提交失败"; }
+  # 双模式：优先直传 .p8 三元组（环境无关，钥匙串丢失/沙箱环境均可用）；
+  # 否则回退 keychain profile（需要 GUI 会话环境）。
+  if [[ -n "${PAPERRSS_NOTARY_KEY:-}" && -n "${PAPERRSS_NOTARY_KEY_ID:-}" && -n "${PAPERRSS_NOTARY_ISSUER:-}" ]]; then
+    [[ -f "${PAPERRSS_NOTARY_KEY}" ]] || fail "PAPERRSS_NOTARY_KEY 指向的 .p8 不存在"
+    AUTH_ARGS=(--key "${PAPERRSS_NOTARY_KEY}" --key-id "${PAPERRSS_NOTARY_KEY_ID}" --issuer "${PAPERRSS_NOTARY_ISSUER}")
+    AUTH_MODE="direct-key"
+  elif [[ -n "$NOTARY_PROFILE" ]]; then
+    AUTH_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+    AUTH_MODE="keychain-profile"
+  else
+    fail "缺少公证凭据：请配置 keychain profile 或 PAPERRSS_NOTARY_KEY/KEY_ID/ISSUER 三元组"
+  fi
+  SUBMIT_OUT=$(xcrun notarytool submit "$SUBMIT_ZIP" "${AUTH_ARGS[@]}" --wait 2>&1) \
+    || { echo "$SUBMIT_OUT" >&2; fail "notarytool 提交失败（模式: ${AUTH_MODE}）"; }
   echo "$SUBMIT_OUT"
   echo "$SUBMIT_OUT" | grep -qi "Accepted" || fail "公证状态不是 Accepted"
   SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep -iE "id: *[a-f0-9-]{36}" | head -1 | awk '{print $NF}' || true)
