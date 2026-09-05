@@ -786,12 +786,14 @@ public final class AppStore: ObservableObject {
 
     public func fetchTimelinePage(
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         retainingIDs: Set<String> = [],
         limit: Int = 100,
         offset: Int = 0
     ) -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(
             scope: scope,
+            unreadOnly: unreadOnly,
             retainingIDs: retainingIDs,
             limit: limit,
             offset: offset
@@ -800,12 +802,14 @@ public final class AppStore: ObservableObject {
 
     public func fetchAdjacentItem(
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         currentItemID: String,
         direction: AdjacentTimelineDirection,
         retainingIDs: Set<String> = []
     ) -> EntryListItem? {
         try? localProvider.timelineQueryService.fetchAdjacentItem(
             scope: scope,
+            unreadOnly: unreadOnly,
             currentItemID: currentItemID,
             direction: direction,
             retainingIDs: retainingIDs
@@ -1595,6 +1599,7 @@ public final class AppStore: ObservableObject {
     /// 预取内部尊重取消标记，不会在用户快速连续切换时堆积网络请求。
     public func scheduleNeighborPrefetch(
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         currentItemID: String,
         retainingIDs: Set<String>
     ) {
@@ -1607,6 +1612,7 @@ public final class AppStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let adjacent = self.fetchAdjacentItem(
                     scope: scope,
+                    unreadOnly: unreadOnly,
                     currentItemID: currentItemID,
                     direction: direction,
                     retainingIDs: retainingIDs

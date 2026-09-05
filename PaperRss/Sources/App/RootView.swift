@@ -54,6 +54,7 @@ struct RootView: View {
     // List's synthesized Hashable selection after the first click. A stable ID
     // makes selection, focus, and the visible detail all describe the same item.
     @State private var selectedEntryID: String?
+    @State private var unreadOnly = false
     @State private var retainedEntryListIDs: Set<String> = []
     @State private var selectedFeedIDs: Set<UUID> = []
     @State private var showsAddFeed = false
@@ -180,6 +181,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: selection ?? .today,
+                unreadOnly: effectiveUnreadOnly,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
                 columnFocusState: columnFocusState,
@@ -199,6 +201,9 @@ struct RootView: View {
                 selectionTitle: headerTitle,
                 hasUnread: currentHasUnread,
                 onMarkAllRead: { markCurrentAllRead() },
+                showsUnreadFilter: supportsUnreadFilter,
+                unreadOnly: effectiveUnreadOnly,
+                onToggleUnreadFilter: toggleUnreadFilter,
                 onFocusAndScrollArticle: { focusAndScrollArticle() },
                 isZenMode: isZenMode,
                 onToggleZenMode: { withAnimation { isZenMode.toggle() } },
@@ -239,6 +244,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: selection ?? .today,
+                unreadOnly: effectiveUnreadOnly,
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
                 columnFocusState: columnFocusState,
@@ -305,6 +311,7 @@ struct RootView: View {
     }
 
     private func markCurrentAllRead() {
+        retainedEntryListIDs = selectedEntryID.map { [$0] } ?? []
         switch currentSelection {
         case .today:
             let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
@@ -416,9 +423,9 @@ struct RootView: View {
     private func selectNextEntry() {
         guard let selectedEntryID else {
             // 没有选中项时，拉取当前时间线第一篇
-            if let firstID = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first?.id {
+            if let firstID = store.fetchTimelinePage(scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly, limit: 1, offset: 0).first?.id {
                 self.selectedEntryID = firstID
-                if currentTimelineScope == .unread {
+                if currentTimelineScope == .unread || effectiveUnreadOnly {
                     self.retainedEntryListIDs.insert(firstID)
                 } else {
                     self.retainedEntryListIDs.removeAll()
@@ -432,7 +439,7 @@ struct RootView: View {
         }
 
         if let nextItem = store.fetchAdjacentItem(
-            scope: currentTimelineScope,
+            scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly,
             currentItemID: selectedEntryID,
             direction: .next,
             retainingIDs: retainedEntryListIDs.union([selectedEntryID])
@@ -474,7 +481,7 @@ struct RootView: View {
     /// 选中稳定后预取相邻文章，使 Space/nn/bb 切换始终命中内存缓存。
     private func scheduleNeighborPrefetch(from entryID: String) {
         store.scheduleNeighborPrefetch(
-            scope: currentTimelineScope,
+            scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly,
             currentItemID: entryID,
             retainingIDs: retainedEntryListIDs.union([entryID])
         )
@@ -505,7 +512,7 @@ struct RootView: View {
         }
 
         guard let adjacentItem = store.fetchAdjacentItem(
-            scope: currentTimelineScope,
+            scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly,
             currentItemID: selectedEntryID,
             direction: adjacentDir,
             retainingIDs: retainedEntryListIDs.union([selectedEntryID])
@@ -554,6 +561,24 @@ struct RootView: View {
         }
     }
 
+    private var supportsUnreadFilter: Bool {
+        switch currentSelection {
+        case .folder, .feed, .feeds: return true
+        default: return false
+        }
+    }
+
+    private var effectiveUnreadOnly: Bool { supportsUnreadFilter && unreadOnly }
+
+    private func toggleUnreadFilter() {
+        cancelNavigationConfirmation(dismissToast: true)
+        retainedEntryListIDs.removeAll()
+        unreadOnly.toggle()
+        if unreadOnly, selectedEntry?.isRead == true {
+            selectedEntryID = nil
+        }
+    }
+
     private var currentTimelineScope: TimelineScope {
         switch currentSelection {
         case .today:
@@ -574,7 +599,7 @@ struct RootView: View {
 
     private func focusAndScrollArticle() {
         if selectedEntryID == nil {
-            selectedEntryID = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first?.id
+            selectedEntryID = store.fetchTimelinePage(scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly, limit: 1, offset: 0).first?.id
         }
 
         #if os(macOS)
@@ -624,7 +649,7 @@ struct RootView: View {
     }
 
     private func selectFirstEntryIfNeeded() {
-        if selectedEntryID == nil, let first = store.fetchTimelinePage(scope: currentTimelineScope, limit: 1, offset: 0).first {
+        if selectedEntryID == nil, let first = store.fetchTimelinePage(scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly, limit: 1, offset: 0).first {
             selectedEntryID = first.id
         }
     }
@@ -1580,6 +1605,7 @@ private struct EntryListView: View {
     @ObservedObject var store: AppStore
     let appearanceMode: ReaderAppearanceMode
     let selection: SidebarSelection
+    var unreadOnly: Bool = false
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
     @ObservedObject var columnFocusState: PaperColumnFocusState
@@ -1627,6 +1653,7 @@ private struct EntryListView: View {
         isLoadingPage = true
         let firstPage = store.fetchTimelinePage(
             scope: timelineScope,
+            unreadOnly: unreadOnly,
             retainingIDs: retainedUnreadIDs,
             limit: pageSize,
             offset: 0
@@ -1643,6 +1670,7 @@ private struct EntryListView: View {
         isLoadingPage = true
         let page = store.fetchTimelinePage(
             scope: timelineScope,
+            unreadOnly: unreadOnly,
             retainingIDs: retainedUnreadIDs,
             limit: pageSize,
             offset: loadedEntries.count
@@ -1664,6 +1692,7 @@ private struct EntryListView: View {
         let totalCount = max(pageSize, loadedEntries.count)
         let refreshed = store.fetchTimelinePage(
             scope: timelineScope,
+            unreadOnly: unreadOnly,
             retainingIDs: retainedUnreadIDs,
             limit: totalCount,
             offset: 0
@@ -1710,7 +1739,7 @@ private struct EntryListView: View {
                 guard let newID else { return }
 
                 // 在未读浏览会话中，累积保留所有在当前会话中被阅读过的条目
-                if timelineScope == .unread {
+                if timelineScope == .unread || unreadOnly {
                     retainedUnreadIDs.insert(newID)
                 } else {
                     retainedUnreadIDs.removeAll()
@@ -1809,9 +1838,12 @@ private struct EntryListView: View {
                 retainedUnreadIDs.removeAll()
                 loadInitialPage()
             }
+            .onChange(of: unreadOnly) { _, _ in
+                loadInitialPage()
+            }
             .onChange(of: selectedEntryID) { _, newID in
                 if let newID {
-                    if timelineScope == .unread {
+                    if timelineScope == .unread || unreadOnly {
                         retainedUnreadIDs.insert(newID)
                     }
                     patchEntryState(entryID: newID, isRead: true)
@@ -1868,7 +1900,7 @@ private struct EntryListView: View {
             .overlay {
                 if loadedEntries.isEmpty && !isLoadingPage {
                     PaperEmptyState(
-                        title: I18N.localized("没有文章"),
+                        title: I18N.localized(unreadOnly ? "暂无未读文章" : "没有文章"),
                         description: I18N.shared.localized(
                             store.feeds.isEmpty
                                 ? "添加订阅后，这里会显示文章。"

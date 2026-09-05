@@ -189,12 +189,13 @@ public final class TimelineQueryService: Sendable {
     public func fetchListItems(
         accountID: String? = nil,
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         retainingIDs: Set<String> = [],
         limit: Int? = nil,
         offset: Int = 0
     ) throws -> [EntryListItem] {
         try database.read { db in
-            try fetchListItems(accountID: accountID, scope: scope, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
+            try fetchListItems(accountID: accountID, scope: scope, unreadOnly: unreadOnly, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
         }
     }
 
@@ -202,18 +203,20 @@ public final class TimelineQueryService: Sendable {
     public func fetchListItemsAsync(
         accountID: String? = nil,
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         retainingIDs: Set<String> = [],
         limit: Int? = nil,
         offset: Int = 0
     ) async throws -> [EntryListItem] {
         try await database.readAsync { db in
-            try self.fetchListItems(accountID: accountID, scope: scope, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
+            try self.fetchListItems(accountID: accountID, scope: scope, unreadOnly: unreadOnly, retainingIDs: retainingIDs, limit: limit, offset: offset, in: db)
         }
     }
 
     public func fetchListItems(
         accountID: String? = nil,
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         retainingIDs: Set<String> = [],
         limit: Int? = nil,
         offset: Int = 0,
@@ -282,6 +285,17 @@ public final class TimelineQueryService: Sendable {
             """)
             arguments["folder_acc_id"] = folderAccID
             arguments["folder_name"] = folderName
+        }
+
+        if unreadOnly && scope != .unread {
+            let placeholders = retainingIDs.sorted().enumerated().map { index, id -> String in
+                let key = "filter_retained_\(index)"
+                arguments[key] = id
+                return ":\(key)"
+            }.joined(separator: ", ")
+            whereClauses.append(retainingIDs.isEmpty
+                ? "s.is_read = 0"
+                : "(s.is_read = 0 OR i.id IN (\(placeholders)))")
         }
 
         var sql = """
@@ -369,6 +383,7 @@ public final class TimelineQueryService: Sendable {
     public func fetchAdjacentItem(
         accountID: String? = nil,
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         currentItemID: String,
         direction: AdjacentTimelineDirection,
         retainingIDs: Set<String> = []
@@ -377,6 +392,7 @@ public final class TimelineQueryService: Sendable {
             try fetchAdjacentItem(
                 accountID: accountID,
                 scope: scope,
+                unreadOnly: unreadOnly,
                 currentItemID: currentItemID,
                 direction: direction,
                 retainingIDs: retainingIDs,
@@ -388,6 +404,7 @@ public final class TimelineQueryService: Sendable {
     public func fetchAdjacentItem(
         accountID: String? = nil,
         scope: TimelineScope,
+        unreadOnly: Bool = false,
         currentItemID: String,
         direction: AdjacentTimelineDirection,
         retainingIDs: Set<String> = [],
@@ -470,6 +487,17 @@ public final class TimelineQueryService: Sendable {
             """)
             arguments["folder_acc_id"] = folderAccID
             arguments["folder_name"] = folderName
+        }
+
+        if unreadOnly && scope != .unread {
+            let placeholders = retainingIDs.sorted().enumerated().map { index, id -> String in
+                let key = "filter_retained_\(index)"
+                arguments[key] = id
+                return ":\(key)"
+            }.joined(separator: ", ")
+            whereClauses.append(retainingIDs.isEmpty
+                ? "s.is_read = 0"
+                : "(s.is_read = 0 OR i.id IN (\(placeholders)))")
         }
 
         arguments["cur_id"] = currentItemID

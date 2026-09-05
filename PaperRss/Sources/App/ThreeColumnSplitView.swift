@@ -56,6 +56,9 @@ struct ToolbarActions {
     let isRefreshing: Bool
     let selectionTitle: String
     let hasUnread: Bool
+    let showsUnreadFilter: Bool
+    let unreadOnly: Bool
+    let onToggleUnreadFilter: () -> Void
     let onMarkAllRead: () -> Void
     let onFocusAndScrollArticle: () -> Void
     let isZenMode: Bool
@@ -79,6 +82,9 @@ struct ToolbarActions {
         selectionTitle: String,
         hasUnread: Bool,
         onMarkAllRead: @escaping () -> Void,
+        showsUnreadFilter: Bool = false,
+        unreadOnly: Bool = false,
+        onToggleUnreadFilter: @escaping () -> Void = {},
         onFocusAndScrollArticle: @escaping () -> Void = {},
         isZenMode: Bool = false,
         onToggleZenMode: @escaping () -> Void = {},
@@ -98,6 +104,9 @@ struct ToolbarActions {
         self.isRefreshing = isRefreshing
         self.selectionTitle = selectionTitle
         self.hasUnread = hasUnread
+        self.showsUnreadFilter = showsUnreadFilter
+        self.unreadOnly = unreadOnly
+        self.onToggleUnreadFilter = onToggleUnreadFilter
         self.onMarkAllRead = onMarkAllRead
         self.onFocusAndScrollArticle = onFocusAndScrollArticle
         self.isZenMode = isZenMode
@@ -317,6 +326,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
+        private weak var unreadFilterButton: NSButton?
         private weak var markAllReadButton: NSButton?
         private var zenRemovedToolbarItemIndexes: [NSToolbarItem.Identifier: Int] = [:]
         nonisolated(unsafe) private var eventMonitor: Any?
@@ -667,6 +677,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 if rect.contains(locationInWindow) {
                     return false
                 }
+            }
+            if let unreadFilterButton, !unreadFilterButton.isHidden, unreadFilterButton.window === window,
+               unreadFilterButton.convert(unreadFilterButton.bounds, to: nil).contains(locationInWindow) {
+                return false
             }
             if let markAllReadButton, !markAllReadButton.isHidden, markAllReadButton.window === window {
                 let rect = markAllReadButton.convert(markAllReadButton.bounds, to: nil)
@@ -1280,6 +1294,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                         menuItem.menu.items.first(where: { $0.action == #selector(doImport) })?.title = I18N.localized("导入 OPML")
                         menuItem.menu.items.first(where: { $0.action == #selector(doExport) })?.title = I18N.localized("导出 OPML")
                     }
+                case .paperUnreadFilter:
+                    item.label = I18N.localized(actions.unreadOnly ? "显示全部" : "仅显示未读")
+                    item.paletteLabel = item.label
+                    item.toolTip = item.label
                 case .paperMarkAllRead:
                     item.label = I18N.localized("全部已读")
                     item.paletteLabel = I18N.localized("全部标为已读")
@@ -1318,6 +1336,32 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             }
             if #available(macOS 15.0, *) {
                 entryListTitleItem?.isHidden = isSidebarCollapsed
+            }
+            if let toolbar = splitViewController?.view.window?.toolbar, !actions.isZenMode {
+                let index = toolbar.items.firstIndex { $0.itemIdentifier == .paperUnreadFilter }
+                if actions.showsUnreadFilter, index == nil,
+                   let markIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperMarkAllRead }) {
+                    toolbar.insertItem(withItemIdentifier: .paperUnreadFilter, at: markIndex)
+                } else if !actions.showsUnreadFilter, let index {
+                    toolbar.removeItem(at: index)
+                }
+            }
+            if let button = unreadFilterButton {
+                let title = I18N.localized(actions.unreadOnly ? "显示全部" : "仅显示未读")
+                button.image = NSImage(systemSymbolName: actions.unreadOnly
+                    ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle",
+                    accessibilityDescription: title)
+                button.toolTip = title
+                button.setAccessibilityLabel(title)
+                button.setAccessibilityValue(actions.unreadOnly ? 1 : 0)
+                button.state = actions.unreadOnly ? .on : .off
+                let tint = actions.unreadOnly
+                    ? NSColor(Color(paperHex: chromePalette.accentHex)) : chromeInkColor
+                button.contentTintColor = tint
+                // 原生工具栏会覆盖模板图像的着色，显式保留主题色。
+                let symbolColors = actions.unreadOnly ? [chromeBackgroundColor, tint] : [tint]
+                button.image = button.image?.withSymbolConfiguration(.init(paletteColors: symbolColors))
+                button.image?.isTemplate = false
             }
             if let button = markAllReadButton {
                 button.isEnabled = actions.hasUnread
@@ -1492,6 +1536,21 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 self.entryListTitleItem = item
                 return item
 
+            case .paperUnreadFilter:
+                let item = NSToolbarItem(itemIdentifier: .paperUnreadFilter)
+                item.label = I18N.localized("仅显示未读")
+                item.autovalidates = false
+                let button = NSButton()
+                button.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: item.label)
+                button.bezelStyle = .texturedRounded
+                button.isBordered = true
+                button.target = self
+                button.action = #selector(doToggleUnreadFilter)
+                button.setAccessibilityIdentifier("timeline.unreadFilter")
+                item.view = button
+                self.unreadFilterButton = button
+                return item
+
             case .paperMarkAllRead:
                 let item = NSToolbarItem(itemIdentifier: .paperMarkAllRead)
                 item.label = I18N.localized("全部已读")
@@ -1603,7 +1662,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         }
 
         func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-            toolbarDefaultItemIdentifiers(toolbar)
+            toolbarDefaultItemIdentifiers(toolbar) + [.paperUnreadFilter]
         }
 
         // MARK: 动作方法
@@ -1617,6 +1676,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         @objc private func doAddFolder() { actions.onAddFolder() }
         @objc private func doImport() { actions.onImport() }
         @objc private func doExport() { actions.onExport() }
+        @objc private func doToggleUnreadFilter() { actions.onToggleUnreadFilter() }
         @objc private func doMarkAllRead() { actions.onMarkAllRead() }
     }
 
@@ -1628,6 +1688,7 @@ extension NSToolbarItem.Identifier {
     static let paperSidebarTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.sidebarTracker")
     static let paperTimelineTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.timelineTracker")
     static let paperEntryListTitle = NSToolbarItem.Identifier("com.paperrss.toolbar.entryListTitle")
+    static let paperUnreadFilter = NSToolbarItem.Identifier("com.paperrss.toolbar.unreadFilter")
     static let paperMarkAllRead = NSToolbarItem.Identifier("com.paperrss.toolbar.markAllRead")
     static let paperReaderCapsule = NSToolbarItem.Identifier("com.paperrss.toolbar.readerCapsule")
 }

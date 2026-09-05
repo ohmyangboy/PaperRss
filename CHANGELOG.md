@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## v1.3.2-beta.3 · Build 20 · 2026-09-05
+
+本次为未读筛选预发布版本；建议希望按文件夹或订阅源集中阅读未读文章的用户升级，稳定通道仍为 v1.3.1。
+
+- 未读筛选：文章列表顶部新增过滤按钮，支持文件夹、单个订阅源和多选订阅源。
+- 阅读连续性：切换订阅范围保持筛选，本轮点开后变为已读的文章继续留在列表；重启后默认显示全部。
+- 导航一致性：分页、上一篇／下一篇和键盘导航遵循同一筛选范围，支持中英文提示与主题色。
+
+---
+
+This prerelease adds unread filtering within folders and feeds. Upgrade to try focused unread reading; the stable channel remains on v1.3.1.
+
+- Unread filtering: Added a filter button above the article list for folders, individual feeds, and multiple selected feeds.
+- Reading continuity: Keep the filter enabled when switching scopes and retain articles read during the current session. Restarting defaults to showing all articles.
+- Consistent navigation: Pagination, previous/next actions, and keyboard navigation follow the same filter, with localized labels and theme colors.
+
 ## v1.3.2-beta.2 · Build 19 · 2026-09-04
 
 本次为 AI 能力架构与设置体验预发布版本；建议希望验证多供应商、Gemini 和并发摘要/翻译的用户升级，稳定通道用户可继续使用 v1.3.1。

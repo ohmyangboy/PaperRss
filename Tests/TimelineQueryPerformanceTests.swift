@@ -30,6 +30,53 @@ final class TimelineQueryPerformanceTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testScopedUnreadPaginationRetentionAndNavigation() throws {
+        try provider.addFolder(name: "筛选测试")
+        let first = try provider.addFeed(title: "源一", feedURL: URL(string: "https://filter.example/one")!, folder: "筛选测试")
+        let second = try provider.addFeed(title: "源二", feedURL: URL(string: "https://filter.example/two")!)
+        let other = LocalAccountProvider(accountID: "other-account", database: database)
+        try other.ensureAccountExists()
+        try other.addFolder(name: "筛选测试")
+        let foreign = try other.addFeed(title: "其他账户", feedURL: URL(string: "https://filter.example/foreign")!, folder: "筛选测试")
+        for (owner, feed) in [(provider!, first), (provider!, second), (other, foreign)] {
+            let entries = (0..<230).map { index in
+                ParsedFeedEntry(id: "item-\(index)", title: "文章 \(index)", author: nil,
+                    url: URL(string: "https://filter.example/item/\(index)"),
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_000 - Double(index)),
+                    summary: "摘要", contentHTML: "<p>正文</p>")
+            }
+            _ = try owner.applyRefreshResult(.init(feedID: feed.id, oldTitle: feed.title,
+                result: .success(.updated(ParsedFeed(title: feed.title, siteURL: nil, iconURL: nil, entries: entries), etag: nil, lastModified: nil))))
+            let all = try queryService.fetchListItems(scope: .feed(feedID: feed.id.uuidString))
+            try owner.markRead(entryIDs: all.enumerated().filter { $0.offset % 2 == 0 }.map { $0.element.id }, read: true)
+        }
+        let scope = TimelineScope.feed(feedID: first.id.uuidString)
+        let all = try queryService.fetchListItems(scope: scope)
+        let expected = all.filter { !$0.isRead }
+        let page1 = try queryService.fetchListItems(scope: scope, unreadOnly: true, limit: 100)
+        let page2 = try queryService.fetchListItems(scope: scope, unreadOnly: true, limit: 100, offset: 100)
+        XCTAssertEqual((page1 + page2).map(\.id), expected.map(\.id))
+        XCTAssertEqual(expected.count, 115)
+        let folder = TimelineScope.folder(accountID: "local-default", folderName: "筛选测试")
+        XCTAssertEqual(try queryService.fetchListItems(scope: folder, unreadOnly: true).map(\.id), expected.map(\.id))
+        XCTAssertEqual(try queryService.fetchListItems(scope: .feeds(feedIDs: [first.id.uuidString, second.id.uuidString]), unreadOnly: true).count, 230)
+        XCTAssertTrue(try queryService.fetchListItems(scope: .feeds(feedIDs: []), unreadOnly: true).isEmpty)
+
+        let current = expected[0].id
+        try provider.markRead(entryIDs: [current], read: true)
+        let outside = try XCTUnwrap(queryService.fetchListItems(scope: .feed(feedID: foreign.id.uuidString)).first?.id)
+        let retained: Set<String> = [current, outside]
+        XCTAssertEqual(try queryService.fetchListItems(scope: folder, unreadOnly: true, retainingIDs: retained).map(\.id), expected.map(\.id))
+        let next = try queryService.fetchAdjacentItem(scope: folder, unreadOnly: true, currentItemID: current, direction: .next, retainingIDs: retained)
+        XCTAssertEqual(next?.id, expected[1].id)
+        XCTAssertEqual(try queryService.fetchAdjacentItem(scope: folder, unreadOnly: true, currentItemID: expected[1].id, direction: .previous, retainingIDs: retained)?.id, current)
+        XCTAssertEqual(try queryService.fetchListItems(scope: scope, unreadOnly: true).count, 114)
+        try provider.markRead(entryIDs: all.map(\.id), read: true)
+        XCTAssertTrue(try queryService.fetchListItems(scope: scope, unreadOnly: true).isEmpty)
+        XCTAssertEqual(try queryService.fetchListItems(scope: scope, unreadOnly: true, retainingIDs: retained).map(\.id), [current])
+        XCTAssertEqual(try queryService.fetchListItems(scope: scope).count, 230)
+    }
+
     func testSidebarCountsAggregationWithoutMaterializingArticles() throws {
         try provider.addFolder(name: "Tech")
         let feed1 = try provider.addFeed(title: "Feed 1", feedURL: URL(string: "https://f1.com/rss")!, folder: "Tech")
