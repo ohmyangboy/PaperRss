@@ -284,8 +284,8 @@ final class AIProviderTests: XCTestCase {
         settings = settings.updatingFeature(.bilingualTranslation, configuration: AIFeatureConfiguration(
             isEnabled: true, model: geminiReference, reasoningMode: "关闭"
         ))
-        XCTAssertEqual(settings.configuration(for: .bilingualTranslation)?.reasoningMode, "自动")
-        XCTAssertEqual(settings.resolvedConfiguration(for: .bilingualTranslation)?.reasoningMode, "自动")
+        XCTAssertEqual(settings.configuration(for: .bilingualTranslation)?.reasoningMode, "关闭")
+        XCTAssertEqual(settings.resolvedConfiguration(for: .bilingualTranslation)?.reasoningMode, "关闭")
     }
 
     @MainActor
@@ -1017,6 +1017,28 @@ final class AIProviderTests: XCTestCase {
         )
         localHTTP.allowInsecureLocalEndpoint = true
         XCTAssertNoThrow(try localHTTP.validateConnection(requireModel: true))
+    }
+
+    func testLocalHTTPValidationRejectsPublicPrefixDomainsInSettingsAndRequests() throws {
+        let service = LLMService()
+        for host in ["fc-example.com", "fd-example.com", "10.0.0.1.example", "192.168.999.1"] {
+            var provider = AIProviderProfile.custom(name: "HTTP", description: "", baseURL: "http://\(host)/v1", modelID: "model")
+            provider.allowInsecureLocalEndpoint = true
+            XCTAssertThrowsError(try provider.validateConnection(requireModel: true), host)
+            var configuration = LLMConfiguration.default
+            configuration.baseURL = provider.baseURL
+            configuration.allowInsecureLocalEndpoint = true
+            XCTAssertThrowsError(try service.makeModelsRequest(configuration: configuration, apiKey: "test-key"), host)
+        }
+        for host in ["127.0.0.1", "192.168.1.2", "[::1]", "[fd00::1]"] {
+            var provider = AIProviderProfile.custom(name: "HTTP", description: "", baseURL: "http://\(host)/v1", modelID: "model")
+            provider.allowInsecureLocalEndpoint = true
+            XCTAssertNoThrow(try provider.validateConnection(requireModel: true), host)
+            var configuration = LLMConfiguration.default
+            configuration.baseURL = provider.baseURL
+            configuration.allowInsecureLocalEndpoint = true
+            XCTAssertNoThrow(try service.makeModelsRequest(configuration: configuration, apiKey: "test-key"), host)
+        }
     }
 
     func testLegacyConfigurationMigrationPreservesConnectionAndFeatureFields() throws {

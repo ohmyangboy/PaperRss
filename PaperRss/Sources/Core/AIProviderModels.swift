@@ -94,6 +94,9 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
     public var isEnabled: Bool
     public var reasoningMode: String
     public var temperature: Double
+    public var adaptation: AIModelAdaptation
+    public var reasoningProtocol: AIReasoningProtocol = .automatic
+    public var reasoningMetadata: AIReasoningMetadata?
 
     public init(
         id: String,
@@ -101,7 +104,8 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
         source: AIModelSource = .manual,
         isEnabled: Bool = true,
         reasoningMode: String = "自动",
-        temperature: Double = 0.2
+        temperature: Double = 0.2,
+        adaptation: AIModelAdaptation = .automatic
     ) {
         let cleanID = id.trimmingCharacters(in: .whitespacesAndNewlines)
         self.id = cleanID
@@ -112,10 +116,11 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
         self.isEnabled = isEnabled
         self.reasoningMode = reasoningMode
         self.temperature = temperature
+        self.adaptation = adaptation
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, displayName, source, isEnabled, reasoningMode, temperature
+        case id, displayName, source, isEnabled, reasoningMode, temperature, adaptation, reasoningProtocol, reasoningMetadata
     }
 
     public init(from decoder: Decoder) throws {
@@ -126,8 +131,11 @@ public struct AIModelOption: Codable, Hashable, Identifiable, Sendable {
             source: try values.decodeIfPresent(AIModelSource.self, forKey: .source) ?? .manual,
             isEnabled: try values.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
             reasoningMode: try values.decodeIfPresent(String.self, forKey: .reasoningMode) ?? "自动",
-            temperature: try values.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.2
+            temperature: try values.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.2,
+            adaptation: try values.decodeIfPresent(AIModelAdaptation.self, forKey: .adaptation) ?? .automatic
         )
+        reasoningProtocol = try values.decodeIfPresent(AIReasoningProtocol.self, forKey: .reasoningProtocol) ?? .automatic
+        reasoningMetadata = try values.decodeIfPresent(AIReasoningMetadata.self, forKey: .reasoningMetadata)
     }
 }
 
@@ -142,6 +150,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     public var showsSelectionAsk: Bool
     public var showsSelectionTranslation: Bool
     public var customPrompt: String
+    public var translationPreferences: TranslationPreferences
 
     public static let `default` = AIFeaturePreferences(
         targetLanguage: "简体中文",
@@ -160,7 +169,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         showsSelectionExplanation: Bool = true,
         showsSelectionAsk: Bool = true,
         showsSelectionTranslation: Bool = true,
-        customPrompt: String = ""
+        customPrompt: String = "",
+        translationPreferences: TranslationPreferences = .default
     ) {
         self.targetLanguage = targetLanguage
         self.showsAISummary = showsAISummary
@@ -169,9 +179,10 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         self.showsSelectionAsk = showsSelectionAsk
         self.showsSelectionTranslation = showsSelectionTranslation
         self.customPrompt = customPrompt
+        self.translationPreferences = translationPreferences
     }
 
-    public init(configuration: LLMConfiguration) {
+    public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default) {
         self.init(
             targetLanguage: configuration.targetLanguage,
             showsAISummary: configuration.showsAISummary,
@@ -179,9 +190,30 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             showsSelectionExplanation: configuration.showsSelectionExplanation,
             showsSelectionAsk: configuration.showsSelectionAsk,
             showsSelectionTranslation: configuration.showsSelectionTranslation,
-            customPrompt: configuration.customPrompt
+            customPrompt: configuration.customPrompt,
+            translationPreferences: translationPreferences
         )
     }
+    private enum CodingKeys: String, CodingKey {
+        case targetLanguage, showsAISummary, automaticallyGenerateSummary
+        case showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt
+        case translationPreferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            targetLanguage: try values.decodeIfPresent(String.self, forKey: .targetLanguage) ?? "简体中文",
+            showsAISummary: try values.decodeIfPresent(Bool.self, forKey: .showsAISummary) ?? true,
+            automaticallyGenerateSummary: try values.decodeIfPresent(Bool.self, forKey: .automaticallyGenerateSummary) ?? false,
+            showsSelectionExplanation: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionExplanation) ?? true,
+            showsSelectionAsk: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionAsk) ?? true,
+            showsSelectionTranslation: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true,
+            customPrompt: try values.decodeIfPresent(String.self, forKey: .customPrompt) ?? "",
+            translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default
+        )
+    }
+
 }
 
 public struct AIProviderProfile: Codable, Hashable, Identifiable, Sendable {
@@ -256,11 +288,15 @@ public struct AIProviderProfile: Codable, Hashable, Identifiable, Sendable {
             description: configuration.providerDescription,
             baseURL: configuration.baseURL,
             selectedModelID: configuration.model,
-            models: [AIModelOption(id: configuration.model)],
+            models: [AIModelOption(id: configuration.model, adaptation: configuration.adaptation)],
             reasoningMode: configuration.reasoningMode,
             temperature: configuration.temperature,
             allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
         )
+        if let index = models.firstIndex(where: { $0.id == configuration.model }) {
+            models[index].reasoningProtocol = configuration.reasoningProtocol
+            models[index].reasoningMetadata = configuration.reasoningMetadata
+        }
     }
 
     public func runtimeConfiguration(features: AIFeaturePreferences) -> LLMConfiguration {
@@ -268,7 +304,7 @@ public struct AIProviderProfile: Codable, Hashable, Identifiable, Sendable {
     }
 
     public func runtimeConfiguration(modelID: String, features: AIFeaturePreferences) -> LLMConfiguration {
-        return LLMConfiguration(
+        var runtime = LLMConfiguration(
             providerName: name,
             providerDescription: description,
             baseURL: baseURL,
@@ -283,8 +319,12 @@ public struct AIProviderProfile: Codable, Hashable, Identifiable, Sendable {
             showsSelectionAsk: features.showsSelectionAsk,
             showsSelectionTranslation: features.showsSelectionTranslation,
             customPrompt: features.customPrompt,
-            providerKind: kind
+            providerKind: kind,
+            adaptation: models.first(where: { $0.id == modelID })?.adaptation ?? .automatic
         )
+        runtime.reasoningProtocol = models.first(where: { $0.id == modelID })?.reasoningProtocol ?? .automatic
+        runtime.reasoningMetadata = models.first(where: { $0.id == modelID })?.reasoningMetadata
+        return runtime
     }
 
     public func updatingModels(from remoteIDs: [String]) -> AIProviderProfile {
@@ -368,15 +408,17 @@ public struct AIProviderProfile: Codable, Hashable, Identifiable, Sendable {
         }
         if scheme == "http" {
             let isLocalName = host == "localhost" || host.hasSuffix(".local")
-            let octets = host.split(separator: ".").compactMap { Int($0) }
-            let isPrivateIPv4 = octets.count == 4 && (
+            let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+            let octets = parts.compactMap { Int($0) }
+            let isPrivateIPv4 = parts.count == 4 && octets.count == 4 && octets.allSatisfy { (0...255).contains($0) } && (
                 octets[0] == 10 ||
                 (octets[0] == 127) ||
                 (octets[0] == 192 && octets[1] == 168) ||
                 (octets[0] == 172 && (16...31).contains(octets[1])) ||
                 (octets[0] == 169 && octets[1] == 254)
             )
-            let isLocalIPv6 = host == "::1" || host.hasPrefix("fe80:") || host.hasPrefix("fc") || host.hasPrefix("fd")
+            let ipv6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            let isLocalIPv6 = ipv6.contains(":") && (ipv6 == "::1" || ipv6.hasPrefix("fe80:") || ipv6.hasPrefix("fc") || ipv6.hasPrefix("fd"))
             guard allowInsecureLocalEndpoint && (isLocalName || isPrivateIPv4 || isLocalIPv6) else {
                 throw AIProviderValidationError.insecureRemoteEndpoint
             }
@@ -533,16 +575,7 @@ public struct AISettings: Codable, Hashable, Sendable {
     }
 
     public func configuration(for kind: AIFeatureKind) -> AIFeatureConfiguration? {
-        if var configured = featureConfigurations?[kind] {
-            if configured.reasoningMode == "关闭",
-               let reference = configured.model,
-               let provider = provider(id: reference.providerID),
-               !provider.runtimeConfiguration(modelID: reference.modelID, features: features).supportsDisablingReasoning {
-                // 换到不支持关闭的模型时，界面和执行都显示其实际使用的自动模式。
-                configured.reasoningMode = "自动"
-            }
-            return configured
-        }
+        if let configured = featureConfigurations?[kind] { return configured }
         guard let provider = activeProvider else { return nil }
         let reference = AIModelReference(providerID: provider.id, modelID: provider.selectedModelID)
         return AIFeatureConfiguration(
@@ -881,20 +914,12 @@ public struct AIExecutionContext: Hashable, Sendable {
         let normalizedModel = configuration.model
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let effectiveReasoning: String
-        switch providerKind {
-        case .gemini where normalizedModel.hasPrefix("gemini-3"):
-            effectiveReasoning = ["低", "中", "高"].contains(configuration.reasoningMode)
-                ? configuration.reasoningMode
-                : "provider-default"
-        default:
-            effectiveReasoning = configuration.reasoningMode
-        }
-        let effectiveTemperature = providerKind == .gemini && normalizedModel.hasPrefix("gemini-3")
+        let effectiveReasoning = AIReasoningCapabilities.canonical(configuration.reasoningMode)
+        let effectiveTemperature = configuration.usesGeminiAPI && normalizedModel.hasPrefix("gemini-3")
             ? "omitted"
             : String(configuration.temperature)
 
-        let payload = [
+        var components = [
             "ai-execution-v1",
             kind.rawValue,
             providerID,
@@ -906,7 +931,11 @@ public struct AIExecutionContext: Hashable, Sendable {
             effectiveTemperature,
             String(promptVersion),
             configuration.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).stableDigest
-        ].joined(separator: "|")
+        ]
+        // 通用聊天保持历史指纹，避免升级使已有译文全部失效。
+        if configuration.resolvedAdaptation != .chat { components.append(configuration.resolvedAdaptation.rawValue) }
+        components.append("reasoning-v2:" + configuration.reasoningCapabilities.wireProtocol.rawValue)
+        let payload = components.joined(separator: "|")
         return "v1:\(payload.stableDigest)"
     }
 }

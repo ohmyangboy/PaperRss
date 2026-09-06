@@ -814,6 +814,7 @@ private struct SidebarView: View {
     #endif
     @AppStorage("sidebar_collapsed_accounts_raw") private var collapsedAccountsRaw: String = ""
     @AppStorage("sidebar_collapsed_folders_raw") private var collapsedFoldersRaw: String = ""
+    @State private var showsEmptyFeedActions = false
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
     #if os(macOS)
     @State private var showsFeedbackPopover = false
@@ -937,13 +938,32 @@ private struct SidebarView: View {
                     systemImage: "person.crop.circle.badge.xmark"
                 )
             } else if (store.isAccountEnabled("local-default") ? store.feeds.isEmpty : true) && freshRSSAccounts.allSatisfy({ store.rootFeeds(for: $0.id).isEmpty && store.folders(for: $0.id).isEmpty }) {
-                PaperEmptyState(
-                    title: I18N.localized("还没有订阅"),
-                    description: I18N.localized("添加一个 RSS 地址，或导入 OPML 文件。"),
-                    systemImage: "dot.radiowaves.left.and.right",
-                    actionTitle: I18N.localized("添加订阅"),
-                    action: { showsAddFeed = true }
+                ColumnEmptyPrompt(
+                    title: I18N.shared.localized("添加或导入 Feed", "Add or import Feed"),
+                    isFeed: true,
+                    iconAction: { showsEmptyFeedActions = true }
                 )
+                .foregroundStyle(Color(paperHex: store.readerAppearance.palette(for: appearanceMode).accentHex))
+                .fixedSize()
+                .popover(isPresented: $showsEmptyFeedActions) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            showsEmptyFeedActions = false
+                            showsAddFeed = true
+                        } label: {
+                            Label(I18N.localized("添加订阅"), systemImage: "plus.circle")
+                        }
+                        Button {
+                            showsEmptyFeedActions = false
+                            showsImporter = true
+                        } label: {
+                            Label(I18N.localized("导入 OPML"), systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(16)
+                }
+                .accessibilityIdentifier("sidebar.empty.addOrImport")
             }
         }
         .onChange(of: store.accounts) {
@@ -1925,15 +1945,14 @@ private struct EntryListView: View {
             #endif
             .overlay {
                 if loadedEntries.isEmpty && !isLoadingPage {
-                    PaperEmptyState(
-                        title: I18N.localized(unreadOnly ? "暂无未读文章" : "没有文章"),
-                        description: I18N.shared.localized(
-                            store.feeds.isEmpty
-                                ? "添加订阅后，这里会显示文章。"
-                                : "切换到其他分类，或等待下一次订阅更新。"
-                        ),
-                        systemImage: "text.line.first.and.arrowtriangle.forward"
+                    ColumnEmptyPrompt(
+                        title: unreadOnly
+                            ? I18N.localized("暂无未读文章")
+                            : I18N.shared.localized("暂无文章", "No articles"),
+                        isFeed: false
                     )
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("articles.empty")
                 }
             }
         }
@@ -2469,5 +2488,60 @@ private struct RenameFolderSheet: View {
         store.renameFolder(from: oldName, to: clean)
         onRename?(clean)
         dismiss()
+    }
+}
+
+/// 两栏空态共用相同的图标占位与文字基线，避免长短文案改变视觉重心。
+private struct ColumnEmptyPrompt: View {
+    let title: String
+    let isFeed: Bool
+    var iconAction: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            if let iconAction {
+                Button(action: iconAction) {
+                    icon.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(title)
+                .help(title)
+            } else {
+                icon.accessibilityHidden(true)
+            }
+
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+                .lineLimit(1)
+        }
+        .padding(12)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var icon: some View {
+            Group {
+                if isFeed {
+                    // 标准 RSS 四分之一圆弧，保持小尺寸下的辨识度。
+                    Image(size: CGSize(width: 20, height: 20)) { context in
+                        var path = Path()
+                        let center = CGPoint(x: 3, y: 17)
+                        for radius: CGFloat in [8, 15] {
+                            path.move(to: CGPoint(x: center.x, y: center.y - radius))
+                            path.addArc(center: center, radius: radius,
+                                        startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+                        }
+                        context.stroke(path, with: .color(.black),
+                                       style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        context.fill(Path(ellipseIn: CGRect(x: 1, y: 15, width: 4, height: 4)), with: .color(.black))
+                    }
+                    .renderingMode(.template)
+                } else {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 20, weight: .medium))
+                }
+            }
+            .frame(width: 20, height: 20)
+
+
     }
 }

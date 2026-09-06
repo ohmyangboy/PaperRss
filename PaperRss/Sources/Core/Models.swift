@@ -521,6 +521,8 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var baseURL: String
     public var model: String
     public var reasoningMode: String
+    public var reasoningProtocol: AIReasoningProtocol = .automatic
+    public var reasoningMetadata: AIReasoningMetadata?
     public var temperature: Double
     public var targetLanguage: String
     public var allowInsecureLocalEndpoint: Bool
@@ -532,6 +534,7 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
 
     public var customPrompt: String
     public var providerKind: AIProviderKind?
+    public var adaptation: AIModelAdaptation
 
     public static let `default` = LLMConfiguration(baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini", temperature: 0.2, targetLanguage: "简体中文", allowInsecureLocalEndpoint: false, showsAISummary: true, automaticallyGenerateSummary: false, showsSelectionExplanation: true, showsSelectionAsk: true, showsSelectionTranslation: true, customPrompt: "")
 
@@ -556,25 +559,13 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     )
 
     public var usesDeepSeekAPI: Bool {
-        if let providerKind { return providerKind == .deepSeek }
-        guard let host = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
-        return host == "api.deepseek.com"
+        reasoningCapabilities.wireProtocol == .deepSeek
     }
 
-    public var usesGeminiAPI: Bool {
-        if let providerKind { return providerKind == .gemini }
-        guard let host = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
-        return host == "generativelanguage.googleapis.com"
-    }
+    public var usesGeminiAPI: Bool { reasoningCapabilities.wireProtocol == .gemini }
+    public var supportsDisablingReasoning: Bool { reasoningCapabilities.canDisable }
 
-    /// 只为请求适配器能够明确关闭推理的模型提供“关闭”。
-    public var supportsDisablingReasoning: Bool {
-        if usesDeepSeekAPI { return true }
-        let normalizedModel = model.replacingOccurrences(of: "models/", with: "").lowercased()
-        return usesGeminiAPI && normalizedModel.hasPrefix("gemini-2.5") && !normalizedModel.contains("pro")
-    }
-
-    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "", providerKind: AIProviderKind? = nil) {
+    public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "", providerKind: AIProviderKind? = nil, adaptation: AIModelAdaptation = .automatic) {
         self.providerName = providerName
         self.providerDescription = providerDescription
         self.baseURL = baseURL
@@ -590,9 +581,10 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         self.showsSelectionTranslation = showsSelectionTranslation
         self.customPrompt = customPrompt
         self.providerKind = providerKind
+        self.adaptation = adaptation
     }
 
-    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt, providerKind }
+    private enum CodingKeys: String, CodingKey { case providerName, providerDescription, baseURL, model, reasoningMode, temperature, targetLanguage, allowInsecureLocalEndpoint, showsAISummary, automaticallyGenerateSummary, showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt, providerKind, adaptation, reasoningProtocol, reasoningMetadata }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -611,6 +603,9 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
         showsSelectionTranslation = try container.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true
         customPrompt = try container.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
         providerKind = try container.decodeIfPresent(AIProviderKind.self, forKey: .providerKind)
+        reasoningProtocol = try container.decodeIfPresent(AIReasoningProtocol.self, forKey: .reasoningProtocol) ?? .automatic
+        reasoningMetadata = try container.decodeIfPresent(AIReasoningMetadata.self, forKey: .reasoningMetadata)
+        adaptation = try container.decodeIfPresent(AIModelAdaptation.self, forKey: .adaptation) ?? .automatic
     }
 }
 

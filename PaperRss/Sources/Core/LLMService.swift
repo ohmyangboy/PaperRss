@@ -60,6 +60,8 @@ public struct URLSessionAIModelAdapter: AIModelPort, @unchecked Sendable {
 }
 
 public enum LLMServiceError: LocalizedError, Sendable {
+    case unsupportedReasoning
+    case truncatedResponse
     case invalidBaseURL
     case insecureEndpoint
     case invalidResponse
@@ -68,10 +70,18 @@ public enum LLMServiceError: LocalizedError, Sendable {
     case rateLimited
     case missingAPIKey
     case requestInProgress
+    case translationOnly
+    case unsupportedTranslationLanguage
+    case inconclusiveTranslationProbe
     case httpStatus(Int, String)
 
     public var errorDescription: String? {
         switch self {
+        case .unsupportedReasoning: I18N.localized("当前思考选项未获此接口支持，请重新选择思考模式。", englishFallback: "Select a reasoning mode supported by this endpoint.")
+        case .truncatedResponse: I18N.localized("模型输出被截断，请缩短输入后重试。", englishFallback: "Model output was truncated. Shorten the input and retry.")
+        case .translationOnly: I18N.localized("当前模型适配仅用于翻译，请为此功能选择其他模型。", englishFallback: "This adapter is for translation. Select another model for this feature.")
+        case .unsupportedTranslationLanguage: I18N.localized("翻译接口不支持此目标语言，请填写支持的语言名称或代码。", englishFallback: "The translation adapter does not support this target language. Enter a supported language name or code.")
+        case .inconclusiveTranslationProbe: I18N.localized("翻译协议探测未能确认目标语言生效，请检查模型说明或手动选择适配。", englishFallback: "The probe could not confirm the target languages. Check the model documentation or choose an adapter manually.")
         case .invalidBaseURL: I18N.localized("Base URL 无效。")
         case .insecureEndpoint: I18N.localized("仅允许 HTTPS；局域网 HTTP 需在设置中明确开启。")
         case .invalidResponse: I18N.localized("模型返回的内容无法识别。")
@@ -96,13 +106,21 @@ public struct LLMService: Sendable {
     }
 
     public func test(configuration: LLMConfiguration, apiKey: String) async throws {
-        _ = try await complete(prompt: "Reply with exactly OK.", system: "You are a connectivity test.", configuration: configuration, apiKey: apiKey)
+        if configuration.usesTranslationAdaptation {
+            _ = try await translate(paragraph: "The library opens tomorrow morning.", configuration: configuration, apiKey: apiKey)
+        } else {
+            _ = try await complete(prompt: "Reply with exactly OK.", system: "You are a connectivity test.", configuration: configuration, apiKey: apiKey)
+        }
     }
 
     /// Fetches the OpenAI-compatible model catalog for a provider. Gemini's
     /// official compatibility endpoint exposes the same `/models` shape, so a
     /// single request contract works for built-in and custom providers.
     public func fetchModels(configuration: LLMConfiguration, apiKey: String) async throws -> [String] {
+        try await fetchModelOptions(configuration: configuration, apiKey: apiKey).map(\.id)
+    }
+
+    public func fetchModelOptions(configuration: LLMConfiguration, apiKey: String) async throws -> [AIModelOption] {
         let request = try makeModelsRequest(configuration: configuration, apiKey: apiKey)
         let response = try await port.data(for: request)
         try validate(statusCode: response.statusCode, data: response.data)
@@ -115,7 +133,21 @@ public struct LLMService: Sendable {
             .map { normalizedModelID($0, configuration: configuration) }
             .filter { !$0.isEmpty }
         guard !ids.isEmpty else { throw LLMServiceError.invalidResponse }
-        return ids
+        let raw = (try? JSONSerialization.jsonObject(with: response.data)) as? [String: Any]
+        let entries = raw?["data"] as? [[String: Any]] ?? []
+        return ids.map { id in
+            var option = AIModelOption(id: id, source: .remote)
+            if configuration.reasoningCapabilities.wireProtocol == .openRouter,
+               let entry = entries.first(where: { ($0["id"] as? String) == id }),
+               let reasoning = entry["reasoning"] as? [String: Any] {
+                let efforts: [String]
+                if reasoning["supported_efforts"] is NSNull {
+                    efforts = ["minimal", "low", "medium", "high", "xhigh", "max"]
+                } else { efforts = reasoning["supported_efforts"] as? [String] ?? [] }
+                option.reasoningMetadata = AIReasoningMetadata(modelID: id, endpoint: configuration.reasoningEndpoint, fetchedAt: Date(), efforts: efforts.filter { $0 != "none" }, canDisable: reasoning["mandatory"] as? Bool == false, supportsThinking: true)
+            }
+            return option
+        }
     }
 
     public func complete(
@@ -127,6 +159,7 @@ public struct LLMService: Sendable {
         forceDisableReasoning: Bool = false,
         overrideTemperature: Double? = nil
     ) async throws -> String {
+        guard !configuration.usesTranslationAdaptation else { throw LLMServiceError.translationOnly }
         let urlRequest = try makeRequest(
             prompt: prompt,
             system: system,
@@ -273,7 +306,14 @@ public struct LLMService: Sendable {
         apiKey: String,
         onDelta: (@Sendable (String) async -> Void)? = nil
     ) async throws -> String {
-        try await complete(
+        if configuration.usesTranslationAdaptation {
+            let request = try makeTranslationRequest(paragraph: paragraph, configuration: configuration, apiKey: apiKey)
+            let result = try await nonStreaming(request: request)
+            try Task.checkCancellation()
+            if let onDelta { await onDelta(result) }
+            return result
+        }
+        return try await complete(
             prompt: paragraph,
             system: "Translate the following passage into \(configuration.targetLanguage). Preserve meaning, tone, numbers, names, links, and Markdown. Return only the translation.",
             configuration: configuration,
@@ -289,6 +329,15 @@ public struct LLMService: Sendable {
     /// when a provider cannot keep the response shape.
     public func translateBatch(paragraphs: [String], configuration: LLMConfiguration, apiKey: String) async throws -> [String] {
         guard !paragraphs.isEmpty else { return [] }
+        if configuration.usesTranslationAdaptation {
+            // 调度层每批一段；直接调用批量入口时仍保证数量与顺序。
+            var translated: [String] = []
+            for paragraph in paragraphs {
+                try Task.checkCancellation()
+                translated.append(try await translate(paragraph: paragraph, configuration: configuration, apiKey: apiKey))
+            }
+            return translated
+        }
         guard paragraphs.count > 1 else {
             return [try await translate(paragraph: paragraphs[0], configuration: configuration, apiKey: apiKey)]
         }
@@ -358,69 +407,422 @@ public struct LLMService: Sendable {
         let root = base.path.hasSuffix("/") ? String(base.path.dropLast()) : base.path
         base.path = root + "/chat/completions"
         guard let url = base.url else { throw LLMServiceError.invalidBaseURL }
-        struct Message: Encodable { let role: String; let content: String }
-        struct Thinking: Encodable { let type: String }
-        struct Body: Encodable {
-            let model: String
-            let messages: [Message]
-            let temperature: Double?
-            let stream: Bool
-            let thinking: Thinking?
-            let reasoningEffort: String?
-
-            enum CodingKeys: String, CodingKey {
-                case model, messages, temperature, stream, thinking
-                case reasoningEffort = "reasoning_effort"
-            }
-        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        let deepSeekReasoning: (Thinking?, String?)
-        if configuration.usesDeepSeekAPI, forceDisableReasoning {
-            deepSeekReasoning = (Thinking(type: "disabled"), nil)
-        } else if configuration.usesDeepSeekAPI {
-            switch configuration.reasoningMode {
-            case "关闭": deepSeekReasoning = (Thinking(type: "disabled"), nil)
-            case "低": deepSeekReasoning = (Thinking(type: "enabled"), "low")
-            case "中": deepSeekReasoning = (Thinking(type: "enabled"), "medium")
-            case "高": deepSeekReasoning = (Thinking(type: "enabled"), "high")
-            default: deepSeekReasoning = (Thinking(type: "enabled"), nil)
-            }
-        } else {
-            deepSeekReasoning = (nil, nil)
-        }
-        // Gemini's OpenAI-compatible endpoint accepts the standard
-        // `reasoning_effort` field. Gemini 3 models cannot disable thinking,
-        // so "关闭"/automatic intentionally omit the field and let Google
-        // choose the model default.
-        let geminiReasoningEffort: String?
-        if configuration.usesGeminiAPI {
-            let geminiModel = configuration.model
-                .replacingOccurrences(of: "models/", with: "")
-                .lowercased()
-            switch configuration.reasoningMode {
-            case "关闭" where geminiModel.hasPrefix("gemini-2.5") && !geminiModel.contains("pro"):
-                geminiReasoningEffort = "none"
-            case "低": geminiReasoningEffort = "low"
-            case "中": geminiReasoningEffort = "medium"
-            case "高": geminiReasoningEffort = "high"
-            default: geminiReasoningEffort = nil
-            }
-        } else {
-            geminiReasoningEffort = nil
-        }
-        // Gemini 3.x rejects the deprecated sampling knobs (temperature,
-        // top_p and top_k). Keep the setting for other providers and omit it
-        // for the official Gemini 3 compatibility endpoint.
         let normalizedModel = normalizedModelID(configuration.model, configuration: configuration)
-        let supportsTemperature = !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3"))
-        let temp = supportsTemperature ? (overrideTemperature ?? configuration.temperature) : nil
-        request.httpBody = try JSONEncoder().encode(Body(model: normalizedModel, messages: [Message(role: "system", content: system), Message(role: "user", content: prompt)], temperature: temp, stream: stream, thinking: deepSeekReasoning.0, reasoningEffort: deepSeekReasoning.1 ?? geminiReasoningEffort))
+        var body: [String: Any] = ["model": normalizedModel, "stream": stream,
+            "messages": configuration.resolvedAdaptation == .userMessage
+                ? [["role": "user", "content": system + "\n\n" + prompt]]
+                : [["role": "system", "content": system], ["role": "user", "content": prompt]]]
+        if !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3")) {
+            body["temperature"] = overrideTemperature ?? configuration.temperature
+        }
+        let capability = configuration.reasoningCapabilities
+        let mode = forceDisableReasoning && capability.canDisable ? "关闭" : AIReasoningCapabilities.canonical(configuration.reasoningMode)
+        // 无效旧选项必须显式重选，不能在界面显示关闭、请求却自动开启。
+        guard mode == "自动" || capability.accepts(mode) else { throw LLMServiceError.unsupportedReasoning }
+        if mode != "自动" {
+            let off = mode == "关闭"
+            let effort = mode == "开启" || off ? nil : mode
+            switch capability.wireProtocol {
+            case .deepSeek:
+                body["thinking"] = ["type": off ? "disabled" : "enabled"]
+                body["reasoning_effort"] = effort
+            case .gemini: body["reasoning_effort"] = off ? "none" : effort
+            case .dashscope:
+                body["enable_thinking"] = !off
+                body["reasoning_effort"] = effort
+            case .openRouter:
+                var reasoning: [String: Any] = ["enabled": !off]
+                reasoning["effort"] = effort
+                body["reasoning"] = reasoning
+                body["provider"] = ["require_parameters": true]
+            case .openAI: body["reasoning_effort"] = effort
+            case .automatic: break
+            }
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+
+    func makeTranslationRequest(paragraph: String, configuration: LLMConfiguration, apiKey: String) throws -> URLRequest {
+        var transport = configuration
+        transport.adaptation = .chat
+        transport.reasoningMode = "自动"
+        var request = try makeRequest(prompt: "", system: "", configuration: transport, apiKey: apiKey, stream: false)
+        // 只复用端点、鉴权和超时。翻译协议不携带通用聊天的采样与推理参数。
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": configuration.model.trimmingCharacters(in: .whitespacesAndNewlines),
+            "messages": [["role": "user", "content": paragraph]],
+            "stream": false,
+            "translation_options": ["source_lang": "auto", "target_lang": try Self.translationLanguage(configuration.targetLanguage, model: configuration.model)]
+        ])
+        return request
+    }
+
+    static func translationLanguage(_ language: String, model: String = "") throws -> String {
+        // 官方语言表，2026-09-06；模型子集由服务端校验。
+        // https://help.aliyun.com/zh/model-studio/machine-translation
+        let aliases = [
+            "英语": "English",
+            "english": "English",
+            "en": "English",
+            "简体中文": "Chinese",
+            "chinese": "Chinese",
+            "zh": "Chinese",
+            "繁体中文": "Traditional Chinese",
+            "traditional chinese": "Traditional Chinese",
+            "zh_tw": "Traditional Chinese",
+            "俄语": "Russian",
+            "russian": "Russian",
+            "ru": "Russian",
+            "日语": "Japanese",
+            "japanese": "Japanese",
+            "ja": "Japanese",
+            "韩语": "Korean",
+            "korean": "Korean",
+            "ko": "Korean",
+            "西班牙语": "Spanish",
+            "spanish": "Spanish",
+            "es": "Spanish",
+            "法语": "French",
+            "french": "French",
+            "fr": "French",
+            "葡萄牙语": "Portuguese",
+            "portuguese": "Portuguese",
+            "pt": "Portuguese",
+            "德语": "German",
+            "german": "German",
+            "de": "German",
+            "意大利语": "Italian",
+            "italian": "Italian",
+            "it": "Italian",
+            "泰语": "Thai",
+            "thai": "Thai",
+            "th": "Thai",
+            "越南语": "Vietnamese",
+            "vietnamese": "Vietnamese",
+            "vi": "Vietnamese",
+            "印度尼西亚语": "Indonesian",
+            "indonesian": "Indonesian",
+            "id": "Indonesian",
+            "马来语": "Malay",
+            "malay": "Malay",
+            "ms": "Malay",
+            "阿拉伯语": "Arabic",
+            "arabic": "Arabic",
+            "ar": "Arabic",
+            "印地语": "Hindi",
+            "hindi": "Hindi",
+            "hi": "Hindi",
+            "希伯来语": "Hebrew",
+            "hebrew": "Hebrew",
+            "he": "Hebrew",
+            "缅甸语": "Burmese",
+            "burmese": "Burmese",
+            "my": "Burmese",
+            "泰米尔语": "Tamil",
+            "tamil": "Tamil",
+            "ta": "Tamil",
+            "乌尔都语": "Urdu",
+            "urdu": "Urdu",
+            "ur": "Urdu",
+            "孟加拉语": "Bengali",
+            "bengali": "Bengali",
+            "bn": "Bengali",
+            "波兰语": "Polish",
+            "polish": "Polish",
+            "pl": "Polish",
+            "荷兰语": "Dutch",
+            "dutch": "Dutch",
+            "nl": "Dutch",
+            "罗马尼亚语": "Romanian",
+            "romanian": "Romanian",
+            "ro": "Romanian",
+            "土耳其语": "Turkish",
+            "turkish": "Turkish",
+            "tr": "Turkish",
+            "高棉语": "Khmer",
+            "khmer": "Khmer",
+            "km": "Khmer",
+            "老挝语": "Lao",
+            "lao": "Lao",
+            "lo": "Lao",
+            "粤语": "Cantonese",
+            "cantonese": "Cantonese",
+            "yue": "Cantonese",
+            "捷克语": "Czech",
+            "czech": "Czech",
+            "cs": "Czech",
+            "希腊语": "Greek",
+            "greek": "Greek",
+            "el": "Greek",
+            "瑞典语": "Swedish",
+            "swedish": "Swedish",
+            "sv": "Swedish",
+            "匈牙利语": "Hungarian",
+            "hungarian": "Hungarian",
+            "hu": "Hungarian",
+            "丹麦语": "Danish",
+            "danish": "Danish",
+            "da": "Danish",
+            "芬兰语": "Finnish",
+            "finnish": "Finnish",
+            "fi": "Finnish",
+            "乌克兰语": "Ukrainian",
+            "ukrainian": "Ukrainian",
+            "uk": "Ukrainian",
+            "保加利亚语": "Bulgarian",
+            "bulgarian": "Bulgarian",
+            "bg": "Bulgarian",
+            "塞尔维亚语": "Serbian",
+            "serbian": "Serbian",
+            "sr": "Serbian",
+            "泰卢固语": "Telugu",
+            "telugu": "Telugu",
+            "te": "Telugu",
+            "南非荷兰语": "Afrikaans",
+            "afrikaans": "Afrikaans",
+            "af": "Afrikaans",
+            "亚美尼亚语": "Armenian",
+            "armenian": "Armenian",
+            "hy": "Armenian",
+            "阿萨姆语": "Assamese",
+            "assamese": "Assamese",
+            "as": "Assamese",
+            "阿斯图里亚斯语": "Asturian",
+            "asturian": "Asturian",
+            "ast": "Asturian",
+            "巴斯克语": "Basque",
+            "basque": "Basque",
+            "eu": "Basque",
+            "白俄罗斯语": "Belarusian",
+            "belarusian": "Belarusian",
+            "be": "Belarusian",
+            "波斯尼亚语": "Bosnian",
+            "bosnian": "Bosnian",
+            "bs": "Bosnian",
+            "加泰罗尼亚语": "Catalan",
+            "catalan": "Catalan",
+            "ca": "Catalan",
+            "宿务语": "Cebuano",
+            "cebuano": "Cebuano",
+            "ceb": "Cebuano",
+            "克罗地亚语": "Croatian",
+            "croatian": "Croatian",
+            "hr": "Croatian",
+            "埃及阿拉伯语": "Egyptian Arabic",
+            "egyptian arabic": "Egyptian Arabic",
+            "arz": "Egyptian Arabic",
+            "爱沙尼亚语": "Estonian",
+            "estonian": "Estonian",
+            "et": "Estonian",
+            "加利西亚语": "Galician",
+            "galician": "Galician",
+            "gl": "Galician",
+            "格鲁吉亚语": "Georgian",
+            "georgian": "Georgian",
+            "ka": "Georgian",
+            "古吉拉特语": "Gujarati",
+            "gujarati": "Gujarati",
+            "gu": "Gujarati",
+            "冰岛语": "Icelandic",
+            "icelandic": "Icelandic",
+            "is": "Icelandic",
+            "爪哇语": "Javanese",
+            "javanese": "Javanese",
+            "jv": "Javanese",
+            "卡纳达语": "Kannada",
+            "kannada": "Kannada",
+            "kn": "Kannada",
+            "哈萨克语": "Kazakh",
+            "kazakh": "Kazakh",
+            "kk": "Kazakh",
+            "拉脱维亚语": "Latvian",
+            "latvian": "Latvian",
+            "lv": "Latvian",
+            "立陶宛语": "Lithuanian",
+            "lithuanian": "Lithuanian",
+            "lt": "Lithuanian",
+            "卢森堡语": "Luxembourgish",
+            "luxembourgish": "Luxembourgish",
+            "lb": "Luxembourgish",
+            "马其顿语": "Macedonian",
+            "macedonian": "Macedonian",
+            "mk": "Macedonian",
+            "马加希语": "Maithili",
+            "maithili": "Maithili",
+            "mai": "Maithili",
+            "马耳他语": "Maltese",
+            "maltese": "Maltese",
+            "mt": "Maltese",
+            "马拉地语": "Marathi",
+            "marathi": "Marathi",
+            "mr": "Marathi",
+            "美索不达米亚阿拉伯语": "Mesopotamian Arabic",
+            "mesopotamian arabic": "Mesopotamian Arabic",
+            "acm": "Mesopotamian Arabic",
+            "摩洛哥阿拉伯语": "Moroccan Arabic",
+            "moroccan arabic": "Moroccan Arabic",
+            "ary": "Moroccan Arabic",
+            "内志阿拉伯语": "Najdi Arabic",
+            "najdi arabic": "Najdi Arabic",
+            "ars": "Najdi Arabic",
+            "尼泊尔语": "Nepali",
+            "nepali": "Nepali",
+            "ne": "Nepali",
+            "北阿塞拜疆语": "North Azerbaijani",
+            "north azerbaijani": "North Azerbaijani",
+            "az": "North Azerbaijani",
+            "北黎凡特阿拉伯语": "North Levantine Arabic",
+            "north levantine arabic": "North Levantine Arabic",
+            "apc": "North Levantine Arabic",
+            "北乌兹别克语": "Northern Uzbek",
+            "northern uzbek": "Northern Uzbek",
+            "uz": "Northern Uzbek",
+            "书面语挪威语": "Norwegian Bokmål",
+            "norwegian bokmål": "Norwegian Bokmål",
+            "nb": "Norwegian Bokmål",
+            "新挪威语": "Norwegian Nynorsk",
+            "norwegian nynorsk": "Norwegian Nynorsk",
+            "nn": "Norwegian Nynorsk",
+            "奥克语": "Occitan",
+            "occitan": "Occitan",
+            "oc": "Occitan",
+            "奥里亚语": "Odia",
+            "odia": "Odia",
+            "or": "Odia",
+            "邦阿西楠语": "Pangasinan",
+            "pangasinan": "Pangasinan",
+            "pag": "Pangasinan",
+            "西西里语": "Sicilian",
+            "sicilian": "Sicilian",
+            "scn": "Sicilian",
+            "信德语": "Sindhi",
+            "sindhi": "Sindhi",
+            "sd": "Sindhi",
+            "僧伽罗语": "Sinhala",
+            "sinhala": "Sinhala",
+            "si": "Sinhala",
+            "斯洛伐克语": "Slovak",
+            "slovak": "Slovak",
+            "sk": "Slovak",
+            "斯洛文尼亚语": "Slovenian",
+            "slovenian": "Slovenian",
+            "sl": "Slovenian",
+            "南黎凡特阿拉伯语": "South Levantine Arabic",
+            "south levantine arabic": "South Levantine Arabic",
+            "ajp": "South Levantine Arabic",
+            "斯瓦希里语": "Swahili",
+            "swahili": "Swahili",
+            "sw": "Swahili",
+            "他加禄语": "Tagalog",
+            "tagalog": "Tagalog",
+            "tl": "Tagalog",
+            "塔伊兹-亚丁阿拉伯语": "Ta’izzi-Adeni Arabic",
+            "ta’izzi-adeni arabic": "Ta’izzi-Adeni Arabic",
+            "acq": "Ta’izzi-Adeni Arabic",
+            "托斯克阿尔巴尼亚语": "Tosk Albanian",
+            "tosk albanian": "Tosk Albanian",
+            "sq": "Tosk Albanian",
+            "突尼斯阿拉伯语": "Tunisian Arabic",
+            "tunisian arabic": "Tunisian Arabic",
+            "aeb": "Tunisian Arabic",
+            "威尼斯语": "Venetian",
+            "venetian": "Venetian",
+            "vec": "Venetian",
+            "瓦莱语": "Waray",
+            "waray": "Waray",
+            "war": "Waray",
+            "威尔士语": "Welsh",
+            "welsh": "Welsh",
+            "cy": "Welsh",
+            "西波斯语": "Western Persian",
+            "western persian": "Western Persian",
+            "fa": "Western Persian",
+            "中文": "Chinese",
+            "zh-cn": "Chinese",
+            "zh-hans": "Chinese",
+            "simplified chinese": "Chinese",
+            "zh-tw": "Traditional Chinese",
+            "zh-hant": "Traditional Chinese",
+            "英文": "English",
+            "en-us": "English",
+            "en-gb": "English",
+            "日文": "Japanese",
+            "印尼语": "Indonesian",
+            "波斯语": "Western Persian",
+        ]
+        let value = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if var mapped = aliases[value] {
+            if model.lowercased().hasPrefix("qwen-mt-lite") {
+                if mapped == "Western Persian" { mapped = "Persian" }
+                let supported = ["English", "Chinese", "Traditional Chinese", "Russian", "Japanese", "Korean", "Spanish", "French", "Portuguese", "German", "Italian", "Thai", "Vietnamese", "Indonesian", "Malay", "Arabic", "Hindi", "Hebrew", "Urdu", "Bengali", "Polish", "Dutch", "Turkish", "Khmer", "Czech", "Swedish", "Hungarian", "Danish", "Finnish", "Tagalog", "Persian"]
+                guard supported.contains(mapped) else { throw LLMServiceError.unsupportedTranslationLanguage }
+            }
+            return mapped
+        }
+        throw LLMServiceError.unsupportedTranslationLanguage
+    }
+
+    public func probeConnection(configuration: LLMConfiguration, apiKey: String) async throws -> AIConnectionTestResult {
+        do {
+            try await test(configuration: configuration, apiKey: apiKey)
+            return AIConnectionTestResult()
+        } catch {
+            guard configuration.adaptation == .automatic,
+                  !configuration.usesTranslationAdaptation,
+                  let hint = Self.protocolHint(error) else { throw error }
+            try Task.checkCancellation()
+            if hint == .userMessage {
+                var userOnly = configuration
+                userOnly.adaptation = .userMessage
+                do {
+                    let output = try await complete(prompt: "Reply with exactly OK.", system: "", configuration: userOnly, apiKey: apiKey)
+                    if output.trimmingCharacters(in: .whitespacesAndNewlines) == "OK" {
+                        return AIConnectionTestResult(suggestedAdaptation: .userMessage)
+                    }
+                } catch {
+                    guard Self.protocolHint(error) == .qwenTranslation else { throw error }
+                }
+            }
+            return try await probeTranslation(configuration: configuration, apiKey: apiKey)
+        }
+    }
+
+    /// 只匹配参数/角色类的 400/422；网络、鉴权、限流错误不扩大发送。
+    static func protocolHint(_ error: Error) -> AIModelAdaptation? {
+        guard case let LLMServiceError.httpStatus(code, body) = error, code == 400 || code == 422 else { return nil }
+        let message = body.lowercased()
+        if message.contains("translation_options") || message.contains("target_lang") || message.contains("source_lang") {
+            return .qwenTranslation
+        }
+        if (message.contains("role") && (message.contains("system") || message.contains("[user, assistant]")))
+            && (message.contains("support") || message.contains("must") || message.contains("invalid")) {
+            return .userMessage
+        }
+        return nil
+    }
+
+    private func probeTranslation(configuration: LLMConfiguration, apiKey: String) async throws -> AIConnectionTestResult {
+        let sample = "The red bicycle is parked beside the library. Tomorrow morning we will read a book together."
+        var candidate = configuration
+        candidate.adaptation = .qwenTranslation
+        candidate.targetLanguage = "Chinese"
+        try Task.checkCancellation()
+        let chinese = try await translate(paragraph: sample, configuration: candidate, apiKey: apiKey)
+        candidate.targetLanguage = "Japanese"
+        try Task.checkCancellation()
+        let japanese = try await translate(paragraph: sample, configuration: candidate, apiKey: apiKey)
+        let hasHan = chinese.unicodeScalars.filter { (0x4E00...0x9FFF).contains($0.value) }.count >= 8
+        let hasKana = japanese.unicodeScalars.filter { (0x3040...0x30FF).contains($0.value) }.count >= 5
+        let chineseHasKana = chinese.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) }
+        guard hasHan, hasKana, !chineseHasKana, chinese != japanese else { throw LLMServiceError.inconclusiveTranslationProbe }
+        return AIConnectionTestResult(suggestedAdaptation: .qwenTranslation)
     }
 
     private func normalizedModelID(_ modelID: String, configuration: LLMConfiguration) -> String {
@@ -460,15 +862,17 @@ public struct LLMService: Sendable {
             throw LLMServiceError.insecureEndpoint
         }
         let isLocalName = host == "localhost" || host.hasSuffix(".local")
-        let octets = host.split(separator: ".").compactMap { Int($0) }
-        let isPrivateIPv4 = octets.count == 4 && (
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        let octets = parts.compactMap { Int($0) }
+        let isPrivateIPv4 = parts.count == 4 && octets.count == 4 && octets.allSatisfy { (0...255).contains($0) } && (
             octets[0] == 10
                 || (octets[0] == 172 && (16...31).contains(octets[1]))
                 || (octets[0] == 192 && octets[1] == 168)
                 || (octets[0] == 127)
                 || (octets[0] == 169 && octets[1] == 254)
         )
-        let isLocalIPv6 = host == "::1" || host.hasPrefix("fe80:") || host.hasPrefix("fc") || host.hasPrefix("fd")
+        let ipv6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        let isLocalIPv6 = ipv6.contains(":") && (ipv6 == "::1" || ipv6.hasPrefix("fe80:") || ipv6.hasPrefix("fc") || ipv6.hasPrefix("fd"))
         guard isLocalName || isPrivateIPv4 || isLocalIPv6 else {
             throw LLMServiceError.insecureEndpoint
         }
@@ -477,8 +881,9 @@ public struct LLMService: Sendable {
     private func nonStreaming(request: URLRequest) async throws -> String {
         let response = try await port.data(for: request)
         try validate(statusCode: response.statusCode, data: response.data)
-        struct Response: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message }; let choices: [Choice] }
+        struct Response: Decodable { struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message; let finish_reason: String? }; let choices: [Choice] }
         guard let result = try? JSONDecoder().decode(Response.self, from: response.data), let text = result.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { throw LLMServiceError.invalidResponse }
+        if result.choices.first?.finish_reason == "length" { throw LLMServiceError.truncatedResponse }
         return text
     }
 

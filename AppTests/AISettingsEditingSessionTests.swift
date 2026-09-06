@@ -90,4 +90,22 @@ final class AISettingsEditingSessionTests: XCTestCase {
         XCTAssertFalse(session.accepts(first, for: id, revision: 0))
         XCTAssertTrue(session.accepts(second, for: id, revision: 0))
     }
+
+    func testAdapterSuggestionCannotSurviveEndpointKeyOrModelChanges() {
+        for field in ["endpoint", "key", "model"] {
+            let session = AISettingsEditingSession()
+            let saved = provider()
+            session.load(saved, apiKey: "fixture")
+            let token = session.beginOperation(for: saved.id)
+            session.edit(saved.id) { draft in
+                switch field {
+                case "endpoint": draft.provider.baseURL = "https://other.example/v1"
+                case "key": draft.apiKey = "changed"
+                default: draft.provider.models[0].adaptation = .qwenTranslation
+                }
+            }
+            XCTAssertFalse(session.accepts(token, for: saved.id, revision: 0))
+            XCTAssertEqual(session.drafts[saved.id]?.original?.models[0].adaptation, .automatic)
+        }
+    }
 }

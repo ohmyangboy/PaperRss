@@ -411,6 +411,7 @@ struct ArticleReaderView: View {
                 contentTopInset: 84,
                 readerParagraphs: readerParagraphs,
                 inlineTranslations: bilingualSegments,
+                translationPreferences: store.aiSettings.features.translationPreferences,
                 pendingTranslationIDs: pendingBilingualParagraphIDs,
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
@@ -487,6 +488,7 @@ struct ArticleReaderView: View {
                 contentTopInset: 64,
                 readerParagraphs: readerParagraphs,
                 inlineTranslations: bilingualSegments,
+                translationPreferences: store.aiSettings.features.translationPreferences,
                 pendingTranslationIDs: pendingBilingualParagraphIDs,
                 selectionAnnotations: savedSelectionAnnotations,
                 isBilingualMode: readerMode == .bilingual,
@@ -2038,6 +2040,31 @@ th, td {
   animation: paper-rss-materialize .20s ease-out both;
   transform-origin: top center;
 }
+.paper-rss-explanation::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+.paper-rss-explanation::-webkit-scrollbar-track {
+  margin-block: 10px;
+  background: transparent;
+}
+.paper-rss-explanation::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-ink) 22%, transparent);
+  background-clip: padding-box;
+}
+.paper-rss-explanation::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--paper-ink) 38%, transparent);
+}
+.paper-rss-explanation::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in srgb, var(--paper-ink) 48%, transparent);
+}
+.paper-rss-explanation::-webkit-scrollbar-corner {
+  background: transparent;
+}
 .paper-rss-selection-anchor {
   display: inline;
   width: 0;
@@ -2103,7 +2130,7 @@ enum PaperReaderBridge {
     static let explainSelectionMessageName = "paperRssExplainSelection"
     static let askSelectionMessageName = "paperRssAskSelection"
 
-    static let translationSynchronizationScript = """
+    static let translationSynchronizationScript = ReaderTranslationPresentation.bootstrapScript + """
     const visibleNodes = Array.from(document.querySelectorAll("[data-paper-rss-id]"))
       .filter(node => {
         const rect = node.getBoundingClientRect();
@@ -2116,6 +2143,7 @@ enum PaperReaderBridge {
     const makeTranslation = update => {
       const aside = document.createElement("aside");
       aside.id = translationNodeID(update.id);
+      aside.className = "paper-rss-translation";
       aside.dataset.paperRssTranslationFor = update.id;
 
       const label = document.createElement("span");
@@ -2157,8 +2185,15 @@ enum PaperReaderBridge {
       if (paragraph) paragraph.textContent = update.text || "";
     };
 
-    removals.forEach(id => document.getElementById(translationNodeID(id))?.remove());
-    updates.forEach(applyUpdate);
+    removals.forEach(id => {
+      window.paperRssTranslationPresentation.remove(id);
+      document.getElementById(translationNodeID(id))?.remove();
+    });
+    updates.forEach(update => {
+      applyUpdate(update);
+      window.paperRssTranslationPresentation.reconcile(update.id);
+    });
+    window.dispatchEvent(new Event('paperRssLayoutRefresh'));
 
     if (anchor && anchorTop !== null) {
       const delta = anchor.getBoundingClientRect().top - anchorTop;
@@ -2187,6 +2222,7 @@ enum PaperReaderBridge {
             "completedExplanation": I18N.localized("已完成解释，点击重新查看"),
             "closeImage": I18N.localized("关闭（Esc）"),
             "translationLabel": I18N.localized("译文"),
+            "showOriginal": I18N.localized("查看原文"),
             "generatingTranslation": I18N.localized("正在生成译文"),
             "tocRailLabel": I18N.localized("文章章节导航", englishFallback: "Article Navigation")
         ]
@@ -4700,6 +4736,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let contentTopInset: CGFloat
     let readerParagraphs: [ReaderParagraph]
     let inlineTranslations: [BilingualSegment]
+    let translationPreferences: TranslationPreferences
     let pendingTranslationIDs: Set<String>
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
@@ -4885,6 +4922,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var completedArticleKey: String?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private var renderedTranslationPreferences: TranslationPreferences?
         private var renderedReaderAppearance: ReaderAppearance?
         private var renderedReaderAppearanceMode: ReaderAppearanceMode?
         private var renderedSelectionOptionsJSON: String?
@@ -4912,12 +4950,33 @@ private struct ArticleHTMLView: NSViewRepresentable {
 
         func synchronizeReaderAppearance(in webView: WKWebView, force: Bool = false) {
             guard force || renderedReaderAppearance != parent.readerAppearance ||
-                    renderedReaderAppearanceMode != parent.readerAppearanceMode else { return }
+                    renderedReaderAppearanceMode != parent.readerAppearanceMode ||
+                    renderedTranslationPreferences != parent.translationPreferences else { return }
+            let typographyChanged = force || renderedReaderAppearance != parent.readerAppearance
+            renderedTranslationPreferences = parent.translationPreferences
             renderedReaderAppearance = parent.readerAppearance
             renderedReaderAppearanceMode = parent.readerAppearanceMode
-            webView.evaluateJavaScript(
-                readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            let preferences = parent.translationPreferences
+            let color = preferences.colorHex(
+                palette: parent.readerAppearance.palette(for: parent.readerAppearanceMode),
+                mode: parent.readerAppearanceMode
             )
+            let appearanceScript = readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            Task { @MainActor in
+                _ = try? await webView.callAsyncJavaScript(
+                    ReaderTranslationPresentation.bootstrapScript + """
+                    const anchor = Array.from(document.querySelectorAll('[data-paper-rss-id]'))
+                      .find(node => node.getBoundingClientRect().bottom > 0);
+                    const before = anchor?.getBoundingClientRect().top;
+                    \(appearanceScript)
+                    window.paperRssTranslationPresentation.setPreferences(mode, color, typographyChanged);
+                    if (anchor && before != null) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+                    """,
+                    arguments: ["mode": preferences.mode.rawValue, "color": color, "typographyChanged": typographyChanged],
+                    in: nil,
+                    contentWorld: .defaultClient
+                )
+            }
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -5055,6 +5114,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 window.paperRssSelectionOptions = options;
               }
               window.paperRssTOCRail?.setRailLabel(options.labels?.tocRailLabel);
+              window.paperRssTranslationPresentation?.setLabel(options.labels?.showOriginal);
             })();
             """
             webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { _ in }
@@ -5359,7 +5419,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                extraStyleCSS: paperArticleStyle + readerAppearanceStyle(
+                extraStyleCSS: paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
                     parent.readerAppearance,
                     mode: parent.readerAppearanceMode
                 )
@@ -5405,6 +5465,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
+                self.synchronizeTranslations(in: webView)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
@@ -5577,6 +5638,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let contentTopInset: CGFloat
     let readerParagraphs: [ReaderParagraph]
     let inlineTranslations: [BilingualSegment]
+    let translationPreferences: TranslationPreferences
     let pendingTranslationIDs: Set<String>
     let selectionAnnotations: [ReaderSelectionAnnotation]
     let isBilingualMode: Bool
@@ -5736,6 +5798,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
         private var failedLoadAttempts: [String: Int] = [:]
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
+        private var renderedTranslationPreferences: TranslationPreferences?
         private var renderedReaderAppearance: ReaderAppearance?
         private var renderedReaderAppearanceMode: ReaderAppearanceMode?
         private var renderedSelectionOptionsJSON: String?
@@ -5763,12 +5826,33 @@ private struct ArticleHTMLView: UIViewRepresentable {
 
         func synchronizeReaderAppearance(in webView: WKWebView, force: Bool = false) {
             guard force || renderedReaderAppearance != parent.readerAppearance ||
-                    renderedReaderAppearanceMode != parent.readerAppearanceMode else { return }
+                    renderedReaderAppearanceMode != parent.readerAppearanceMode ||
+                    renderedTranslationPreferences != parent.translationPreferences else { return }
+            let typographyChanged = force || renderedReaderAppearance != parent.readerAppearance
+            renderedTranslationPreferences = parent.translationPreferences
             renderedReaderAppearance = parent.readerAppearance
             renderedReaderAppearanceMode = parent.readerAppearanceMode
-            webView.evaluateJavaScript(
-                readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            let preferences = parent.translationPreferences
+            let color = preferences.colorHex(
+                palette: parent.readerAppearance.palette(for: parent.readerAppearanceMode),
+                mode: parent.readerAppearanceMode
             )
+            let appearanceScript = readerAppearanceJavaScript(parent.readerAppearance, mode: parent.readerAppearanceMode)
+            Task { @MainActor in
+                _ = try? await webView.callAsyncJavaScript(
+                    ReaderTranslationPresentation.bootstrapScript + """
+                    const anchor = Array.from(document.querySelectorAll('[data-paper-rss-id]'))
+                      .find(node => node.getBoundingClientRect().bottom > 0);
+                    const before = anchor?.getBoundingClientRect().top;
+                    \(appearanceScript)
+                    window.paperRssTranslationPresentation.setPreferences(mode, color, typographyChanged);
+                    if (anchor && before != null) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+                    """,
+                    arguments: ["mode": preferences.mode.rawValue, "color": color, "typographyChanged": typographyChanged],
+                    in: nil,
+                    contentWorld: .defaultClient
+                )
+            }
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -6158,7 +6242,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
-                extraStyleCSS: paperArticleStyle + readerAppearanceStyle(
+                extraStyleCSS: paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
                     parent.readerAppearance,
                     mode: parent.readerAppearanceMode
                 )
@@ -6205,6 +6289,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
+                self.synchronizeTranslations(in: webView)
                 self.pendingContentOffset = nil
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)

@@ -32,14 +32,20 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("window.backgroundColor = chromeBackgroundColor"))
     }
 
-    func testPrimaryEmptyStatesUseOnePaperTypographyComponent() throws {
+    func testPrimaryEmptyStatesUseSharedTypographyAndCompactColumnPrompts() throws {
         let theme = try sourceText("PaperRss/Sources/App/PaperTheme.swift")
         let root = try sourceText("PaperRss/Sources/App/RootView.swift")
 
         XCTAssertTrue(theme.contains("struct PaperEmptyState"))
         XCTAssertTrue(theme.contains("size: 18, weight: .medium, design: .serif"))
         XCTAssertTrue(theme.contains("size: 13, design: .serif"))
-        XCTAssertGreaterThanOrEqual(root.components(separatedBy: "PaperEmptyState(").count - 1, 4)
+        XCTAssertGreaterThanOrEqual(root.components(separatedBy: "PaperEmptyState(").count - 1, 2)
+        XCTAssertEqual(root.components(separatedBy: "ColumnEmptyPrompt(").count - 1, 2)
+        XCTAssertTrue(root.contains(".accessibilityIdentifier(\"sidebar.empty.addOrImport\")"))
+        XCTAssertTrue(root.contains(".accessibilityIdentifier(\"articles.empty\")"))
+        XCTAssertTrue(root.contains(".popover(isPresented: $showsEmptyFeedActions)"))
+        XCTAssertTrue(root.contains("showsAddFeed = true"))
+        XCTAssertTrue(root.contains("showsImporter = true"))
     }
 
     func testScreenshotRegionsHaveEnglishCopyAndLocaleAwareReaderGlyphs() throws {

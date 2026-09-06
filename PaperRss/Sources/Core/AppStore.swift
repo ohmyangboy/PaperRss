@@ -1749,6 +1749,11 @@ public final class AppStore: ObservableObject {
         guard aiSettings.configuration(for: feature)?.isEnabled == true,
               aiSettings.resolvedConfiguration(for: feature) != nil else { return nil }
         let execution = currentAIExecutionContext(for: feature)
+        if execution.configuration.usesTranslationAdaptation,
+           feature != .bilingualTranslation && feature != .selectionTranslation {
+            emitTransientNotice(LLMServiceError.translationOnly.localizedDescription)
+            return nil
+        }
         return (execution, apiKey(for: execution.providerID))
     }
 
@@ -2176,7 +2181,7 @@ public final class AppStore: ObservableObject {
         let paragraphsBySource = Dictionary(grouping: uncachedParagraphs, by: \.original)
         var seenSources = Set<String>()
         let uniqueParagraphs = uncachedParagraphs.filter { seenSources.insert($0.original).inserted }
-        let batches = translationBatches(from: uniqueParagraphs)
+        let batches = configuration.usesTranslationAdaptation ? uniqueParagraphs.map { [$0] } : translationBatches(from: uniqueParagraphs)
         let batchConfiguration = configuration
         let service = llm
         do {
@@ -2499,7 +2504,15 @@ public final class AppStore: ObservableObject {
     }
 
     public func saveAIProvider(_ provider: AIProviderProfile, apiKey: String? = nil) {
-        let settings = aiSettings.updatingProvider(provider)
+        var updated = provider
+        if let apiKey, apiKey != self.apiKey(for: provider.id) {
+            updated.models = updated.models.map { model in
+                var next = model
+                next.reasoningMetadata = nil
+                return next
+            }
+        }
+        let settings = aiSettings.updatingProvider(updated)
         if let apiKey {
             _ = saveAIProviderKey(apiKey, for: provider.id)
         }
@@ -2508,7 +2521,16 @@ public final class AppStore: ObservableObject {
 
     @discardableResult
     public func saveAIProviderKey(_ apiKey: String, for providerID: String) -> LocalAPIKeyStore.Storage {
+        let changed = apiKey != self.apiKey(for: providerID)
         let storage = LocalAPIKeyStore.saveAPIKey(apiKey, for: providerID)
+        if changed, var provider = aiSettings.provider(id: providerID) {
+            provider.models = provider.models.map { model in
+                var next = model
+                next.reasoningMetadata = nil
+                return next
+            }
+            saveAISettings(aiSettings.updatingProvider(provider))
+        }
         // Keep the old single-provider projection aligned only for the active
         // provider. This lets an older build start safely, while keys for
         // inactive providers never overwrite one another. An empty v2 key is
@@ -2619,7 +2641,7 @@ public final class AppStore: ObservableObject {
             temperature: configuration.temperature,
             allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
         ).selectingModel(configuration.model)
-        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration))
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences))
         _ = LocalAPIKeyStore.saveAPIKey(apiKey, for: destination)
         self.llmConfiguration = configuration
         self.aiSettings = settings
@@ -2645,7 +2667,7 @@ public final class AppStore: ObservableObject {
             temperature: configuration.temperature,
             allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
         ).selectingModel(configuration.model)
-        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration))
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences))
         self.aiSettings = settings
         self.llmConfiguration = configuration
         persistAISettings(settings)
@@ -2660,6 +2682,32 @@ public final class AppStore: ObservableObject {
 
     public func testLLM(configuration: LLMConfiguration, apiKey: String) async throws {
         try await llm.test(configuration: configuration, apiKey: apiKey)
+    }
+
+    private var reasoningRefreshes: Set<String> = []
+
+    /// 只请求当前供应商目录，不执行推理。并发功能卡共用一次刷新。
+    public func refreshReasoningCapabilities(providerID: String, force: Bool = false) async throws {
+        guard let provider = aiSettings.provider(id: providerID), !reasoningRefreshes.contains(providerID) else { return }
+        let runtime = provider.runtimeConfiguration(features: aiSettings.features)
+        guard runtime.reasoningCapabilities.wireProtocol == .openRouter else { return }
+        if !force, provider.models.allSatisfy({ model in
+            guard let metadata = model.reasoningMetadata else { return false }
+            return metadata.endpoint == runtime.reasoningEndpoint && Date().timeIntervalSince(metadata.fetchedAt) < 86400
+        }) { return }
+        let key = apiKey(for: providerID)
+        reasoningRefreshes.insert(providerID)
+        defer { reasoningRefreshes.remove(providerID) }
+        let fetched = try await fetchAIModels(provider: provider, apiKey: key)
+        try Task.checkCancellation()
+        guard aiSettings.provider(id: providerID) == provider, apiKey(for: providerID) == key else { return }
+        var updated = provider
+        updated.models = provider.models.map { model in
+            var next = model
+            next.reasoningMetadata = fetched.first(where: { $0.id == model.id })?.reasoningMetadata
+            return next
+        }
+        if updated != provider { saveAISettings(aiSettings.updatingProvider(updated)) }
     }
 
     public func fetchAIModels(providerID: String) async throws -> [AIModelOption] {
@@ -2679,8 +2727,12 @@ public final class AppStore: ObservableObject {
             throw LLMServiceError.missingAPIKey
         }
         let configuration = provider.runtimeConfiguration(features: aiSettings.features)
-        let ids = try await llm.fetchModels(configuration: configuration, apiKey: apiKey)
-        return provider.updatingModels(from: ids).models
+        let remote = try await llm.fetchModelOptions(configuration: configuration, apiKey: apiKey)
+        return provider.updatingModels(from: remote.map(\.id)).models.map { model in
+            var next = model
+            if let fetched = remote.first(where: { $0.id == model.id }) { next.reasoningMetadata = fetched.reasoningMetadata }
+            return next
+        }
     }
 
     public func testAIProvider(providerID: String, modelID: String? = nil) async throws {
@@ -2696,6 +2748,12 @@ public final class AppStore: ObservableObject {
         }
         let draft = provider.replacing(selectedModelID: configuration.model).selectingModel(configuration.model)
         try await testAIProvider(provider: draft, apiKey: apiKey(for: providerID))
+    }
+
+    public func probeAIProvider(provider: AIProviderProfile, apiKey: String) async throws -> AIConnectionTestResult {
+        try provider.validateConnection(requireModel: true)
+        if provider.kind != .customOpenAICompatible && apiKey.isEmpty { throw LLMServiceError.missingAPIKey }
+        return try await llm.probeConnection(configuration: provider.runtimeConfiguration(features: aiSettings.features), apiKey: apiKey)
     }
 
     public func testAIProvider(provider: AIProviderProfile, apiKey: String) async throws {

@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.3.2-beta.3](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.3) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -77,7 +77,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Beta v1.3.2-beta.3 (Build 20)** adds unread filtering and saved reading line spacing, and improves AI settings, default model configuration, and translation scheduling. This is a preview release; the stable channel remains on v1.3.1. See the [changelog](CHANGELOG.md) for details.
+**Stable v1.3.2 (Build 21)** brings multi-provider AI, model-aware translation and in-place translated text, plus unread filtering and reading appearance improvements. Recommended for all users. See the [changelog](CHANGELOG.md).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 
@@ -121,3 +121,13 @@ PaperRss is local-first, not completely offline. Subscriptions and extracted art
 ## License
 
 PaperRss is open-sourced under the [GNU General Public License v3.0](LICENSE).
+
+---
+
+## Contributor
+
+Special thanks to:
+
+[@ProudBenzene](https://github.com/ProudBenzene)
+
+Thank you to everyone who has contributed bug reports, detailed feedback, and valuable suggestions. Your contributions help make PaperRss better. ❤️

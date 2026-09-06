@@ -1,5 +1,29 @@
 # 更新记录 / Changelog
 
+## v1.3.2 · Build 21 · 2026-09-06
+
+本次为稳定版本，整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。
+
+- AI 配置：支持 DeepSeek、Google Gemini、OpenAI 兼容及自定义供应商，按摘要、翻译和划词功能选择模型；设置草稿与运行配置隔离。
+- 模型适配：新增通用、单条用户消息和 Qwen-MT 翻译协议，改进连接探测、思考能力选项、语言映射和截断检测，修复 OpenRouter 能力缓存过期后配置失效。
+- 翻译体验：支持上下文对照与原位替换，悬浮或聚焦查看原文；目标语言、浅深色译文颜色与预览统一设置，切换展示复用缓存。
+- 阅读效率：文件夹及单选、多选订阅源支持未读筛选；摘要与翻译独立调度，翻译分批并行并逐批显示，减少文章切换时结果串台。
+- 阅读外观：新增正文与译文行距，划词浮层跟随阅读字体；改进空状态添加／导入入口、应用图标、代码高亮、图片排版及 X/Twitter 头像过滤。
+- 连接安全：修正本地 HTTP 地址识别，拒绝将特定前缀的公网域名视为局域网接口。
+- 升级兼容：保留既有阅读数据、AI 配置、模型与已有摘要和译文，同步中英文 README、官网及稳定更新通道。
+
+---
+
+This stable release brings multi-provider AI, model-aware translation and in-place translated text, plus unread filtering and reading appearance improvements. Recommended for all users.
+
+- AI configuration: Support DeepSeek, Google Gemini, OpenAI-compatible and custom providers, with per-feature model routing and settings drafts isolated from active requests.
+- Model adaptation: Add general, single-user-message and Qwen-MT translation protocols; improve connection probing, reasoning options, language mapping and truncation detection, and keep saved OpenRouter reasoning modes usable after catalog expiry.
+- Translation experience: Choose contextual or in-place translation, with hover or focus revealing the original. Configure target language and light/dark translation colors with a preview; display changes reuse cached results.
+- Reading efficiency: Filter unread articles within folders or selected feeds. Schedule summaries and translation independently, translate batches concurrently with incremental results, and improve result isolation across articles.
+- Reading appearance: Adjust original and translated text line spacing and match selection popovers to reader typography. Improve empty-state add/import actions, app icons, code highlighting, image layout and X/Twitter avatar filtering.
+- Connection security: Correct local HTTP address validation so public domains with local-looking prefixes are rejected.
+- Upgrade compatibility: Preserve reading data, AI configuration, models and existing summaries/translations; update bilingual READMEs, the website and the stable update channel.
+
 ## v1.3.2-beta.3 · Build 20 · 2026-09-05
 
 本次为阅读与 AI 设置体验预发布版本；建议希望体验未读筛选、阅读行距和翻译优化的用户升级，稳定通道仍为 v1.3.1。

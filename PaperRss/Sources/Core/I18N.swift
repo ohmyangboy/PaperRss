@@ -110,6 +110,7 @@ public final class I18N: ObservableObject {
     }
 
     private nonisolated static let builtinEnglishTranslations: [String: String] = [
+        "查看原文": "Show original text",
         "今天": "Today",
         "添加订阅": "Add Feed",
         "未读": "Unread",

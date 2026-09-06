@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [测试版 v1.3.2-beta.3](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.2-beta.3) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -77,7 +77,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**测试版 v1.3.2-beta.3（Build 20）** 新增当前文件夹和订阅源的未读文章筛选、可保存的阅读行距，改进 AI 设置编辑体验、默认模型配置及翻译并发调度。此版本供提前体验，稳定通道仍为 v1.3.1。详情见 [更新记录](CHANGELOG.md)。
+**稳定版 v1.3.2（Build 21）** 整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
@@ -123,3 +123,13 @@ PaperRss 是本地优先而非“完全离线”的客户端：订阅和正文�
 ## 开源协议
 
 PaperRss 基于 [GNU General Public License v3.0](LICENSE) 开源。
+
+---
+
+## 贡献者 Contributor
+
+特别感谢：
+
+[@ProudBenzene](https://github.com/ProudBenzene)
+
+感谢所有为 PaperRss 提供问题报告、详细反馈和宝贵建议的朋友，是大家的参与让 PaperRss 不断变得更好。❤️

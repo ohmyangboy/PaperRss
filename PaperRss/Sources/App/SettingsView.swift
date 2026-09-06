@@ -28,7 +28,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: I18N.shared.localized("常规", "General")
         case .appearance: I18N.shared.localized("外观", "Appearance")
         case .accounts: I18N.shared.localized("账号", "Accounts")
-        case .aiService: I18N.shared.localized("AI 功能", "AI Features")
+        case .aiService: I18N.shared.localized("AI", "AI")
         case .about: I18N.shared.localized("关于", "About")
         }
     }
@@ -82,13 +82,27 @@ private func providerSymbolName(_ kind: AIProviderKind) -> String {
 private struct AIProviderIcon: View {
     let kind: AIProviderKind
     var size: CGFloat = 24
+    var providerID: String = ""
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var customColor: Color {
+        // 按稳定标识分配色相，重启或重命名不会改变供应商图标颜色。
+        let hash = providerID.utf8.reduce(UInt64(14695981039346656037)) {
+            ($0 ^ UInt64($1)) &* 1099511628211
+        }
+        return Color(
+            hue: Double(hash % 3600) / 3600,
+            saturation: colorScheme == .dark ? 0.48 : 0.64,
+            brightness: colorScheme == .dark ? 0.84 : 0.66
+        )
+    }
 
     private var color: Color {
         switch kind {
         case .deepSeek: Color(red: 0.30, green: 0.42, blue: 0.99)
         case .gemini: .primary
         case .openAICompatible: .primary
-        case .customOpenAICompatible: .orange
+        case .customOpenAICompatible: customColor
         }
     }
 
@@ -190,6 +204,7 @@ struct SettingsView: View {
         nonmutating set { editor.edit(selectedProviderID) { $0.provider.models = newValue } }
     }
     private var draftRevision: Int { editor.drafts[selectedProviderID]?.revision ?? 0 }
+    @State private var adaptationSuggestion: (providerID: String, modelID: String, revision: Int, adaptation: AIModelAdaptation)?
     @State private var showsAPIKey = false
     @State private var selectedProviderID = AIProviderID.deepSeek
     @State private var selectedAISettingsPane: AISettingsPane = .features
@@ -208,7 +223,6 @@ struct SettingsView: View {
     @State private var status = ""
     @State private var isTesting = false
     @State private var testRequestID: UUID?
-    @State private var showingTargetLanguagePopover = false
     @Environment(\.colorScheme) private var colorScheme
 
     // 账号管理与添加弹窗状态
@@ -244,7 +258,11 @@ struct SettingsView: View {
         .accentColor(settingsAccentColor)
         .toggleStyle(.switch)
         .environment(\.paperAppearancePalette, settingsAppearancePalette)
+        #if os(macOS)
+        .environment(\.colorScheme, settingsAppearancePalette.colorScheme == .dark ? .dark : .light)
+        #endif
         .onChange(of: draftRevision) { _, _ in
+            adaptationSuggestion = nil
             modelFetchRequestID = nil
             testRequestID = nil
             isFetchingModels = false
@@ -316,7 +334,7 @@ struct SettingsView: View {
                     .padding(.bottom, 34)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
-                ScrollView {
+                SettingsScrollView {
                     settingsPage
                         .frame(maxWidth: SettingsMetrics.contentMaxWidth, alignment: .leading)
                         .padding(.horizontal, SettingsMetrics.contentHorizontalPadding)
@@ -725,12 +743,14 @@ struct SettingsView: View {
                         Image("SponsorQR", bundle: nil)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
+                            // 原图自带黑色方框，略微放大后裁去外沿，避免圆角处残留断开的黑边。
+                            .frame(width: 114, height: 114)
                             .frame(width: 112, height: 112)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                             )
 
                         VStack(alignment: .leading, spacing: 8) {
@@ -1018,7 +1038,7 @@ struct SettingsView: View {
                 I18N.shared.localized("搜索字体", "Search fonts"),
                 text: $fontSearchText
             )
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(SettingsInputStyle())
             .focused($isFontSearchFocused)
 
             if filteredReaderFontFamilies.isEmpty {
@@ -1262,45 +1282,33 @@ struct SettingsView: View {
                     }
                 }
 
-                settingsGroup(I18N.shared.localized("翻译目标语言", "Translation Language")) {
-                    settingsRow(I18N.shared.localized("目标语言", "Target Language")) {
-                        HStack(spacing: 8) {
-                            Button { showingTargetLanguagePopover.toggle() } label: {
-                                Image(systemName: "info.circle")
-                                    .foregroundStyle(.secondary)
-                                    .font(.system(size: 13, weight: .semibold))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(I18N.shared.localized("显示说明", "Show information"))
-                            .popover(isPresented: $showingTargetLanguagePopover, arrowEdge: .trailing) {
-                                Text(I18N.shared.localized("你可以自由填入你想翻译成的语言，例如中文、英语、法语等。", "Enter any target language, such as Chinese, English, or French."))
-                                    .font(.subheadline)
-                                    .padding(12)
-                                    .frame(width: 240)
-                            }
+                translationPreferencesSection
 
-                            TextField(I18N.shared.localized("简体中文", "Simplified Chinese"), text: featurePreferenceBinding(\.targetLanguage))
-                                .textFieldStyle(.roundedBorder)
-                                .frame(maxWidth: 200)
+                settingsGroup(I18N.shared.localized("表达偏好", "Writing Preferences")) {
+                    TextEditor(text: featurePreferenceBinding(\.customPrompt))
+                        .font(.system(size: 15))
+                        .frame(height: 100)
+                        .scrollContentBackground(.hidden)
+                        .scrollIndicators(.hidden)
+                        .overlay(alignment: .topLeading) {
+                            if store.aiSettings.features.customPrompt.isEmpty {
+                                Text(I18N.shared.localized(
+                                    "填写你偏好的语气、篇幅或输出格式。\n例如：语气自然简洁，总结控制在 200 字以内，按要点分段。",
+                                    "Describe your preferred tone, length, or format.\nFor example: use a natural, concise tone; keep summaries under 200 words and organize them into key points."
+                                ))
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color(paperHex: settingsAppearancePalette.mutedHex))
+                                .padding(.horizontal, 5)
+                                .padding(.top, 8)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                            }
                         }
-                    }
-                }
-
-                settingsGroup(I18N.shared.localized("个性化", "Personalization")) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(I18N.shared.localized("自定义摘要提示词", "Custom Summary Instructions"))
-                            .font(.subheadline.weight(.medium))
-                        TextEditor(text: featurePreferenceBinding(\.customPrompt))
-                            .font(.system(size: 15))
-                            .frame(minHeight: 70, maxHeight: 120)
-                            .padding(4)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(Color.primary.opacity(0.15), lineWidth: 1)
-                            )
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
+                        .padding(10)
+                        .modifier(SettingsInputSurface())
+                        .accessibilityLabel(I18N.shared.localized("表达偏好", "Writing Preferences"))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 5) {
@@ -1334,7 +1342,7 @@ struct SettingsView: View {
                             Spacer()
                             addProviderButton
                         }
-                        ScrollView {
+                        SettingsScrollView {
                             LazyVStack(spacing: 8) {
                                 ForEach(filteredAIProviders) { provider in providerSidebarRow(provider) }
                             }
@@ -1431,6 +1439,12 @@ struct SettingsView: View {
                 featureReasoningMenu(kind, configuration: configuration)
                     .frame(width: 112)
             }
+            if let reference = configuration.model,
+               let model = store.aiSettings.provider(id: reference.providerID)?.models.first(where: { $0.id == reference.modelID }),
+               !model.supports(kind) {
+                Text(LLMServiceError.translationOnly.localizedDescription)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1462,15 +1476,17 @@ struct SettingsView: View {
                             ))
                         } label: {
                             if configuration.model == AIModelReference(providerID: provider.id, modelID: model.id) {
-                                Label(model.displayName, systemImage: "checkmark")
+                                Label(model.displayName + (model.adaptationBadge.map { " · " + $0 } ?? ""), systemImage: "checkmark")
                             } else {
-                                Text(model.displayName)
+                                Text(model.displayName + (model.adaptationBadge.map { " · " + $0 } ?? ""))
                             }
                         }
+                        .disabled(!model.supports(kind))
+                        .help(model.supports(kind) ? "" : LLMServiceError.translationOnly.localizedDescription)
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        AIProviderIcon(kind: provider.kind, size: 16)
+                        AIProviderIcon(kind: provider.kind, size: 16, providerID: provider.id)
                         Text(provider.name.isEmpty ? I18N.shared.localized("新供应商", "New provider") : localizedBuiltInProviderName(provider.name))
                     }
                 }
@@ -1483,7 +1499,7 @@ struct SettingsView: View {
             HStack(spacing: 7) {
                 if let reference = configuration.model,
                    let provider = store.aiProvider(id: reference.providerID) {
-                    AIProviderIcon(kind: provider.kind, size: 21)
+                    AIProviderIcon(kind: provider.kind, size: 21, providerID: provider.id)
                 }
                 Text(featureModelLabel(configuration.model))
                     .lineLimit(1)
@@ -1498,10 +1514,22 @@ struct SettingsView: View {
         _ kind: AIFeatureKind,
         configuration: AIFeatureConfiguration
     ) -> some View {
-        Menu {
+        let runtime = store.aiSettings.resolvedConfiguration(for: kind)
+        let capabilities = runtime?.reasoningCapabilities
+        let isTranslation = runtime?.usesTranslationAdaptation == true
+        let valid = capabilities?.accepts(configuration.reasoningMode) == true
+        return Menu {
+            Text(localizedReasoningMode(capabilities?.source ?? "能力未确认"))
+            if capabilities?.wireProtocol == .openRouter, let reference = configuration.model {
+                Button(I18N.shared.localized("刷新模型能力", "Refresh capabilities")) {
+                    Task { @MainActor in
+                        do { try await store.refreshReasoningCapabilities(providerID: reference.providerID, force: true) }
+                        catch { store.emitTransientNotice(error.localizedDescription) }
+                    }
+                }
+            }
             ForEach(
-                store.aiSettings.resolvedConfiguration(for: kind)?.supportsDisablingReasoning == true
-                    ? ["关闭", "自动", "低", "中", "高"] : ["自动", "低", "中", "高"],
+                capabilities?.modes ?? ["自动"],
                 id: \.self
             ) { mode in
                 Button {
@@ -1509,7 +1537,7 @@ struct SettingsView: View {
                     next.reasoningMode = mode
                     store.saveAISettings(store.aiSettings.updatingFeature(kind, configuration: next))
                 } label: {
-                    if configuration.reasoningMode == mode {
+                    if AIReasoningCapabilities.canonical(configuration.reasoningMode) == mode {
                         Label(localizedReasoningMode(mode), systemImage: "checkmark")
                     } else {
                         Text(localizedReasoningMode(mode))
@@ -1517,11 +1545,16 @@ struct SettingsView: View {
                 }
             }
         } label: {
-            Text(I18N.shared.localizedFormat("思考：%@", localizedReasoningMode(configuration.reasoningMode)))
+            Text(I18N.shared.localizedFormat("思考：%@", localizedReasoningMode(isTranslation ? "不适用" : valid ? configuration.reasoningMode : "需重选")))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .disabled(!configuration.isEnabled)
+        .disabled(!configuration.isEnabled || isTranslation)
+        .task(id: configuration.model) {
+            guard !isTranslation, let reference = configuration.model else { return }
+            do { try await store.refreshReasoningCapabilities(providerID: reference.providerID) }
+            catch { /* 保留现有配置，用户可从菜单手动重试。 */ }
+        }
     }
 
     private func featureIconName(_ kind: AIFeatureKind) -> String {
@@ -1547,16 +1580,24 @@ struct SettingsView: View {
         guard provider.isEnabled else {
             return I18N.shared.localized("供应商已停用", "Provider disabled")
         }
-        return "\(localizedBuiltInProviderName(provider.name)) / \(model.displayName)"
+        return "\(localizedBuiltInProviderName(provider.name)) / \(model.displayName)" + (model.adaptationBadge.map { " · " + $0 } ?? "")
     }
 
     private func localizedReasoningMode(_ mode: String) -> String {
         switch mode {
         case "关闭": I18N.shared.localized("关闭", "Off")
-        case "低": I18N.shared.localized("低", "Low")
-        case "中": I18N.shared.localized("中", "Medium")
-        case "高": I18N.shared.localized("高", "High")
-        default: I18N.shared.localized("自动", "Auto")
+        case "low", "低": I18N.shared.localized("低", "Low")
+        case "medium", "中": I18N.shared.localized("中", "Medium")
+        case "high", "高": I18N.shared.localized("高", "High")
+        case "自动": I18N.shared.localized("自动", "Auto")
+        case "开启": I18N.shared.localized("开启", "On")
+        case "不适用": I18N.shared.localized("不适用", "Not applicable")
+        case "需重选": I18N.shared.localized("需重选", "Reselect")
+        case "官方协议规则": I18N.shared.localized("来源：官方协议规则", "Source: official protocol rules")
+        case "模型目录": I18N.shared.localized("来源：模型目录（24 小时有效）", "Source: model catalog (valid for 24 hours)")
+        case "手动协议": I18N.shared.localized("来源：手动协议，请按接口文档确认", "Source: manual protocol; check endpoint documentation")
+        case "能力未确认，请刷新模型目录或选择协议", "能力未确认": I18N.shared.localized("能力未确认，请刷新模型目录或选择协议", "Capabilities unknown; refresh models or select a protocol")
+        default: mode
         }
     }
 
@@ -1611,6 +1652,195 @@ struct SettingsView: View {
             : "受影响功能：\(affected.joined(separator: "、"))。保存后会自动改绑。"
     }
 
+    private var translationPreferencesSection: some View {
+        settingsGroup(I18N.shared.localized("翻译偏好", "Translation Preferences")) {
+            settingsRow(I18N.shared.localized("目标语言", "Target Language")) {
+                Picker(I18N.shared.localized("目标语言", "Target Language"), selection: featurePreferenceBinding(\.targetLanguage)) {
+                    ForEach(translationTargetLanguages, id: \.self) { language in
+                        Text(language).tag(language)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .frame(width: 200, alignment: .trailing)
+                .accessibilityIdentifier("translation-target-language")
+            }
+            settingsRow(I18N.shared.localized("翻译模式", "Translation Mode")) {
+                SettingsCompactSwitcher(
+                    options: TranslationDisplayMode.allCases,
+                    selection: translationPreferenceBinding(\.mode),
+                    accent: settingsAccentColor,
+                    title: { $0 == .comparison
+                        ? I18N.shared.localized("上下文对照", "Side by side")
+                        : I18N.shared.localized("替换翻译", "Replacement") }
+                )
+                .accessibilityLabel(I18N.shared.localized("翻译模式", "Translation Mode"))
+                .accessibilityIdentifier("translation-mode")
+            }
+            settingsRow(I18N.shared.localized("对照译文颜色", "Comparison Translation Color")) {
+                HStack(alignment: .top, spacing: 20) {
+                    translationColorRow(for: .light)
+                    translationColorRow(for: .dark)
+                }
+                .disabled(store.aiSettings.features.translationPreferences.mode == .replacement)
+                .opacity(store.aiSettings.features.translationPreferences.mode == .replacement ? 0.45 : 1)
+            }
+            translationPreferencesPreview
+            HStack {
+                Spacer()
+                Button(I18N.shared.localized("恢复翻译显示默认值", "Reset Translation Display")) {
+                    translationPreferenceBinding(\.self).wrappedValue = .default
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .font(.system(size: 12))
+                .accessibilityIdentifier("translation-reset")
+                Spacer()
+            }
+            .padding(.vertical, 14)
+        }
+    }
+
+    private var translationTargetLanguages: [String] {
+        let languages = ["简体中文", "繁體中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español", "Português", "Italiano", "Русский", "العربية", "हिन्दी", "ไทย", "Tiếng Việt", "Bahasa Indonesia"]
+        let current = store.aiSettings.features.targetLanguage
+        // 保留旧配置中不在常用列表内的语言，避免切换控件时改写用户偏好。
+        return languages.contains(current) || current.isEmpty ? languages : [current] + languages
+    }
+
+    private func translationPreferenceBinding<Value>(_ keyPath: WritableKeyPath<TranslationPreferences, Value>) -> Binding<Value> {
+        Binding(
+            get: { store.aiSettings.features.translationPreferences[keyPath: keyPath] },
+            set: { value in
+                var preferences = store.aiSettings.features.translationPreferences
+                preferences[keyPath: keyPath] = value
+                featurePreferenceBinding(\.translationPreferences).wrappedValue = preferences
+            }
+        )
+    }
+
+    private func translationColorRow(for mode: ReaderAppearanceMode) -> some View {
+        let title = mode == .light
+            ? I18N.shared.localized("浅色", "Light")
+            : I18N.shared.localized("深色", "Dark")
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+                SettingsCompactSwitcher(
+                    options: TranslationColorSource.allCases,
+                    selection: Binding(
+                        get: { store.aiSettings.features.translationPreferences.colorSource(for: mode) },
+                        set: { source in
+                            var next = store.aiSettings.features.translationPreferences
+                            next.setColorSource(source, for: mode)
+                            featurePreferenceBinding(\.translationPreferences).wrappedValue = next
+                        }
+                    ),
+                    accent: settingsAccentColor,
+                    title: { $0 == .automatic
+                        ? I18N.shared.localized("跟随主题", "Theme")
+                        : I18N.shared.localized("自定义", "Custom") },
+                    accessory: { source in
+                        AnyView(Group {
+                            if source == .custom {
+                                TranslationColorWell(color: Binding(
+                                    get: {
+                                        let current = store.aiSettings.features.translationPreferences
+                                        return Color(paperHex: (mode == .light ? current.customLightHex : current.customDarkHex)
+                                            ?? TranslationPreferences.defaultCustomHex)
+                                    },
+                                    set: { color in
+                                        var next = store.aiSettings.features.translationPreferences
+                                        guard next.mode == .comparison else { return }
+                                        next.setColorSource(.custom, for: mode)
+                                        next.setCustomHex(color.readerHexString, for: mode)
+                                        featurePreferenceBinding(\.translationPreferences).wrappedValue = next
+                                    }
+                                ))
+                                .frame(width: 18, height: 18)
+                                .clipShape(Circle())
+                                .overlay { Circle().strokeBorder(.white, lineWidth: 1).allowsHitTesting(false) }
+                                .padding(.trailing, 8)
+                                .accessibilityLabel(title + I18N.shared.localized("自定义颜色", " Custom Color"))
+                                .accessibilityIdentifier("translation-custom-" + mode.rawValue)
+                            }
+                        })
+                    }
+                )
+                .accessibilityLabel(title + I18N.shared.localized("对照译文颜色", " Comparison Translation Color"))
+                .accessibilityIdentifier("translation-color-" + mode.rawValue)
+
+
+            }
+
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var translationPreferencesPreview: some View {
+        HStack(alignment: .top, spacing: 12) {
+            translationPreferencesPreview(for: .light)
+            translationPreferencesPreview(for: .dark)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .accessibilityIdentifier("translation-preview")
+    }
+
+    private func translationPreferencesPreview(for mode: ReaderAppearanceMode) -> some View {
+        let preferences = store.aiSettings.features.translationPreferences
+        let palette = store.readerAppearance.palette(for: mode)
+        let showsLowContrast = preferences.mode == .comparison
+            && preferences.colorSource(for: mode) == .custom
+            && TranslationPreferences.contrastRatio(preferences.colorHex(palette: palette, mode: mode), palette.backgroundHex) < 4.5
+        let contrastHint = I18N.shared.localized("与阅读背景对比度较低", "Low contrast against the reading background")
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(mode == .light ? I18N.shared.localized("浅色预览", "Light Preview") : I18N.shared.localized("深色预览", "Dark Preview"))
+                    .fixedSize()
+                Text(contrastHint)
+                    .lineLimit(1)
+                    .opacity(showsLowContrast ? 1 : 0)
+                    .accessibilityHidden(!showsLowContrast)
+                    .help(showsLowContrast ? contrastHint : "")
+            }
+            .font(.caption)
+            .foregroundStyle(Color(paperHex: palette.mutedHex))
+            // 两种内容共同撑高，切换模式时保持预览和设置面板的布局稳定。
+            ZStack(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Reading opens a window to the world.")
+                        .foregroundStyle(Color(paperHex: palette.inkHex))
+                    Text("A文  阅读为我们打开一扇通向世界的窗。")
+                        .foregroundStyle(Color(paperHex: preferences.colorHex(palette: palette, mode: mode)))
+                }
+                .opacity(preferences.mode == .comparison ? 1 : 0)
+                .allowsHitTesting(preferences.mode == .comparison)
+                .accessibilityHidden(preferences.mode != .comparison)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    TranslationReplacementPreview()
+                        .foregroundStyle(Color(paperHex: palette.inkHex))
+                    Text(I18N.shared.localized("鼠标悬浮切换原文", "Hover to show the original text"))
+                        .font(.caption)
+                        .foregroundStyle(Color(paperHex: palette.mutedHex))
+                }
+                .opacity(preferences.mode == .replacement ? 1 : 0)
+                .allowsHitTesting(preferences.mode == .replacement)
+                .accessibilityHidden(preferences.mode != .replacement)
+            }
+        }
+        .font(readerPreviewFont)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(paperHex: palette.backgroundHex), in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityIdentifier("translation-preview-" + mode.rawValue)
+    }
+
     private func featurePreferenceBinding<Value>(_ keyPath: WritableKeyPath<AIFeaturePreferences, Value>) -> Binding<Value> {
         Binding(
             get: { store.aiSettings.features[keyPath: keyPath] },
@@ -1641,7 +1871,7 @@ struct SettingsView: View {
         return ZStack(alignment: .trailing) {
             Button { selectProvider(provider.id) } label: {
                 HStack(spacing: 12) {
-                    AIProviderIcon(kind: provider.kind, size: 42)
+                    AIProviderIcon(kind: provider.kind, size: 42, providerID: provider.id)
                         .opacity(isEnabled ? 1 : 0.48)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(provider.name.isEmpty ? I18N.shared.localized("新供应商", "New provider") : localizedBuiltInProviderName(provider.name))
@@ -1709,11 +1939,11 @@ struct SettingsView: View {
 
     private var providerDetailPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
+            SettingsScrollView {
             VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 13) {
                 if let provider = selectedAIProvider {
-                    AIProviderIcon(kind: provider.kind, size: 46)
+                    AIProviderIcon(kind: provider.kind, size: 46, providerID: provider.id)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(selectedAIProvider?.name.isEmpty == false
@@ -1756,7 +1986,7 @@ struct SettingsView: View {
                         TextField(I18N.shared.localized("例如：Gemini", "For example: Gemini"), text: localizedProviderNameBinding)
                             .focused($isProviderNameFocused)
                             .accessibilityIdentifier("settings.provider.name")
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
                 }
 
@@ -1765,7 +1995,7 @@ struct SettingsView: View {
                         providerReadOnlyValue(localizedBuiltInProviderDescription(configuration.providerDescription))
                     } else {
                         TextField(I18N.shared.localized("例如：个人阅读助手", "For example: Reading assistant"), text: localizedProviderDescriptionBinding)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
                 }
 
@@ -1778,7 +2008,7 @@ struct SettingsView: View {
                                 SecureField(I18N.shared.localized("局域网模型可留空", "Optional for local models"), text: apiKeyBinding)
                             }
                         }
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(SettingsInputStyle())
 
                         Button { showsAPIKey.toggle() } label: {
                             Image(systemName: showsAPIKey ? "eye.slash" : "eye")
@@ -1794,7 +2024,7 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                     } else {
                         TextField(I18N.shared.localized("供应商 API 根地址", "Provider API root URL"), text: configurationBinding.baseURL)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
                 }
             }
@@ -1820,6 +2050,16 @@ struct SettingsView: View {
             if !status.isEmpty {
                 Text(status).font(.system(size: 12)).foregroundStyle(statusIsSuccess ? Color.secondary : Color.red)
                     .padding(.horizontal, 16).padding(.top, 8).textSelection(.enabled)
+            }
+            if let suggestion = adaptationSuggestion,
+               suggestion.providerID == selectedProviderID, suggestion.revision == draftRevision {
+                Button(I18N.shared.localized("采用检测到的适配", "Use detected adapter")) {
+                    setModelAdaptation(suggestion.adaptation, modelID: suggestion.modelID)
+                    adaptationSuggestion = nil
+                    status = I18N.shared.localized("已更新草稿，请保存更改。", "Draft updated. Save changes to apply.")
+                }
+                .accessibilityIdentifier("settings.model.applyAdaptation")
+                .padding(.horizontal, 16).padding(.top, 6)
             }
             HStack(spacing: 9) {
                 if let provider = selectedAIProvider, !provider.isBuiltIn, editor.newProviderID != provider.id {
@@ -1921,6 +2161,9 @@ struct SettingsView: View {
 
                             Spacer()
 
+                            if let badge = model.adaptationBadge {
+                                Text(badge).font(.caption).foregroundStyle(.secondary)
+                            }
                             if configuration.model == model.id {
                                 Text(I18N.shared.localized("默认", "Default"))
                                     .font(.caption.weight(.medium))
@@ -1931,6 +2174,37 @@ struct SettingsView: View {
                             }
 
                             Menu {
+                                Menu(I18N.shared.localized("模型适配：", "Model adapter: ") + model.adaptation.title) {
+                                    Text(I18N.shared.localized("控制发给模型的消息格式", "Controls the message format sent to the model"))
+                                    ForEach(AIModelAdaptation.allCases, id: \.self) { adaptation in
+                                        Button((model.adaptation == adaptation ? "✓ " : "　") + adaptation.title) {
+                                            setModelAdaptation(adaptation, modelID: model.id)
+                                        }
+                                    }
+                                    Divider()
+                                    Text(modelAdaptationExplanation(model))
+                                }
+                                Menu(I18N.shared.localized("思考协议：", "Reasoning protocol: ") + reasoningProtocolTitle(model.reasoningProtocol)) {
+                                    Text(I18N.shared.localized("控制思考开关与等级参数的发送方式", "Controls how thinking switches and effort levels are sent"))
+                                    ForEach(AIReasoningProtocol.allCases, id: \.self) { wire in
+                                        Button((model.reasoningProtocol == wire ? "✓ " : "　") + reasoningProtocolTitle(wire)) {
+                                            editor.edit(selectedProviderID) { draft in
+                                                guard let index = draft.provider.models.firstIndex(where: { $0.id == model.id }) else { return }
+                                                draft.provider.models[index].reasoningProtocol = wire
+                                                draft.provider.models[index].reasoningMetadata = nil
+                                            }
+                                        }
+                                    }
+                                    Divider()
+                                    if model.usesTranslationAdaptation {
+                                        Text(I18N.shared.localized("翻译适配不发送思考参数", "Translation adapters do not send reasoning parameters"))
+                                    } else {
+                                        let wire = draftAIProvider?.runtimeConfiguration(modelID: model.id, features: store.aiSettings.features).reasoningCapabilities.wireProtocol ?? .automatic
+                                        Text(I18N.shared.localized("当前识别：", "Currently resolved: ") + (wire == .automatic
+                                            ? I18N.shared.localized("未确认，使用服务默认", "Unknown; use server defaults")
+                                            : reasoningProtocolTitle(wire)))
+                                    }
+                                }
                                 Button(I18N.shared.localized("测试模型", "Test Model")) { test(modelID: model.id) }
                                 Button(I18N.shared.localized("删除模型", "Remove Model"), role: .destructive) {
                                     providerModelPendingDeletion = model
@@ -2069,7 +2343,7 @@ struct SettingsView: View {
             .padding(20)
 
             TextField(I18N.shared.localized("搜索远端模型", "Search remote models"), text: $modelCandidateSearchText)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(SettingsInputStyle())
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
 
@@ -2110,7 +2384,7 @@ struct SettingsView: View {
             Divider()
             HStack(spacing: 8) {
                 TextField(I18N.shared.localized("手动输入模型 ID", "Enter model ID manually"), text: $manualModelID)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(SettingsInputStyle())
                 Button(I18N.shared.localized("手动添加", "Add Manually")) { addManualModel() }
                     .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
@@ -2284,42 +2558,24 @@ struct SettingsView: View {
     }
 
     private var updateChannelPicker: some View {
-        HStack(spacing: 3) {
-            ForEach(UpdateChannel.allCases, id: \.self) { channel in
-                let isSelected = updateCoordinator.channel == channel
-                Button {
+        SettingsCompactSwitcher(
+            options: UpdateChannel.allCases,
+            selection: Binding(
+                get: { updateCoordinator.channel },
+                set: { channel in
                     guard updateCoordinator.canChangeChannel else { return }
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        updateCoordinator.selectChannel(channel)
-                    }
-                } label: {
-                    Text(
-                        channel == .stable
-                            ? I18N.shared.localized("Stable 稳定版", "Stable")
-                            : I18N.shared.localized("Beta 抢先版", "Beta")
-                    )
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                    .frame(minWidth: 108, minHeight: 36)
-                    .contentShape(Capsule())
-                    .background(isSelected ? settingsAccentColor : Color.clear, in: Capsule())
+                    updateCoordinator.selectChannel(channel)
                 }
-                .buttonStyle(.plain)
-                .disabled(!updateCoordinator.canChangeChannel)
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
-        .padding(4)
-        .background(Color.primary.opacity(0.075), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.8)
-        }
-        .contentShape(Capsule())
-        .animation(.easeInOut(duration: 0.2), value: updateCoordinator.channel)
-        .accessibilityElement(children: .contain)
+            ),
+            accent: settingsAccentColor,
+            title: { $0 == .stable
+                ? I18N.shared.localized("Stable 稳定版", "Stable")
+                : I18N.shared.localized("Beta 抢先版", "Beta") }
+        )
+        .disabled(!updateCoordinator.canChangeChannel)
         .accessibilityLabel(I18N.shared.localized("通道", "Channel"))
     }
+
     #endif
 
     private var activeReleaseNotes: String? {
@@ -2401,12 +2657,16 @@ struct SettingsView: View {
     @ViewBuilder
     private var appIconView: some View {
         #if os(macOS)
-        Image(nsImage: NSApplication.shared.applicationIconImage)
+        // 复用包内的多分辨率 macOS 图标，不额外打包图片。
+        let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+            .flatMap { NSImage(contentsOf: $0) }
+            ?? NSApplication.shared.applicationIconImage
+            ?? NSImage(size: NSSize(width: 64, height: 64))
+        Image(nsImage: icon)
             .resizable()
+            .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
             .padding(.top, 8)
         #else
         if let icon = UIImage(named: "AppIcon") {
@@ -2711,7 +2971,7 @@ struct SettingsView: View {
 
     private var settingsSidebarBackground: Color {
         #if os(macOS)
-        reduceTransparency ? Color(nsColor: .windowBackgroundColor) : PaperTheme.chromeBackground(scheme: colorScheme)
+        Color(paperHex: store.readerAppearance.backgroundHex(for: readerAppearanceMode, surface: .sidebar))
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
@@ -2719,7 +2979,7 @@ struct SettingsView: View {
 
     private var settingsWindowBackground: Color {
         #if os(macOS)
-        Color(nsColor: .controlBackgroundColor)
+        Color(paperHex: settingsAppearancePalette.backgroundHex)
         #else
         Color(uiColor: .systemGroupedBackground)
         #endif
@@ -2727,14 +2987,14 @@ struct SettingsView: View {
 
     private var settingsGroupBackground: Color {
         #if os(macOS)
-        Color(nsColor: .controlBackgroundColor)
+        Color(paperHex: store.readerAppearance.backgroundHex(for: readerAppearanceMode, surface: .articleList))
         #else
         Color(uiColor: .secondarySystemGroupedBackground)
         #endif
     }
 
     private var statusIsSuccess: Bool {
-        status.hasPrefix("成功") || status.hasPrefix("已保存") || status.hasPrefix("已填入")
+        status.hasPrefix("检测到") || status.hasPrefix("Detected") || status.hasPrefix("成功") || status.hasPrefix("已保存") || status.hasPrefix("已填入")
             || status.hasPrefix("已切换") || status.hasPrefix("已更新") || status.hasPrefix("已添加")
             || status.hasPrefix("Success") || status.hasPrefix("Saved") || status.hasPrefix("Recommended")
             || status.hasPrefix("Active") || status.hasPrefix("Updated") || status.hasPrefix("Added")
@@ -2747,6 +3007,7 @@ struct SettingsView: View {
 
     private func cancelProviderOperations() {
         editor.cancelOperations(for: selectedProviderID)
+        adaptationSuggestion = nil
         modelFetchRequestID = nil
         testRequestID = nil
         isFetchingModels = false
@@ -2835,8 +3096,9 @@ struct SettingsView: View {
 
     private func confirmCandidateModels() {
         for model in fetchedModelCandidates where selectedCandidateModelIDs.contains(model.id) {
-            guard !draftModels.contains(where: { $0.id == model.id }) else { continue }
-            draftModels.append(model)
+            if let index = draftModels.firstIndex(where: { $0.id == model.id }) {
+                draftModels[index].reasoningMetadata = model.reasoningMetadata
+            } else { draftModels.append(model) }
         }
         if configuration.model.isEmpty { configuration.model = draftModels.first?.id ?? "" }
         selectedCandidateModelIDs.removeAll()
@@ -2870,6 +3132,13 @@ struct SettingsView: View {
                 let models = try await store.fetchAIModels(provider: provider, apiKey: requestedAPIKey)
                 guard modelFetchRequestID == requestID, selectedProviderID == providerID, editor.accepts(requestID, for: providerID, revision: revision) else { return }
                 fetchedModelCandidates = models
+                editor.edit(providerID) { draft in
+                    for index in draft.provider.models.indices {
+                        if let fetched = models.first(where: { $0.id == draft.provider.models[index].id }) {
+                            draft.provider.models[index].reasoningMetadata = fetched.reasoningMetadata
+                        }
+                    }
+                }
                 status = I18N.shared.isEnglish ? "Fetched \(models.count) models" : "已拉取 \(models.count) 个候选模型"
             } catch {
                 guard modelFetchRequestID == requestID,
@@ -2881,6 +3150,37 @@ struct SettingsView: View {
         editor.register(task, for: providerID, token: requestID)
     }
 
+    private func reasoningProtocolTitle(_ wire: AIReasoningProtocol) -> String {
+        switch wire {
+        case .automatic: I18N.shared.localized("自动", "Automatic")
+        case .deepSeek: "DeepSeek"
+        case .gemini: "Google Gemini"
+        case .dashscope: I18N.shared.localized("阿里云百炼", "Alibaba Cloud Model Studio")
+        case .openRouter: "OpenRouter"
+        case .openAI: "OpenAI"
+        }
+    }
+
+    private func modelAdaptationExplanation(_ model: AIModelOption) -> String {
+        switch model.adaptation {
+        case .automatic:
+            I18N.shared.localized("当前格式：", "Current format: ") + model.adaptation.resolved(modelID: model.id).title
+        case .chat:
+            I18N.shared.localized("分别发送系统指令与用户内容", "Sends system instructions and user content separately")
+        case .userMessage:
+            I18N.shared.localized("合并为一条用户消息，兼容不接受系统消息的接口", "Combines instructions and content for endpoints without system messages")
+        case .qwenTranslation:
+            I18N.shared.localized("发送原文与目标语言，仅用于翻译功能", "Sends source text and target language for translation features only")
+        }
+    }
+
+    private func setModelAdaptation(_ adaptation: AIModelAdaptation, modelID: String) {
+        editor.edit(selectedProviderID) { draft in
+            guard let index = draft.provider.models.firstIndex(where: { $0.id == modelID }) else { return }
+            draft.provider.models[index].adaptation = adaptation
+        }
+    }
+
     private func test() {
         test(modelID: configuration.model)
     }
@@ -2888,6 +3188,7 @@ struct SettingsView: View {
     private func test(modelID: String) {
         guard let provider = draftAIProvider else { return }
         isTesting = true
+        adaptationSuggestion = nil
         status = ""
         let providerID = selectedProviderID
         let requestID = editor.beginOperation(for: providerID)
@@ -2903,9 +3204,15 @@ struct SettingsView: View {
             do {
                 var requestedProvider = provider.selectingModel(modelID)
                 requestedProvider = requestedProvider.replacing(selectedModelID: modelID)
-                try await store.testAIProvider(provider: requestedProvider, apiKey: requestedAPIKey)
+                let result = try await store.probeAIProvider(provider: requestedProvider, apiKey: requestedAPIKey)
                 guard testRequestID == requestID, selectedProviderID == providerID, editor.accepts(requestID, for: providerID, revision: revision) else { return }
-                status = I18N.shared.localized("成功：当前模型可以响应。", "Success: selected model responded.")
+                if let adaptation = result.suggestedAdaptation {
+                    adaptationSuggestion = (providerID, modelID, revision, adaptation)
+                    status = I18N.shared.localized("检测到可用适配：", "Detected adapter: ") + adaptation.title
+                        + I18N.shared.localized("。采用后请保存更改。", ". Apply and save changes to use it.")
+                } else {
+                    status = I18N.shared.localized("成功：当前模型可以响应。", "Success: selected model responded.")
+                }
             } catch {
                 guard testRequestID == requestID,
                       selectedProviderID == providerID,
@@ -3305,7 +3612,7 @@ private struct AddAccountSheet: View {
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
                         TextField(I18N.shared.localized("https://rss.example.com 或 /api/greader.php"), text: $freshRSSEndpoint)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
 
                     HStack {
@@ -3313,7 +3620,7 @@ private struct AddAccountSheet: View {
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
                         TextField(I18N.shared.localized("FreshRSS 用户名"), text: $freshRSSUsername)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
 
                     HStack {
@@ -3321,7 +3628,7 @@ private struct AddAccountSheet: View {
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
                         SecureField(I18N.shared.localized("用户配置中生成的 API 密码"), text: $freshRSSPassword)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
 
                     HStack {
@@ -3329,7 +3636,7 @@ private struct AddAccountSheet: View {
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
                         TextField(I18N.shared.localized("可选（默认服务器域名）"), text: $freshRSSDisplayName)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(SettingsInputStyle())
                     }
                 }
 
@@ -3382,5 +3689,221 @@ private struct AddAccountSheet: View {
             }
             .padding(20)
         }
+    }
+}
+
+/// 设置页的滚动条叠在右侧留白上，不参与内容宽度计算。
+private struct SettingsScrollView<Content: View>: View {
+    @ViewBuilder var content: Content
+    #if os(macOS)
+    @State private var scrollbar = PaperFloatingScrollbarView()
+    #endif
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+                #if os(macOS)
+                .background(SettingsScrollTarget(scrollbar: scrollbar))
+                #endif
+        }
+        #if os(macOS)
+        .scrollIndicators(.never, axes: .vertical)
+        .overlay(alignment: .trailing) {
+            SettingsScrollbarOverlay(scrollbar: scrollbar)
+                .frame(width: PaperFloatingScrollbarView.hitLaneWidth)
+                .accessibilityHidden(true)
+        }
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct SettingsScrollbarOverlay: NSViewRepresentable {
+    let scrollbar: PaperFloatingScrollbarView
+
+    func makeNSView(context: Context) -> PaperFloatingScrollbarView { scrollbar }
+    func updateNSView(_ nsView: PaperFloatingScrollbarView, context: Context) {}
+}
+
+/// 从内容内部向上绑定所属滚动容器，避免误选供应商页的相邻列表或嵌套文本框。
+private struct SettingsScrollTarget: NSViewRepresentable {
+    let scrollbar: PaperFloatingScrollbarView
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.scrollbar = scrollbar
+        return view
+    }
+
+    func updateNSView(_ nsView: Probe, context: Context) {
+        nsView.scrollbar = scrollbar
+        nsView.scheduleAttachment()
+    }
+
+    final class Probe: NSView {
+        weak var scrollbar: PaperFloatingScrollbarView?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scheduleAttachment()
+        }
+
+        func scheduleAttachment() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let scrollView = self.enclosingScrollView else { return }
+                self.scrollbar?.attach(to: scrollView)
+            }
+        }
+    }
+}
+#endif
+
+/// 预览与阅读器一样按较长内容预留高度，避免悬浮时推动设置行。
+private struct TranslationReplacementPreview: View {
+    @State private var showsOriginal = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Text("Reading opens a window to the world.")
+                .opacity(showsOriginal ? 1 : 0)
+                .accessibilityHidden(!showsOriginal)
+            Text("阅读为我们打开一扇通向世界的窗。")
+                .opacity(showsOriginal ? 0 : 1)
+                .accessibilityHidden(showsOriginal)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onHover { showsOriginal = $0 }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showsOriginal)
+    }
+}
+
+/// 设置中的紧凑分段选择器，统一模式、配色和更新通道的比例。
+private struct SettingsCompactSwitcher<Option: Hashable>: View {
+    let options: [Option]
+    @Binding var selection: Option
+    let accent: Color
+    let title: (Option) -> String
+    var accessory: ((Option) -> AnyView)? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var selectedText: Color {
+        TranslationPreferences.contrastRatio(accent.readerHexString, "#FFFFFF") >= 4.5
+            ? .white : Color(paperHex: "#18181B")
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                let selected = selection == option
+                HStack(spacing: 0) {
+                    Button { selection = option } label: {
+                        Text(title(option))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .font(.system(size: 12, weight: selected ? .medium : .regular))
+                            .foregroundStyle(selected ? selectedText : Color.primary)
+                            .padding(.horizontal, 12)
+                            .frame(height: 26)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    if let accessory { accessory(option) }
+                }
+                .background(selected ? accent : Color.clear, in: Capsule())
+            }
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.06), in: Capsule())
+        .overlay { Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5) }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: selection)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 使用原生最简色井，在自定义分段内部呈现圆形选色入口。
+private struct TranslationColorWell: View {
+    @Binding var color: Color
+
+    var body: some View {
+        #if os(macOS)
+        NativeWell(color: $color)
+            // 保留原生选色交互，用纯色圆覆盖原生悬浮标记。
+            .overlay { Circle().fill(color).allowsHitTesting(false) }
+        #else
+        ColorPicker("", selection: $color, supportsOpacity: false).labelsHidden()
+        #endif
+    }
+
+    #if os(macOS)
+    private struct NativeWell: NSViewRepresentable {
+        @Binding var color: Color
+        @Environment(\.isEnabled) private var isEnabled
+
+        func makeCoordinator() -> Coordinator { Coordinator(color: $color) }
+
+        func makeNSView(context: Context) -> NSColorWell {
+            let well = NSColorWell()
+            well.colorWellStyle = .minimal
+            well.isBordered = false
+            well.target = context.coordinator
+            well.action = #selector(Coordinator.changed(_:))
+            well.color = NSColor(color)
+            well.isEnabled = isEnabled
+            return well
+        }
+
+        func updateNSView(_ well: NSColorWell, context: Context) {
+            context.coordinator.color = $color
+            well.isEnabled = isEnabled
+            if !isEnabled, well.isActive { well.deactivate() }
+            let next = NSColor(color)
+            if well.color != next { well.color = next }
+        }
+
+        @MainActor
+        final class Coordinator: NSObject {
+            var color: Binding<Color>
+            init(color: Binding<Color>) { self.color = color }
+            @objc func changed(_ sender: NSColorWell) {
+                color.wrappedValue = Color(nsColor: sender.color)
+            }
+        }
+    }
+    #endif
+}
+
+/// 设置输入框与阅读主题共用底色，聚焦时以主题色描边。
+@MainActor
+private struct SettingsInputStyle: @preconcurrency TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .modifier(SettingsInputSurface())
+    }
+}
+
+private struct SettingsInputSurface: ViewModifier {
+    @Environment(\.paperAppearancePalette) private var palette
+    @Environment(\.colorSchemeContrast) private var contrast
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(Color(paperHex: palette.inkHex))
+            .focused($isFocused)
+            .background(Color(paperHex: palette.backgroundHex), in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(
+                        isFocused ? Color(paperHex: palette.accentHex)
+                            : Color(paperHex: palette.inkHex).opacity(contrast == .increased ? 0.5 : 0.18),
+                        lineWidth: isFocused ? 1.5 : 1
+                    )
+                    .allowsHitTesting(false)
+            }
     }
 }
