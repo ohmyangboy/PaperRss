@@ -45,6 +45,7 @@ async function manifestFixture(parent, { version, build, channel = 'stable', fil
     sha256: createHash('sha256').update(bytes).digest('hex'),
     edSignature: signature,
     minimumMacOS: '14.0',
+    architectures: ['arm64', 'x86_64'],
     downloadURL: `https://github.com/example/PaperRss/releases/download/v${version}/${filename}`,
     dmgFilename,
     dmgByteLength: dmgBytes.length,
@@ -250,6 +251,8 @@ test('正式发布绑定 target commit，并支持只核验资产后恢复 appca
   const fakeGh = join(parent, 'gh');
   const releaseState = join(parent, 'release-state');
   const appcastState = join(parent, 'remote-appcast.xml');
+  const caskState = join(parent, 'remote-cask.rb');
+  await writeFile(caskState, 'cask "paperrss" do\n  version "1.9.0"\n  sha256 "' + 'a'.repeat(64) + '"\n  url "https://github.com/example/PaperRss/releases/download/v#{version}/PaperRss-v#{version}.dmg"\nend\n');
   await writeFile(fakeGh, `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
@@ -265,6 +268,15 @@ if (args[0] === 'api') {
   if (endpoint.includes('/git/ref/tags/')) {
     if (state === 'absent') fail404();
     process.stdout.write(args.includes('--jq') ? target + '\\n' : JSON.stringify({ object: { sha: target } }) + '\\n');
+    process.exit(0);
+  }
+  if (endpoint.includes('/contents/Casks/paperrss.rb')) {
+    if (args.includes('PUT')) {
+      const content = args.find((arg) => arg.startsWith('content=')).slice(8);
+      fs.writeFileSync(process.env.GH_CASK_STATE, Buffer.from(content, 'base64'));
+      process.stdout.write('{}'); process.exit(0);
+    }
+    process.stdout.write(JSON.stringify({sha: 'cask-sha', encoding: 'base64', content: fs.readFileSync(process.env.GH_CASK_STATE).toString('base64')}));
     process.exit(0);
   }
   if (endpoint.includes('/contents/website/appcast/')) {
@@ -287,8 +299,8 @@ if (args[0] === 'api') {
 if (args[0] === 'release' && args[1] === 'view') {
   if (state === 'absent') fail404();
   process.stdout.write(JSON.stringify({
-    isDraft: state === 'draft', tagName: 'v2.0.0', targetCommitish: target,
-    assets: [{ name: 'PaperRss-v2.0.0.zip' }, { name: 'PaperRss-v2.0.0.dmg' }],
+    isDraft: state === 'draft', isPrerelease: false, tagName: 'v2.0.0', targetCommitish: target,
+    assets: [{ name: 'PaperRss-v2.0.0.zip' }, { name: 'PaperRss-v2.0.0.dmg', url: 'https://github.com/example/PaperRss/releases/download/v2.0.0/PaperRss-v2.0.0.dmg' }],
   }) + '\\n');
   process.exit(0);
 }
@@ -314,6 +326,7 @@ process.exit(9);
   await writeFile(noRemoteMutationGh, '#!/bin/sh\necho remote mutation >&2\nexit 9\n');
   await chmod(noRemoteMutationGh, 0o755);
   const dryRun = await runShell(releasePublisher, [
+    '--repo', 'example/PaperRss',
     '--channel', 'stable', '--tag', 'v2.0.0', '--manifest', fixture.manifest,
     '--output-dir', output, '--public-key', fixture.publicKeyPath,
   ], { PATH: `${parent}:${process.env.PATH}`, GH_LOG: log });
@@ -325,6 +338,7 @@ process.exit(9);
     GH_LOG: log,
     GH_RELEASE_STATE: releaseState,
     GH_APPCAST_STATE: appcastState,
+    GH_CASK_STATE: caskState,
     GH_ASSET_ROOT: parent,
     GH_TARGET_COMMIT: fixture.sourceCommit,
     PAPERRSS_RELEASE_AUTHORIZED: 'YES',
@@ -363,6 +377,10 @@ process.exit(9);
   assert.match(commands[5], /release edit v2\.0\.0.*--draft=false/);
   assert.match(commands.slice(6).join('\n'), /contents\/website\/appcast\/stable\.xml/);
 
+  const caskPut = commands.findIndex((command) => /PUT.*contents\/Casks\/paperrss.rb/.test(command));
+  const appcastPut = commands.findIndex((command) => /PUT.*contents\/website\/appcast/.test(command));
+  assert.ok(caskPut > appcastPut, 'Homebrew 必须在 appcast 发布成功后执行');
+  assert.match(await readFile(caskState, 'utf8'), /version "2\.0\.0"/);
   await writeFile(log, '');
   await writeFile(appcastState, 'stale remote appcast');
   const resumed = await runShell(releasePublisher, [
@@ -377,6 +395,8 @@ process.exit(9);
   assert.equal(resumeCommands.some((command) => /release (create|upload|edit)/.test(command)), false);
   assert.match(resumeCommands.slice(4).join('\n'), /api --method PUT repos\/example\/PaperRss\/contents\/website\/appcast\/stable\.xml/);
 
+  assert.doesNotMatch(resumeCommands.join('\n'), /PUT.*contents\/Casks\/paperrss.rb/);
+
   // beta 必须在首次公开前标记为预发布，不能触发稳定版镜像同步。
   const beta = await manifestFixture(parent, { version: '2.1.0-beta.1', build: 21, channel: 'beta' });
   await writeFile(releaseState, 'absent');
@@ -389,6 +409,7 @@ process.exit(9);
     '--output-dir', join(parent, 'beta-output'),
   ], { ...environment, PAPERRSS_RELEASE_CONFIRM: 'PUBLISH v2.1.0-beta.1' });
   const betaCommands = (await readFile(log, 'utf8')).trim().split('\n');
+  assert.doesNotMatch(betaCommands.join('\n'), /homebrew-tap|Casks/);
   const createBeta = betaCommands.find((command) => command.startsWith('release create '));
   assert.match(createBeta, /--prerelease(?:\s|$)/);
   assert.match(createBeta, /--latest=false(?:\s|$)/);

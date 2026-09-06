@@ -187,10 +187,35 @@ CloudKit 同步代码已经存在，但设置页明确标记为“同步功能�
 2. 执行 `scripts/release.sh build --version <版本> --build <构建号> --channel stable|beta`：运行 Core 测试，归档并注入更新源、公钥和源提交信息。
 3. Developer ID 导出后检查签名与 Hardened Runtime、启动冒烟、Apple 公证及 Staple；生成并公证 DMG，同时生成 Sparkle ZIP、EdDSA 签名及 manifest。
 4. 使用 `scripts/release.sh verify` 复验产物；另行执行 `scripts/verify.sh --web`、受影响功能测试与真实 App 检查。
-5. 先运行 `scripts/release.sh publish` 的 dry-run，再在明确授权下执行 `--execute`：绑定远端源提交，创建 draft、上传资产、公开 Release、发布并读回对应通道 appcast。
+5. 先运行 `scripts/release.sh publish` 的 dry-run，再在明确授权下执行 `--execute`：绑定远端源提交，创建 draft、上传资产、公开 Release、发布并读回对应通道 appcast。稳定版随后自动同步 Homebrew Cask 并读回复验。
 6. beta 在公开前标记为 GitHub prerelease，且不设置为 latest；只更新 `website/appcast/beta.xml`，不覆盖稳定版更新源或触发稳定镜像同步。
 
 官网由独立 Pages workflow 从 `website/` 部署，并同步至镜像站。发布后仍需核对远端资产散列、更新源、工作流状态及中英文页面。正式发布不得跳过公证；`--skip-notarization` 只用于本机演练。
+
+### Homebrew 同步
+
+稳定版通过 [`publish_homebrew.mjs`](../../scripts/sparkle/publish_homebrew.mjs) 更新
+`ohmyangboy/homebrew-tap` 的 `main:Casks/paperrss.rb`，仅修改版本号与 DMG SHA-256。
+复用发布机器的 `gh` 登录，该账户需要 tap 的 Contents 写权限，无需新增 Actions secret。
+普通 `publish` dry-run 仅验证本地产物，不访问 tap；beta 不执行 Homebrew 同步。
+
+执行时先核对公开 Release 不是 draft/prerelease，再下载 DMG 并校验长度与 SHA-256。
+写入携带旧文件 SHA，遇到并发冲突直接报错；成功后读回验证。同版本、同散列重试不产生提交，
+旧版本回退或同版本散列变化会被拒绝。系统要求或架构改变时需先调整同步校验和 Cask。
+
+Homebrew 失败会让发布命令非零退出，此时 Release 和 appcast 可能已经公开。
+保留原始 manifest，沿用该次发布授权，单独重试以下命令，不重新创建或上传 Release：
+
+```bash
+PAPERRSS_RELEASE_AUTHORIZED=YES \
+PAPERRSS_RELEASE_CONFIRM="PUBLISH vX.Y.Z" \
+node scripts/sparkle/publish_homebrew.mjs --execute \
+  --repo ohmyangboy/PaperRss --tag vX.Y.Z \
+  --manifest dist/release/vX.Y.Z/manifest.json
+```
+
+`--resume-appcast` 恢复成功后也会继续同步稳定版 Cask。直接在 GitHub 网页创建 Release
+不会调用本机脚本，需要按上述命令补同步。此流程不自动维护 beta Cask。
 
 ## 8. 验证结构
 

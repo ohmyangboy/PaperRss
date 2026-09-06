@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 import { resolveWebsiteLocale } from '../website/locale.mjs';
 
@@ -80,7 +81,7 @@ test('website showcases the supplied full-resolution product screenshots', async
   }
 });
 
-test('download routing and options support dual-source smart download', async () => {
+test('下载始终优先 GitHub，镜像保留为菜单备选', async () => {
   const [zhHome, enHome, routerScript] = await Promise.all([
     readFile(new URL('../website/zh-CN/index.html', import.meta.url), 'utf8'),
     readFile(new URL('../website/en/index.html', import.meta.url), 'utf8'),
@@ -95,11 +96,32 @@ test('download routing and options support dual-source smart download', async ()
     assert.match(home, /href="https:\/\/github\.com\/ohmyangboy\/PaperRss\/releases"/);
   }
 
-  assert.match(routerScript, /https:\/\/download\.1leaf\.cc\/PaperRss-latest\.dmg/);
+  assert.doesNotMatch(routerScript, /isOneLeafHost|ONELEAF_URL/);
   assert.match(routerScript, /https:\/\/api\.github\.com\/repos\/ohmyangboy\/PaperRss\/releases\/latest/);
   assert.match(routerScript, /https:\/\/github\.com\/ohmyangboy\/PaperRss\/releases\/latest/);
   assert.match(routerScript, /data-smart-download/);
   assert.match(routerScript, /aria-busy/);
+  for (const hostname of ['rss.1leaf.cc', 'ohmyangboy.github.io', '127.0.0.1']) {
+    for (const available of [true, false]) {
+      const listeners = {};
+      const link = { href: '', dataset: {}, setAttribute() {}, removeAttribute() {},
+        addEventListener(type, callback) { listeners[type] = callback; } };
+      const location = { hostname, href: '' };
+      let requested;
+      runInNewContext(routerScript, {
+        document: { readyState: 'complete', querySelectorAll: () => [link] },
+        window: { location }, location, AbortController, setTimeout, clearTimeout,
+        fetch: async (url) => {
+          requested = url;
+          return { ok: available, json: async () => ({ assets: [{ name: 'PaperRss.dmg', browser_download_url: 'https://github.com/example/PaperRss.dmg' }] }) };
+        },
+      });
+      assert.equal(link.href, 'https://github.com/ohmyangboy/PaperRss/releases/latest');
+      await listeners.click({ preventDefault() {} });
+      assert.equal(requested, 'https://api.github.com/repos/ohmyangboy/PaperRss/releases/latest');
+      assert.equal(location.href, available ? 'https://github.com/example/PaperRss.dmg' : link.href);
+    }
+  }
 });
 
 test('title scramble animation is shared by both locales and respects reduced motion', async () => {

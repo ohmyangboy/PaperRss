@@ -83,6 +83,52 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 > 📝 备注：签名问题已解决——所有产物均经过 Developer ID 签名与 Apple 公证，首次打开不会再出现「无法验证」提示。接下来版本更新会加快，敬请谅解。
 
+### Homebrew
+
+要求 macOS 14+，支持 Apple Silicon 与 Intel Mac。首次安装：
+
+```bash
+brew install --cask ohmyangboy/tap/paperrss
+```
+
+以后升级：
+
+```bash
+brew update
+brew upgrade --cask --greedy ohmyangboy/tap/paperrss
+```
+
+PaperRss 支持应用内更新，因此使用 `--greedy` 将其纳入 Homebrew 升级检查。
+
+已通过 DMG 安装？先退出 PaperRss，再执行以下命令，由 Homebrew 替换并管理应用，订阅、阅读记录和设置会保留：
+
+```bash
+brew update
+brew install --cask --force ohmyangboy/tap/paperrss
+```
+
+此命令安装 tap 中的稳定版；如果正在使用更新的 beta 版，请勿执行，以免降级。
+
+Tap 与安装说明：[ohmyangboy/homebrew-tap](https://github.com/ohmyangboy/homebrew-tap)。
+
+### curl 脚本安装
+
+无需 Homebrew。先退出 PaperRss，再执行：
+
+```bash
+curl -fsSL https://ohmyangboy.github.io/PaperRss/install.sh | bash
+```
+
+脚本从 GitHub 获取最新稳定版，校验 SHA-256、应用签名与 Gatekeeper 后安装到 `/Applications`。再次执行同一命令即可更新；保留订阅、阅读记录与设置，并拒绝覆盖版本号更新的应用。已通过 Homebrew 安装的用户请继续使用 `brew upgrade`。
+
+仅下载校验、不安装：
+
+```bash
+curl -fsSL https://ohmyangboy.github.io/PaperRss/install.sh | bash -s -- --dry-run
+```
+
+如需安装到个人应用目录，在命令末尾使用 `bash -s -- --app-dir "$HOME/Applications"`。脚本随官网发布，并自动跟踪 GitHub 稳定版，无需每次更新安装链接。
+
 ## 从源码构建
 
 要求：macOS 14.0+、Xcode 15.0+、Swift 5.9+。

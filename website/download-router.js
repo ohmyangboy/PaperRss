@@ -1,7 +1,4 @@
 (() => {
-  const ONELEAF_URL =
-    "https://download.1leaf.cc/PaperRss-latest.dmg";
-
   const GITHUB_API =
     "https://api.github.com/repos/ohmyangboy/PaperRss/releases/latest";
 
@@ -9,13 +6,6 @@
     "https://github.com/ohmyangboy/PaperRss/releases/latest";
 
   const TIMEOUT_MS = 3000;
-
-  function isOneLeafHost() {
-    return (
-      location.hostname === "rss.1leaf.cc" ||
-      location.hostname.endsWith(".1leaf.cc")
-    );
-  }
 
   async function fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
@@ -58,15 +48,7 @@
   function initSmartDownload() {
     const links = document.querySelectorAll("[data-smart-download]");
 
-    if (isOneLeafHost()) {
-      // 1leaf 域名：固定走 1leaf 镜像下载，不自动切到 GitHub
-      links.forEach((link) => {
-        link.href = ONELEAF_URL;
-      });
-      return;
-    }
-
-    // GitHub Pages 或其他域名：固定走 GitHub 下载，不自动切到 1leaf
+    // 所有域名统一优先 GitHub，服务器镜像仅保留为下拉备选。
     links.forEach((link) => {
       link.href = GITHUB_RELEASES;
 

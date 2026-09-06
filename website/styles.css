@@ -266,14 +266,19 @@ body {
 /* Hero CTA Cluster — Download, Star & Lang Switches Together */
 .hero-ctas {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   margin-bottom: 1.5rem;
   position: relative;
   z-index: 20;
+}
+
+.hero-ctas > * {
+  flex-shrink: 0;
 }
 
 /* Split Download Button (Universal macOS) */
@@ -1542,4 +1547,139 @@ body {
   .legal-footer {
     flex-direction: column;
   }
+}
+
+/* 安装命令：细边框、标签下划线与紧凑的单行命令。 */
+.homebrew-install {
+  width: min(100%, 640px);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.install-card {
+  border: 1px solid var(--border-medium);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--paper) 72%, var(--surface));
+  overflow: hidden;
+  text-align: left;
+}
+
+.install-tabs {
+  display: flex;
+  gap: 1.6rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border-medium);
+}
+
+.install-tab {
+  padding: 0.8rem 0;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--subtle);
+  font: 400 0.875rem var(--font-mono);
+  cursor: pointer;
+}
+
+.install-tab[aria-selected="true"] {
+  border-bottom-color: var(--ink);
+  color: var(--ink);
+}
+
+.install-tab:hover {
+  color: var(--ink);
+}
+
+.install-command {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 78px;
+  padding: 1.2rem 1.25rem;
+}
+
+.install-command code {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.8;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.install-command strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.copy-command {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+}
+
+.copy-command svg {
+  width: 18px;
+  height: 18px;
+}
+
+.copy-done,
+.copy-command[data-copied] .copy-icon {
+  display: none;
+}
+
+.copy-command[data-copied] .copy-done {
+  display: block;
+}
+
+.copy-command:hover {
+  color: var(--ink);
+  background: var(--chip);
+}
+
+.copy-command:focus-visible,
+.install-tab:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.install-commands {
+  padding: 1rem 1.25rem;
+}
+
+.install-command-group + .install-command-group {
+  margin-top: 0.85rem;
+}
+
+.install-commands .install-command {
+  min-height: 28px;
+  padding: 0;
+}
+
+.install-comment {
+  margin-bottom: 0.15rem;
+  color: var(--subtle);
+  font: 400 0.6875rem/1.6 var(--font-mono);
+}
+
+.install-toggle {
+  border: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.install-toggle[aria-expanded="true"] {
+  background: var(--chip-hover);
+}
+
+.install-toggle:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
 }

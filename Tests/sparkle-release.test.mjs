@@ -114,7 +114,8 @@ exit 2
 }
 
 async function waitForFile(path) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     try {
       await readFile(path);
       return;
@@ -348,16 +349,18 @@ test('同版本并发打包只有一个进程能原子发布，且最终目录�
   const args = ['--app', fixture.app, '--output-dir', output, '--channel', 'beta'];
 
   const first = run(buildScript, args, environment);
-  await waitForFile(signerReady);
-  const second = run(buildScript, args, environment);
-  void second.catch(() => {});
+  void first.catch(() => {});
+  let second;
   let results;
   try {
+    await waitForFile(signerReady);
+    second = run(buildScript, args, environment);
+    void second.catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 1000));
     assert.equal(await fileExists(secondarySigner), false, '未持有版本锁的第二个进程不应进入签名阶段');
   } finally {
     await writeFile(signerContinue, 'continue');
-    results = await Promise.allSettled([first, second]);
+    results = await Promise.allSettled(second ? [first, second] : [first]);
   }
 
   assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);

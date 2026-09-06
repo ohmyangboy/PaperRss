@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 DRY_RUN="$ROOT_DIR/scripts/sparkle/publish_release_dry_run.sh"
 APPCAST_TOOL="$ROOT_DIR/scripts/sparkle/publish_appcast_github.mjs"
+HOMEBREW_TOOL="$ROOT_DIR/scripts/sparkle/publish_homebrew.mjs"
 
 EXECUTE=false
 RESUME_APPCAST=false
@@ -37,6 +38,10 @@ usage() {
 
 Release 已公开但 appcast 失败时，保留上述参数并增加 --resume-appcast。
 恢复模式只核对既有 tag/Release/远程 ZIP+DMG，然后重试固定 appcast。
+稳定版随后同步 ohmyangboy/homebrew-tap 的 Casks/paperrss.rb；beta 跳过。
+Homebrew 失败可用相同授权变量单独重试：
+  node scripts/sparkle/publish_homebrew.mjs --execute --repo <owner/repository>
+    --tag <vX.Y.Z> --manifest <manifest.json>
 EOF
 }
 
@@ -65,6 +70,11 @@ done
 if [[ -z "$CHANNEL" || -z "$TAG" || -z "$MANIFEST" || -z "$OUTPUT_DIR" ]]; then
   usage
   exit 2
+fi
+
+# 稳定版在创建任何远端资产之前，先验证 Homebrew 产物约束。
+if [[ "$CHANNEL" == "stable" ]]; then
+  node "$HOMEBREW_TOOL" --manifest "$MANIFEST" --tag "$TAG" --repo "${REPO:-ohmyangboy/PaperRss}"
 fi
 
 if [[ "$EXECUTE" != true ]]; then
@@ -246,6 +256,15 @@ PAPERRSS_APPCAST_CONFIRM="PUBLISH $APPCAST_TARGET" \
   node "$APPCAST_TOOL" --execute --repo "$APPCAST_REPO" --branch "$APPCAST_BRANCH" \
     --path "$APPCAST_REMOTE_PATH" --channel "$CHANNEL" --appcast "$APPCAST_PATH" \
     --asset-root "$MANIFEST_DIR" --public-key "$PUBLIC_KEY"
+
+if [[ "$CHANNEL" == "stable" ]]; then
+  node "$HOMEBREW_TOOL" --execute --manifest "$MANIFEST" --tag "$TAG" --repo "$REPO" || {
+    echo "错误: Release/appcast 已发布，Homebrew 同步失败。保留 manifest，使用帮助中的单独重试命令。" >&2
+    exit 1
+  }
+else
+  echo "beta 发布：跳过稳定版 Homebrew Cask。"
+fi
 
 if [[ "$RESUME_APPCAST" == true ]]; then
   echo "appcast 恢复完成；未修改既有 Release 资产。"

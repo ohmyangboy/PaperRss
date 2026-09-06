@@ -83,6 +83,52 @@ Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangb
 
 > 📝 Note: The signing issue has been resolved — all artifacts are Developer ID signed and Apple notarized, so the "cannot be verified" warning is gone for good. Release cadence will speed up from here; thanks for your patience.
 
+### Homebrew
+
+Requires macOS 14+, with support for Apple Silicon and Intel Macs. Install with:
+
+```bash
+brew install --cask ohmyangboy/tap/paperrss
+```
+
+To update:
+
+```bash
+brew update
+brew upgrade --cask --greedy ohmyangboy/tap/paperrss
+```
+
+PaperRss supports in-app updates; `--greedy` includes it in Homebrew upgrade checks.
+
+Already installed via DMG? Quit PaperRss, then run the following to replace the app and let Homebrew manage it. Your subscriptions, reading history and settings are preserved:
+
+```bash
+brew update
+brew install --cask --force ohmyangboy/tap/paperrss
+```
+
+This installs the stable version in the tap. Skip this step if you are using a newer beta to avoid downgrading.
+
+Tap and installation details: [ohmyangboy/homebrew-tap](https://github.com/ohmyangboy/homebrew-tap).
+
+### Install via curl
+
+No Homebrew needed. Quit PaperRss, then run:
+
+```bash
+curl -fsSL https://ohmyangboy.github.io/PaperRss/install.sh | bash
+```
+
+The script downloads the latest stable release from GitHub, verifies SHA-256, the app signature and Gatekeeper assessment, then installs it in `/Applications`. Run the same command again to update. Subscriptions, reading history and settings are preserved; newer app versions are not downgraded. If you installed with Homebrew, continue using `brew upgrade`.
+
+Download and verify without installing:
+
+```bash
+curl -fsSL https://ohmyangboy.github.io/PaperRss/install.sh | bash -s -- --dry-run
+```
+
+To install in your personal Applications folder, use `bash -s -- --app-dir "$HOME/Applications"` at the end of the command. The script is deployed with the website and automatically follows stable GitHub releases.
+
 ## Build from Source
 
 Requirements: macOS 14.0+, Xcode 15.0+, Swift 5.9+.
