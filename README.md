@@ -79,6 +79,8 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.3.2（Build 21）** 整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
+**Beta v1.3.3-beta.1（Build 22）**：新增独立的订阅源未读筛选，修复含图片或视频文章的空格导航，优化侧栏和工具栏图标。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.1)。
+
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
 > 📝 备注：签名问题已解决——所有产物均经过 Developer ID 签名与 Apple 公证，首次打开不会再出现「无法验证」提示。接下来版本更新会加快，敬请谅解。

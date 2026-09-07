@@ -19,6 +19,7 @@ enum SidebarSelection: Hashable {
     case today
     case unread
     case starred
+    case account(String)
     case folder(accountID: String, folderName: String)
     case feed(UUID)
     case feeds(Set<UUID>)
@@ -29,6 +30,7 @@ enum SidebarSelection: Hashable {
         case .today: I18N.shared.localized("今天")
         case .unread: I18N.shared.localized("未读")
         case .starred: I18N.shared.localized("收藏")
+        case let .account(id): I18N.shared.localized(id == "local-default" ? "我的 Mac" : "账号")
         case let .folder(_, name): name
         case .feed: I18N.shared.localized("订阅")
         case let .feeds(ids): I18N.shared.localizedFormat("%lld 个订阅", ids.count)
@@ -56,6 +58,7 @@ struct RootView: View {
     // List's synthesized Hashable selection after the first click. A stable ID
     // makes selection, focus, and the visible detail all describe the same item.
     @State private var selectedEntryID: String?
+    @State private var unreadFilteredGroups: Set<SidebarSelection> = []
     @State private var unreadOnly = false
     @State private var retainedEntryListIDs: Set<String> = []
     @State private var selectedFeedIDs: Set<UUID> = []
@@ -193,6 +196,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: sidebarSelection,
+                unreadFilteredGroups: $unreadFilteredGroups,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
@@ -261,6 +265,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: sidebarSelection,
+                unreadFilteredGroups: $unreadFilteredGroups,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
@@ -321,6 +326,9 @@ struct RootView: View {
            let feed = store.feed(for: entry) {
             return feed.title
         }
+        if case let .account(id) = currentSelection {
+            return store.accounts.first(where: { $0.id == id })?.displayName ?? currentSelection.title
+        }
         return currentSelection.title
     }
 
@@ -336,6 +344,8 @@ struct RootView: View {
             return (store.sidebarCounts.unreadByFeed[id] ?? 0) > 0
         case let .feeds(ids):
             return ids.contains { (store.sidebarCounts.unreadByFeed[$0] ?? 0) > 0 }
+        case let .account(id):
+            return store.feeds(for: id).contains { store.unreadCount(feedID: $0.id) > 0 }
         case let .folder(acc, folder):
             return store.unreadCount(folder: folder, accountID: acc) > 0
         }
@@ -351,6 +361,8 @@ struct RootView: View {
             store.markAllRead()
         case .starred:
             store.markAllRead(scope: .starred)
+        case let .account(id):
+            store.markAllRead(accountID: id)
         case let .folder(acc, folder):
             store.markAllRead(accountID: acc, folder: folder)
         case let .feed(id):
@@ -594,7 +606,7 @@ struct RootView: View {
 
     private var supportsUnreadFilter: Bool {
         switch currentSelection {
-        case .folder, .feed, .feeds: return true
+        case .account, .folder, .feed, .feeds: return true
         default: return false
         }
     }
@@ -619,6 +631,8 @@ struct RootView: View {
             return .unread
         case .starred:
             return .starred
+        case let .account(id):
+            return .feeds(feedIDs: Set(store.feeds(for: id).map { $0.id.uuidString }))
         case let .folder(acc, folder):
             return .folder(accountID: acc, folderName: folder)
         case let .feed(id):
@@ -797,6 +811,7 @@ private struct SidebarView: View {
     @ObservedObject var store: AppStore
     let appearanceMode: ReaderAppearanceMode
     @Binding var selection: SidebarSelection?
+    @Binding var unreadFilteredGroups: Set<SidebarSelection>
     @Binding var selectedFeedIDs: Set<UUID>
     @Binding var showsAddFeed: Bool
     @Binding var showsAddFolder: Bool
@@ -819,6 +834,7 @@ private struct SidebarView: View {
     #if os(macOS)
     @State private var showsFeedbackPopover = false
     #endif
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     #if os(macOS)
@@ -908,6 +924,63 @@ private struct SidebarView: View {
                 }
             }
         )
+    }
+
+    private var filtersUnreadFeeds: Bool { !unreadFilteredGroups.isEmpty }
+
+    private func visibleFeeds(_ feeds: [Feed], accountID: String, folder: String? = nil) -> [Feed] {
+        let filtersAccount = unreadFilteredGroups.contains(.account(accountID))
+        let filtersFolder = folder.map { unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: $0)) } ?? false
+        guard filtersAccount || filtersFolder else { return feeds }
+        return feeds.filter { store.unreadCount(feedID: $0.id) > 0 }
+    }
+
+    private func filterAction(for row: SidebarSelection) -> (() -> Void)? {
+        guard selection == row || unreadFilteredGroups.contains(row) else { return nil }
+        return {
+            withAnimation(feedFilterAnimation) {
+                let enabling = !unreadFilteredGroups.contains(row)
+                if enabling {
+                    unreadFilteredGroups.insert(row)
+                } else {
+                    unreadFilteredGroups.remove(row)
+                }
+                switch row {
+                case let .account(id):
+                    if enabling { isAccountExpandedBinding(accountID: id).wrappedValue = true }
+                    for folder in store.folders(for: id) {
+                        if !enabling || store.unreadCount(folder: folder, accountID: id) > 0 {
+                            isFolderExpandedBinding(key: "\(id)::\(folder)").wrappedValue = enabling
+                        }
+                    }
+                case let .folder(id, name):
+                    if enabling {
+                        if store.unreadCount(folder: name, accountID: id) > 0 {
+                            isAccountExpandedBinding(accountID: id).wrappedValue = true
+                            isFolderExpandedBinding(key: "\(id)::\(name)").wrappedValue = true
+                        }
+                    } else {
+                        isFolderExpandedBinding(key: "\(id)::\(name)").wrappedValue = false
+                    }
+                default: break
+                }
+            }
+        }
+    }
+
+    private var feedFilterAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.2)
+    }
+
+    private func selectAccount(_ id: String) {
+        if selection == .account(id) {
+            withAnimation(feedFilterAnimation) {
+                isAccountExpandedBinding(accountID: id).wrappedValue.toggle()
+            }
+        } else {
+            selectedFeedIDs = []
+            selection = .account(id)
+        }
     }
 
     private var freshRSSAccounts: [AccountRecord] {
@@ -1080,94 +1153,98 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private var localSubscriptionsSection: some View {
-        Section(isExpanded: isAccountExpandedBinding(accountID: "local-default")) {
-            ForEach(store.rootFeeds(for: "local-default")) { feed in
-                feedRow(feed)
-            }
-            .onMove { fromOffsets, toOffset in
-                store.reorderRootFeeds(fromOffsets: fromOffsets, toOffset: toOffset)
-            }
-
-            ForEach(store.folders(for: "local-default"), id: \.self) { folder in
-                let key = "local-default::\(folder)"
-                DisclosureGroup(
-                    isExpanded: isFolderExpandedBinding(key: key),
-                    content: {
-                        ForEach(store.feeds(in: folder, for: "local-default")) { feed in
-                            feedRow(feed, inFolder: true)
-                        }
-                        .onMove { fromOffsets, toOffset in
-                            store.reorderFeeds(in: folder, fromOffsets: fromOffsets, toOffset: toOffset)
-                        }
-                    },
-                    label: {
-                        folderRow(folder, accountID: "local-default")
-                    }
-                )
-            }
-            .onMove { fromOffsets, toOffset in
-                store.reorderFolders(fromOffsets: fromOffsets, toOffset: toOffset)
-            }
-        } header: {
-            HStack {
-                Text(I18N.localized("我的 Mac"))
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(appearanceMutedColor)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isAccountExpandedBinding(accountID: "local-default").wrappedValue.toggle()
+        Section {
+            DisclosureGroup(isExpanded: isAccountExpandedBinding(accountID: "local-default")) {
+                ForEach(visibleFeeds(store.rootFeeds(for: "local-default"), accountID: "local-default")) { feed in
+                    feedRow(feed)
+                        .moveDisabled(filtersUnreadFeeds)
+                        .transition(.opacity)
                 }
+                .onMove { fromOffsets, toOffset in
+                    guard !filtersUnreadFeeds else { return }
+                    store.reorderRootFeeds(fromOffsets: fromOffsets, toOffset: toOffset)
+                }
+                .animation(feedFilterAnimation, value: visibleFeeds(store.rootFeeds(for: "local-default"), accountID: "local-default").map(\.id))
+
+                ForEach(store.folders(for: "local-default"), id: \.self) { folder in
+                    let key = "local-default::\(folder)"
+                    DisclosureGroup(
+                        isExpanded: isFolderExpandedBinding(key: key),
+                        content: {
+                            ForEach(visibleFeeds(store.feeds(in: folder, for: "local-default"), accountID: "local-default", folder: folder)) { feed in
+                                feedRow(feed, inFolder: true)
+                                    .moveDisabled(filtersUnreadFeeds)
+                                    .transition(.opacity)
+                            }
+                            .onMove { fromOffsets, toOffset in
+                                guard !filtersUnreadFeeds else { return }
+                                store.reorderFeeds(in: folder, fromOffsets: fromOffsets, toOffset: toOffset)
+                            }
+                            .animation(feedFilterAnimation, value: visibleFeeds(store.feeds(in: folder, for: "local-default"), accountID: "local-default", folder: folder).map(\.id))
+                        },
+                        label: {
+                            folderRow(folder, accountID: "local-default")
+                        }
+                    )
+                }
+                .onMove { fromOffsets, toOffset in
+                    guard !filtersUnreadFeeds else { return }
+                    store.reorderFolders(fromOffsets: fromOffsets, toOffset: toOffset)
+                }
+            } label: {
+                accountRow(I18N.localized("我的 Mac"), accountID: "local-default")
             }
         }
     }
 
     @ViewBuilder
     private func freshRSSAccountSection(_ account: AccountRecord) -> some View {
-        Section(isExpanded: isAccountExpandedBinding(accountID: account.id)) {
-            ForEach(store.rootFeeds(for: account.id)) { feed in
-                remoteFeedRow(feed, accountID: account.id)
-            }
-
-            ForEach(store.folders(for: account.id), id: \.self) { folder in
-                let key = "\(account.id)::\(folder)"
-                DisclosureGroup(
-                    isExpanded: isFolderExpandedBinding(key: key),
-                    content: {
-                        ForEach(store.feeds(in: folder, for: account.id)) { feed in
-                            remoteFeedRow(feed, accountID: account.id, inFolder: true)
-                        }
-                    },
-                    label: {
-                        remoteFolderRow(folder, accountID: account.id)
-                    }
-                )
-            }
-        } header: {
-            HStack {
-                Text(account.displayName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(appearanceMutedColor)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isAccountExpandedBinding(accountID: account.id).wrappedValue.toggle()
+        Section {
+            DisclosureGroup(isExpanded: isAccountExpandedBinding(accountID: account.id)) {
+                ForEach(visibleFeeds(store.rootFeeds(for: account.id), accountID: account.id)) { feed in
+                    remoteFeedRow(feed, accountID: account.id)
+                        .transition(.opacity)
                 }
+                .animation(feedFilterAnimation, value: visibleFeeds(store.rootFeeds(for: account.id), accountID: account.id).map(\.id))
+
+                ForEach(store.folders(for: account.id), id: \.self) { folder in
+                    let key = "\(account.id)::\(folder)"
+                    DisclosureGroup(
+                        isExpanded: isFolderExpandedBinding(key: key),
+                        content: {
+                            ForEach(visibleFeeds(store.feeds(in: folder, for: account.id), accountID: account.id, folder: folder)) { feed in
+                                remoteFeedRow(feed, accountID: account.id, inFolder: true)
+                                    .transition(.opacity)
+                            }
+                            .animation(feedFilterAnimation, value: visibleFeeds(store.feeds(in: folder, for: account.id), accountID: account.id, folder: folder).map(\.id))
+                        },
+                        label: {
+                            remoteFolderRow(folder, accountID: account.id)
+                        }
+                    )
+                }
+            } label: {
+                accountRow(account.displayName, accountID: account.id)
             }
         }
+    }
+
+    private func accountRow(_ title: String, accountID: String) -> some View {
+        SidebarRow(title, systemImage: "desktopcomputer",
+                   count: store.feeds(for: accountID).reduce(0) { $0 + store.unreadCount(feedID: $1.id) },
+                   isFiltered: unreadFilteredGroups.contains(.account(accountID)), onToggleFilter: filterAction(for: .account(accountID)))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .tag(SidebarSelection.account(accountID))
+            .onTapGesture { selectAccount(accountID) }
     }
 
     @ViewBuilder
     private func remoteFolderRow(_ folder: String, accountID: String) -> some View {
         let count = store.unreadCount(folder: folder, accountID: accountID)
         let key = "\(accountID)::\(folder)"
-        SidebarRow(folder, systemImage: "folder", count: count)
+        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
             .contentShape(Rectangle())
             .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
             .onTapGesture {
@@ -1250,7 +1327,7 @@ private struct SidebarView: View {
     @ViewBuilder
     private func folderRow(_ folder: String, accountID: String = "local-default") -> some View {
         let key = "\(accountID)::\(folder)"
-        FolderRowView(folder: folder, unreadCount: store.unreadCount(folder: folder, accountID: accountID)) { feedIDs in
+        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
             store.setFeedFolder(feedIDs: feedIDs, folder: folder)
             var current = collapsedFolders
             current.remove(key)
@@ -1470,7 +1547,7 @@ private struct SidebarView: View {
     private func validateSelectionAgainstEnabledAccounts() {
         guard let sel = selection else { return }
         switch sel {
-        case .folder(let accountID, _):
+        case .account(let accountID), .folder(let accountID, _):
             if !store.isAccountEnabled(accountID) {
                 selection = .today
             }
@@ -1542,20 +1619,52 @@ private struct FeedFaviconContent: View {
     }
 }
 
+/// 与侧栏 SF 文件夹共用 18 点占位，展开时显示向前倾斜的封面。
+private struct OpenSidebarFolder: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        // 后盖与标签页。
+        path.move(to: CGPoint(x: 2.5, y: 14.5))
+        path.addQuadCurve(to: CGPoint(x: 1, y: 12.8), control: CGPoint(x: 1, y: 14.5))
+        path.addLine(to: CGPoint(x: 1, y: 4))
+        path.addQuadCurve(to: CGPoint(x: 2.5, y: 2.5), control: CGPoint(x: 1, y: 2.5))
+        path.addLine(to: CGPoint(x: 6, y: 2.5))
+        path.addLine(to: CGPoint(x: 8, y: 4.3))
+        path.addLine(to: CGPoint(x: 14, y: 4.3))
+        path.addQuadCurve(to: CGPoint(x: 15.5, y: 5.8), control: CGPoint(x: 15.5, y: 4.3))
+        path.addLine(to: CGPoint(x: 15.5, y: 7.2))
+        // 打开的前盖，保留小尺寸下清晰的圆角轮廓。
+        path.move(to: CGPoint(x: 2.5, y: 14.5))
+        path.addLine(to: CGPoint(x: 5, y: 8.2))
+        path.addQuadCurve(to: CGPoint(x: 6.4, y: 7.2), control: CGPoint(x: 5.4, y: 7.2))
+        path.addLine(to: CGPoint(x: 16, y: 7.2))
+        path.addQuadCurve(to: CGPoint(x: 16.8, y: 8.5), control: CGPoint(x: 17.5, y: 7.2))
+        path.addLine(to: CGPoint(x: 14.6, y: 13.6))
+        path.addQuadCurve(to: CGPoint(x: 13.2, y: 14.5), control: CGPoint(x: 14.2, y: 14.5))
+        path.addLine(to: CGPoint(x: 2.5, y: 14.5))
+        return path.applying(CGAffineTransform(scaleX: rect.width / 18, y: rect.height / 18)
+            .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.minY)))
+    }
+}
+
 private struct SidebarRow: View {
     let title: String
     let systemImage: String
     let iconURL: URL?
     let count: Int
     var feedID: UUID?
+    var isFiltered: Bool
+    var onToggleFilter: (() -> Void)?
     @Environment(\.paperAppearancePalette) private var appearancePalette
 
-    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil) {
+    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil, isFiltered: Bool = false, onToggleFilter: (() -> Void)? = nil) {
         self.title = title
         self.systemImage = systemImage
         self.iconURL = iconURL
         self.count = count
         self.feedID = feedID
+        self.isFiltered = isFiltered
+        self.onToggleFilter = onToggleFilter
     }
 
     var body: some View {
@@ -1563,19 +1672,43 @@ private struct SidebarRow: View {
             Group {
                 if let iconURL, let feedID {
                     FeedFaviconView(feedID: feedID, iconURL: iconURL, title: title, size: 16)
+                } else if systemImage == "folder.fill" {
+                    OpenSidebarFolder()
+                        .stroke(style: StrokeStyle(lineWidth: 1.0, lineCap: .round, lineJoin: .round))
+                        .foregroundStyle(.primary)
+                        .frame(width: 16, height: 16)
+                        .transition(.identity)
+                        .accessibilityHidden(true)
                 } else {
                     Image(systemName: systemImage)
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(.primary)
+                        .transition(.identity)
                 }
             }
-            .frame(width: 18, alignment: .center)
+            .frame(width: 18, height: 18, alignment: .center)
+            // 图标即时替换，避免继承文件夹展开动画后新旧轮廓交叉淡化。
+            .transaction { $0.animation = nil }
             Text(title)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer(minLength: 8)
+            if let onToggleFilter {
+                Button(action: onToggleFilter) {
+                    Image(systemName: isFiltered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.borderless)
+                .help(I18N.localized(isFiltered ? "显示全部" : "仅显示未读"))
+                .accessibilityLabel(I18N.localized(isFiltered ? "显示全部" : "仅显示未读"))
+                .accessibilityValue(isFiltered ? "1" : "0")
+            }
             if count > 0 {
                 Text(count, format: .number)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(Color(paperHex: appearancePalette.mutedHex))
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -1622,13 +1755,16 @@ private struct SubscriptionsHeaderView: View {
 
 private struct FolderRowView: View {
     let folder: String
+    var isExpanded: Bool
     let unreadCount: Int
+    var isFiltered: Bool = false
+    var onToggleFilter: (() -> Void)? = nil
     let onDropBatch: (Set<UUID>) -> Void
 
     @State private var isTargeted = false
 
     var body: some View {
-        SidebarRow(folder, systemImage: isTargeted ? "folder.fill" : "folder", count: unreadCount)
+        SidebarRow(folder, systemImage: isTargeted || isExpanded ? "folder.fill" : "folder", count: unreadCount, isFiltered: isFiltered, onToggleFilter: onToggleFilter)
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
             .background(
@@ -1681,6 +1817,8 @@ private struct EntryListView: View {
             return .unread
         case .starred:
             return .starred
+        case let .account(id):
+            return .feeds(feedIDs: Set(store.feeds(for: id).map { $0.id.uuidString }))
         case let .folder(acc, folder):
             return .folder(accountID: acc, folderName: folder)
         case let .feed(id):
@@ -1759,6 +1897,8 @@ private struct EntryListView: View {
             store.markAllRead()
         case .starred:
             store.markAllRead(scope: .starred)
+        case let .account(id):
+            store.markAllRead(accountID: id)
         case let .folder(acc, folder):
             store.markAllRead(accountID: acc, folder: folder)
         case let .feed(id):

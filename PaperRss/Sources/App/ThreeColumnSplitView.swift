@@ -1333,10 +1333,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     item.label = I18N.localized("全部已读")
                     item.paletteLabel = I18N.localized("全部标为已读")
                     item.toolTip = I18N.localized("将当前列表全部标为已读")
-                    markAllReadButton?.image = NSImage(
+                    markAllReadButton?.image = listToolbarImage(NSImage(
                         systemSymbolName: "envelope.open",
                         accessibilityDescription: I18N.localized("全部已读")
-                    )
+                    ))
                 case .paperReaderCapsule:
                     item.label = I18N.localized("阅读工具")
                     item.paletteLabel = I18N.localized("阅读工具")
@@ -1345,6 +1345,26 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     break
                 }
             }
+        }
+
+        // 原生工具栏会二次缩放 SF Symbol；固定绘制边界，与阅读胶囊的视觉尺寸一致。
+        private func listToolbarImage(_ image: NSImage?) -> NSImage? {
+            guard let image else { return nil }
+            let symbol = image.withSymbolConfiguration(.init(
+                pointSize: ReaderCapsuleToolbar.symbolPointSize, weight: .medium
+            )) ?? image
+            let side: CGFloat = 18
+            let size = symbol.size
+            let factor = side / max(1, max(size.width, size.height))
+            let rect = NSRect(x: (side - size.width * factor) / 2,
+                              y: (side - size.height * factor) / 2,
+                              width: size.width * factor, height: size.height * factor)
+            let result = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+                symbol.draw(in: rect)
+                return true
+            }
+            result.isTemplate = image.isTemplate
+            return result
         }
 
         /// 同步中间栏标题及全部已读按钮状态
@@ -1393,6 +1413,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let symbolColors = actions.unreadOnly ? [chromeBackgroundColor, tint] : [tint]
                 button.image = button.image?.withSymbolConfiguration(.init(paletteColors: symbolColors))
                 button.image?.isTemplate = false
+                button.image = listToolbarImage(button.image)
             }
             if let button = markAllReadButton {
                 button.isEnabled = actions.hasUnread
@@ -1573,7 +1594,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 item.label = I18N.localized("仅显示未读")
                 item.autovalidates = false
                 let button = NSButton()
-                button.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: item.label)
+                button.image = listToolbarImage(NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: item.label))
+                button.imageScaling = .scaleNone
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
                 button.target = self
@@ -1591,7 +1613,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 item.autovalidates = false
                 
                 let button = NSButton()
-                button.image = NSImage(systemSymbolName: "envelope.open", accessibilityDescription: I18N.localized("全部已读"))
+                button.image = listToolbarImage(NSImage(systemSymbolName: "envelope.open", accessibilityDescription: I18N.localized("全部已读")))
+                button.imageScaling = .scaleNone
                 button.bezelStyle = .texturedRounded
                 button.isBordered = true
                 button.contentTintColor = chromeInkColor

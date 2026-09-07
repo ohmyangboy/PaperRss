@@ -4028,6 +4028,23 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
+    static let documentReadyMessageName = "paperRssDocumentReady"
+
+    // 正文 DOM 就绪即可交互，不等待图片、视频等外部资源结束加载。
+    static let documentReadyScript = WKUserScript(
+        source: """
+        (() => {
+          const generation = document.querySelector('meta[name="paper-rss-load-generation"]')?.content;
+          if (generation) {
+            window.webkit?.messageHandlers?.\(documentReadyMessageName)?.postMessage({ generation });
+          }
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
     static let nextArticleMessageName = "paperRssNextArticle"
     static let focusListMessageName = "paperRssFocusList"
     static let readerShortcutMessageName = "paperRssReaderShortcut"
@@ -4532,6 +4549,7 @@ enum PaperReaderBridge {
         controller.addUserScript(readerShortcutScript)
         #endif
         controller.addUserScript(spacebarScript)
+        controller.addUserScript(documentReadyScript)
         controller.addUserScript(mediaFullscreenScript)
         #if os(macOS)
         controller.addUserScript(fontSizeScript)
@@ -4812,6 +4830,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
         configuration.userContentController.add(
             context.coordinator,
             contentWorld: .defaultClient,
+            name: PaperReaderBridge.documentReadyMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
             name: PaperReaderBridge.focusListMessageName
         )
         configuration.userContentController.add(
@@ -4894,6 +4917,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.nextArticleMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.documentReadyMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -5150,6 +5177,17 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == PaperReaderBridge.documentReadyMessageName {
+                guard message.frameInfo.isMainFrame,
+                      let payload = message.body as? [String: Any],
+                      let value = payload["generation"] as? String,
+                      let generation = Int(value),
+                      generation == currentLoadGeneration,
+                      let load = navigationLoads.values.first(where: { $0.generation == generation }),
+                      let webView = message.webView else { return }
+                completeDocumentLoad(load, in: webView)
+                return
+            }
             if !parent.isInteractive {
                 guard parent.allowsNavigationWhenInactive else { return }
                 if message.name == PaperReaderBridge.nextArticleMessageName {
@@ -5436,7 +5474,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
             pendingScrollOffset = 0
             currentLoadGeneration += 1
             let generation = currentLoadGeneration
-            if let navigation = webView.loadHTMLString(document.html, baseURL: document.baseURL) {
+            let html = document.html.replacingOccurrences(
+                of: "<head>",
+                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\">"
+            )
+            if let navigation = webView.loadHTMLString(html, baseURL: document.baseURL) {
                 navigationLoads[ObjectIdentifier(navigation)] = (
                     entryID: parent.entry.id,
                     signature: document.renderSignature,
@@ -5454,14 +5496,21 @@ private struct ArticleHTMLView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let load = navigation.flatMap {
+            guard let load = navigation.flatMap({
                 navigationLoads.removeValue(forKey: ObjectIdentifier($0))
-            }
+            }) else { return }
+            completeDocumentLoad(load, in: webView)
+        }
+
+        private func completeDocumentLoad(
+            _ load: (entryID: String, signature: String, generation: Int),
+            in webView: WKWebView
+        ) {
             DispatchQueue.main.async {
-                guard let load,
-                      load.entryID == self.parent.entry.id,
+                guard load.entryID == self.parent.entry.id,
                       load.signature == self.loadedArticleKey,
-                      load.generation == self.currentLoadGeneration else { return }
+                      load.generation == self.currentLoadGeneration,
+                      self.completedArticleKey != load.signature else { return }
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
@@ -5710,6 +5759,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
             contentWorld: .defaultClient,
             name: PaperReaderBridge.nextArticleMessageName
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.documentReadyMessageName
+        )
         // 摘要卡片按钮使用 observerScript (.defaultClient 特权世界) 的全局点击
         // 捕获代理发布 postMessage,在 CSP script-src 'none' 下完美安全触发。
         configuration.userContentController.add(
@@ -5768,6 +5822,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.nextArticleMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.documentReadyMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -5991,6 +6049,17 @@ private struct ArticleHTMLView: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == PaperReaderBridge.documentReadyMessageName {
+                guard message.frameInfo.isMainFrame,
+                      let payload = message.body as? [String: Any],
+                      let value = payload["generation"] as? String,
+                      let generation = Int(value),
+                      generation == currentLoadGeneration,
+                      let load = navigationLoads.values.first(where: { $0.generation == generation }),
+                      let webView = message.webView else { return }
+                completeDocumentLoad(load, in: webView)
+                return
+            }
             if !parent.isInteractive {
                 guard parent.allowsNavigationWhenInactive,
                       message.name == PaperReaderBridge.nextArticleMessageName else { return }
@@ -6259,7 +6328,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
             pendingContentOffset = .zero
             currentLoadGeneration += 1
             let generation = currentLoadGeneration
-            if let navigation = webView.loadHTMLString(document.html, baseURL: document.baseURL) {
+            let html = document.html.replacingOccurrences(
+                of: "<head>",
+                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\">"
+            )
+            if let navigation = webView.loadHTMLString(html, baseURL: document.baseURL) {
                 navigationLoads[ObjectIdentifier(navigation)] = (
                     entryID: parent.entry.id,
                     signature: document.renderSignature,
@@ -6277,15 +6350,22 @@ private struct ArticleHTMLView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let load = navigation.flatMap {
+            guard let load = navigation.flatMap({
                 navigationLoads.removeValue(forKey: ObjectIdentifier($0))
-            }
+            }) else { return }
+            completeDocumentLoad(load, in: webView)
+        }
+
+        private func completeDocumentLoad(
+            _ load: (entryID: String, signature: String, generation: Int),
+            in webView: WKWebView
+        ) {
             let offset = pendingContentOffset
             DispatchQueue.main.async {
-                guard let load,
-                      load.entryID == self.parent.entry.id,
+                guard load.entryID == self.parent.entry.id,
                       load.signature == self.loadedArticleKey,
-                      load.generation == self.currentLoadGeneration else { return }
+                      load.generation == self.currentLoadGeneration,
+                      self.completedArticleKey != load.signature else { return }
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
@@ -6493,6 +6573,7 @@ private struct BilingualContent: View {
 // MARK: - 阅读胶囊工具栏控件
 
 struct ReaderCapsuleToolbar: View {
+    static let symbolPointSize: CGFloat = 13
     let isBilingualActive: Bool
     let isRead: Bool
     let isStarred: Bool
@@ -6598,7 +6679,7 @@ struct ReaderCapsuleToolbar: View {
         Image(systemName: name)
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: Self.symbolPointSize, weight: .medium))
             .frame(width: 28, height: 26)
             .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
             .contentShape(Circle())

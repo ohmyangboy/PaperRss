@@ -79,6 +79,8 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 **Stable v1.3.2 (Build 21)** brings multi-provider AI, model-aware translation and in-place translated text, plus unread filtering and reading appearance improvements. Recommended for all users. See the [changelog](CHANGELOG.md).
 
+**Beta v1.3.3-beta.1 (Build 22)** adds independent unread feed filtering, fixes Space-key navigation in articles with images or videos, and refines sidebar and toolbar icons. [Download the Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.1).
+
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 
 > 📝 Note: The signing issue has been resolved — all artifacts are Developer ID signed and Apple notarized, so the "cannot be verified" warning is gone for good. Release cadence will speed up from here; thanks for your patience.

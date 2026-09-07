@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.1 · Build 22 · 2026-09-07
+
+本次为小范围修复与体验优化的 Beta 版本；可升级体验独立的订阅源未读筛选，稳定通道仍为 v1.3.2。
+
+- 订阅源筛选：文件夹与账号独立筛选未读 Feed，切换订阅保留过滤；开启时展开有未读内容的文件夹，关闭时收起。
+- 侧栏体验：账号显示未读总数并支持展开收起，改善选中对比度与文件夹打开图标。
+- 阅读修复：修复底部包含图片或视频的文章无法通过空格继续导航的问题，统一文章列表与阅读工具栏图标尺寸。
+
+---
+
+This Beta contains a small set of fixes and refinements. Upgrade to try independent unread feed filtering; the stable channel remains on v1.3.2.
+
+- Feed filtering: Filter unread feeds independently by folder or account and retain filters when switching feeds. Expand folders containing unread items when enabling the filter and collapse them when disabling it.
+- Sidebar: Show account unread totals, support account expansion and collapse, and refine selection contrast and open-folder icons.
+- Reading fixes: Restore Space-key navigation for articles ending with images or videos, and align article-list and reader toolbar icon sizes.
+
 ## v1.3.2 · Build 21 · 2026-09-06
 
 本次为稳定版本，整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。
