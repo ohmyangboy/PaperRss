@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.2 · Build 23 · 2026-09-08
+
+本次为阅读器图片修复 Beta；建议遇到 RSS 图片缺失的用户升级测试，稳定通道仍为 v1.3.2。
+
+- 图片显示：修复部分 RSS 文章段落内图片丢失的问题，保留图片、链接和强调格式（#31）。
+- 内容适配：统一原文与双语阅读的 HTML 结构处理，复杂段落保守保留，并避免段落结构变化后匹配到旧译文。
+
+---
+
+This Beta fixes missing images in the reader. Recommended for testing if RSS images are missing; the stable channel remains on v1.3.2.
+
+- Image display: Fix missing images inside paragraphs in some RSS articles while preserving images, links and emphasis (#31).
+- Content adaptation: Share HTML structure handling between original and bilingual reading, preserve complex paragraphs, and avoid matching stale translations after paragraph structure changes.
+
 ## v1.3.3-beta.1 · Build 22 · 2026-09-07
 
 本次为小范围修复与体验优化的 Beta 版本；可升级体验独立的订阅源未读筛选，稳定通道仍为 v1.3.2。
