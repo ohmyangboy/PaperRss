@@ -5,6 +5,7 @@ public struct ParsedFeed: Sendable {
     public var siteURL: URL?
     public var iconURL: URL?
     public var entries: [ParsedFeedEntry]
+    public var languageHints: [ArticleLanguageHint] = []
 }
 
 public struct ParsedFeedEntry: Sendable {
@@ -15,6 +16,7 @@ public struct ParsedFeedEntry: Sendable {
     public var publishedAt: Date?
     public var summary: String
     public var contentHTML: String?
+    public var languageHints: [ArticleLanguageHint] = []
 }
 
 public enum FeedParserError: LocalizedError {
@@ -45,6 +47,7 @@ public enum FeedParser {
     private static func parseJSON(data: Data) throws -> ParsedFeed {
         struct JSONFeed: Decodable {
             struct Item: Decodable {
+                var language: String?
                 var id: String?
                 var url: String?
                 var external_url: String?
@@ -56,6 +59,7 @@ public enum FeedParser {
                 var authors: [Author]?
                 struct Author: Decodable { var name: String? }
             }
+            var language: String?
             var version: String?
             var title: String?
             var home_page_url: String?
@@ -75,12 +79,13 @@ public enum FeedParser {
                 url: link,
                 publishedAt: parseDate(item.date_published),
                 summary: item.summary ?? body?.plainText ?? "",
-                contentHTML: item.content_html ?? item.content_text
+                contentHTML: item.content_html ?? item.content_text,
+                languageHints: item.language.map { [ArticleLanguageHint(language: $0, scope: "json:item")] } ?? []
             )
         }
         let iconURLString = decoded.icon ?? decoded.favicon
         let iconURL = iconURLString.flatMap { URL(string: $0) }
-        return ParsedFeed(title: decoded.title?.nonEmpty ?? "未命名订阅", siteURL: URL(string: decoded.home_page_url ?? ""), iconURL: iconURL, entries: items)
+        return ParsedFeed(title: decoded.title?.nonEmpty ?? "未命名订阅", siteURL: URL(string: decoded.home_page_url ?? ""), iconURL: iconURL, entries: items, languageHints: decoded.language.map { [ArticleLanguageHint(language: $0, scope: "json:feed")] } ?? [])
     }
 
     fileprivate static func parseDate(_ value: String?) -> Date? {
@@ -101,6 +106,9 @@ public enum FeedParser {
 private final class XMLFeedParser: NSObject, XMLParserDelegate {
     private let baseURL: URL
     private var root = ""
+    private var languageStack: [String] = []
+    private var feedLanguageHints: [ArticleLanguageHint] = []
+    private var itemLanguageHints: [ArticleLanguageHint] = []
     private var currentElement = ""
     private var currentText = ""
     private var feedTitle = ""
@@ -126,13 +134,23 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
         // when namespaces are not processed, so strip the prefix before
         // matching against the unqualified cases below.
         let local = Self.localName(of: elementName)
+        let inherited = attributeDict["xml:lang"] ?? languageStack.last ?? ""
+        languageStack.append(inherited)
+        if local == "feed", !inherited.isEmpty {
+            feedLanguageHints.append(.init(language: inherited, scope: "atom:feed"))
+        }
         currentElement = local
         currentText = ""
         if root.isEmpty { root = local }
         if local == "image" { inImageTag = true }
         if local == "item" || local == "entry" {
             currentItem = [:]
+            itemLanguageHints = inherited.isEmpty ? [] : [.init(language: inherited, scope: "atom:entry")]
+
             currentItemLink = nil
+        }
+        if currentItem != nil, ["content", "summary", "description"].contains(local), !inherited.isEmpty {
+            itemLanguageHints.append(.init(language: inherited, scope: "atom:\(local)"))
         }
         if local == "link" {
             let href = attributeDict["href"] ?? attributeDict["url"]
@@ -153,6 +171,7 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let local = Self.localName(of: elementName)
+        defer { if !languageStack.isEmpty { languageStack.removeLast() } }
         let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
         if var item = currentItem {
             switch local {
@@ -172,6 +191,9 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
             }
             currentItem = item
         } else {
+            if local == "language", !text.isEmpty {
+                feedLanguageHints.append(.init(language: text, scope: "rss:channel"))
+            }
             if local == "title" && !text.isEmpty {
                 feedTitle = text
             } else if (local == "icon" || local == "logo" || (local == "url" && inImageTag)) && !text.isEmpty && feedIconURL == nil {
@@ -192,7 +214,8 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
                 url: link,
                 publishedAt: FeedParser.parseDate(item["published"] ?? item["updated"] ?? item["pubdate"]),
                 summary: item["summary"]?.plainText ?? item["description"]?.plainText ?? body?.plainText ?? "",
-                contentHTML: body
+                contentHTML: body,
+                languageHints: itemLanguageHints
             ))
             currentItem = nil
             currentItemLink = nil
@@ -207,7 +230,7 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
         // still normally carries the publisher URL, which is a useful and
         // stable source for favicon fallback.
         let siteURL = feedLink ?? entries.compactMap(\.url).first.flatMap(Self.originURL)
-        return ParsedFeed(title: feedTitle.nonEmpty ?? "未命名订阅", siteURL: siteURL, iconURL: feedIconURL, entries: entries)
+        return ParsedFeed(title: feedTitle.nonEmpty ?? "未命名订阅", siteURL: siteURL, iconURL: feedIconURL, entries: entries, languageHints: feedLanguageHints)
     }
 
     private static func originURL(_ url: URL) -> URL? {

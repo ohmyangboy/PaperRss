@@ -9,6 +9,9 @@ import UIKit
 /// 此处只保留与更新无关的通用能力。
 public enum AppInfo {
     public static let githubRepositoryURL = URL(string: "https://github.com/ohmyangboy/PaperRss")!
+    public static let discussionsURL = githubRepositoryURL.appendingPathComponent("discussions")
+    public static let sponsorsURL = URL(string: "https://ohmyangboy.github.io/blog/posts/paperrss-sponsors/")!
+    public static let xiaohongshuURL = URL(string: "https://xhslink.cn/m/972wHfC16uj")!
     public static let releasesPageURL = URL(string: "https://github.com/ohmyangboy/PaperRss/releases")!
 
     public static var currentVersion: String {

@@ -101,6 +101,7 @@ struct ArticleReaderView: View {
     var onFocusListView: () -> Void = {}
     var isZenMode: Bool = false
     var onToggleZenMode: () -> Void = {}
+    @State private var translationDocumentReady = false
     @State private var preparedArticle: PreparedArticle?
     @State private var displayedEntry: Entry?
     /// Parsing a long document's paragraph structure is deliberately done once
@@ -195,9 +196,11 @@ struct ArticleReaderView: View {
             return original.isSameReaderParagraph(as: segment.original)
         }
         let persistedIDs = Set(persisted.map(\.id))
+        let contextMatches = aiWorkspace.isTranslationContextCurrent(entryID: entry.id, text: text, targetLanguage: store.bilingualTargetLanguage)
         let streamed = readerParagraphs.compactMap { paragraph -> BilingualSegment? in
             guard !persistedIDs.contains(paragraph.id),
                   aiWorkspace.projection.entryID == entry.id,
+                  contextMatches,
                   let translation = aiWorkspace.projection.bilingualTranslations[paragraph.id],
                   !translation.isEmpty else { return nil }
             return BilingualSegment(id: paragraph.id, original: paragraph.original, translation: translation)
@@ -264,6 +267,30 @@ struct ArticleReaderView: View {
         .navigationTitle(entry.title)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .task(id: automationIdentity) {
+            guard translationDocumentReady, displayedEntry?.id == entry.id,
+                  let article = preparedArticle else { return }
+            let identity = automationIdentity
+            let requestedEntry = entry
+            let target = store.bilingualTargetLanguage
+            let changed = !aiWorkspace.isTranslationContextCurrent(entryID: entry.id, text: article.text, targetLanguage: target)
+            aiWorkspace.setTranslationContext(entryID: entry.id, text: article.text, targetLanguage: target)
+            if changed {
+                pendingBilingualParagraphIDs.removeAll()
+                failedBilingualParagraphIDs.removeAll()
+            }
+            // 关闭、豁免或模型未就绪时不做额外识别，手动翻译仍可继续。
+            if let skip = store.autoTranslationPreflight(entry: requestedEntry) {
+                store.applyAutoTranslation(skip, entryID: requestedEntry.id)
+                requestVisibleTranslationsIfPossible()
+                return
+            }
+            let analysis = await store.languageDetectionService.analyze(article)
+            guard !Task.isCancelled, identity == automationIdentity, translationDocumentReady else { return }
+            let decision = store.autoTranslationDecision(entry: requestedEntry, analysis: analysis)
+            store.applyAutoTranslation(decision, entryID: requestedEntry.id)
+            requestVisibleTranslationsIfPossible()
+        }
         .onChange(of: text) { _, newText in
             if !newText.isEmpty {
                 requestVisibleTranslationsIfPossible()
@@ -271,10 +298,10 @@ struct ArticleReaderView: View {
         }
         .onChange(of: readerMode) { _, newMode in
             if newMode == .bilingual {
+                failedBilingualParagraphIDs.removeAll()
                 requestVisibleTranslationsIfPossible()
             } else {
                 cancelBilingualTranslationLocal()
-                onShortcutFeedback(I18N.shared.localized("已取消双语翻译"))
             }
         }
         .onChange(of: shortcutInvocation) { _, invocation in
@@ -286,6 +313,7 @@ struct ArticleReaderView: View {
             articleReloadToken += 1
         }
         .task(id: "\(entry.id)-\(articleReloadToken)") {
+            translationDocumentReady = false
             store.dismissError()
             let requestedEntry = entry
             articleLoadSession += 1
@@ -351,10 +379,12 @@ struct ArticleReaderView: View {
                 imageURLs: prepared.imageURLs,
                 baseURL: prepared.baseURL,
                 source: prepared.source,
-                features: prepared.features
+                features: prepared.features,
+                languageHints: prepared.languageHints
             )
             parsedReaderParagraphs = parsedParagraphs
             parsedReaderEntryID = requestedEntry.id
+            translationDocumentReady = true
             if store.llmConfiguration.showsAISummary,
                store.llmConfiguration.automaticallyGenerateSummary,
                store.artifact(for: requestedEntry, kind: .summary) == nil,
@@ -368,6 +398,10 @@ struct ArticleReaderView: View {
                 )
             }
         }
+    }
+
+    private var automationIdentity: String {
+        "\(entry.id)|\(articleLoadSession)|\(translationDocumentReady)|\(text.stableDigest)|\(store.autoTranslationRevision)|\(store.aiSettings.hashValue)"
     }
 
     private var hasReaderContent: Bool { preparedArticle != nil }
@@ -1032,7 +1066,8 @@ struct ArticleReaderView: View {
     }
 
     private func requestVisibleTranslationsIfPossible() {
-        guard isDisplayedDocumentInteractive,
+        guard isDisplayedDocumentInteractive, translationDocumentReady,
+              aiWorkspace.isTranslationContextCurrent(entryID: entry.id, text: text, targetLanguage: store.bilingualTargetLanguage),
               readerMode == .bilingual,
               !text.isEmpty else { return }
 
@@ -1048,12 +1083,13 @@ struct ArticleReaderView: View {
         )
         guard !batch.isEmpty else { return }
 
-        pendingBilingualParagraphIDs.formUnion(batch)
         let paragraphs = readerParagraphs
         guard let generation = activeAIGeneration,
               aiWorkspace.isCurrent(generation) else { return }
+        pendingBilingualParagraphIDs.formUnion(batch)
         let requestedEntry = entry
         let requestedText = text
+        let requestedTarget = store.bilingualTargetLanguage
         do {
             try aiWorkspace.submit(.bilingual(paragraphIDs: batch), in: generation) { emit in
                 await store.translateBilingualParagraphs(
@@ -1061,10 +1097,13 @@ struct ArticleReaderView: View {
                     text: requestedText,
                     paragraphs: paragraphs,
                     paragraphIDs: batch,
+                    targetLanguage: requestedTarget,
                     onDelta: { id, delta in
                         await emit(.bilingual(paragraphID: id, text: delta))
                     },
-                    isRequestCurrent: { true }
+                    isRequestCurrent: {
+                        aiWorkspace.isTranslationContextCurrent(entryID: requestedEntry.id, text: requestedText, targetLanguage: requestedTarget)
+                    }
                 )
 
             guard !Task.isCancelled, aiWorkspace.isCurrent(generation) else { return }
@@ -2261,6 +2300,7 @@ enum PaperReaderBridge {
 
           const publishParagraphs = () => {
             scheduled.paragraphs = false;
+            if (!window.paperRssReaderInteractive) return;
             const viewportHeight = Math.max(window.innerHeight || 0, 1);
             const topPreloadBound = -viewportHeight * 0.30;
             const bottomPreloadBound = viewportHeight * 1.30;
@@ -2281,7 +2321,11 @@ enum PaperReaderBridge {
             const payload = JSON.stringify(paragraphIDs);
             if (payload !== lastParagraphPayload) {
               lastParagraphPayload = payload;
-              window.webkit.messageHandlers.paperRssVisibleParagraphs.postMessage(paragraphIDs);
+              window.webkit.messageHandlers.paperRssVisibleParagraphs.postMessage({
+                paragraphIDs,
+                generation: document.querySelector('meta[name="paper-rss-load-generation"]')?.content,
+                documentIdentity: document.querySelector('meta[name="paper-rss-document-identity"]')?.content
+              });
             }
           };
 
@@ -2295,6 +2339,14 @@ enum PaperReaderBridge {
             if (scheduled.paragraphs) return;
             scheduled.paragraphs = true;
             requestAnimationFrame(publishParagraphs);
+          };
+
+          // 原生就绪后重取首屏快照，不依赖 IntersectionObserver 的首次回调时机。
+          window.paperRssRequestVisibleParagraphs = generation => {
+            if (String(generation) !== document.querySelector('meta[name="paper-rss-load-generation"]')?.content) return;
+            observedParagraphs = new Map(allParagraphs.map(node => [node.dataset.paperRssId, node]));
+            lastParagraphPayload = "";
+            scheduleParagraphs();
           };
 
           const refreshLayout = () => {
@@ -5214,7 +5266,13 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 guard let offset = message.body as? Double else { return }
                 parent.onScrollOffsetChange(CGFloat(max(0, offset)))
             case PaperReaderBridge.visibleParagraphsMessageName:
-                guard let paragraphIDs = message.body as? [String] else { return }
+                guard message.frameInfo.isMainFrame,
+                      let payload = message.body as? [String: Any],
+                      let generation = payload["generation"] as? String,
+                      Int(generation) == currentLoadGeneration,
+                      let identity = payload["documentIdentity"] as? String,
+                      identity == loadedDocumentIdentity, identity == parent.entry.id,
+                      let paragraphIDs = payload["paragraphIDs"] as? [String] else { return }
                 parent.onVisibleParagraphIDsChange(paragraphIDs)
             case PaperReaderBridge.explainSelectionMessageName, PaperReaderBridge.askSelectionMessageName:
                 guard let payload = message.body as? [String: Any],
@@ -5389,7 +5447,14 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let value = parent.isInteractive ? "true" : "false"
             let navigationValue = parent.allowsNavigationWhenInactive ? "true" : "false"
             webView.evaluateJavaScript(
-                "window.paperRssReaderInteractive = \(value); window.paperRssReaderNavigationEnabled = \(navigationValue)",
+                """
+                (() => {
+                const becameInteractive = !window.paperRssReaderInteractive && \(value);
+                window.paperRssReaderInteractive = \(value);
+                window.paperRssReaderNavigationEnabled = \(navigationValue);
+                if (becameInteractive) window.paperRssRequestVisibleParagraphs?.(\(currentLoadGeneration));
+                })();
+                """,
                 in: nil,
                 in: .defaultClient
             ) { _ in }
@@ -5480,7 +5545,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let generation = currentLoadGeneration
             let html = document.html.replacingOccurrences(
                 of: "<head>",
-                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\">"
+                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\"><meta name=\"paper-rss-document-identity\" content=\"\(parent.entry.id.htmlEscaped)\">"
             )
             if let navigation = webView.loadHTMLString(html, baseURL: document.baseURL) {
                 navigationLoads[ObjectIdentifier(navigation)] = (
@@ -6075,7 +6140,13 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 guard let offset = message.body as? Double else { return }
                 parent.onScrollOffsetChange(CGFloat(max(0, offset)))
             case PaperReaderBridge.visibleParagraphsMessageName:
-                guard let paragraphIDs = message.body as? [String] else { return }
+                guard message.frameInfo.isMainFrame,
+                      let payload = message.body as? [String: Any],
+                      let generation = payload["generation"] as? String,
+                      Int(generation) == currentLoadGeneration,
+                      let identity = payload["documentIdentity"] as? String,
+                      identity == loadedDocumentIdentity, identity == parent.entry.id,
+                      let paragraphIDs = payload["paragraphIDs"] as? [String] else { return }
                 parent.onVisibleParagraphIDsChange(paragraphIDs)
             case PaperReaderBridge.explainSelectionMessageName, PaperReaderBridge.askSelectionMessageName:
                 guard let payload = message.body as? [String: Any],
@@ -6239,7 +6310,14 @@ private struct ArticleHTMLView: UIViewRepresentable {
             let value = parent.isInteractive ? "true" : "false"
             let navigationValue = parent.allowsNavigationWhenInactive ? "true" : "false"
             webView.evaluateJavaScript(
-                "window.paperRssReaderInteractive = \(value); window.paperRssReaderNavigationEnabled = \(navigationValue)",
+                """
+                (() => {
+                const becameInteractive = !window.paperRssReaderInteractive && \(value);
+                window.paperRssReaderInteractive = \(value);
+                window.paperRssReaderNavigationEnabled = \(navigationValue);
+                if (becameInteractive) window.paperRssRequestVisibleParagraphs?.(\(currentLoadGeneration));
+                })();
+                """,
                 in: nil,
                 in: .defaultClient
             ) { _ in }
@@ -6330,7 +6408,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             let generation = currentLoadGeneration
             let html = document.html.replacingOccurrences(
                 of: "<head>",
-                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\">"
+                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\"><meta name=\"paper-rss-document-identity\" content=\"\(parent.entry.id.htmlEscaped)\">"
             )
             if let navigation = webView.loadHTMLString(html, baseURL: document.baseURL) {
                 navigationLoads[ObjectIdentifier(navigation)] = (

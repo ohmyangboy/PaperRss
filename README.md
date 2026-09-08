@@ -79,7 +79,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.3.2（Build 21）** 整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
-**Beta v1.3.3-beta.4（Build 25）**：修复退出禅模式后的阅读工具栏错位，补充交互回归与发布验收门禁。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.4)。
+**Beta v1.3.3-beta.5（Build 26）**：新增自动翻译 Beta、订阅黑白名单，以及 Discussion、社交动态和赞赏名单入口。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.5)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
@@ -181,3 +181,11 @@ PaperRss 基于 [GNU General Public License v3.0](LICENSE) 开源。
 [@ProudBenzene](https://github.com/ProudBenzene)
 
 感谢所有为 PaperRss 提供问题报告、详细反馈和宝贵建议的朋友，是大家的参与让 PaperRss 不断变得更好。❤️
+
+### 赞赏名单
+
+也感谢每一位通过赞赏支持 PaperRss 的朋友。
+
+[![PaperRss 赞赏名单预览](https://ohmyangboy.github.io/PaperRss/assets/sponsors-preview.png)](https://ohmyangboy.github.io/blog/posts/paperrss-sponsors/)
+
+预览随网站部署自动更新，点击图片查看最新完整名单（图片缓存可能稍有延迟）。

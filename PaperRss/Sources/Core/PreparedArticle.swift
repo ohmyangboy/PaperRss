@@ -24,6 +24,7 @@ public struct PreparedArticle: Sendable, Equatable {
     public let imageURLs: [URL]
     public let baseURL: URL?
     public let source: ArticleSource
+    public let languageHints: [ArticleLanguageHint]
     public let features: ArticleFeatures
 
     public init(
@@ -32,7 +33,8 @@ public struct PreparedArticle: Sendable, Equatable {
         imageURLs: [URL],
         baseURL: URL?,
         source: ArticleSource,
-        features: ArticleFeatures = ArticleFeatures()
+        features: ArticleFeatures = ArticleFeatures(),
+        languageHints: [ArticleLanguageHint] = []
     ) {
         self.text = text
         self.html = html
@@ -40,6 +42,7 @@ public struct PreparedArticle: Sendable, Equatable {
         self.baseURL = baseURL
         self.source = source
         self.features = features
+        self.languageHints = languageHints
     }
 }
 
@@ -47,10 +50,12 @@ public struct PreparedArticle: Sendable, Equatable {
 public struct LoadedArticlePage: Sendable, Equatable {
     public let html: String
     public let finalURL: URL
+    public let contentLanguage: String?
 
-    public init(html: String, finalURL: URL) {
+    public init(html: String, finalURL: URL, contentLanguage: String? = nil) {
         self.html = html
         self.finalURL = finalURL
+        self.contentLanguage = contentLanguage
     }
 }
 
@@ -91,6 +96,6 @@ public struct DefaultArticlePageLoader: ArticlePageLoading {
             html = String(data: data, encoding: .isoLatin1)
         }
         guard let html else { return nil }
-        return LoadedArticlePage(html: html, finalURL: httpResponse.url ?? url)
+        return LoadedArticlePage(html: html, finalURL: httpResponse.url ?? url, contentLanguage: httpResponse.value(forHTTPHeaderField: "Content-Language"))
     }
 }

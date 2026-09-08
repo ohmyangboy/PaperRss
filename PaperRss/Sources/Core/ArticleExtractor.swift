@@ -922,7 +922,7 @@ public enum ArticleExtractor {
             return attributes.joined()
         }
 
-        let allowed: Set<String>
+        var allowed: Set<String>
         switch tag {
         case "a": allowed = ["href", "title"]
         case "code": allowed = ["class"]
@@ -942,6 +942,7 @@ public enum ArticleExtractor {
         case "maction": allowed = ["actiontype", "selection"]
         default: allowed = []
         }
+        allowed.insert("lang")
         guard !allowed.isEmpty,
               let expression = try? NSRegularExpression(pattern: "(?is)([a-z][a-z0-9:-]*)(?:\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s>]+)))?") else { return "" }
         let range = NSRange(source.startIndex..., in: source)

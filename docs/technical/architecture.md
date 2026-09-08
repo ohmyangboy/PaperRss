@@ -126,7 +126,7 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 2. **异步准备引擎（`ArticlePreparationEngine`）**：
    - 统一评估 Feed、本地 `ArticleCache` 与网页抓取候选质量。
    - 强 Feed（不少于 600 字或 200 字带图）直接采用，0 网页请求；弱 Feed 最多抓取 1 次并在明显改善时替换。
-   - 统一输出严格同源的 `PreparedArticle`（包含 `text`、`html`、`imageURLs`、`baseURL`、`source` 与 `features`），杜绝各字段分散决策。
+   - 统一输出严格同源的 `PreparedArticle`（包含 `text`、`html`、`imageURLs`、`baseURL`、`source`、`features` 与同源 `languageHints`），杜绝各字段分散决策。
 3. **通用容器评分与媒体管线**：
    - `ArticleExtractor` 通过标签栈扫描平衡容器，结合语义标签与词元打分，零站点硬编码。
    - 提取 `data-original`、`data-src`、`srcset` 恢复高清图片；前 2 张图片使用 `loading="eager"`，其余使用 `loading="lazy"`，并注入 `decoding="async"`。
@@ -158,6 +158,16 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 - Google Gemini 通过官方 OpenAI-compatible 根地址（`/v1beta/openai`）复用同一消息与 SSE 解析；Gemini 3.x 映射 `reasoning_effort`，并省略已废弃的 `temperature` 参数。
 - 供应商详情支持 `GET /models` 拉取候选目录；只有用户确认添加并保存草稿后模型才进入已配置目录，失败时不覆盖已有目录。
 - 切换 Provider 或模型不隐藏已有摘要、译文和划词标注；摘要重生成成功后事务替换，失败时保留旧摘要。
+### 打开文章时自动翻译（Beta）
+
+翻译偏好第一项是默认关闭的自动翻译开关。只有当前打开文章完成正文准备后才调用 `LanguageDetectionService`，以设备端 `NLLanguageRecognizer` 分析清理后的原文。刷新和相邻预取不触发检测或模型请求。语言声明是辅助证据，不单独触发翻译；混合、未知及同目标语言文章跳过。
+
+`AIAutomationPolicy` 只读取系统总开关与具体 Feed 名单：总开关开启时，白名单固定翻译、黑名单不自动翻译、其余订阅使用语言检测。单篇文章手动关闭持久化；手动开启移除豁免。规则关闭只停止自动开启的模式，不干预手动开启。界面语言不参与目标语言比较。
+
+Schema v9 使用 `translation_feed_lists` 保存账号及 Feed ID 的互斥黑白名单，`translation_article_exemptions` 保存文章豁免，清理已退役的分组继承及名称规则表；`source_language_hints` 保存 Feed／条目来源的声明。`article_caches.language_hints_json` 随正文缓存保存提示；检测结果仅使用有界内存缓存。这些数据不进入同步出站请求。名单不依赖分组或 Feed 名称。
+
+自动开启复用现有视口分批、翻译记忆和双语产物。Workspace 按文章保留正文版本和目标语言上下文，改变上下文取消旧翻译并清除旧投影；迟到结果不得写入新正文。阈值和覆盖率为 Beta 工程门槛，不代表已验证的语言识别准确率。
+
 
 ### 5.5 CloudKit
 
@@ -245,3 +255,9 @@ node scripts/sparkle/publish_homebrew.mjs --execute \
 | CloudKit | `CloudSyncService.swift`、AppStore sync methods、entitlement 与真实签名环境 |
 | macOS 界面与快捷键 | `RootView.swift`、`ThreeColumnSplitView.swift`、`ReaderShortcutPolicy.swift` |
 | 官网与发布 | `website/`、Pages workflow、`scripts/release.sh` |
+
+### 自动翻译匹配与首屏握手
+
+管理弹窗左右并列白名单与黑名单，通过搜索现有 Feed 添加或移除。加入另一侧时直接移动，避免名单冲突；关闭系统总开关同时停止名单触发。旧偏好的模式字段被忽略，运行时不再包含名称匹配或继承逻辑。
+
+语言检测 v2 按正文文字位置取样，保留自然段边界，过滤短元数据块并保持总量上限。分析键包含规范编码的提示与检测版本。原生阅读器在进入可交互状态时请求首屏段落快照；快照携带文档身份及加载代数，两端 Coordinator 均拒绝旧文档消息，避免首屏消息早到后被永久去重。

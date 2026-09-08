@@ -1,6 +1,502 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "问题反馈与 Bug 报告" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Problems and bug reports"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "问题反馈与 Bug 报告"
+          }
+        }
+      }
+    },
+    "GitHub Discussions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub Discussions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub Discussions"
+          }
+        }
+      }
+    },
+    "想法、建议与交流" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ideas, suggestions, and conversations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想法、建议与交流"
+          }
+        }
+      }
+    },
+    "参与 Discussion" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join Discussion"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "参与 Discussion"
+          }
+        }
+      }
+    },
+    "小红书" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xiaohongshu"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小红书"
+          }
+        }
+      }
+    },
+    "社交动态" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Social Updates"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "社交动态"
+          }
+        }
+      }
+    },
+    "打开小红书主页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Xiaohongshu profile"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开小红书主页"
+          }
+        }
+      }
+    },
+    "微信赞赏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WeChat Support"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "微信赞赏"
+          }
+        }
+      }
+    },
+    "微信扫一扫，感谢支持" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan with WeChat to support the project"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "微信扫一扫，感谢支持"
+          }
+        }
+      }
+    },
+    "赞助列表" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supporters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "赞助列表"
+          }
+        }
+      }
+    },
+    "感谢每一位支持者" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thank you to every supporter"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "感谢每一位支持者"
+          }
+        }
+      }
+    },
+    "问题反馈 · GitHub Issue" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bug reports · GitHub Issue"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "问题反馈 · GitHub Issue"
+          }
+        }
+      }
+    },
+    "想法与建议" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ideas & Suggestions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想法与建议"
+          }
+        }
+      }
+    },
+    "小红书扫一扫，关注开发动态" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan with Xiaohongshu for development updates"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小红书扫一扫，关注开发动态"
+          }
+        }
+      }
+    },
+    "包含" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contains"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含"
+          }
+        }
+      }
+    },
+    "白名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Whitelist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "白名单"
+          }
+        }
+      }
+    },
+    "黑名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blacklist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "黑名单"
+          }
+        }
+      }
+    },
+    "完成" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        }
+      }
+    },
+    "选择订阅源" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a feed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择订阅源"
+          }
+        }
+      }
+    },
+    "全部账号" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All accounts"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部账号"
+          }
+        }
+      }
+    },
+    "全局" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Global"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全局"
+          }
+        }
+      }
+    },
+    "分组" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分组"
+          }
+        }
+      }
+    },
+    "发送原文与目标语言，仅用于翻译功能" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sends source text and target language for translation features only"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送原文与目标语言，仅用于翻译功能"
+          }
+        }
+      }
+    },
+    "外语正文，已自动开启翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foreign-language article: translation enabled automatically"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外语正文，已自动开启翻译"
+          }
+        }
+      }
+    },
+    "已按分组设置自动开启翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translation enabled automatically by folder settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已按分组设置自动开启翻译"
+          }
+        }
+      }
+    },
+    "已按订阅源设置自动开启翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translation enabled automatically by feed settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已按订阅源设置自动开启翻译"
+          }
+        }
+      }
+    },
+    "打开外语文章时自动翻译，可由分组和订阅源覆盖。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translate foreign-language articles when opened. Folders and feeds can override this default."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开外语文章时自动翻译，可由分组和订阅源覆盖。"
+          }
+        }
+      }
+    },
+    "打开文章时自动生成" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generate when opening an article"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文章时自动生成"
+          }
+        }
+      }
+    },
+    "目标语言" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Target Language"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标语言"
+          }
+        }
+      }
+    },
+    "自动翻译 Beta" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic Translation Beta"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动翻译 Beta"
+          }
+        }
+      }
+    },
+    "自动翻译 · Beta" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic Translation · Beta"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动翻译 · Beta"
+          }
+        }
+      }
+    },
     "暂无未读文章" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -53,94 +549,304 @@
       }
     },
     "控制界面模式、三栏主题与文章阅读排版" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Control the interface mode, three-column theme, and reading typography" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Control the interface mode, three-column theme, and reading typography"
+          }
+        }
+      }
     },
     "内容主题" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Content Theme" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content Theme"
+          }
+        }
+      }
     },
     "主题同步作用于侧边栏、文章列表与阅读区，不改变布局、间距或功能状态。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Themes stay coordinated across the sidebar, article list, and reader without changing layout, spacing, or feature state." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Themes stay coordinated across the sidebar, article list, and reader without changing layout, spacing, or feature state."
+          }
+        }
+      }
     },
     "修改任一背景会进入 Custom 状态；三栏共享该背景，文字会自动保持清晰对比。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Changing either background creates a Custom state; all three columns share it and text contrast stays readable automatically." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changing either background creates a Custom state; all three columns share it and text contrast stays readable automatically."
+          }
+        }
+      }
     },
     "三栏实时预览" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Three-Column Live Preview" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Three-Column Live Preview"
+          }
+        }
+      }
     },
     "PaperRss 专为沉浸式阅读打造。三栏主题会保持一致，字号调整只作用于文章正文。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "PaperRss is designed for immersive reading. The three-column theme stays coordinated while text size applies only to article content." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PaperRss is designed for immersive reading. The three-column theme stays coordinated while text size applies only to article content."
+          }
+        }
+      }
     },
     "重置内容外观" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset Content Appearance" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Content Appearance"
+          }
+        }
+      }
     },
     "恢复默认内容外观" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Content Defaults" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore Content Defaults"
+          }
+        }
+      }
     },
     "重置阅读外观" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset Reader Appearance" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Reader Appearance"
+          }
+        }
+      }
     },
     "恢复 Paper、系统字体与 17pt" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Paper, system font, and 17pt" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore Paper, system font, and 17pt"
+          }
+        }
+      }
     },
     "恢复默认阅读外观" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore Reader Defaults" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore Reader Defaults"
+          }
+        }
+      }
     },
     "阅读主题" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reader Theme" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reader Theme"
+          }
+        }
+      }
     },
     "主题只改变文章阅读区，不会改变导航、布局或功能状态。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Themes affect only the article reader, never navigation, layout, or feature state." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Themes affect only the article reader, never navigation, layout, or feature state."
+          }
+        }
+      }
     },
     "排版" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Typography" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Typography"
+          }
+        }
+      }
     },
     "字体与字号只作用于文章正文，并会自动保存。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Font and size apply only to article text and save automatically." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Font and size apply only to article text and save automatically."
+          }
+        }
+      }
     },
     "正文字体" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Body Font" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Body Font"
+          }
+        }
+      }
     },
     "使用这台 Mac 已安装的字体" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Uses fonts installed on this Mac" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uses fonts installed on this Mac"
+          }
+        }
+      }
     },
     "颜色" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Colors" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colors"
+          }
+        }
+      }
     },
     "修改任一背景会进入 Custom 状态；正文颜色会自动保持清晰对比。" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Changing either background creates a Custom state; text contrast stays readable automatically." } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changing either background creates a Custom state; text contrast stays readable automatically."
+          }
+        }
+      }
     },
     "浅色背景" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Light Background" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light Background"
+          }
+        }
+      }
     },
     "深色背景" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dark Background" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dark Background"
+          }
+        }
+      }
     },
     "Custom · 自定义" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Custom" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom"
+          }
+        }
+      }
     },
     "当前使用内置预设" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Using built-in preset" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Using built-in preset"
+          }
+        }
+      }
     },
     "重置为预设" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset to Preset" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset to Preset"
+          }
+        }
+      }
     },
     "Paper" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Paper" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paper"
+          }
+        }
+      }
     },
     "White" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "White" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "White"
+          }
+        }
+      }
     },
     "Geek" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Geek" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geek"
+          }
+        }
+      }
     },
     "默认纸感，自动跟随 macOS 明暗模式" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Default paper feel that follows macOS appearance" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default paper feel that follows macOS appearance"
+          }
+        }
+      }
     },
     "高对比、纯净、中性的现代阅读体验" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Clean, neutral, high-contrast modern reading" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clean, neutral, high-contrast modern reading"
+          }
+        }
+      }
     },
     "Tokyo Night 深色配色，适合夜间与技术内容" : {
-      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Tokyo Night colors for nighttime and technical reading" } } }
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tokyo Night colors for nighttime and technical reading"
+          }
+        }
+      }
     },
     "更新" : {
       "localizations" : {
@@ -202,9 +908,7 @@
         }
       }
     },
-    "%@" : {
-
-    },
+    "%@" : {},
     "%@ @ %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -215,9 +919,7 @@
         }
       }
     },
-    "%@ pt" : {
-
-    },
+    "%@ pt" : {},
     "%lld 个订阅" : {
       "localizations" : {
         "en" : {
@@ -4350,6 +5052,230 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Follows your system language by default. You can switch here at any time, and the interface updates immediately."
+          }
+        }
+      }
+    },
+    "翻译黑白名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translation feed lists"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译黑白名单"
+          }
+        }
+      }
+    },
+    "管理" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
+          }
+        }
+      }
+    },
+    "打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detect and translate foreign-language articles when opened. Use feed lists for exceptions."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。"
+          }
+        }
+      }
+    },
+    "自动翻译开启时：白名单固定翻译，黑名单不自动翻译，其余订阅自动识别。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When automatic translation is on: always translate whitelisted feeds, skip blacklisted feeds, and detect the language for other feeds."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动翻译开启时：白名单固定翻译，黑名单不自动翻译，其余订阅自动识别。"
+          }
+        }
+      }
+    },
+    "同一订阅只能加入一个名单；加入另一侧会自动移出原名单。手动翻译不受名单限制。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A feed can belong to one list. Adding it to the other list moves it. Manual translation remains available."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同一订阅只能加入一个名单；加入另一侧会自动移出原名单。手动翻译不受名单限制。"
+          }
+        }
+      }
+    },
+    "搜索订阅以添加" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search feeds to add"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索订阅以添加"
+          }
+        }
+      }
+    },
+    "移出名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from list"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出名单"
+          }
+        }
+      }
+    },
+    "加入名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to list"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入名单"
+          }
+        }
+      }
+    },
+    "搜索并添加订阅" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search to add a feed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索并添加订阅"
+          }
+        }
+      }
+    },
+    "没有匹配的订阅" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching feeds"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的订阅"
+          }
+        }
+      }
+    },
+    "加入翻译白名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to translation whitelist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入翻译白名单"
+          }
+        }
+      }
+    },
+    "移出翻译白名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from translation whitelist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出翻译白名单"
+          }
+        }
+      }
+    },
+    "加入翻译黑名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to translation blacklist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入翻译黑名单"
+          }
+        }
+      }
+    },
+    "移出翻译黑名单" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from translation blacklist"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出翻译黑名单"
           }
         }
       }

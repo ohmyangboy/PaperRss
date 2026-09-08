@@ -25,7 +25,7 @@ final class DatabaseSchemaTests: XCTestCase {
 
     // MARK: - A. 完整表集合测试
 
-    func testMigrationCreatesExact11BusinessTables() throws {
+    func testMigrationCreatesExact14BusinessTables() throws {
         let expectedTables: Set<String> = [
             "accounts",
             "folders",
@@ -37,7 +37,10 @@ final class DatabaseSchemaTests: XCTestCase {
             "article_state_outbox",
             "article_caches",
             "ai_artifacts",
-            "account_sync_state"
+            "account_sync_state",
+            "translation_article_exemptions",
+            "source_language_hints",
+            "translation_feed_lists"
         ]
 
         let existingTables = try database.dbPool.read { db -> Set<String> in
@@ -48,7 +51,7 @@ final class DatabaseSchemaTests: XCTestCase {
             return Set(tableNames)
         }
 
-        XCTAssertEqual(existingTables, expectedTables, "数据库必须且只能包含规范定义的 11 张业务表")
+        XCTAssertEqual(existingTables, expectedTables, "数据库必须且只能包含规范定义的 14 张业务表")
     }
 
     // MARK: - B. Column Contract 结构内省

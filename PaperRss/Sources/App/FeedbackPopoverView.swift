@@ -84,11 +84,23 @@ struct FeedbackPopoverView: View {
                     actionRow(
                         icon: "bubble.left.and.bubble.right",
                         title: I18N.shared.localized("GitHub Issue", "GitHub Issue"),
-                        subtitle: I18N.shared.localized("Bug 报告与功能建议", "Bug reports and feature requests"),
+                        subtitle: I18N.shared.localized("问题反馈与 Bug 报告", "Problems and bug reports"),
                         actionTitle: I18N.shared.localized("公开反馈", "Open Issue"),
                         isProminent: true
                     ) {
                         openFeedback(.issue)
+                    }
+
+                    actionRow(
+                        icon: "bubble.left.and.bubble.right",
+                        title: I18N.shared.localized("GitHub Discussions", "GitHub Discussions"),
+                        subtitle: I18N.shared.localized("想法、建议与交流", "Ideas, suggestions, and conversations"),
+                        actionTitle: I18N.shared.localized("参与 Discussion", "Join Discussion"),
+                        isProminent: false
+                    ) {
+                        if AppInfo.openURL(AppInfo.discussionsURL) {
+                            onDismiss()
+                        }
                     }
 
                     actionRow(
@@ -129,25 +141,42 @@ struct FeedbackPopoverView: View {
                         .font(.system(size: 13, weight: .semibold))
 
                     HStack(alignment: .top, spacing: 10) {
-                        socialCard(
-                            imageName: "XiaohongshuContact",
-                            title: I18N.shared.localized("小红书", "Xiaohongshu"),
-                            detail: I18N.shared.localized("oi一页风\n小红书号：95393080312", "oi一页风\nID: 95393080312"),
-                            imageSize: CGSize(width: 128, height: 174)
-                        )
+                        Button {
+                            if AppInfo.openURL(AppInfo.xiaohongshuURL) {
+                                onDismiss()
+                            }
+                        } label: {
+                            socialCard(
+                                imageName: "XiaohongshuContact",
+                                title: I18N.shared.localized("小红书", "Xiaohongshu"),
+                                detail: I18N.shared.localized("oi一页风\n小红书号：95393080312", "oi一页风\nID: 95393080312"),
+                                imageSize: CGSize(width: 128, height: 174),
+                                actionTitle: I18N.shared.localized("社交动态", "Social Updates")
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help(I18N.shared.localized("打开小红书主页", "Open Xiaohongshu profile"))
 
-                        socialCard(
-                            imageName: "SponsorQR",
-                            title: I18N.shared.localized("微信赞赏", "WeChat Support"),
-                            detail: I18N.shared.localized("微信扫一扫，感谢支持", "Scan with WeChat to support the project"),
-                            imageSize: CGSize(width: 128, height: 128)
-                        )
+                        Button {
+                            if AppInfo.openURL(AppInfo.sponsorsURL) {
+                                onDismiss()
+                            }
+                        } label: {
+                            socialCard(
+                                imageName: "SponsorQR",
+                                title: I18N.shared.localized("微信赞赏", "WeChat Support"),
+                                detail: I18N.shared.localized("微信扫一扫，感谢支持", "Scan with WeChat to support the project"),
+                                imageSize: CGSize(width: 128, height: 128),
+                                actionTitle: I18N.shared.localized("赞助列表", "Supporters")
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
             }
             .padding(18)
-        .frame(width: 410, height: 560)
+        .frame(width: 410)
     }
 
     private func actionRow(
@@ -203,24 +232,43 @@ struct FeedbackPopoverView: View {
         imageName: String,
         title: String,
         detail: String,
-        imageSize: CGSize
+        imageSize: CGSize,
+        actionTitle: String
     ) -> some View {
         VStack(spacing: 7) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
 
-            Image(imageName, bundle: nil)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: imageSize.width, height: imageSize.height)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            if imageName == "SponsorQR" {
+                Image(imageName, bundle: nil)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    // 与设置页一致，裁去原图自带黑框，再绘制完整圆角边框。
+                    .frame(width: imageSize.width + 2, height: imageSize.height + 2)
+                    .frame(width: imageSize.width, height: imageSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+            } else {
+                Image(imageName, bundle: nil)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: imageSize.width, height: imageSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
 
             Text(detail)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+            Label(actionTitle, systemImage: "arrow.up.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
         }
         .frame(maxWidth: .infinity, alignment: .top)
         .padding(.vertical, 10)

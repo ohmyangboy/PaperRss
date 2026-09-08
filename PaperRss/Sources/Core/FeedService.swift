@@ -19,7 +19,11 @@ public enum FeedService {
         let lastModified = http.value(forHTTPHeaderField: "Last-Modified")
         if http.statusCode == 304 { return .notModified(etag: etag ?? feed.etag, lastModified: lastModified ?? feed.lastModified) }
         guard (200...299).contains(http.statusCode) else { throw HTTPStatusError(statusCode: http.statusCode) }
-        return .updated(try FeedParser.parse(data: data, baseURL: feed.feedURL), etag: etag, lastModified: lastModified)
+        var parsed = try FeedParser.parse(data: data, baseURL: feed.feedURL)
+        if let language = http.value(forHTTPHeaderField: "Content-Language") {
+            parsed.languageHints.append(.init(language: language, scope: "feed:http"))
+        }
+        return .updated(parsed, etag: etag, lastModified: lastModified)
     }
 }
 

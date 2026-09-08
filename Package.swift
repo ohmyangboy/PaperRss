@@ -61,6 +61,7 @@ let package = Package(
                 "mathjax-runtime.test.mjs",
                 "code-highlighting.test.mjs",
                 "reader-shortcuts.test.mjs",
+                "reader-auto-translation.test.mjs",
                 "reader-toc.test.mjs",
                 "repository-policy.test.mjs",
                 "selection-assistant-sync.test.mjs",

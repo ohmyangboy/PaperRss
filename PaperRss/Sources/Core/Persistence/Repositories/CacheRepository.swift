@@ -73,7 +73,8 @@ public final class CacheRepository: Sendable {
             fetchedAt: Date(timeIntervalSince1970: record.fetchedAt),
             sourceURL: sourceURL,
             isSanitized: record.isSanitized,
-            normalizationRevision: record.normalizationRevision
+            normalizationRevision: record.normalizationRevision,
+            languageHints: record.languageHintsJSON.flatMap { try? JSONDecoder().decode([ArticleLanguageHint].self, from: Data($0.utf8)) } ?? []
         )
     }
 
@@ -88,7 +89,8 @@ public final class CacheRepository: Sendable {
             fetchedAt: cache.fetchedAt.timeIntervalSince1970,
             sourceURL: cache.sourceURL?.absoluteString,
             isSanitized: cache.isSanitized,
-            normalizationRevision: cache.normalizationRevision
+            normalizationRevision: cache.normalizationRevision,
+            languageHintsJSON: String(decoding: try JSONEncoder().encode(cache.languageHints), as: UTF8.self)
         )
         try saveCache(record, in: db)
     }

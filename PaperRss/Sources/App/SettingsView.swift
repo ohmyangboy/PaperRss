@@ -778,13 +778,22 @@ struct SettingsView: View {
                 }
                 Divider().padding(.horizontal, 18).opacity(0.18)
 
+                settingsRow(I18N.shared.localized("感谢每一位支持者", "Thank you to every supporter")) {
+                    Button {
+                        AppInfo.openURL(AppInfo.sponsorsURL)
+                    } label: {
+                        Label(I18N.shared.localized("赞助列表", "Supporters"), systemImage: "arrow.up.right")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.18)
+
                 settingsRow(
-                    I18N.shared.localized("提交 GitHub Issue", "Submit GitHub Issue")
+                    I18N.shared.localized("问题反馈 · GitHub Issue", "Bug reports · GitHub Issue")
                 ) {
                     Button {
-                        if let url = URL(string: "https://github.com/ohmyangboy/PaperRss/issues") {
-                            AppInfo.openURL(url)
-                        }
+                        AppInfo.openURL(FeedbackComposer.issueURL)
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
@@ -792,6 +801,19 @@ struct SettingsView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.18)
+
+                settingsRow(
+                    I18N.shared.localized("想法与建议", "Ideas & Suggestions")
+                ) {
+                    Button {
+                        AppInfo.openURL(AppInfo.discussionsURL)
+                    } label: {
+                        Label(I18N.shared.localized("参与 Discussion", "Join Discussion"), systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 Divider().padding(.horizontal, 18).opacity(0.18)
@@ -811,6 +833,40 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+            }
+
+            settingsGroup(I18N.shared.localized("社交动态", "Social Updates")) {
+                HStack(spacing: 20) {
+                    Button {
+                        AppInfo.openURL(AppInfo.xiaohongshuURL)
+                    } label: {
+                        Image("XiaohongshuContact", bundle: nil)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 128, height: 174)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(I18N.shared.localized("打开小红书主页", "Open Xiaohongshu profile"))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("oi一页风")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text(I18N.shared.localized("小红书扫一扫，关注开发动态", "Scan with Xiaohongshu for development updates"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            AppInfo.openURL(AppInfo.xiaohongshuURL)
+                        } label: {
+                            Label(I18N.shared.localized("打开小红书主页", "Open Xiaohongshu profile"), systemImage: "arrow.up.right")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
             }
         }
     }
@@ -1654,6 +1710,18 @@ struct SettingsView: View {
 
     private var translationPreferencesSection: some View {
         settingsGroup(I18N.shared.localized("翻译偏好", "Translation Preferences")) {
+            settingsRow(I18N.shared.localized("自动翻译 · Beta", "Automatic Translation · Beta"),
+                        description: I18N.shared.localized("打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。", "Detect and translate foreign-language articles when opened. Use feed lists for exceptions.")) {
+                Toggle("", isOn: featurePreferenceBinding(\.automaticallyTranslate))
+                    .toggleStyle(.switch)
+                    .accessibilityLabel(I18N.shared.localized("自动翻译 Beta", "Automatic Translation Beta"))
+                    .accessibilityIdentifier("translation-automatic-beta")
+            }
+
+            settingsRow(I18N.localized("翻译黑白名单", englishFallback: "Translation feed lists")) {
+                TranslationFeedListSettings(store: store)
+            }
+
             settingsRow(I18N.shared.localized("目标语言", "Target Language")) {
                 Picker(I18N.shared.localized("目标语言", "Target Language"), selection: featurePreferenceBinding(\.targetLanguage)) {
                     ForEach(translationTargetLanguages, id: \.self) { language in

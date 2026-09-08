@@ -115,6 +115,7 @@ public final class ArticleRepository: Sendable {
 
         for parsed in parsedEntries {
             let itemID = "\(feedID)|\(parsed.id)".stableDigest
+            try AutoTranslationRepository.saveHints(parsed.languageHints, scope: "article", id: itemID, in: db)
             let existingItem = try ItemRecord.filter(Column("id") == itemID).fetchOne(db)
 
             if existingItem == nil {

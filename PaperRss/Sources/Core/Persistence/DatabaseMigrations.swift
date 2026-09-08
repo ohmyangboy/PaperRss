@@ -350,6 +350,86 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v7-auto-translation") { db in
+            try db.execute(sql: """
+            CREATE TABLE auto_translation_rules (
+                account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                scope TEXT NOT NULL CHECK(scope IN ('feed', 'folder', 'article')),
+                entity_id TEXT NOT NULL,
+                rule TEXT NOT NULL CHECK(rule IN ('off', 'foreignLanguage')),
+                PRIMARY KEY(account_id, scope, entity_id)
+            );
+            CREATE TABLE source_language_hints (
+                scope TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                hints_json TEXT NOT NULL,
+                PRIMARY KEY(scope, entity_id)
+            );
+            """)
+            if try db.tableExists("article_caches") {
+                try db.execute(sql: "ALTER TABLE article_caches ADD COLUMN language_hints_json TEXT;")
+            }
+            // 兼容只包含部分旧表的迁移测试与恢复数据库。
+            for (table, scope, key) in [("items", "article", "id"), ("feeds", "feed", "id"), ("folders", "folder", "id")] {
+                guard try db.tableExists(table) else { continue }
+                try db.execute(sql: """
+                CREATE TRIGGER auto_translation_delete_\(table) AFTER DELETE ON \(table) BEGIN
+                    DELETE FROM auto_translation_rules WHERE scope = '\(scope)' AND entity_id = OLD.\(key);
+                    DELETE FROM source_language_hints WHERE scope = '\(scope)' AND entity_id = OLD.\(key);
+                END;
+                """)
+            }
+        }
+
+        migrator.registerMigration("v8-auto-translation-name-rules") { db in
+            try db.execute(sql: """
+            CREATE TABLE auto_translation_name_rules (
+                id TEXT PRIMARY KEY NOT NULL,
+                account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+                payload_json TEXT NOT NULL
+            );
+            """)
+        }
+
+        migrator.registerMigration("v9-simple-translation-feed-lists") { db in
+            // 旧模式及继承规则退役；只保留用户对单篇文章的手动关闭记录。
+            try db.execute(sql: """
+                CREATE TABLE translation_feed_lists (
+                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    feed_id TEXT NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                    list TEXT NOT NULL CHECK(list IN ('whitelist', 'blacklist')),
+                    PRIMARY KEY(account_id, feed_id)
+                );
+                CREATE TABLE translation_article_exemptions (
+                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    item_id TEXT NOT NULL,
+                    PRIMARY KEY(account_id, item_id)
+                );
+                INSERT INTO translation_article_exemptions(account_id, item_id)
+                    SELECT account_id, entity_id FROM auto_translation_rules WHERE scope = 'article' AND rule = 'off';
+                DROP TRIGGER IF EXISTS auto_translation_delete_items;
+                DROP TRIGGER IF EXISTS auto_translation_delete_feeds;
+                DROP TRIGGER IF EXISTS auto_translation_delete_folders;
+                DROP TABLE auto_translation_rules;
+                DROP TABLE auto_translation_name_rules;
+                """)
+            for (table, scope) in [("items", "article"), ("feeds", "feed")] {
+                guard try db.tableExists(table) else { continue }
+                try db.execute(sql: """
+                    CREATE TRIGGER translation_delete_\(table) AFTER DELETE ON \(table) BEGIN
+                        DELETE FROM source_language_hints WHERE scope = '\(scope)' AND entity_id = OLD.id;
+                    END;
+                    """)
+            }
+            if try db.tableExists("items") {
+                try db.execute(sql: """
+                    CREATE TRIGGER translation_delete_exemptions AFTER DELETE ON items BEGIN
+                        DELETE FROM translation_article_exemptions WHERE account_id = OLD.account_id AND item_id = OLD.id;
+                    END;
+                    """)
+            }
+        }
+
         return migrator
     }
 }

@@ -315,6 +315,7 @@ public struct ArticleCache: Codable, Hashable, Sendable {
     public var sourceURL: URL?
     public var isSanitized: Bool
     public var normalizationRevision: Int
+    public var languageHints: [ArticleLanguageHint]
 
     public init(
         entryID: String,
@@ -324,7 +325,8 @@ public struct ArticleCache: Codable, Hashable, Sendable {
         fetchedAt: Date = .now,
         sourceURL: URL? = nil,
         isSanitized: Bool = false,
-        normalizationRevision: Int = ArticleCache.currentNormalizationRevision
+        normalizationRevision: Int = ArticleCache.currentNormalizationRevision,
+        languageHints: [ArticleLanguageHint] = []
     ) {
         self.entryID = entryID
         self.text = text
@@ -334,10 +336,11 @@ public struct ArticleCache: Codable, Hashable, Sendable {
         self.sourceURL = sourceURL
         self.isSanitized = isSanitized
         self.normalizationRevision = normalizationRevision
+        self.languageHints = languageHints
     }
 
     private enum CodingKeys: String, CodingKey {
-        case entryID, text, html, imageURLs, fetchedAt, sourceURL, isSanitized, normalizationRevision
+        case entryID, text, html, imageURLs, fetchedAt, sourceURL, isSanitized, normalizationRevision, languageHints
     }
 
     public init(from decoder: Decoder) throws {
@@ -349,6 +352,7 @@ public struct ArticleCache: Codable, Hashable, Sendable {
         fetchedAt = try container.decodeIfPresent(Date.self, forKey: .fetchedAt) ?? .distantPast
         sourceURL = try container.decodeIfPresent(URL.self, forKey: .sourceURL)
         isSanitized = try container.decodeIfPresent(Bool.self, forKey: .isSanitized) ?? false
+        languageHints = try container.decodeIfPresent([ArticleLanguageHint].self, forKey: .languageHints) ?? []
         normalizationRevision = try container.decodeIfPresent(Int.self, forKey: .normalizationRevision) ?? 0
     }
 }

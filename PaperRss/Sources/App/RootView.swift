@@ -1271,6 +1271,8 @@ private struct SidebarView: View {
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .contextMenu {
+                TranslationFeedListMenu(store: store, feedID: feed.id, accountID: accountID)
+                Divider()
                 Button {
                     store.markAllRead(feedID: feed.id)
                 } label: {
@@ -1468,6 +1470,9 @@ private struct SidebarView: View {
                     } label: {
                         Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                     }
+
+                    TranslationFeedListMenu(store: store, feedID: feed.id, accountID: "local-default")
+                    Divider()
 
                     Button {
                         copyToClipboard(feed.feedURL.absoluteString)

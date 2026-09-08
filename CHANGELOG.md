@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.5 · Build 26 · 2026-09-08
+
+本次为自动翻译与社区支持功能 Beta；建议测试自动翻译和订阅黑白名单，稳定通道仍为 v1.3.2。
+
+- 自动翻译：新增默认关闭的 Beta 开关，根据本地正文语言识别自动开启外语文章翻译；支持订阅白名单固定翻译、黑名单跳过，以及单篇手动关闭记录。
+- 阅读与兼容：改进首屏可见段落握手，隔离正文和目标语言变化后的翻译结果；通过增量迁移保留阅读状态、正文与译文缓存及 AI 配置。
+- 社区入口：区分 Issue 问题反馈与 Discussion 想法交流，新增社交动态、可点击的小红书主页及赞助列表，统一赞赏码圆角显示。
+- 官网与文档：嵌入曝光后加载的赞赏名单，同步中英文 README；网站部署时自动截取最新名单预览。
+
+---
+
+This Beta adds automatic translation and community support features. Please test automatic translation and feed lists; the stable channel remains on v1.3.2.
+
+- Automatic translation: Add an opt-in Beta switch using local article language detection, with a whitelist to always translate, a blacklist to skip, and remembered per-article manual opt-outs.
+- Reading and compatibility: Improve the initial visible-paragraph handshake and isolate translation results after content or target-language changes. Incremental migrations preserve reading state, article and translation caches, and AI configuration.
+- Community: Separate Issue bug reports from Discussion ideas, add social updates, clickable Xiaohongshu profiles and supporter lists, and align sponsor QR styling.
+- Website and documentation: Embed the supporters page on exposure, update both READMEs, and capture a fresh supporter preview during website deployment.
+
 ## v1.3.3-beta.4 · Build 25 · 2026-09-08
 
 本次为工具栏交互修复 Beta；建议使用 v1.3.3-beta.3 的用户升级，稳定通道仍为 v1.3.2。

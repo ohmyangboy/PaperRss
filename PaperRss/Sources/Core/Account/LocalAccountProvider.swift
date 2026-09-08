@@ -269,6 +269,7 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
             return (false, [])
 
         case let .success(.updated(parsed, etag, lastModified)):
+            try AutoTranslationRepository.saveHints(parsed.languageHints, scope: "feed", id: feedIDString, in: db)
             try feedRepository.updateFeedMetadata(
                 feedID: feedIDString,
                 title: parsed.title,

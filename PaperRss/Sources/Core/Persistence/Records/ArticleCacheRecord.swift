@@ -15,6 +15,7 @@ public struct ArticleCacheRecord: Codable, FetchableRecord, PersistableRecord, T
     public var sourceURL: String?
     public var isSanitized: Bool
     public var normalizationRevision: Int
+    public var languageHintsJSON: String?
 
     public init(
         itemID: String,
@@ -24,7 +25,8 @@ public struct ArticleCacheRecord: Codable, FetchableRecord, PersistableRecord, T
         fetchedAt: Double,
         sourceURL: String? = nil,
         isSanitized: Bool = false,
-        normalizationRevision: Int = 0
+        normalizationRevision: Int = 0,
+        languageHintsJSON: String? = nil
     ) {
         self.itemID = itemID
         self.text = text
@@ -34,6 +36,7 @@ public struct ArticleCacheRecord: Codable, FetchableRecord, PersistableRecord, T
         self.sourceURL = sourceURL
         self.isSanitized = isSanitized
         self.normalizationRevision = normalizationRevision
+        self.languageHintsJSON = languageHintsJSON
     }
 
     enum CodingKeys: String, CodingKey {
@@ -44,6 +47,7 @@ public struct ArticleCacheRecord: Codable, FetchableRecord, PersistableRecord, T
         case fetchedAt = "fetched_at"
         case sourceURL = "source_url"
         case isSanitized = "is_sanitized"
+        case languageHintsJSON = "language_hints_json"
         case normalizationRevision = "normalization_revision"
     }
 }

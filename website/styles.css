@@ -973,6 +973,68 @@ body {
   gap: 2rem;
 }
 
+/* 名单曝光后才加载；预留完整阅读区域，加载不改变外层布局。 */
+.sponsor-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.sponsor-actions .sponsor-box {
+  gap: 1.5rem;
+}
+
+.sponsor-actions .feedback-btn {
+  height: auto;
+  min-height: 38px;
+  padding: 0.65rem 1rem;
+  text-align: center;
+}
+
+.supporters-panel {
+  width: 100%;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 1.5rem;
+}
+
+.supporters-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.supporters-heading h3 {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+
+.supporters-heading a {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-underline-offset: 3px;
+}
+
+.supporters-frame {
+  display: block;
+  width: 100%;
+  height: 900px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+@media (max-width: 768px) {
+  .sponsor-section { padding: 1.25rem; }
+  .sponsor-actions .sponsor-box { justify-content: center; }
+  .sponsor-actions .feedback-links { width: 100%; }
+  .supporters-frame { height: 1400px; }
+}
+
 .qr-card {
   display: flex;
   flex-direction: column;

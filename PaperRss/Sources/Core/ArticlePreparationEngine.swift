@@ -66,10 +66,11 @@ public final class ArticlePreparationEngine: Sendable {
         entry: Entry,
         cached: ArticleCache?,
         feed: Feed? = nil,
-        policy: ArticlePreparationPolicy
+        policy: ArticlePreparationPolicy,
+        feedLanguageHints: [ArticleLanguageHint] = []
     ) async -> ArticlePreparationResult {
         // 1. 准备 Feed 候选
-        let feedCandidate = prepareFeedCandidate(for: entry, feed: feed)
+        let feedCandidate = prepareFeedCandidate(for: entry, feed: feed, hints: feedLanguageHints)
 
         // 2. 准备 Cache 候选
         let cacheCandidate = prepareCacheCandidate(cached, entry: entry)
@@ -133,7 +134,7 @@ public final class ArticlePreparationEngine: Sendable {
                     if let page = try await pageLoader.loadPage(for: entryURL),
                        !page.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                        !Task.isCancelled,
-                       let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL),
+                       let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL, contentLanguage: page.contentLanguage),
                        webCandidate.quality.isUsableCache,
                        !ArticleMathDetector.containsUnsupportedMarkupInsideFormula(in: webCandidate.html) {
                         let prepared = webCandidate.toPreparedArticle()
@@ -211,7 +212,7 @@ public final class ArticlePreparationEngine: Sendable {
                         return ArticlePreparationResult(prepared: fallback.0, updatedCache: fallback.1, cacheState: .current)
                     }
 
-                    if let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL) {
+                    if let webCandidate = prepareWebCandidate(page.html, baseURL: page.finalURL, contentLanguage: page.contentLanguage) {
                         // 判定 Web 是否“明显改善”
                         if let bestLocal {
                             if isSignificantlyBetter(webCandidate.quality, than: bestLocal.quality) {
@@ -269,6 +270,7 @@ public final class ArticlePreparationEngine: Sendable {
         let baseURL: URL?
         let source: ArticleSource
         let quality: ArticleCandidateQuality
+        var languageHints: [ArticleLanguageHint] = []
 
         func toPreparedArticle() -> PreparedArticle {
             // HTML retains code-block boundaries and safe MathML tags. Running
@@ -281,7 +283,8 @@ public final class ArticlePreparationEngine: Sendable {
                 imageURLs: imageURLs,
                 baseURL: baseURL,
                 source: source,
-                features: ArticleFeatures(containsMath: containsMath)
+                features: ArticleFeatures(containsMath: containsMath),
+                languageHints: languageHints
             )
         }
     }
@@ -312,7 +315,7 @@ public final class ArticlePreparationEngine: Sendable {
 
     // MARK: - Candidate Preparation
 
-    private func prepareFeedCandidate(for entry: Entry, feed: Feed?) -> ArticleCandidate? {
+    private func prepareFeedCandidate(for entry: Entry, feed: Feed?, hints: [ArticleLanguageHint]) -> ArticleCandidate? {
         guard let rawHTML = entry.contentHTML,
               !rawHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
@@ -328,7 +331,8 @@ public final class ArticlePreparationEngine: Sendable {
             imageURLs: content.imageURLs,
             baseURL: entry.url,
             source: .feed,
-            quality: quality
+            quality: quality,
+            languageHints: hints + ArticleLanguageHint.htmlDeclarations(in: rawHTML)
         )
     }
 
@@ -357,11 +361,12 @@ public final class ArticlePreparationEngine: Sendable {
             imageURLs: content.imageURLs,
             baseURL: sourceURL,
             source: .cache,
-            quality: quality
+            quality: quality,
+            languageHints: cache.languageHints
         )
     }
 
-    private func prepareWebCandidate(_ webHTML: String, baseURL: URL) -> ArticleCandidate? {
+    private func prepareWebCandidate(_ webHTML: String, baseURL: URL, contentLanguage: String?) -> ArticleCandidate? {
         let content = ArticleExtractor.content(from: webHTML, baseURL: baseURL)
         guard !content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let quality = evaluateQuality(text: content.text, html: content.html, imageCount: content.imageURLs.count, isSpecialSelfContained: false)
@@ -372,7 +377,8 @@ public final class ArticlePreparationEngine: Sendable {
             imageURLs: content.imageURLs,
             baseURL: baseURL,
             source: .web,
-            quality: quality
+            quality: quality,
+            languageHints: (ArticleLanguageHint.htmlDeclarations(in: webHTML).filter { $0.scope == "html:html" } + ArticleLanguageHint.htmlDeclarations(in: content.html)) + (contentLanguage.map { [.init(language: $0, scope: "web:http")] } ?? [])
         )
     }
 
@@ -519,7 +525,8 @@ public final class ArticlePreparationEngine: Sendable {
            existing.text == prepared.text,
            existing.html == prepared.html,
            existing.imageURLs == prepared.imageURLs,
-           existing.sourceURL == prepared.baseURL {
+           existing.sourceURL == prepared.baseURL,
+           existing.languageHints == prepared.languageHints {
             // 内容完全未变化，0 写入
             return nil
         }
@@ -532,7 +539,8 @@ public final class ArticlePreparationEngine: Sendable {
             fetchedAt: refreshed ? .now : (existing?.fetchedAt ?? .now),
             sourceURL: prepared.baseURL,
             isSanitized: true,
-            normalizationRevision: ArticleCache.currentNormalizationRevision
+            normalizationRevision: ArticleCache.currentNormalizationRevision,
+            languageHints: prepared.languageHints
         )
     }
 
@@ -598,7 +606,8 @@ public final class ArticlePreparationEngine: Sendable {
             imageURLs: [],
             baseURL: entry.url,
             source: .fallback,
-            features: ArticleFeatures(containsMath: containsMath)
+            features: ArticleFeatures(containsMath: containsMath),
+            languageHints: []
         )
     }
 }

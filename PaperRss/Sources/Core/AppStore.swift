@@ -172,6 +172,50 @@ public final class AppStore: ObservableObject {
         activeBilingualRequest = nil
     }
 
+    @Published public private(set) var autoTranslationRevision = 0
+    public var translationFeedLists: [UUID: TranslationFeedList] { (try? autoTranslationRepository.feedLists()) ?? [:] }
+
+    public func setTranslationFeedList(_ list: TranslationFeedList?, feedID: UUID, accountID: String) throws {
+        try autoTranslationRepository.setList(list, feedID: feedID, accountID: accountID)
+        autoTranslationRevision += 1
+    }
+
+    private var automaticallyActivatedEntryIDs: Set<String> = []
+    public let languageDetectionService = LanguageDetectionService()
+    public var autoTranslationRepository: AutoTranslationRepository { .init(database: libraryDatabase) }
+
+    public var bilingualTargetLanguage: String {
+        aiSettings.resolvedConfiguration(for: .bilingualTranslation)?.targetLanguage ?? aiSettings.features.targetLanguage
+    }
+
+    public func autoTranslationPreflight(entry: Entry) -> AutoTranslationDecision? {
+        if !aiSettings.features.automaticallyTranslate { return .disabled }
+        guard let exempt = try? autoTranslationRepository.isExempt(entry: entry) else { return .disabled }
+        if exempt { return .exempt }
+        if translationFeedLists[entry.feedID] == .blacklist { return .blacklisted }
+        guard let execution = executionSnapshot(for: .bilingualTranslation),
+              !execution.1.isEmpty || !providerRequiresAPIKey(execution.0.providerKind) else { return .unavailable }
+        return nil
+    }
+
+    public func autoTranslationDecision(entry: Entry, analysis: ArticleLanguageAnalysis) -> AutoTranslationDecision {
+        if let skip = autoTranslationPreflight(entry: entry) { return skip }
+        return AIAutomationPolicy.evaluate(analysis: analysis, targetLanguage: bilingualTargetLanguage,
+            enabled: true, exempt: false, available: true, list: translationFeedLists[entry.feedID])
+    }
+
+    public func applyAutoTranslation(_ decision: AutoTranslationDecision, entryID: String) {
+        if decision == .translate {
+            if !activeBilingualEntryIDs.contains(entryID) {
+                automaticallyActivatedEntryIDs.insert(entryID)
+                activeBilingualEntryIDs.insert(entryID)
+            }
+        } else if automaticallyActivatedEntryIDs.remove(entryID) != nil {
+            activeBilingualEntryIDs.remove(entryID)
+            aiWorkspace.cancel(.background(entryID: entryID, kind: .bilingual))
+        }
+    }
+
     @Published public private(set) var activeBilingualEntryIDs: Set<String> = []
 
     public func isBilingualActive(for entryID: String) -> Bool {
@@ -179,6 +223,16 @@ public final class AppStore: ObservableObject {
     }
 
     public func toggleBilingualMode(for entryID: String) {
+        if let entry = entry(id: entryID), let account = try? autoTranslationRepository.accountID(feedID: entry.feedID) {
+            do {
+                try autoTranslationRepository.setExempt(activeBilingualEntryIDs.contains(entryID), accountID: account, entryID: entryID)
+            } catch {
+                reportError(error, module: .settings)
+                return
+            }
+        }
+        automaticallyActivatedEntryIDs.remove(entryID)
+        autoTranslationRevision += 1
         if activeBilingualEntryIDs.contains(entryID) {
             activeBilingualEntryIDs.remove(entryID)
             cancelBilingualTranslation()
@@ -464,6 +518,7 @@ public final class AppStore: ObservableObject {
     @Published public var foldersByAccount: [String: [String]] = [:]
 
     public func reloadState() {
+        autoTranslationRevision += 1
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
         let limit = Self.defaultTimelineLimit
@@ -605,6 +660,7 @@ public final class AppStore: ObservableObject {
 
         accounts = fetchedAccounts
         feedsByAccount = newFeedsByAccount
+        autoTranslationRevision += 1
         foldersByAccount = newFoldersByAccount
         feeds = newFeedsByAccount["local-default"] ?? []
         customFolders = newFoldersByAccount["local-default"] ?? []
@@ -1554,7 +1610,8 @@ public final class AppStore: ObservableObject {
             entry: entry,
             cached: cached,
             feed: feed,
-            policy: policy
+            policy: policy,
+            feedLanguageHints: (try? autoTranslationRepository.languageHints(entry: entry)) ?? []
         )
         let prepared = result.prepared
         var permitsMemoryCaching = true
@@ -2652,7 +2709,7 @@ public final class AppStore: ObservableObject {
             temperature: configuration.temperature,
             allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
         ).selectingModel(configuration.model)
-        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences))
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences, automaticallyTranslate: settings.features.automaticallyTranslate))
         _ = LocalAPIKeyStore.saveAPIKey(apiKey, for: destination)
         self.llmConfiguration = configuration
         self.aiSettings = settings
@@ -2678,7 +2735,7 @@ public final class AppStore: ObservableObject {
             temperature: configuration.temperature,
             allowInsecureLocalEndpoint: configuration.allowInsecureLocalEndpoint
         ).selectingModel(configuration.model)
-        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences))
+        settings = settings.updatingProvider(profile).selectingProvider(id: destination).updatingFeatures(AIFeaturePreferences(configuration: configuration, translationPreferences: settings.features.translationPreferences, automaticallyTranslate: settings.features.automaticallyTranslate))
         self.aiSettings = settings
         self.llmConfiguration = configuration
         persistAISettings(settings)

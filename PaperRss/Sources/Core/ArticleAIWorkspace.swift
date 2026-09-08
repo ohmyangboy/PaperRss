@@ -143,6 +143,25 @@ public final class ArticleAIWorkspace: ObservableObject {
     private var bilingualBufferByEntryID: [String: [String: String]] = [:]
     private var pendingBackground: [PendingBackgroundRequest] = []
     private var activeBackground = Set<AIRequestID>()
+    private struct TranslationContext: Equatable {
+        let contentHash: String
+        let targetLanguage: String
+    }
+    private var translationContexts: [String: TranslationContext] = [:]
+
+    /// 同一文章的原文或目标语言变化时作废旧作业及内存投影。
+    public func setTranslationContext(entryID: String, text: String, targetLanguage: String) {
+        let context = TranslationContext(contentHash: text.stableDigest, targetLanguage: targetLanguage)
+        if let old = translationContexts[entryID], old != context {
+            cancel(.background(entryID: entryID, kind: .bilingual))
+        }
+        translationContexts[entryID] = context
+    }
+
+    public func isTranslationContextCurrent(entryID: String, text: String, targetLanguage: String) -> Bool {
+        translationContexts[entryID] == TranslationContext(contentHash: text.stableDigest, targetLanguage: targetLanguage)
+    }
+
     private let maximumBackgroundConcurrency: Int
     private let maximumTranslationConcurrency: Int
 

@@ -5,6 +5,7 @@
 DerivedData/
 build/
 build-settings-ui/
+build-community-ui/
 *.xcuserstate
 xcuserdata/
 *.xcuserdatad

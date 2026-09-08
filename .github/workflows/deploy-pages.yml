@@ -7,6 +7,8 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/deploy-pages.yml'
+      - 'scripts/capture-sponsors-preview.py'
+      - 'scripts/requirements-sponsors-preview.txt'
   schedule:
     - cron: '17 */12 * * *'
   workflow_dispatch:
@@ -55,6 +57,24 @@ jobs:
               printf '{\n  "stars": 16,\n  "fetchedAt": "%s"\n}\n' "$FETCHED_AT" > "$DATA_FILE"
             fi
           fi
+
+      - name: Setup Python for sponsor preview
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements-sponsors-preview.txt
+
+      - name: Install sponsor screenshot dependencies
+        timeout-minutes: 5
+        run: |
+          python -m pip install -r scripts/requirements-sponsors-preview.txt
+          python -m playwright install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk fonts-noto-color-emoji
+
+      - name: Capture latest sponsors preview
+        timeout-minutes: 3
+        run: python scripts/capture-sponsors-preview.py
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

@@ -150,6 +150,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     public var showsSelectionAsk: Bool
     public var showsSelectionTranslation: Bool
     public var customPrompt: String
+    public var automaticallyTranslate: Bool
     public var translationPreferences: TranslationPreferences
 
     public static let `default` = AIFeaturePreferences(
@@ -170,7 +171,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         showsSelectionAsk: Bool = true,
         showsSelectionTranslation: Bool = true,
         customPrompt: String = "",
-        translationPreferences: TranslationPreferences = .default
+        translationPreferences: TranslationPreferences = .default,
+        automaticallyTranslate: Bool = false
     ) {
         self.targetLanguage = targetLanguage
         self.showsAISummary = showsAISummary
@@ -180,9 +182,10 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         self.showsSelectionTranslation = showsSelectionTranslation
         self.customPrompt = customPrompt
         self.translationPreferences = translationPreferences
+        self.automaticallyTranslate = automaticallyTranslate
     }
 
-    public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default) {
+    public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default, automaticallyTranslate: Bool = false) {
         self.init(
             targetLanguage: configuration.targetLanguage,
             showsAISummary: configuration.showsAISummary,
@@ -191,13 +194,14 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             showsSelectionAsk: configuration.showsSelectionAsk,
             showsSelectionTranslation: configuration.showsSelectionTranslation,
             customPrompt: configuration.customPrompt,
-            translationPreferences: translationPreferences
+            translationPreferences: translationPreferences,
+            automaticallyTranslate: automaticallyTranslate
         )
     }
     private enum CodingKeys: String, CodingKey {
         case targetLanguage, showsAISummary, automaticallyGenerateSummary
         case showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt
-        case translationPreferences
+        case translationPreferences, automaticallyTranslate
     }
 
     public init(from decoder: Decoder) throws {
@@ -210,7 +214,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             showsSelectionAsk: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionAsk) ?? true,
             showsSelectionTranslation: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true,
             customPrompt: try values.decodeIfPresent(String.self, forKey: .customPrompt) ?? "",
-            translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default
+            translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default,
+            automaticallyTranslate: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslate) ?? false
         )
     }
 
