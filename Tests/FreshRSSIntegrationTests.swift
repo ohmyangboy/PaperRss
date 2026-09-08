@@ -107,6 +107,47 @@ final class FreshRSSIntegrationTests: XCTestCase {
     var mockSession: URLSession!
     var inMemoryCredentialStore: InMemoryCredentialStore!
 
+    @MainActor
+    func testBackgroundAccountAdditionReturnsBeforeSyncAndReportsFailureThenRetries() async throws {
+        let store = AppStore(databaseURL: sqliteURL,
+                             persistenceURL: tempDir.appendingPathComponent("legacy.json"),
+                             credentialStore: inMemoryCredentialStore, customSession: mockSession)
+        let shouldFail = TestStateBox(true)
+        let releaseSync = DispatchSemaphore(value: 0)
+        MockFreshRSSURLProtocol.setHandler { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            if request.url!.path.contains("ClientLogin") {
+                return (response, Data("Auth=mock_auth".utf8))
+            }
+            if shouldFail.value {
+                _ = releaseSync.wait(timeout: .now() + 2)
+                throw URLError(.notConnectedToInternet)
+            }
+            return (response, Data("{\"subscriptions\":[],\"tags\":[],\"itemRefs\":[],\"items\":[]}".utf8))
+        }
+        let start = Date()
+        let account = try await store.addFreshRSSAccount(
+            endpointURLText: "https://background.example.com", username: "test", password: "test",
+            customSession: mockSession, waitForInitialSync: false
+        )
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1, "账号添加不应等待首次同步请求")
+        XCTAssertTrue(store.accounts.contains { $0.id == account.id })
+        XCTAssertNotNil(store.accountRefreshProgress[account.id], "返回时必须已显示等待状态")
+        releaseSync.signal()
+        let deadline = Date().addingTimeInterval(5)
+        while store.accountRefreshProgress[account.id] != nil && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(store.accountRefreshProgress[account.id])
+        XCTAssertNotNil(store.accountSyncStates[account.id]?.lastError)
+        XCTAssertTrue(store.accounts.contains { $0.id == account.id }, "同步失败不能当作添加失败")
+        shouldFail.value = false
+        await store.syncAccount(accountID: account.id)
+        XCTAssertNil(store.accountRefreshProgress[account.id])
+        XCTAssertNil(store.accountSyncStates[account.id]?.lastError)
+        XCTAssertNotNil(store.accountSyncStates[account.id]?.lastSyncCompletedAt)
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         tempDir = FileManager.default.temporaryDirectory

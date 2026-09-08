@@ -604,7 +604,11 @@ struct SettingsView: View {
 
                         // 次行：左侧同步状态，右侧操作（立即同步 + 删除）
                         HStack(spacing: 8) {
-                            if let syncState = store.accountSyncStates[account.id] {
+                            if store.accountRefreshProgress[account.id] != nil {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(settingsAccentColor)
+                            } else if let syncState = store.accountSyncStates[account.id] {
                                 HStack(spacing: 6) {
                                     if let lastSync = syncState.lastSyncCompletedAt {
                                         let date = Date(timeIntervalSince1970: lastSync)
@@ -635,7 +639,7 @@ struct SettingsView: View {
                                 }
                             }
                             .controlSize(.small)
-                            .disabled(!account.isEnabled)
+                            .disabled(!account.isEnabled || store.accountRefreshProgress[account.id] != nil)
 
                             Button(role: .destructive) {
                                 accountPendingDeletion = account
@@ -3754,7 +3758,8 @@ private struct AddAccountSheet: View {
                                     endpointURLText: freshRSSEndpoint,
                                     username: freshRSSUsername,
                                     password: freshRSSPassword,
-                                    displayName: freshRSSDisplayName.isEmpty ? nil : freshRSSDisplayName
+                                    displayName: freshRSSDisplayName.isEmpty ? nil : freshRSSDisplayName,
+                                    waitForInitialSync: false
                                 )
                                 isPresented = false
                                 freshRSSEndpoint = ""

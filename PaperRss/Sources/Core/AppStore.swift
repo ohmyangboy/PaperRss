@@ -1492,7 +1492,8 @@ public final class AppStore: ObservableObject {
         username: String,
         password: String,
         displayName: String? = nil,
-        customSession: URLSession = .shared
+        customSession: URLSession = .shared,
+        waitForInitialSync: Bool = true
     ) async throws -> AccountRecord {
         guard let rawURL = URL(string: endpointURLText.trimmingCharacters(in: .whitespacesAndNewlines)),
               let host = rawURL.host, !host.isEmpty else {
@@ -1582,18 +1583,25 @@ public final class AppStore: ObservableObject {
         )
         await syncCoordinator.registerProvider(provider)
 
-        // 6. 执行初始同步（明确暴露同步结果，禁止静默吞错）
-        var initialSyncError: (any Error)? = nil
-        do {
+        // 账号持久化成功即可关闭添加界面；首次同步由 Store 持有，不依赖弹窗生命周期。
+        if waitForInitialSync {
+            defer { reloadState() }
             _ = try await provider.refresh(reason: .manual)
-        } catch {
-            initialSyncError = error
-        }
-
-        reloadState()
-
-        if let initialSyncError {
-            throw initialSyncError
+        } else {
+            reloadState()
+            accountRefreshProgress[accountID] = AccountRefreshProgress()
+            Task { [self] in
+                defer {
+                    accountRefreshProgress.removeValue(forKey: accountID)
+                    reloadState()
+                }
+                do {
+                    _ = try await provider.refresh(reason: .manual)
+                } catch {
+                    reportError(error, module: .settings)
+                    lastError = error.localizedDescription
+                }
+            }
         }
 
         return accountRecord
@@ -1651,6 +1659,10 @@ public final class AppStore: ObservableObject {
     }
 
     public func syncAccount(accountID: String) async {
+        defer {
+            accountRefreshProgress.removeValue(forKey: accountID)
+            reloadState()
+        }
         do {
             _ = try await syncCoordinator.refreshAccount(accountID: accountID, reason: .manual)
             reloadState()
