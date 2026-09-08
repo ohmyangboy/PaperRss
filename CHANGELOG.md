@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.3 · Build 24 · 2026-09-08
+
+本次为整合当前代码的体验优化 Beta；建议测试侧栏展开收起与阅读工具栏表现，稳定通道仍为 v1.3.2。
+
+- 工具栏：调整侧栏收起时的紧凑布局，展开收起时保留阅读工具栏实例，减少界面重建。
+- 阅读体验：仅在禅模式切换时更新分栏显隐，避免重复设置列表选中样式；包含上一 Beta 的 RSS 图片和内容适配修复。
+
+---
+
+This Beta includes the current code changes. Recommended for testing sidebar transitions and reader toolbar behavior; the stable channel remains on v1.3.2.
+
+- Toolbar: Refine the compact layout when the sidebar is collapsed and preserve the reader toolbar instance across sidebar transitions.
+- Reading: Update split-column visibility only when Zen mode changes and avoid resetting list selection styling unnecessarily. Includes the previous Beta's RSS image and content adaptation fixes.
+
 ## v1.3.3-beta.2 · Build 23 · 2026-09-08
 
 本次为阅读器图片修复 Beta；建议遇到 RSS 图片缺失的用户升级测试，稳定通道仍为 v1.3.2。

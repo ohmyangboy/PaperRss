@@ -450,7 +450,7 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
     private func findAndAttachScrollViewIfNeeded() {
         guard let tableView = findTableView(in: hostingController.view),
               let scrollView = tableView.enclosingScrollView else { return }
-        if suppressSystemSelectionHighlight {
+        if suppressSystemSelectionHighlight, tableView.selectionHighlightStyle != .none {
             // 保留键盘/辅助功能选择行为，只禁用 NSTableView 默认蓝色底色，
             // 由 EntryListView 按当前阅读主题统一绘制选中态。
             tableView.selectionHighlightStyle = .none

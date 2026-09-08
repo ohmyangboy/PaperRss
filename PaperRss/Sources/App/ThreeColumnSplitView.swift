@@ -230,6 +230,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
     func updateNSViewController(_ splitVC: NSSplitViewController, context: Context) {
         context.coordinator.setReaderActive(isReaderActive)
+        let zenModeChanged = context.coordinator.actions.isZenMode != toolbarActions.isZenMode
         // 更新工具栏动作状态
         context.coordinator.actions = toolbarActions
         context.coordinator.appearance = appearance
@@ -254,7 +255,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         context.coordinator.syncAppearance()
 
         // 禅模式：平滑动画收起 Sidebar (Column 0) 和 EntryListView (Column 1)
-        if splitVC.splitViewItems.count >= 2 {
+        if zenModeChanged, splitVC.splitViewItems.count >= 2 {
             let sidebarItem = splitVC.splitViewItems[0]
             let contentListItem = splitVC.splitViewItems[1]
             let targetState = toolbarActions.isZenMode
@@ -357,6 +358,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var titleLabel: NSTextField?
         private weak var unreadFilterButton: NSButton?
         private weak var markAllReadButton: NSButton?
+        private var compactToolbarLayout: Bool?
         private var zenRemovedToolbarItemIndexes: [NSToolbarItem.Identifier: Int] = [:]
         nonisolated(unsafe) private var eventMonitor: Any?
         nonisolated(unsafe) private var mouseDownMonitor: Any?
@@ -1389,12 +1391,46 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 entryListTitleItem?.isHidden = isSidebarCollapsed
             }
             if let toolbar = splitViewController?.view.window?.toolbar, !actions.isZenMode {
-                let index = toolbar.items.firstIndex { $0.itemIdentifier == .paperUnreadFilter }
-                if actions.showsUnreadFilter, index == nil,
-                   let markIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperMarkAllRead }) {
-                    toolbar.insertItem(withItemIdentifier: .paperUnreadFilter, at: markIndex)
-                } else if !actions.showsUnreadFilter, let index {
-                    toolbar.removeItem(at: index)
+                // 只调整列表布局项，绝不移除或重建阅读胶囊及其宿主。
+                if compactToolbarLayout != isSidebarCollapsed {
+                    compactToolbarLayout = isSidebarCollapsed
+                    if isSidebarCollapsed {
+                        let removedIDs: Set<NSToolbarItem.Identifier> = [.paperSidebarTracker, .paperTimelineTracker, .paperEntryListTitle]
+                        let listSpacer = toolbar.items.firstIndex { $0.itemIdentifier == .paperEntryListTitle }
+                            .flatMap { titleIndex in toolbar.items.indices.dropFirst(titleIndex + 1).first { toolbar.items[$0].itemIdentifier == .flexibleSpace } }
+                        for index in toolbar.items.indices.reversed() {
+                            if removedIDs.contains(toolbar.items[index].itemIdentifier) || index == listSpacer {
+                                toolbar.removeItem(at: index)
+                            }
+                        }
+                    } else if !toolbar.items.contains(where: { $0.itemIdentifier == .paperSidebarTracker }),
+                              let addIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperAddMenu }) {
+                        for (offset, identifier) in [NSToolbarItem.Identifier.paperSidebarTracker, .paperEntryListTitle, .flexibleSpace].enumerated() {
+                            toolbar.insertItem(withItemIdentifier: identifier, at: addIndex + 1 + offset)
+                        }
+                        if let readerIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperReaderCapsule }) {
+                            toolbar.insertItem(withItemIdentifier: .paperTimelineTracker, at: max(0, readerIndex - 1))
+                        }
+                    }
+                }
+                let buttonIDs: Set<NSToolbarItem.Identifier> = [.paperUnreadFilter, .paperMarkAllRead]
+                let visibleButtons: [NSToolbarItem.Identifier] = isSidebarCollapsed
+                    ? [actions.showsUnreadFilter ? .paperUnreadFilter : .paperMarkAllRead]
+                    : (actions.showsUnreadFilter ? [.paperUnreadFilter, .paperMarkAllRead] : [.paperMarkAllRead])
+                var expectedOrder = toolbar.items.map(\.itemIdentifier).filter { !buttonIDs.contains($0) }
+                let insertionIndex = isSidebarCollapsed
+                    ? expectedOrder.firstIndex(of: .paperAddMenu).map { $0 + 1 }
+                    : expectedOrder.firstIndex(of: .paperTimelineTracker)
+                if let insertionIndex {
+                    expectedOrder.insert(contentsOf: visibleButtons, at: insertionIndex)
+                    if toolbar.items.map(\.itemIdentifier) != expectedOrder {
+                        for index in toolbar.items.indices.reversed() where buttonIDs.contains(toolbar.items[index].itemIdentifier) {
+                            toolbar.removeItem(at: index)
+                        }
+                        for (offset, identifier) in visibleButtons.enumerated() {
+                            toolbar.insertItem(withItemIdentifier: identifier, at: insertionIndex + offset)
+                        }
+                    }
                 }
             }
             if let button = unreadFilterButton {
