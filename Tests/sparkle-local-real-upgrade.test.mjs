@@ -48,7 +48,7 @@ async function makeTLSFixture(parent) {
   await writeFile(extensions, 'subjectAltName=DNS:localhost,IP:127.0.0.1\n');
   await run('openssl', [
     'x509', '-req', '-in', leafCSR, '-CA', caCert, '-CAkey', caKey,
-    '-CAcreateserial', '-out', leafCert, '-days', '1', '-sha256', '-extfile', extensions,
+    '-CAserial', join(tls, 'ca.srl'), '-CAcreateserial', '-out', leafCert, '-days', '1', '-sha256', '-extfile', extensions,
   ], { stdio: 'ignore' });
   return { caCert, leafKey, leafCert };
 }

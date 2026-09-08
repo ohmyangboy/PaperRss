@@ -73,3 +73,22 @@ public protocol AccountProvider: Sendable {
     func refresh(reason: RefreshReason) async throws -> RefreshResult
     func pushPendingArticleStates() async throws
 }
+
+/// 账号刷新进度；总量未知时显示准备状态，计数仅在落库批次完成后发布。
+public struct AccountRefreshProgress: Sendable, Equatable {
+    public enum Phase: Sendable { case preparing, downloading, reconciling }
+    public let completed: Int
+    public let total: Int?
+    public let phase: Phase
+
+    public init(completed: Int = 0, total: Int? = nil, phase: Phase? = nil) {
+        self.completed = completed
+        self.total = total
+        self.phase = phase ?? (total == nil ? .preparing : .downloading)
+    }
+
+    public var fraction: Double? {
+        guard phase == .downloading, let total, total > 0 else { return nil }
+        return min(1, max(0, Double(completed) / Double(total)))
+    }
+}

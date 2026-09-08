@@ -87,7 +87,8 @@ fi
 chmod 600 "$TMP_PLIST"
 
 echo "🏗️  provenance 构建: v$VERSION (build $BUILD) @ ${SOURCE_COMMIT:0:12}"
-xcodebuild \
+python3 "$ROOT_DIR/scripts/build-support.py" -- xcodebuild \
+  -derivedDataPath "$ROOT_DIR/build/archive" \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
   -configuration "$CONFIGURATION" \

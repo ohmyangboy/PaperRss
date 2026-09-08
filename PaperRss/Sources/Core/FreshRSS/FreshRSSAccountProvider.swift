@@ -10,6 +10,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
     private let database: LibraryDatabase
     private let credentialStore: CredentialStore
     private let apiClient: ReaderAPIClient
+    private let onProgress: (@Sendable (AccountRefreshProgress?) async -> Void)?
+    private var plannedDownloadKeys = Set<String>()
+    private var completedDownloadKeys = Set<String>()
     private let outboxProcessor: ArticleStateOutboxProcessor
 
     public init(
@@ -18,8 +21,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
         username: String,
         database: LibraryDatabase,
         credentialStore: CredentialStore,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        onProgress: (@Sendable (AccountRefreshProgress?) async -> Void)? = nil
     ) {
+        self.onProgress = onProgress
         self.accountID = accountID
         self.database = database
         self.credentialStore = credentialStore
@@ -41,8 +46,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
         accountID: String,
         database: LibraryDatabase,
         credentialStore: CredentialStore,
-        apiClient: ReaderAPIClient
+        apiClient: ReaderAPIClient,
+        onProgress: (@Sendable (AccountRefreshProgress?) async -> Void)? = nil
     ) {
+        self.onProgress = onProgress
         self.accountID = accountID
         self.database = database
         self.credentialStore = credentialStore
@@ -57,8 +64,11 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - AccountProvider Protocol
 
     public func refresh(reason: RefreshReason) async throws -> RefreshResult {
+        plannedDownloadKeys.removeAll(keepingCapacity: true)
+        completedDownloadKeys.removeAll(keepingCapacity: true)
         let now = Date().timeIntervalSince1970
         await markSyncStarted(timestamp: now)
+        await onProgress?(AccountRefreshProgress())
 
         do {
             // 1. 先尝试将本地离线修改写回远端
@@ -66,6 +76,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
             // 2. 拉取远端订阅源与分类目录
             try await syncSubscriptionsAndFolders()
+            await onProgress?(AccountRefreshProgress())
 
             // 3. 拉取文章与阅读/星标状态，并执行字段级状态调和
             let reachedBoundary = try await syncArticlesAndStates()
@@ -74,10 +85,12 @@ public actor FreshRSSAccountProvider: AccountProvider {
             _ = try await outboxProcessor.processOutbox()
 
             await markSyncCompleted(timestamp: Date().timeIntervalSince1970, advanceFetchTimestamp: reachedBoundary)
+            await onProgress?(nil)
             return RefreshResult(status: .success)
         } catch {
             let errorMsg = error.localizedDescription
             await markSyncFailed(timestamp: Date().timeIntervalSince1970, error: errorMsg)
+            await onProgress?(nil)
             throw error
         }
     }
@@ -240,81 +253,53 @@ public actor FreshRSSAccountProvider: AccountProvider {
         // 2. 拉取远端未读与星标 ID 集合（支持 continuation 翻页，显式标记完整性）
         var remoteUnreadSet: ReaderItemIDSet? = nil
         var remoteStarredSet: ReaderItemIDSet? = nil
-        var canonicalUnreadKeys: Set<String>? = nil
-        var canonicalStarredKeys: Set<String>? = nil
 
         do {
             let unreadResult = try await apiClient.fetchAllUnreadItemIDs()
             remoteUnreadSet = unreadResult
-            canonicalUnreadKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: unreadResult.ids)
         } catch {
             remoteUnreadSet = nil
-            canonicalUnreadKeys = nil
             if isInitialSync { throw error }
         }
 
         do {
             let starredResult = try await apiClient.fetchAllStarredItemIDs()
             remoteStarredSet = starredResult
-            canonicalStarredKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: starredResult.ids)
         } catch {
             remoteStarredSet = nil
-            canonicalStarredKeys = nil
             if isInitialSync { throw error }
         }
 
-        // 3. 获取本地 Pending Outbox 集合 (PU 和 PS)
-        let pendingRows: [ArticleStateOutboxRecord] = try database.read { db in
-            try ArticleStateOutboxRecord
-                .filter(Column("account_id") == self.accountID)
-                .fetchAll(db)
+        // 展示进度时先读取轻量 ID 快照；不用下载正文来猜测总量。
+        if onProgress != nil {
+            let streamIDs = try await apiClient.fetchRefreshStreamItemIDs(initialSync: isInitialSync, sinceTimestamp: lastArticleFetchAt)
+            let completeIDs: [String] = try database.read { db in
+                try String.fetchAll(db, sql: """
+                    SELECT i.external_id FROM items i JOIN articles a ON a.item_id = i.id
+                    WHERE i.account_id = ? AND i.external_id IS NOT NULL
+                    """, arguments: [self.accountID])
+            }
+            let completeKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: Set(completeIDs))
+            let specialKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: (remoteUnreadSet?.ids ?? []).union(remoteStarredSet?.ids ?? []))
+            let repairIDs: [String] = try database.read { db in
+                try String.fetchAll(db, sql: """
+                    SELECT i.external_id FROM items i LEFT JOIN articles a ON a.item_id = i.id
+                    WHERE i.account_id = ? AND i.external_id IS NOT NULL AND a.item_id IS NULL LIMIT 50
+                    """, arguments: [self.accountID])
+            }
+            plannedDownloadKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: streamIDs)
+                .union(specialKeys.subtracting(completeKeys))
+                .union(isInitialSync ? [] : ReaderItemIDCodec.buildCanonicalKeySet(from: Set(repairIDs)))
+            await onProgress?(AccountRefreshProgress(completed: 0, total: plannedDownloadKeys.count))
         }
-
-        let pendingReadItemIDs = Set(pendingRows.filter { $0.stateKey == "read" }.map(\.itemID))
-        let pendingStarredItemIDs = Set(pendingRows.filter { $0.stateKey == "starred" }.map(\.itemID))
 
         // 4. 拉取文章内容（严禁吞掉必须的失败）
         var streamItems: [ReaderAPIStreamItem] = []
-        var olderSpecialRawIDs: [String] = []
         var reachedBoundary = true
 
         if isInitialSync {
             // 首次同步：有界拉取最近 200 篇文章内容
             streamItems = try await apiClient.fetchRecentStreamContents(limit: 200)
-
-            // Initial Sync Policy: 识别历史窗口外的 old unread / old starred 并批量拉取真实正文
-            var streamItemKeys = Set(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
-
-            if let unreadSet = remoteUnreadSet {
-                for rawID in unreadSet.ids {
-                    let key = ReaderItemIDCodec.canonicalComparisonKey(for: rawID)
-                    if !streamItemKeys.contains(key) {
-                        olderSpecialRawIDs.append(rawID)
-                        streamItemKeys.insert(key)
-                    }
-                }
-            }
-            if let starredSet = remoteStarredSet {
-                for rawID in starredSet.ids {
-                    let key = ReaderItemIDCodec.canonicalComparisonKey(for: rawID)
-                    if !streamItemKeys.contains(key) {
-                        olderSpecialRawIDs.append(rawID)
-                        streamItemKeys.insert(key)
-                    }
-                }
-            }
-
-            // 按需分批拉取历史特殊条目真实正文（每批 50 篇，上限 200 篇），获取 origin.streamId 与完整内容
-            if !olderSpecialRawIDs.isEmpty {
-                let initialHydrationBatch = Array(olderSpecialRawIDs.prefix(200))
-                let batchSize = 50
-                for startIdx in stride(from: 0, to: initialHydrationBatch.count, by: batchSize) {
-                    let chunk = Array(initialHydrationBatch[startIdx..<min(startIdx + batchSize, initialHydrationBatch.count)])
-                    if let fetchedOlder = try? await apiClient.fetchItemContents(itemIDs: chunk) {
-                        streamItems.append(contentsOf: fetchedOlder)
-                    }
-                }
-            }
         } else {
             // 增量同步：获取本地已存在的 external_id 集合
             let existingExternalIDs: Set<String> = try database.read { db in
@@ -325,7 +310,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
             // 使用时间边界与 continuation 遍历拉取增量新文章（直到追平时间边界或流结束）
             let fetchResult = try await apiClient.fetchIncrementalStreamContents(
                 sinceTimestamp: lastArticleFetchAt,
-                knownLocalExternalIDs: existingExternalIDs
+                knownLocalExternalIDs: existingExternalIDs,
+                onPage: { [weak self] items in
+                    try await self?.persistIncrementalPage(items)
+                }
             )
             reachedBoundary = fetchResult.reachedBoundary
             streamItems.append(contentsOf: fetchResult.items)
@@ -349,10 +337,90 @@ public actor FreshRSSAccountProvider: AccountProvider {
             }
         }
 
+        // 首次和增量同步都补齐远端未读／收藏中缺失的正文，修复旧版本留下的历史缺口。
+        // 只把已有正文的条目排除；使用规范化 ID 对齐十进制 ID 与 Tag URI。
+        let completeExternalIDs: [String] = try database.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT i.external_id FROM items i
+                INNER JOIN articles a ON a.item_id = i.id
+                WHERE i.account_id = ? AND i.external_id IS NOT NULL
+                """, arguments: [self.accountID])
+        }
+        var availableKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: Set(completeExternalIDs))
+        availableKeys.formUnion(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+        var missingRemoteIDs: [String] = []
+        let specialIDs = (remoteUnreadSet?.ids ?? []).union(remoteStarredSet?.ids ?? [])
+        for rawID in specialIDs.sorted() {
+            if availableKeys.insert(ReaderItemIDCodec.canonicalComparisonKey(for: rawID)).inserted {
+                missingRemoteIDs.append(rawID)
+            }
+        }
+
+        try persistArticles(streamItems)
+        var processedKeys = Set(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+        await publishDownloadedProgress(streamItems)
+        streamItems.removeAll(keepingCapacity: false)
+
+        // 每批 50 篇；失败前已获取的正文仍落库，下次刷新只重试剩余差集。
+        var hydrationError: Error?
+        for start in stride(from: 0, to: missingRemoteIDs.count, by: 50) {
+            let chunk = Array(missingRemoteIDs[start..<min(start + 50, missingRemoteIDs.count)])
+            do {
+                try Task.checkCancellation()
+                let batch = try await apiClient.fetchItemContents(itemIDs: chunk)
+                try persistArticles(batch)
+                processedKeys.formUnion(batch.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+                await publishDownloadedProgress(batch)
+            } catch {
+                hydrationError = error
+                break
+            }
+        }
+
+        await onProgress?(AccountRefreshProgress(completed: completedDownloadKeys.count, total: plannedDownloadKeys.count, phase: .reconciling))
+        try persistArticles([], remoteUnreadSet: remoteUnreadSet, remoteStarredSet: remoteStarredSet,
+                            processedKeys: processedKeys, reconcile: true)
+        if let hydrationError { throw hydrationError }
+        return reachedBoundary
+    }
+
+    private func publishDownloadedProgress(_ items: [ReaderAPIStreamItem]) async {
+        guard onProgress != nil else { return }
+        let keys = Set(items.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+        // 服务器在快照后到达的新文章也属于真实工作量，不使用虚构的阶段百分比。
+        plannedDownloadKeys.formUnion(keys)
+        completedDownloadKeys.formUnion(keys)
+        await onProgress?(AccountRefreshProgress(completed: completedDownloadKeys.count, total: plannedDownloadKeys.count))
+    }
+
+    private func persistIncrementalPage(_ items: [ReaderAPIStreamItem]) async throws {
+        guard !items.isEmpty else { return }
+        try persistArticles(items)
+        await publishDownloadedProgress(items)
+    }
+
+    /// 每批独立事务落库；重新读取待提交状态，保护同步期间产生的本地阅读操作。
+    private func persistArticles(
+        _ streamItems: [ReaderAPIStreamItem],
+        remoteUnreadSet: ReaderItemIDSet? = nil,
+        remoteStarredSet: ReaderItemIDSet? = nil,
+        processedKeys: Set<String> = [],
+        reconcile: Bool = false
+    ) throws {
+        let canonicalUnreadKeys = remoteUnreadSet.map { ReaderItemIDCodec.buildCanonicalKeySet(from: $0.ids) }
+        let canonicalStarredKeys = remoteStarredSet.map { ReaderItemIDCodec.buildCanonicalKeySet(from: $0.ids) }
         let now = Date().timeIntervalSince1970
 
         // 5. 在单一事务中持久化文章、条目与状态，严格遵守字段级调和 (Reconciliation)
         try database.write { db in
+            // 3. 获取本地 Pending Outbox 集合 (PU 和 PS)
+            let pendingRows = try ArticleStateOutboxRecord
+                .filter(Column("account_id") == self.accountID)
+                .fetchAll(db)
+
+            let pendingReadItemIDs = Set(pendingRows.filter { $0.stateKey == "read" }.map(\.itemID))
+            let pendingStarredItemIDs = Set(pendingRows.filter { $0.stateKey == "starred" }.map(\.itemID))
+
             // 建立 feed_id 映射 (external_id -> internal UUID)
             let allAccountFeeds = try FeedRecord
                 .filter(Column("account_id") == self.accountID)
@@ -463,13 +531,15 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
+            guard reconcile else { return }
+
             // B. 对未在本次 streamItems 中出现但在本地库中的 items 进行全库远端状态校准
             let allLocalItems = try ItemRecord
                 .filter(Column("account_id") == self.accountID)
                 .fetchAll(db)
 
             for localItem in allLocalItems {
-                if processedItemIDs.contains(localItem.id) {
+                if processedItemIDs.contains(localItem.id) || processedKeys.contains(ReaderItemIDCodec.canonicalComparisonKey(for: localItem.externalID)) {
                     continue
                 }
 
@@ -528,7 +598,6 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
         }
-        return reachedBoundary
     }
 
     // MARK: - Helpers

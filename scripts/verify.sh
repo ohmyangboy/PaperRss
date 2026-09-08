@@ -9,6 +9,7 @@
 #   ./scripts/verify.sh --web         # 仅执行 Web Reader / JS Bridge / 快捷键策略测试
 #   ./scripts/verify.sh --mathjax-webkit # 执行需拉起 WebKit 的 MathJax Tier 3 探针
 #   ./scripts/verify.sh --highlight-webkit # 执行需拉起 WebKit 的代码高亮 Tier 3 探针
+#   ./scripts/verify.sh --build       # 仅执行 macOS 宿主增量构建
 #   ./scripts/verify.sh --core        # 仅执行 Swift Core 数据与性能全量回归测试
 #   ./scripts/verify.sh --filter <名> # 运行指定测试类或测试方法
 #
@@ -47,13 +48,13 @@ fi
 
 run_feature_tests() {
     echo -e "\n${BLUE}▶ 执行 App 核心功能回归测试 (AppFeatureRegressionTests)...${NC}"
-    swift test --filter AppFeatureRegressionTests
+    python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build" --filter AppFeatureRegressionTests
     echo -e "${GREEN}✔ App 核心功能回归测试通过！${NC}"
 }
 
 run_web_tests() {
     echo -e "\n${BLUE}▶ 执行 Web Reader / JS Bridge / 快捷键测试...${NC}"
-    node --test Tests/*.test.mjs
+    python3 scripts/build-support.py --temporary --unlocked -- node --test Tests/*.test.mjs
     echo -e "${GREEN}✔ Web / Bridge 测试全部通过！${NC}"
 }
 
@@ -71,13 +72,13 @@ run_highlight_webkit_test() {
 
 run_core_tests() {
     echo -e "\n${BLUE}▶ 执行 Swift 全量单元与集成测试 (Core/Data/FreshRSS/Performance)...${NC}"
-    swift test
+    python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build"
     echo -e "${GREEN}✔ Swift 全量回归测试全部通过！${NC}"
 }
 
 run_build_test() {
-    echo -e "\n${BLUE}▶ 执行 macOS 宿主 Clean Build (xcodebuild)...${NC}"
-    xcodebuild -scheme PaperRss -destination "platform=macOS" clean build
+    echo -e "\n${BLUE}▶ 执行 macOS 宿主增量构建 (xcodebuild)...${NC}"
+    python3 scripts/build-support.py -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination "platform=macOS" -derivedDataPath "$PWD/build" build
     echo -e "${GREEN}✔ macOS 宿主编译构建成功！${NC}"
 }
 
@@ -107,12 +108,15 @@ case "$MODE" in
     --highlight-webkit)
         run_highlight_webkit_test
         ;;
+    --build)
+        run_build_test
+        ;;
     --core)
         run_core_tests
         ;;
     --filter)
         echo -e "\n${BLUE}▶ 执行自定义过滤回归测试: ${FILTER_ARG}...${NC}"
-        swift test --filter "$FILTER_ARG"
+        python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build" --filter "$FILTER_ARG"
         echo -e "${GREEN}✔ 自定义测试 ${FILTER_ARG} 执行完成！${NC}"
         ;;
     all|--all)
@@ -135,6 +139,7 @@ case "$MODE" in
         echo -e "  ./scripts/verify.sh --web         # 仅回归 Web / JS Bridge" >&2
         echo -e "  ./scripts/verify.sh --mathjax-webkit # MathJax Tier 3 WebKit 探针" >&2
         echo -e "  ./scripts/verify.sh --highlight-webkit # 代码高亮 Tier 3 WebKit 探针" >&2
+        echo -e "  ./scripts/verify.sh --build       # macOS 宿主增量构建" >&2
         echo -e "  ./scripts/verify.sh --core        # 仅回归 Swift Core 测试" >&2
         echo -e "  ./scripts/verify.sh --filter <名> # 运行指定测试类/方法" >&2
         exit 1

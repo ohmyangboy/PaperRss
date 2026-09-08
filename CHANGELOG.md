@@ -1,5 +1,25 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.6 · Build 27 · 2026-09-09
+
+本次为 FreshRSS 同步与侧边栏体验修复 Beta；建议遇到未读缺失或大批量同步卡顿的用户升级测试，稳定通道仍为 v1.3.2。
+
+- FreshRSS 同步：修复首次添加账号只拉取部分未读的问题，并补齐旧账号缺失的未读与收藏正文；按批次落库，断网、超时或取消后保留已完成内容并支持重试。
+- 同步反馈：账号从排队时显示 loading 并闪烁，取得真实待下载总量后切换为进度圆环；分类文件夹仅闪烁，结束或失败后清理加载状态。
+- 侧边栏：修复文件夹展开箭头错位和选中背景下进度不清晰的问题，减少大量订阅同步时的重复查询、图标更新与列表重绘。
+- 账号设置：补充 FreshRSS 钥匙串访问说明，帮助区分 Mac 登录密码与 FreshRSS 凭据。
+- 开发维护：复用构建目录、串行执行构建并回收测试临时文件，保留发布归档；新增同步恢复、滚动性能与构建管理回归测试。
+
+---
+
+This Beta fixes FreshRSS synchronization and sidebar feedback. Recommended for testing if unread items are missing or large syncs affect scrolling; the stable channel remains on v1.3.2.
+
+- FreshRSS sync: Fix incomplete unread downloads when adding an account and recover missing unread and starred content in existing accounts. Save batches independently and retain completed content for retries after network failures, timeouts or cancellation.
+- Sync feedback: Show loading and pulse account icons as soon as accounts enter the queue, then switch to a determinate ring once the actual download total is known. Folder icons pulse without progress rings, and indicators stop on completion or failure.
+- Sidebar: Fix folder disclosure alignment and progress contrast on selected rows. Reduce repeated queries, icon updates and list rendering during large syncs.
+- Account settings: Explain FreshRSS Keychain access and distinguish the Mac login password from FreshRSS credentials.
+- Development: Reuse build directories, serialize builds and reclaim test temporary files while preserving release archives. Add sync recovery, scrolling performance and build management regression tests.
+
 ## v1.3.3-beta.5 · Build 26 · 2026-09-08
 
 本次为自动翻译与社区支持功能 Beta；建议测试自动翻译和订阅黑白名单，稳定通道仍为 v1.3.2。

@@ -194,6 +194,42 @@ public actor ReaderAPIClient {
 
     // MARK: - Stream Item IDs (Unread / Starred)
 
+    /// 读取本轮文章流的 ID 快照，用于下载前确定真实工作量；首次仅取最近 200 篇。
+    public func fetchRefreshStreamItemIDs(initialSync: Bool, sinceTimestamp: TimeInterval?) async throws -> Set<String> {
+        var ids = Set<String>()
+        var continuation: String?
+        var visited = Set<String>()
+        repeat {
+            try Task.checkCancellation()
+            let url = canonicalBaseURL.appendingPathComponent("reader/api/0/stream/items/ids")
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            var query = [
+                URLQueryItem(name: "s", value: "user/-/state/com.google/reading-list"),
+                URLQueryItem(name: "n", value: initialSync ? "200" : "10000"),
+                URLQueryItem(name: "output", value: "json")
+            ]
+            if !initialSync, let sinceTimestamp {
+                query.append(URLQueryItem(name: "ot", value: String(Int(max(0, sinceTimestamp - 300)))))
+            }
+            if let continuation { query.append(URLQueryItem(name: "c", value: continuation)) }
+            components.queryItems = query
+            let requestURL = components.url!
+            let (data, _) = try await performRequest { token in
+                var request = URLRequest(url: requestURL)
+                request.setValue("GoogleLogin auth=\(token)", forHTTPHeaderField: "Authorization")
+                return request
+            }
+            let page = try JSONDecoder().decode(ReaderAPIStreamItemIDsResponse.self, from: data)
+            ids.formUnion(page.itemRefs?.map(\.id) ?? [])
+            if initialSync { break }
+            continuation = page.continuation.flatMap { $0.isEmpty ? nil : $0 }
+            if let continuation, !visited.insert(continuation).inserted {
+                throw ReaderAPIError.decodingError("Repeated stream ID continuation")
+            }
+        } while continuation != nil
+        return ids
+    }
+
     /// 单页拉取未读文章 ID 集合及 continuation token
     public func fetchUnreadItemIDsPage(
         continuation: String? = nil,
@@ -435,7 +471,8 @@ public actor ReaderAPIClient {
         sinceTimestamp: TimeInterval? = nil,
         pageSize: Int = 100,
         maxTotal: Int = 10000,
-        knownLocalExternalIDs: Set<String>? = nil
+        knownLocalExternalIDs: Set<String>? = nil,
+        onPage: (@Sendable ([ReaderAPIStreamItem]) async throws -> Void)? = nil
     ) async throws -> (items: [ReaderAPIStreamItem], reachedBoundary: Bool) {
         var allItems: [ReaderAPIStreamItem] = []
         var nextContinuation: String? = nil
@@ -450,6 +487,7 @@ public actor ReaderAPIClient {
                 limit: pageSize,
                 startTime: cutoff
             )
+            try await onPage?(pageItems)
             allItems.append(contentsOf: pageItems)
 
             // 检查边界：如果某条 item 的 published 时间早于 cutoff，且本地已知该 item，说明已与存量历史接轨

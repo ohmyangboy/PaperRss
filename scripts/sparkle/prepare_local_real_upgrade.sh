@@ -190,7 +190,7 @@ echo "正在生成仅存于临时工作目录的本地测试 CA 与 localhost le
   -subj '/CN=localhost' -keyout "$LEAF_KEY" -out "$LEAF_CSR" >/dev/null 2>&1
 printf '%s\n' 'subjectAltName=DNS:localhost,IP:127.0.0.1' > "$LEAF_EXT"
 "$OPENSSL_BIN" x509 -req -in "$LEAF_CSR" -CA "$CA_CERT" -CAkey "$CA_KEY" \
-  -CAcreateserial -out "$LEAF_CERT" -days 1 -sha256 -extfile "$LEAF_EXT" >/dev/null 2>&1
+  -CAserial "$TLS_DIR/ca.srl" -CAcreateserial -out "$LEAF_CERT" -days 1 -sha256 -extfile "$LEAF_EXT" >/dev/null 2>&1
 chmod 600 "$CA_KEY" "$LEAF_KEY"
 
 if [[ "$INSTALL_CA" == true ]]; then
@@ -289,13 +289,13 @@ build_archive() {
   # this harness-owned archive so a failed rebuild cannot be mistaken for the
   # current N/N+1 evidence.
   rm -rf "$archive"
-  if ! "$XCODEBUILD_BIN" \
+  if ! python3 "$ROOT_DIR/scripts/build-support.py" -- "$XCODEBUILD_BIN" \
     -project "$ROOT_DIR/PaperRss.xcodeproj" \
     -scheme PaperRss \
     -configuration "$CONFIGURATION" \
     -destination 'generic/platform=macOS' \
     -archivePath "$archive" \
-    -derivedDataPath "$WORKSPACE/derived-$label" \
+    -derivedDataPath "$ROOT_DIR/build/upgrade" \
     clean archive \
     MARKETING_VERSION="$version" \
     CURRENT_PROJECT_VERSION="$build" \

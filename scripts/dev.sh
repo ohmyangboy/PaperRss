@@ -6,15 +6,37 @@ cd "$(dirname "$0")/.."
 
 # 隔离验收复用指定目录，便于验证重启持久化；不关闭用户的日常实例。
 ISOLATED_DIRECTORY=""
+OWNED_DIRECTORY=""
+APP_PID=""
 DERIVED_DATA="./build"
 BUILD_OPTIONS=()
+cleanup() {
+    local code=$?
+    trap - EXIT INT TERM
+    if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+        kill "$APP_PID" 2>/dev/null || true
+        wait "$APP_PID" 2>/dev/null || true
+    fi
+    if [ -n "$OWNED_DIRECTORY" ]; then
+        rm -rf -- "$OWNED_DIRECTORY"
+    fi
+    exit "$code"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ "${1:-}" = "--isolated" ]; then
     ISOLATED_DIRECTORY="${2:-}"
+    if [ -z "$ISOLATED_DIRECTORY" ]; then
+        mkdir -p .scratch/tmp
+        OWNED_DIRECTORY="$(mktemp -d "$PWD/.scratch/tmp/dev-home.XXXXXX")"
+        ISOLATED_DIRECTORY="$OWNED_DIRECTORY"
+    fi
     if [[ "$ISOLATED_DIRECTORY" != /* || ! -d "$ISOLATED_DIRECTORY" ]]; then
-        echo "用法: ./scripts/dev.sh --isolated <已创建的绝对临时目录>" >&2
+        echo "用法: ./scripts/dev.sh --isolated [已创建的绝对临时目录]" >&2
         exit 2
     fi
-    DERIVED_DATA="${PAPERRSS_DEV_DERIVED_DATA:-./build-settings-ui}"
+    DERIVED_DATA="${PAPERRSS_DEV_DERIVED_DATA:-./build/isolated}"
     BUILD_OPTIONS+=("PRODUCT_BUNDLE_IDENTIFIER=${PAPERRSS_DEV_BUNDLE_ID:-com.yangbukun.PaperRss.SettingsUI}")
 elif [ $# -gt 0 ]; then
     echo "未知参数: $1" >&2
@@ -30,7 +52,7 @@ if [ -z "$DEVELOPER_DIR" ]; then
 fi
 
 echo "🚀 正在编译 PaperRss..."
-xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -configuration Debug -derivedDataPath "$DERIVED_DATA" "${BUILD_OPTIONS[@]}" -quiet
+python3 scripts/build-support.py -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -configuration Debug -derivedDataPath "$DERIVED_DATA" "${BUILD_OPTIONS[@]}" -quiet
 
 # 编译成功后关闭已有运行实例，再启动新实例
 if [ -z "$ISOLATED_DIRECTORY" ] && pgrep -x "PaperRss" >/dev/null 2>&1; then
@@ -48,7 +70,9 @@ fi
 
 echo "🚀 启动最新 PaperRss (控制台输出已连接，按 Ctrl+C 退出)..."
 if [ -n "$ISOLATED_DIRECTORY" ]; then
-    exec env CFFIXED_USER_HOME="$ISOLATED_DIRECTORY" "$APP_BIN"
+    env CFFIXED_USER_HOME="$ISOLATED_DIRECTORY" "$APP_BIN" &
+    APP_PID=$!
+    wait "$APP_PID"
 else
     exec "$APP_BIN"
 fi

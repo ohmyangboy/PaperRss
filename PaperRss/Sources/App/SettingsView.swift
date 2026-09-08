@@ -654,6 +654,19 @@ struct SettingsView: View {
                 }
             }
 
+            #if os(macOS)
+            if store.accounts.contains(where: { $0.type == AccountType.freshRSS.rawValue }) {
+                Text(I18N.shared.localized(
+                    "同步时，macOS 可能请求访问已保存的 FreshRSS 密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
+                    "When syncing, macOS may ask to access your saved FreshRSS password. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
+                ))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+            }
+            #endif
+
             if let deleteError = deleteAccountError {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.circle.fill")
@@ -3673,6 +3686,16 @@ private struct AddAccountSheet: View {
                 Text(I18N.shared.localized("输入您的 FreshRSS 服务信息与 API 凭据。密码将安全保存在系统 Keychain 中。"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                #if os(macOS)
+                Text(I18N.shared.localized(
+                    "同步时，macOS 可能请求访问已保存的 FreshRSS 密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
+                    "When syncing, macOS may ask to access your saved FreshRSS password. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
+                ))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                #endif
 
                 VStack(spacing: 12) {
                     HStack {

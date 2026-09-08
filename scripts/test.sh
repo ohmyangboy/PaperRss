@@ -97,7 +97,7 @@ fi
 
 if [ "$FRESH_TEST_SKIP_BUILD" = false ]; then
     echo "🔨 正在构建隔离测试应用..."
-    xcodebuild \
+    python3 scripts/build-support.py -- xcodebuild \
         -project PaperRss.xcodeproj \
         -scheme PaperRss \
         -configuration Debug \

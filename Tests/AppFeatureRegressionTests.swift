@@ -71,6 +71,44 @@ final class AppFeatureRegressionTests: XCTestCase {
         XCTAssertNotEqual(localStore.transientNotice?.id, first?.id)
     }
 
+    func testSidebarGroupingTracksFolderMovesAndAccountReplacement() throws {
+        let feed = try store.localProvider.addFeed(title: "分组验证", feedURL: URL(string: "https://example.com/grouping")!, siteURL: nil, folder: "旧目录")
+        store.reloadState()
+        XCTAssertEqual(store.feeds(in: "旧目录", for: "local-default").map(\.id), [feed.id])
+        var moved = feed
+        moved.folder = "新目录"
+        store.feedsByAccount["local-default"] = [moved]
+        XCTAssertTrue(store.feeds(in: "旧目录", for: "local-default").isEmpty)
+        XCTAssertEqual(store.feeds(in: "新目录", for: "local-default").map(\.id), [feed.id])
+        moved.folder = nil
+        store.feedsByAccount = ["remote-fixture": [moved]]
+        XCTAssertTrue(store.feeds(for: "local-default").isEmpty)
+        XCTAssertTrue(store.feeds(in: "新目录", for: "local-default").isEmpty)
+        XCTAssertEqual(store.rootFeeds(for: "remote-fixture").map(\.id), [feed.id])
+    }
+
+    func testRemoteAccountPulsesWhileLocalFeedsAreStillLoading() async throws {
+        let localStore = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in
+            try await Task.sleep(for: .milliseconds(200))
+            return FeedFetchResult.notModified(etag: nil, lastModified: nil)
+        })
+        _ = try localStore.localProvider.addFeed(title: "排队验证", feedURL: URL(string: "https://example.com/queue")!, siteURL: nil, folder: nil)
+        for (id, enabled) in [("queued-remote", true), ("disabled-remote", false)] {
+            try localStore.libraryDatabase.write { db in
+                try AccountRecord(id: id, type: AccountType.freshRSS.rawValue, displayName: id, endpointURL: nil, username: nil, isEnabled: enabled, createdAt: 0, updatedAt: 0).save(db)
+            }
+        }
+        localStore.reloadState()
+        let refresh = Task { await localStore.refresh(reportErrors: false) }
+        while !localStore.isRefreshing { await Task.yield() }
+        XCTAssertEqual(localStore.accountRefreshProgress["queued-remote"]?.phase, .preparing)
+        XCTAssertNil(localStore.accountRefreshProgress["queued-remote"]?.fraction)
+        XCTAssertNotNil(localStore.accountRefreshProgress["local-default"])
+        XCTAssertNil(localStore.accountRefreshProgress["disabled-remote"])
+        _ = await refresh.value
+        XCTAssertNil(localStore.accountRefreshProgress["queued-remote"], "没有 Provider 或同步未启动也必须清除等待状态")
+    }
+
     // MARK: - 1. 文章标题与元数据更新回归 (Article Title & Metadata Mutation)
 
     func testArticleTitleAndMetadataUpdateRegression() async throws {

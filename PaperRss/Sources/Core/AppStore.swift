@@ -251,6 +251,8 @@ public final class AppStore: ObservableObject {
 
     @Published public private(set) var accounts: [AccountRecord] = []
     @Published public var activeAccountID: String = "local-default"
+    private var lastRefreshProgressPublishedAt: [String: Date] = [:]
+    @Published public private(set) var accountRefreshProgress: [String: AccountRefreshProgress] = [:]
     @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
 
     private let persistenceURL: URL
@@ -514,7 +516,13 @@ public final class AppStore: ObservableObject {
 
     // MARK: - State Reload & Querying
 
-    @Published public var feedsByAccount: [String: [Feed]] = [:]
+    // 订阅结构改变时建立分组，批次计数更新无需为每个文件夹扫描全部 Feed。
+    private var sidebarFeedsByFolder: [String: [String?: [Feed]]] = [:]
+    @Published public var feedsByAccount: [String: [Feed]] = [:] {
+        didSet {
+            sidebarFeedsByFolder = feedsByAccount.mapValues { Dictionary(grouping: $0, by: \.folder) }
+        }
+    }
     @Published public var foldersByAccount: [String: [String]] = [:]
 
     public func reloadState() {
@@ -584,7 +592,10 @@ public final class AppStore: ObservableObject {
                         username: username,
                         database: libraryDatabase,
                         credentialStore: credentialStore,
-                        session: customSession
+                        session: customSession,
+                        onProgress: { [weak self] progress in
+                            await self?.receiveRefreshProgress(progress, accountID: account.id)
+                        }
                     )
                     Task { [syncCoordinator] in
                         await syncCoordinator.registerProvider(provider)
@@ -683,7 +694,10 @@ public final class AppStore: ObservableObject {
                     username: username,
                     database: database,
                     credentialStore: credentialStore,
-                    session: customSession
+                    session: customSession,
+                    onProgress: { [weak self] progress in
+                        await self?.receiveRefreshProgress(progress, accountID: account.id)
+                    }
                 )
                 Task { [syncCoordinator] in
                     await syncCoordinator.registerProvider(provider)
@@ -730,7 +744,7 @@ public final class AppStore: ObservableObject {
     }
 
     public func rootFeeds(for accountID: String) -> [Feed] {
-        (feedsByAccount[accountID] ?? []).filter { $0.folder == nil }
+        sidebarFeedsByFolder[accountID]?[nil] ?? []
     }
 
     public func folders(for accountID: String) -> [String] {
@@ -750,7 +764,7 @@ public final class AppStore: ObservableObject {
     }
 
     public func feeds(in folder: String, for accountID: String) -> [Feed] {
-        (feedsByAccount[accountID] ?? []).filter { $0.folder == folder }
+        sidebarFeedsByFolder[accountID]?[folder] ?? []
     }
 
     public var rootFeeds: [Feed] { feeds.filter { $0.folder == nil } }
@@ -1173,6 +1187,19 @@ public final class AppStore: ObservableObject {
         }
         refreshStatus = .refreshing
 
+        // 本轮远端账号排队即显示等待；不覆盖已经运行的独立账号同步。
+        let queuedAccountIDs = feedIDs == nil ? accounts.filter {
+            $0.id != "local-default" && $0.isEnabled && accountRefreshProgress[$0.id] == nil
+        }.map(\.id) : []
+        for accountID in queuedAccountIDs {
+            accountRefreshProgress[accountID] = AccountRefreshProgress()
+        }
+        defer {
+            for accountID in queuedAccountIDs {
+                accountRefreshProgress.removeValue(forKey: accountID)
+            }
+        }
+
         var failures: [String] = []
         var updatedFeeds = 0
         var newUnreadEntries: [Entry] = []
@@ -1188,6 +1215,11 @@ public final class AppStore: ObservableObject {
             targetFeeds = []
         }
 
+        var completedLocalFeeds = 0
+        if !targetFeeds.isEmpty {
+            accountRefreshProgress["local-default"] = AccountRefreshProgress(completed: 0, total: targetFeeds.count)
+        }
+        defer { accountRefreshProgress.removeValue(forKey: "local-default") }
         let maxConcurrency = 6
         let provider = self.localProvider
 
@@ -1229,6 +1261,9 @@ public final class AppStore: ObservableObject {
                     }
                 }
 
+                completedLocalFeeds += 1
+                await receiveRefreshProgress(AccountRefreshProgress(completed: completedLocalFeeds, total: targetFeeds.count), accountID: "local-default")
+
                 while feedIndex < targetFeeds.count && activeTaskCount < maxConcurrency {
                     let feed = targetFeeds[feedIndex]
                     feedIndex += 1
@@ -1244,6 +1279,8 @@ public final class AppStore: ObservableObject {
                 }
             }
         }
+
+        accountRefreshProgress.removeValue(forKey: "local-default")
 
         // 2. 全局刷新时，仅协调刷新所有远端账号（排除 local-default，杜绝本地重复刷新）
         if feedIDs == nil {
@@ -1538,7 +1575,10 @@ public final class AppStore: ObservableObject {
             username: trimmedUsername,
             database: libraryDatabase,
             credentialStore: credentialStore,
-            session: customSession
+            session: customSession,
+            onProgress: { [weak self] progress in
+                await self?.receiveRefreshProgress(progress, accountID: accountID)
+            }
         )
         await syncCoordinator.registerProvider(provider)
 
@@ -1557,6 +1597,46 @@ public final class AppStore: ObservableObject {
         }
 
         return accountRecord
+    }
+
+    /// 批次落库后仅更新侧边栏投影，不在同步中重新注册 Provider。
+    private func receiveRefreshProgress(_ progress: AccountRefreshProgress?, accountID: String) async {
+        // 快速连续完成的 Feed／批次合并发布，避免全局 ObservableObject 高频重绘。
+        let now = Date()
+        if let progress, progress.completed > 0, progress.completed != progress.total,
+           accountRefreshProgress[accountID]?.phase == progress.phase,
+           let last = lastRefreshProgressPublishedAt[accountID], now.timeIntervalSince(last) < 0.3 {
+            return
+        }
+        lastRefreshProgressPublishedAt[accountID] = progress == nil ? nil : now
+        let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        if progress?.completed == 0 {
+            let repository = localProvider.feedRepository
+            if let snapshot = try? await libraryDatabase.readAsync({ db in
+                let account = try AccountRecord.filter(Column("id") == accountID).fetchOne(db)
+                let feeds = try repository.fetchAllFeedModels(accountID: accountID, in: db)
+                let folders = try repository.fetchAllFolders(accountID: accountID, in: db)
+                return (account, feeds, folders.map(\.name))
+            }) {
+                if let account = snapshot.0, !accounts.contains(where: { $0.id == accountID }) {
+                    accounts.append(account)
+                }
+                feedsByAccount[accountID] = snapshot.1
+                foldersByAccount[accountID] = snapshot.2
+            }
+        }
+        if let counts = try? await localProvider.timelineQueryService.fetchSidebarCountsAsync(startOfDayTimestamp: startOfDay) {
+            sidebarCounts = counts
+        }
+        if progress == nil,
+           let state = try? await libraryDatabase.readAsync({ db in
+               try AccountSyncStateRecord.filter(Column("account_id") == accountID).fetchOne(db)
+           }) {
+            accountSyncStates[accountID] = state
+        }
+        // 查询结束后在同一主线程事务发布，避免进度先触发一次重绘、计数再触发一次。
+        accountRefreshProgress[accountID] = progress
+        timelineRevision &+= 1
     }
 
     public func removeAccount(accountID: String) async throws {

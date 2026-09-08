@@ -1143,10 +1143,13 @@ private struct SidebarView: View {
     private var readingSection: some View {
         Section(I18N.localized("阅读")) {
             SidebarRow(I18N.shared.localized("今天"), systemImage: "sun.max", count: store.sidebarCounts.todayUnread)
+            .equatable()
                 .tag(SidebarSelection.today)
             SidebarRow(I18N.shared.localized("未读"), systemImage: "circle", count: store.sidebarCounts.allUnread)
+            .equatable()
                 .tag(SidebarSelection.unread)
             SidebarRow(I18N.shared.localized("收藏"), systemImage: "star", count: store.sidebarCounts.starred)
+            .equatable()
                 .tag(SidebarSelection.starred)
         }
     }
@@ -1232,7 +1235,9 @@ private struct SidebarView: View {
     private func accountRow(_ title: String, accountID: String) -> some View {
         SidebarRow(title, systemImage: "desktopcomputer",
                    count: store.feeds(for: accountID).reduce(0) { $0 + store.unreadCount(feedID: $1.id) },
+                   syncProgress: store.accountRefreshProgress[accountID], pulsesWhileSyncing: true, isSelected: selection == .account(accountID),
                    isFiltered: unreadFilteredGroups.contains(.account(accountID)), onToggleFilter: filterAction(for: .account(accountID)))
+            .equatable()
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
             .contentShape(Rectangle())
@@ -1244,7 +1249,8 @@ private struct SidebarView: View {
     private func remoteFolderRow(_ folder: String, accountID: String) -> some View {
         let count = store.unreadCount(folder: folder, accountID: accountID)
         let key = "\(accountID)::\(folder)"
-        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
+        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isSyncing: store.accountRefreshProgress[accountID] != nil, pulsesWhileSyncing: true, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
+            .equatable()
             .contentShape(Rectangle())
             .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
             .onTapGesture {
@@ -1268,6 +1274,7 @@ private struct SidebarView: View {
     @ViewBuilder
     private func remoteFeedRow(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
         SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
+            .equatable()
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .contextMenu {
@@ -1329,7 +1336,7 @@ private struct SidebarView: View {
     @ViewBuilder
     private func folderRow(_ folder: String, accountID: String = "local-default") -> some View {
         let key = "\(accountID)::\(folder)"
-        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
+        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isSyncing: store.accountRefreshProgress[accountID] != nil, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
             store.setFeedFolder(feedIDs: feedIDs, folder: folder)
             var current = collapsedFolders
             current.remove(key)
@@ -1378,6 +1385,7 @@ private struct SidebarView: View {
     @ViewBuilder
     private func feedRow(_ feed: Feed, inFolder: Bool = false) -> some View {
         SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
+            .equatable()
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .draggable(selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 ? selectedFeedIDs.map(\.uuidString).joined(separator: ",") : feed.id.uuidString) {
@@ -1652,17 +1660,33 @@ private struct OpenSidebarFolder: Shape {
     }
 }
 
-private struct SidebarRow: View {
+struct SidebarRow: View, Equatable {
+    // 带操作闭包的行始终更新，避免复用过期操作；普通 Feed 行可跳过无关批次重绘。
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.canSkipUpdates && rhs.canSkipUpdates && lhs.title == rhs.title
+            && lhs.systemImage == rhs.systemImage && lhs.iconURL == rhs.iconURL
+            && lhs.count == rhs.count && lhs.feedID == rhs.feedID
+            && lhs.isFiltered == rhs.isFiltered && lhs.syncProgress == rhs.syncProgress
+            && lhs.isSyncing == rhs.isSyncing && lhs.pulsesWhileSyncing == rhs.pulsesWhileSyncing
+            && lhs.isSelected == rhs.isSelected
+    }
+    let canSkipUpdates: Bool
     let title: String
     let systemImage: String
     let iconURL: URL?
     let count: Int
-    var feedID: UUID?
-    var isFiltered: Bool
+    let feedID: UUID?
+    let isFiltered: Bool
     var onToggleFilter: (() -> Void)?
+    let syncProgress: AccountRefreshProgress?
+    let pulsesWhileSyncing: Bool
+    let isSyncing: Bool
+    let isSelected: Bool
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.paperAppearancePalette) private var appearancePalette
 
-    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil, isFiltered: Bool = false, onToggleFilter: (() -> Void)? = nil) {
+    init(_ title: String, systemImage: String, iconURL: URL? = nil, count: Int = 0, feedID: UUID? = nil, syncProgress: AccountRefreshProgress? = nil, isSyncing: Bool = false, pulsesWhileSyncing: Bool = false, isSelected: Bool = false, isFiltered: Bool = false, onToggleFilter: (() -> Void)? = nil) {
         self.title = title
         self.systemImage = systemImage
         self.iconURL = iconURL
@@ -1670,6 +1694,11 @@ private struct SidebarRow: View {
         self.feedID = feedID
         self.isFiltered = isFiltered
         self.onToggleFilter = onToggleFilter
+        self.canSkipUpdates = onToggleFilter == nil
+        self.syncProgress = syncProgress
+        self.isSyncing = isSyncing || syncProgress != nil
+        self.pulsesWhileSyncing = pulsesWhileSyncing
+        self.isSelected = isSelected
     }
 
     var body: some View {
@@ -1677,15 +1706,20 @@ private struct SidebarRow: View {
             Group {
                 if let iconURL, let feedID {
                     FeedFaviconView(feedID: feedID, iconURL: iconURL, title: title, size: 16)
-                } else if systemImage == "folder.fill" {
-                    OpenSidebarFolder()
-                        .stroke(style: StrokeStyle(lineWidth: 1.0, lineCap: .round, lineJoin: .round))
-                        .foregroundStyle(.primary)
-                        .frame(width: 16, height: 16)
+                } else if systemImage == "folder.fill" || systemImage == "folder" {
+                    // 用 SwiftUI 符号提供行基线；AppKit 图标仅作覆盖层，避免影响展开箭头定位。
+                    Image(systemName: "folder")
+                        .hidden()
+                        .overlay {
+                            SidebarFolderIcon(isExpanded: systemImage == "folder.fill", isPulsing: pulsesWhileSyncing && isSyncing && !reduceMotion)
+                                .equatable()
+                                .frame(width: 16, height: 16)
+                        }
                         .transition(.identity)
                         .accessibilityHidden(true)
                 } else {
                     Image(systemName: systemImage)
+                        .symbolEffect(.pulse, isActive: pulsesWhileSyncing && isSyncing && isVisible && !reduceMotion)
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(.primary)
                         .transition(.identity)
@@ -1693,7 +1727,9 @@ private struct SidebarRow: View {
             }
             .frame(width: 18, height: 18, alignment: .center)
             // 图标即时替换，避免继承文件夹展开动画后新旧轮廓交叉淡化。
-            .transaction { $0.animation = nil }
+            .transaction {
+                if !pulsesWhileSyncing || !isSyncing { $0.animation = nil }
+            }
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1709,14 +1745,120 @@ private struct SidebarRow: View {
                 .accessibilityLabel(I18N.localized(isFiltered ? "显示全部" : "仅显示未读"))
                 .accessibilityValue(isFiltered ? "1" : "0")
             }
-            if count > 0 {
+            if let syncProgress {
+                Group {
+                    if let fraction = syncProgress.fraction {
+                        ZStack {
+                            Circle().stroke((isSelected ? Color.white : Color(paperHex: appearancePalette.accentHex)).opacity(0.2), lineWidth: 2)
+                            Circle().trim(from: 0, to: fraction)
+                                .stroke((isSelected ? Color.white : Color(paperHex: appearancePalette.accentHex)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        }
+                        .frame(width: 12, height: 12)
+                    } else {
+                        SidebarWaitingIndicator()
+                            .foregroundStyle(isSelected ? Color.white : Color(paperHex: appearancePalette.accentHex))
+                            .frame(width: 12, height: 12)
+                    }
+                }
+                .accessibilityLabel(I18N.shared.localized("正在同步", "Syncing"))
+                .accessibilityValue(syncProgress.fraction.map { "\(Int($0 * 100))%" } ?? "")
+            }
+            if count > 0 || syncProgress != nil {
                 Text(count, format: .number)
                     .font(.caption.monospacedDigit())
                     .fixedSize()
                     .foregroundStyle(.secondary)
             }
         }
+        .onAppear { if pulsesWhileSyncing && systemImage != "folder" && systemImage != "folder.fill" { isVisible = true } }
+        .onDisappear { if isVisible { isVisible = false } }
     }
+}
+
+/// 仅账号在总量未知的阶段显示 loading，不将等待伪装成完成百分比。
+private struct SidebarWaitingIndicator: View {
+    @State private var rotating = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Circle().trim(from: 0, to: 0.7)
+            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(rotating && !reduceMotion ? 360 : 0))
+            .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: rotating)
+            .onAppear { rotating = true }
+            .onDisappear { rotating = false }
+    }
+}
+
+/// 文件夹交给 Core Animation 合成透明度，避免长列表逐帧重算 SwiftUI 视图。
+private struct SidebarFolderIcon: NSViewRepresentable, Equatable {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.isExpanded == rhs.isExpanded && lhs.isPulsing == rhs.isPulsing
+    }
+    let isExpanded: Bool
+    let isPulsing: Bool
+
+    func makeNSView(context: Context) -> SidebarFolderImageView {
+        let view = SidebarFolderImageView()
+        view.wantsLayer = true
+        view.imageScaling = .scaleProportionallyUpOrDown
+        return view
+    }
+
+    func updateNSView(_ view: SidebarFolderImageView, context: Context) {
+        let image = isExpanded ? SidebarFolderImageView.openFolderImage : SidebarFolderImageView.closedFolderImage
+        if view.image !== image { view.image = image }
+        view.isPulsing = isPulsing
+        view.updatePulse()
+    }
+}
+
+private final class SidebarFolderImageView: NSImageView {
+    var isPulsing = false
+    static let closedFolderImage = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+    static let openFolderImage: NSImage = {
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: true) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.addPath(OpenSidebarFolder().path(in: rect).cgPath)
+            context.setStrokeColor(NSColor.black.cgColor)
+            context.setLineWidth(1)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.strokePath()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updatePulse()
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        updatePulse()
+    }
+
+    func updatePulse() {
+        guard let layer else { return }
+        if isPulsing && window != nil && !visibleRect.isEmpty {
+            guard layer.animation(forKey: "syncPulse") == nil else { return }
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 1
+            animation.toValue = 0.3
+            animation.duration = 0.8
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: "syncPulse")
+        } else {
+            layer.removeAnimation(forKey: "syncPulse")
+        }
+    }
+
 }
 
 private struct SubscriptionsHeaderView: View {
@@ -1762,6 +1904,7 @@ private struct FolderRowView: View {
     let folder: String
     var isExpanded: Bool
     let unreadCount: Int
+    var isSyncing: Bool = false
     var isFiltered: Bool = false
     var onToggleFilter: (() -> Void)? = nil
     let onDropBatch: (Set<UUID>) -> Void
@@ -1769,7 +1912,8 @@ private struct FolderRowView: View {
     @State private var isTargeted = false
 
     var body: some View {
-        SidebarRow(folder, systemImage: isTargeted || isExpanded ? "folder.fill" : "folder", count: unreadCount, isFiltered: isFiltered, onToggleFilter: onToggleFilter)
+        SidebarRow(folder, systemImage: isTargeted || isExpanded ? "folder.fill" : "folder", count: unreadCount, isSyncing: isSyncing, pulsesWhileSyncing: true, isFiltered: isFiltered, onToggleFilter: onToggleFilter)
+            .equatable()
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
             .background(

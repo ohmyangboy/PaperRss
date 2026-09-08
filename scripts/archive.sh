@@ -14,7 +14,7 @@ fi
 PROJECT_NAME="PaperRss"
 SCHEME_NAME="PaperRss"
 CONFIGURATION="Release"
-DIST_DIR="./dist"
+DIST_DIR="./dist/archive/$(date +%Y%m%d-%H%M%S)-$$"
 ARCHIVE_PATH="${DIST_DIR}/${PROJECT_NAME}.xcarchive"
 EXPORT_PATH="${DIST_DIR}/export"
 PLIST_PATH="${DIST_DIR}/ExportOptions.plist"
@@ -24,14 +24,14 @@ PLATFORM="${1:-macOS}" # 默认 macOS，支持传入 iOS
 echo "🔧 使用开发者环境: $DEVELOPER_DIR"
 echo "📦 准备 Archive [$PROJECT_NAME] 平台: $PLATFORM, 配置: $CONFIGURATION..."
 
-# 清理并创建产物目录
-rm -rf "$DIST_DIR"
+# 每次归档单独保留，禁止清空发布根目录。
 mkdir -p "$DIST_DIR"
 
 # 1. 执行 Archive 动作
 echo "⏳ 正在打包 .xcarchive..."
 if [ "$PLATFORM" == "iOS" ]; then
-    xcodebuild \
+    python3 scripts/build-support.py -- xcodebuild \
+      -derivedDataPath "$PWD/build/archive" \
       -project "${PROJECT_NAME}.xcodeproj" \
       -scheme "$SCHEME_NAME" \
       -configuration "$CONFIGURATION" \
@@ -40,7 +40,8 @@ if [ "$PLATFORM" == "iOS" ]; then
       -archivePath "$ARCHIVE_PATH" \
       -quiet
 else
-    xcodebuild \
+    python3 scripts/build-support.py -- xcodebuild \
+      -derivedDataPath "$PWD/build/archive" \
       -project "${PROJECT_NAME}.xcodeproj" \
       -scheme "$SCHEME_NAME" \
       -configuration "$CONFIGURATION" \
