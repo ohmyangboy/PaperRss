@@ -4,6 +4,72 @@ import Foundation
 
 final class ReaderBlockSemanticsTests: XCTestCase {
 
+    func testMixedParagraphPreservesMediaLinksAndEmphasis() {
+        let source = """
+        <img src="https://example.com/cover.jpg">
+        <p><strong>工具标题</strong><br>
+        <a href="https://example.com/tool">工具链接</a><br>
+        介绍文字<br>
+        <img src="https://example.com/tool.png"></p>
+        """
+        let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: [])
+        XCTAssertEqual(ArticleExtractor.imageURLs(from: output, baseURL: nil),
+                       ArticleExtractor.imageURLs(from: source, baseURL: nil))
+        XCTAssertTrue(output.contains("<strong>工具标题</strong>"))
+        XCTAssertTrue(output.contains("<a href=\"https://example.com/tool\">工具链接</a>"))
+        XCTAssertEqual(ArticleExtractor.readerParagraphs(in: source).map(\.id), ["p0"])
+    }
+
+    func testExplicitBreakParagraphsRetainInlineHTMLAndTranslationAnchors() {
+        let source = "<p><strong>第一段</strong><br><br>第二段<img src=\"https://example.com/a.png\"></p>"
+        let paragraphs = ArticleExtractor.readerParagraphs(in: source)
+        let segments = paragraphs.map {
+            BilingualSegment(id: $0.id, original: $0.original, translation: "译文" + $0.id)
+        }
+        let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: segments)
+        XCTAssertEqual(paragraphs.map(\.id), ["p0_0", "p0_1"])
+        XCTAssertTrue(output.contains("<strong>第一段</strong>"))
+        XCTAssertTrue(output.contains("第二段<img src=\"https://example.com/a.png\">"))
+        XCTAssertTrue(output.contains("paper-rss-translation-p0_1"))
+    }
+
+    func testNestedInlineBreaksFallBackToIntactBlock() {
+        let source = "<p><a href=\"https://example.com\">第一行<br><br>第二行<img src=\"https://example.com/a.png\"></a></p>"
+        let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: [])
+        XCTAssertEqual(ArticleExtractor.readerParagraphs(in: source).map(\.id), ["p0"])
+        XCTAssertEqual(output.replacingOccurrences(of: " data-paper-rss-id=\"p0\"", with: ""), source)
+    }
+
+    func testSourceFormattingDoesNotChangeMediaOrParagraphIDs() {
+        let compact = "<p><strong>标题</strong><br><a href=\"https://example.com/tool\">链接</a><br>说明<img src=\"https://example.com/a.png\"></p>"
+        let formatted = compact.replacingOccurrences(of: "<br>", with: "<br>\n")
+        let first = ArticleExtractor.insertingInlineTranslations(into: compact, segments: [])
+        let second = ArticleExtractor.insertingInlineTranslations(into: formatted, segments: [])
+        XCTAssertEqual(ArticleExtractor.readerParagraphs(in: compact).map(\.id), ArticleExtractor.readerParagraphs(in: formatted).map(\.id))
+        XCTAssertEqual(second.replacingOccurrences(of: "\n", with: ""), first)
+    }
+
+    func testMalformedAndMediaOnlyFragmentsKeepOriginalHTML() {
+        for source in [
+            "<p>前文<br><br><img src=\"https://example.com/a.png\"><br><br>后文</p>",
+            "<p><strong>未闭合<br><br>文本<img src=\"https://example.com/a.png\"></p>",
+            "<p>开头<br><br></p>",
+            "<p><code>代码<br><br>仍然是代码</code></p>"
+        ] {
+            let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: [])
+            XCTAssertEqual(output.replacingOccurrences(of: " data-paper-rss-id=\"p0\"", with: ""), source)
+        }
+    }
+
+    func testOldSubparagraphTranslationCannotAttachToNewIntactBlock() {
+        let source = "<p><strong>标题</strong><br>\n说明<img src=\"https://example.com/a.png\"></p>"
+        let old = BilingualSegment(id: "p0_0", original: "标题", translation: "旧译文")
+        let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: [old], pendingIDs: ["p0"])
+        XCTAssertFalse(output.contains("旧译文"))
+        XCTAssertTrue(output.contains("paper-rss-translation-p0\""))
+        XCTAssertTrue(output.contains("<img"))
+    }
+
     func testInsertingTranslationsPreservesBlockquoteSemantics() {
         let source = """
         <blockquote>
@@ -118,7 +184,8 @@ final class ReaderBlockSemanticsTests: XCTestCase {
         let paragraphs = ArticleExtractor.readerParagraphs(in: source)
         let output = ArticleExtractor.insertingInlineTranslations(into: source, segments: [])
 
-        XCTAssertEqual(paragraphs.map(\.original).joined(separator: " "), "Before Nested block After Following paragraph")
+        XCTAssertEqual(paragraphs.map(\.id), ["p0", "p1"], "不完整嵌套段落整块保留")
+        XCTAssertEqual(paragraphs.map(\.original).joined(separator: " ").replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression), "Before Nested block After Following paragraph")
         XCTAssertTrue(output.contains("Before"))
         XCTAssertTrue(output.contains("Nested block"))
         XCTAssertTrue(output.contains("After"))

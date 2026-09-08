@@ -10,6 +10,46 @@ final class ReaderEngineEndToEndTests: XCTestCase {
 
     let defaultFeedID = UUID()
 
+    func testStructureVariantsPreserveMediaThroughActualRenderer() async throws {
+        let description = String(repeating: "这是一段完整的文章说明，包含足够的正文用于直接采用订阅内容。", count: 12)
+        let variants: [(String, String, Int)] = [
+            ("mixed-inline", "<p><strong>工具标题</strong><br>\n<a href=\"https://unknown.example/tool\">工具链接</a><br>\n介绍<img src=\"/one.png\"></p>", 1),
+            ("explicit-breaks", "<p>第一段<img src=\"/one.png\"><br><br><em>第二段</em><img src=\"/two.png\"></p>", 2),
+            ("nested-link", "<p><a href=\"/tool\">第一行<br><br>第二行<img src=\"/one.png\"></a></p>", 1),
+            ("media-only-fragment", "<p>正文<br><br><img src=\"/one.png\"><br><br>后续正文</p>", 1),
+            ("lazy-image", "<p>说明<img data-src=\"/one.png\" src=\"placeholder.gif\"></p>", 1),
+            ("nested-figure", "<div><figure><img src=\"/one.png\"><figcaption>图片说明</figcaption></figure><p>后续文字</p></div>", 1),
+            ("table-media", "<table><tr><td>说明<img src=\"/one.png\"></td></tr></table>", 1)
+        ]
+        for (name, body, count) in variants {
+            let entry = Entry(id: name, feedID: defaultFeedID, title: "结构验证",
+                              url: URL(string: "https://unknown.example/article"), publishedAt: .now,
+                              summary: "", contentHTML: "<p>\(description)</p>" + body + "<p>文章结束。</p>")
+            let (prepared, _) = await ArticlePreparationEngine(pageLoader: NoNetworkPageLoader()).prepare(entry: entry, cached: nil)
+            XCTAssertEqual(prepared.source, .feed, name)
+            XCTAssertEqual(prepared.imageURLs.count, count, name)
+            let paragraphs = ArticleExtractor.readerParagraphs(in: prepared.html)
+            let translations = paragraphs.map { BilingualSegment(id: $0.id, original: $0.original, translation: "译文" + $0.id) }
+            for segments in [[], translations] {
+                let document = ReaderDocumentRenderer.renderDocument(article: prepared, documentIdentity: name, translations: segments)
+                XCTAssertEqual(ArticleExtractor.imageURLs(from: document.html, baseURL: document.baseURL), prepared.imageURLs, name)
+                for paragraph in paragraphs {
+                    XCTAssertTrue(document.html.contains("data-paper-rss-id=\"\(paragraph.id)\""), name)
+                    if !segments.isEmpty {
+                        XCTAssertTrue(document.html.contains("paper-rss-translation-\(paragraph.id)\""), name)
+                    }
+                }
+                for tag in ["img", "a", "strong", "em", "figure", "figcaption", "table"] {
+                    let expression = try NSRegularExpression(pattern: "<" + tag + "\\b[^>]*>")
+                    func countTags(_ html: String) -> Int {
+                        expression.numberOfMatches(in: html, range: NSRange(html.startIndex..., in: html))
+                    }
+                    XCTAssertEqual(countTags(document.html), countTags(prepared.html), "\(name): \(tag)")
+                }
+            }
+        }
+    }
+
     // MARK: - 1. Mixed Markup & Markdown End-to-End Pipeline
 
     func testMixedMarkupAndMarkdownEndToEndPipeline() async {

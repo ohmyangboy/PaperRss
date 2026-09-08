@@ -201,6 +201,26 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         XCTAssertTrue(persistedArtifact?.isComplete ?? false)
     }
 
+    @MainActor
+    func testChangedParagraphStructureDoesNotReuseSameIDWithDifferentOriginal() async throws {
+        let feed = Feed(id: UUID(), title: "结构测试", feedURL: URL(string: "https://example.com/rss")!)
+        let entry = Entry(id: "changed-structure", feedID: feed.id, title: "标题", url: URL(string: "https://example.com/article"), publishedAt: .now, summary: "正文")
+        let database = AppDatabase(feeds: [feed], entries: [entry], articleCaches: [:], readingStates: [:], artifacts: [], llmConfiguration: .deepSeek, customFolders: [])
+        let store = AppStore(testDatabase: database, feedFetcher: { _ in .notModified(etag: nil, lastModified: nil) })
+        store.llmConfiguration = .deepSeek
+        _ = store.saveLLMConfiguration(store.llmConfiguration, apiKey: "test-api-key")
+        let old = BilingualSegment(id: "p0_0", original: "标题", translation: "旧标题译文")
+        let current = BilingualSegment(id: "p0_0", original: "标题 链接 说明", translation: "完整段落译文")
+        store.cacheTranslations([old, current], configuration: store.llmConfiguration)
+        let text = "不变的全文内容 hash"
+        await store.translateBilingualParagraphs(entry: entry, text: text, paragraphs: [ReaderParagraph(id: old.id, original: old.original)], paragraphIDs: [old.id])
+        await store.translateBilingualParagraphs(entry: entry, text: text, paragraphs: [ReaderParagraph(id: current.id, original: current.original)], paragraphIDs: [current.id])
+        let artifact = try XCTUnwrap(store.localProvider.fetchArtifact(entryID: entry.id, kind: .bilingual, isCompleteOnly: false))
+        XCTAssertEqual(artifact.segments.map(\.original), [current.original])
+        XCTAssertEqual(artifact.segments.map(\.translation), [current.translation])
+        XCTAssertTrue(artifact.isComplete)
+    }
+
     // MARK: - Test C: Streaming summary callback delivers incremental deltas
     @MainActor
     func testC_StreamingSummaryScopedCallback() async throws {

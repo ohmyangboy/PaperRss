@@ -564,30 +564,6 @@ public enum ArticleExtractor {
         return output
     }
 
-    private static func splitBlockTextIntoParagraphs(_ text: String) -> [String] {
-        let lines = text.components(separatedBy: "\n")
-        var result: [String] = []
-        var current = ""
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty {
-                if !current.isEmpty {
-                    result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
-                    current = ""
-                }
-            } else {
-                if !current.isEmpty {
-                    current += "\n"
-                }
-                current += line
-            }
-        }
-        if !current.isEmpty {
-            result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return result.filter { !$0.isEmpty }
-    }
-
     /// Presentation-stage helper: examines the first leading heading block (h1/h2/h3).
     /// If its normalized text is semantically identical to the article title rendered in the Reader header,
     /// removes that leading heading block from the display HTML so it doesn't appear twice.
@@ -638,23 +614,6 @@ public enum ArticleExtractor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .lowercased()
-    }
-
-    /// Returns the source blocks WebKit can observe while the reader scrolls.
-    /// The same expression is used by the renderer below, keeping paragraph IDs
-    /// stable between translation requests and document reloads.
-    /// Semantic block tags whose wrapper must be preserved when a reader block
-    /// is annotated. Splitting these into flat `<p>` fragments would destroy the
-    /// blockquote/pre/heading/list/table semantics the reader relies on.
-    private static let structuralBlockTags: Set<String> = [
-        "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
-        "li", "figcaption", "dt", "dd", "ol", "ul", "table", "div"
-    ]
-
-    private static func blockTagName(of block: String) -> String? {
-        guard let openingTag = block.range(of: "<[a-z][a-z0-9]*\\b", options: .regularExpression) else { return nil }
-        let tag = block[openingTag].dropFirst()
-        return tag.lowercased()
     }
 
     private struct ReaderBlockMatch {
@@ -716,6 +675,104 @@ public enum ArticleExtractor {
         return selected
     }
 
+    /// 结构适配只作用于已经清洗的正文；按固定顺序尝试，无法安全拆分时整块保留。
+    /// 两种真实策略共用一个内部接口，段落索引与 HTML 标注不得各自重新推断结构。
+    private enum ReaderBlockAdapter: CaseIterable {
+        case explicitBreakParagraph
+        case preservedBlock
+
+        func fragments(for block: String, tag: String, hasNestedBlock: Bool) -> [String]? {
+            switch self {
+            case .explicitBreakParagraph:
+                guard tag == "p", !hasNestedBlock else { return nil }
+                return ArticleExtractor.splitHTMLParagraphAtExplicitBreaks(block)
+            case .preservedBlock:
+                return [block]
+            }
+        }
+    }
+
+    private static func readerBlockFragments(_ block: String, match: ReaderBlockMatch) -> [String] {
+        for adapter in ReaderBlockAdapter.allCases {
+            if let fragments = adapter.fragments(for: block, tag: match.tag, hasNestedBlock: match.hasNestedReaderBlock) {
+                // 新增适配策略也必须保留文本及非布局标签的顺序、属性；失败则尝试保留策略。
+                if fragments.count == 1 && fragments[0] == block { return fragments }
+                if readerContentSignature(block) == readerContentSignature(fragments.joined()) {
+                    return fragments
+                }
+            }
+        }
+        return [block]
+    }
+
+    /// p/br 是允许改写的分段标记，其余标签（含媒体与链接属性）必须逐一保持。
+    private static func readerContentSignature(_ html: String) -> [String] {
+        let pattern = "(?is)</?(?!p\\b|br\\b)[a-z][a-z0-9]*\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>"
+        let expression = try? NSRegularExpression(pattern: pattern)
+        let tags = expression?.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap {
+            Range($0.range, in: html).map { String(html[$0]) }
+        } ?? []
+        return [html.plainText.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)] + tags
+    }
+
+    /// 仅以段落直属的连续 br 为分隔符。保留原始片段和属性，源码换行不参与拆分。
+    /// 嵌套链接/强调内部的 br、未闭合标签和纯媒体片段均保守保留，避免拆坏结构。
+    private static func splitHTMLParagraphAtExplicitBreaks(_ block: String) -> [String]? {
+        let pattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let tokens = expression.matches(in: block, range: NSRange(block.startIndex..., in: block))
+        guard let first = tokens.first, let last = tokens.last,
+              let opening = Range(first.range, in: block),
+              let closing = Range(last.range, in: block), opening.upperBound <= closing.lowerBound,
+              block[closing].lowercased().hasPrefix("</p") else { return nil }
+        let voidTags: Set<String> = ["br", "hr", "img", "source", "wbr", "area", "base", "col", "embed", "input", "link", "meta", "param", "track"]
+        var stack: [String] = []
+        var breaks: [Range<String.Index>] = []
+        for token in tokens.dropFirst().dropLast() {
+            guard let range = Range(token.range, in: block),
+                  let nameRange = Range(token.range(at: 1), in: block) else { return nil }
+            let tag = block[nameRange].lowercased()
+            let isClosing = block[range].hasPrefix("</")
+            if isClosing {
+                guard stack.last == tag else { return nil }
+                stack.removeLast()
+            } else if tag == "br" && stack.isEmpty {
+                breaks.append(range)
+            } else if !voidTags.contains(tag) {
+                stack.append(tag)
+            }
+        }
+        guard stack.isEmpty else { return nil }
+
+        var separators: [Range<String.Index>] = []
+        var run: Range<String.Index>?
+        var count = 0
+        for range in breaks {
+            if let previous = run,
+               block[previous.upperBound..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                run = previous.lowerBound..<range.upperBound
+                count += 1
+            } else {
+                if let previous = run, count >= 2 { separators.append(previous) }
+                run = range
+                count = 1
+            }
+        }
+        if let run, count >= 2 { separators.append(run) }
+        guard !separators.isEmpty else { return nil }
+
+        var fragments: [String] = []
+        var cursor = opening.upperBound
+        for separator in separators {
+            fragments.append(String(block[cursor..<separator.lowerBound]))
+            cursor = separator.upperBound
+        }
+        fragments.append(String(block[cursor..<closing.lowerBound]))
+        // 图片不能因为所在片段没有可翻译文本而消失，也不能被搬到其他段落。
+        guard fragments.allSatisfy({ !$0.plainText.isEmpty }) else { return nil }
+        return fragments.map { String(block[opening]) + $0 + String(block[closing]) }
+    }
+
     public static func readerParagraphs(in html: String, title: String? = nil) -> [ReaderParagraph] {
         var paragraphs: [ReaderParagraph] = []
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -727,20 +784,10 @@ public enum ArticleExtractor {
             let original = block.plainText
             guard !original.isEmpty else { continue }
 
-            // Structural blocks stay a single observable, translatable unit so
-            // their wrapper (blockquote/pre/heading/table) survives annotation.
-            let tag = blockTagName(of: block)
-            if structuralBlockTags.contains(tag ?? "") {
-                paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
-            } else {
-                let subParagraphs = splitBlockTextIntoParagraphs(original)
-                if subParagraphs.count > 1 {
-                    for (subIdx, subText) in subParagraphs.enumerated() {
-                        paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)_\(subIdx)", original: subText))
-                    }
-                } else {
-                    paragraphs.append(ReaderParagraph(id: "p\(paragraphIndex)", original: original))
-                }
+            let fragments = readerBlockFragments(block, match: match)
+            for (index, fragment) in fragments.enumerated() {
+                let id = fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
+                paragraphs.append(ReaderParagraph(id: id, original: fragment.plainText))
             }
             paragraphIndex += 1
         }
@@ -772,42 +819,15 @@ public enum ArticleExtractor {
                 continue
             }
 
-            let tag = blockTagName(of: block)
-            if structuralBlockTags.contains(tag ?? "") {
-                // Preserve the structural wrapper (blockquote/pre/heading/table).
-                // The whole block stays one observable unit; sub-segmenting a
-                // blockquote into flat <p> fragments destroys its semantics.
-                let id = "p\(paragraphIndex)"
-                rendered += annotatedReaderBlock(block, id: id)
+            let fragments = readerBlockFragments(block, match: match)
+            for (index, fragment) in fragments.enumerated() {
+                let id = fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
+                rendered += annotatedReaderBlock(fragment, id: id)
                 if let segment = segmentsByID[id],
-                   original.isSameReaderParagraph(as: segment.original) {
+                   fragment.plainText.isSameReaderParagraph(as: segment.original) {
                     rendered += translationMarkup(for: segment.translation, id: id)
                 } else if pendingIDs.contains(id) {
                     rendered += pendingTranslationMarkup(for: id)
-                }
-            } else {
-                let subParagraphs = splitBlockTextIntoParagraphs(original)
-                if subParagraphs.count > 1 {
-                    for (subIdx, subText) in subParagraphs.enumerated() {
-                        let subID = "p\(paragraphIndex)_\(subIdx)"
-                        let escapedSubText = htmlTextEscaped(subText).replacingOccurrences(of: "\n", with: "<br>")
-                        rendered += "<p class=\"paper-rss-subparagraph\" data-paper-rss-id=\"\(subID)\">\(escapedSubText)</p>"
-                        if let segment = segmentsByID[subID], subText.isSameReaderParagraph(as: segment.original) {
-                            rendered += translationMarkup(for: segment.translation, id: subID)
-                        } else if pendingIDs.contains(subID) {
-                            rendered += pendingTranslationMarkup(for: subID)
-                        }
-                    }
-                } else {
-                    let id = "p\(paragraphIndex)"
-                    rendered += annotatedReaderBlock(block, id: id)
-
-                    if let segment = segmentsByID[id],
-                       original.isSameReaderParagraph(as: segment.original) {
-                        rendered += translationMarkup(for: segment.translation, id: id)
-                    } else if pendingIDs.contains(id) {
-                        rendered += pendingTranslationMarkup(for: id)
-                    }
                 }
             }
             paragraphIndex += 1

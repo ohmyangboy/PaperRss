@@ -2103,6 +2103,13 @@ public final class AppStore: ObservableObject {
                 isComplete: false
             )
 
+        // 展示结构升级可能复用段落 ID；原文也匹配才算命中，过期片段不能计入完成状态。
+        let currentParagraphs = Dictionary(uniqueKeysWithValues: paragraphs.map { ($0.id, $0.original) })
+        artifact.segments.removeAll { segment in
+            guard let original = currentParagraphs[segment.id] else { return true }
+            return !original.isSameReaderParagraph(as: segment.original)
+        }
+
         let existingSegmentMap: [String: BilingualSegment] = Dictionary(
             uniqueKeysWithValues: artifact.segments.map { ($0.id, $0) }
         )
@@ -2242,6 +2249,10 @@ public final class AppStore: ObservableObject {
                         contentHash: hash,
                         targetLanguage: configuration.targetLanguage
                     )) ?? artifact
+                    current.segments.removeAll { segment in
+                        guard let original = currentParagraphs[segment.id] else { return true }
+                        return !original.isSameReaderParagraph(as: segment.original)
+                    }
                     for seg in batchSegments {
                         if let idx = current.segments.firstIndex(where: { $0.id == seg.id }) {
                             current.segments[idx] = seg

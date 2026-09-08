@@ -48,7 +48,7 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("handleLoadFailure("))
         XCTAssertTrue(articleReader.contains("parent.onDocumentLoadFailed(entryID)"))
         let identityCheck = try XCTUnwrap(articleReader.range(of: "if loadedDocumentIdentity == parent.entry.id")?.lowerBound)
-        let translationInsertion = try XCTUnwrap(articleReader.range(of: "ArticleExtractor.insertingInlineTranslations(", range: identityCheck..<articleReader.endIndex)?.lowerBound)
+        let translationInsertion = try XCTUnwrap(articleReader.range(of: "ReaderDocumentRenderer.renderDocument(", range: identityCheck..<articleReader.endIndex)?.lowerBound)
         XCTAssertLessThan(identityCheck, translationInsertion)
         XCTAssertTrue(articleReader.contains("loadedText.htmlEscaped"))
         XCTAssertTrue(articleReader.contains("private var hasReaderContent: Bool { preparedArticle != nil }"))

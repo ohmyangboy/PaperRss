@@ -41,7 +41,7 @@ final class ReaderDocumentRendererTests: XCTestCase {
         XCTAssertTrue(doc.contains("script-src 'none'"), "普通模式下脚本必须严格被 CSP 禁用")
         XCTAssertTrue(doc.contains("<style>:root { --paper-reader-top-inset: 24.0px; --paper-font-size: 18px; }"))
         XCTAssertTrue(doc.contains(".custom-class { color: red; }"))
-        XCTAssertTrue(doc.contains("<body><header><h1>标题</h1></header><p>正文内容测试</p></body>"))
+        XCTAssertTrue(doc.contains("<body><header><h1>标题</h1></header><p data-paper-rss-id=\"p0\">正文内容测试</p></body>"))
         XCTAssertEqual(document.baseURL, URL(string: "https://example.com/articles/1"))
         XCTAssertEqual(document.features, ArticleFeatures(containsMath: false))
         XCTAssertFalse(document.renderSignature.isEmpty)
@@ -76,7 +76,7 @@ final class ReaderDocumentRendererTests: XCTestCase {
             article: article(mathBody, features: ArticleFeatures(containsMath: true)),
             documentIdentity: "math"
         ).html
-        XCTAssertTrue(docMath.contains(mathBody))
+        XCTAssertTrue(docMath.contains("公式 \\(E = mc^2\\)</p>"))
     }
 
     // MARK: - 4. Referrer Policy for Hotlink-Protected Image CDNs
@@ -101,7 +101,7 @@ final class ReaderDocumentRendererTests: XCTestCase {
         let dynamicUpdate = ReaderDocumentRenderer.renderDocument(
             article: article("<p>初始正文和动态摘要 A</p>", baseURL: URL(string: "https://example.com/a")),
             documentIdentity: "entry-a",
-            bodyHTML: "<p>初始正文和动态摘要 A</p><aside>增量译文</aside>",
+            translations: [BilingualSegment(id: "p0", original: "初始正文和动态摘要 A", translation: "增量译文")],
             headerHTML: "<header>流式摘要 B</header>",
             topInset: 64,
             fontSize: 20

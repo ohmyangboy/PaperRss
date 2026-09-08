@@ -189,7 +189,11 @@ struct ArticleReaderView: View {
 
     private var bilingualSegments: [BilingualSegment] {
         guard readerMode == .bilingual else { return [] }
-        let persisted = store.bilingualArtifact(for: entry, text: text)?.segments ?? []
+        let originals = Dictionary(uniqueKeysWithValues: readerParagraphs.map { ($0.id, $0.original) })
+        let persisted = (store.bilingualArtifact(for: entry, text: text)?.segments ?? []).filter { segment in
+            guard let original = originals[segment.id] else { return false }
+            return original.isSameReaderParagraph(as: segment.original)
+        }
         let persistedIDs = Set(persisted.map(\.id))
         let streamed = readerParagraphs.compactMap { paragraph -> BilingualSegment? in
             guard !persistedIDs.contains(paragraph.id),
@@ -1064,8 +1068,12 @@ struct ArticleReaderView: View {
                 )
 
             guard !Task.isCancelled, aiWorkspace.isCurrent(generation) else { return }
+            let originals = Dictionary(uniqueKeysWithValues: paragraphs.map { ($0.id, $0.original) })
             let completedIDs = Set(
-                store.bilingualArtifact(for: requestedEntry, text: requestedText)?.segments.map(\.id) ?? []
+                (store.bilingualArtifact(for: requestedEntry, text: requestedText)?.segments ?? []).filter { segment in
+                    guard let original = originals[segment.id] else { return false }
+                    return original.isSameReaderParagraph(as: segment.original)
+                }.map(\.id)
             )
             let unsuccessfulIDs = Set(batch).subtracting(completedIDs)
             pendingBilingualParagraphIDs.subtract(batch)
@@ -5432,11 +5440,6 @@ private struct ArticleHTMLView: NSViewRepresentable {
                   parent.entry.id == entryID else { return }
             scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
-            let readerHTML = ArticleExtractor.insertingInlineTranslations(
-                into: parent.html,
-                segments: parent.inlineTranslations,
-                pendingIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : []
-            )
             let headerHTML = PaperReaderHeaderBuilder.headerHTML(
                 entry: parent.entry,
                 feedTitle: parent.feedTitle,
@@ -5453,7 +5456,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let document = ReaderDocumentRenderer.renderDocument(
                 article: parent.article,
                 documentIdentity: parent.entry.id,
-                bodyHTML: readerHTML,
+                translations: parent.inlineTranslations,
+                pendingTranslationIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : [],
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,
@@ -6286,11 +6290,6 @@ private struct ArticleHTMLView: UIViewRepresentable {
                   parent.entry.id == entryID else { return }
             scheduledNavigationEntryID = nil
             let initialTranslationState = translationState()
-            let readerHTML = ArticleExtractor.insertingInlineTranslations(
-                into: parent.html,
-                segments: parent.inlineTranslations,
-                pendingIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : []
-            )
             let headerHTML = PaperReaderHeaderBuilder.headerHTML(
                 entry: parent.entry,
                 feedTitle: parent.feedTitle,
@@ -6307,7 +6306,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
             let document = ReaderDocumentRenderer.renderDocument(
                 article: parent.article,
                 documentIdentity: parent.entry.id,
-                bodyHTML: readerHTML,
+                translations: parent.inlineTranslations,
+                pendingTranslationIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : [],
                 headerHTML: headerHTML,
                 topInset: Double(parent.contentTopInset),
                 fontSize: parent.fontSize,

@@ -40,7 +40,8 @@ public enum ReaderDocumentRenderer: Sendable {
     public static func renderDocument(
         article: PreparedArticle,
         documentIdentity: String,
-        bodyHTML: String? = nil,
+        translations: [BilingualSegment] = [],
+        pendingTranslationIDs: Set<String> = [],
         headerHTML: String = "",
         topInset: Double = 0,
         fontSize: Int = 16,
@@ -54,7 +55,11 @@ public enum ReaderDocumentRenderer: Sendable {
             return url
         }
         let renderSignature = renderSignature(for: article, documentIdentity: documentIdentity)
-        let renderedBodyHTML = bodyHTML ?? article.html
+        let renderedBodyHTML = ArticleExtractor.insertingInlineTranslations(
+            into: article.html,
+            segments: translations,
+            pendingIDs: pendingTranslationIDs
+        )
 
         let html = """
         <!doctype html>
