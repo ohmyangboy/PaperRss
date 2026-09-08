@@ -1390,7 +1390,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             if #available(macOS 15.0, *) {
                 entryListTitleItem?.isHidden = isSidebarCollapsed
             }
-            if let toolbar = splitViewController?.view.window?.toolbar, !actions.isZenMode {
+            // 退出禅模式时 Header 会先于分栏展开与结构项恢复同步。
+            // 恢复完成前保持原布局，避免改变已保存索引所对应的工具栏顺序。
+            if let toolbar = splitViewController?.view.window?.toolbar, !actions.isZenMode,
+               zenRemovedToolbarItemIndexes.isEmpty {
                 // 只调整列表布局项，绝不移除或重建阅读胶囊及其宿主。
                 if compactToolbarLayout != isSidebarCollapsed {
                     compactToolbarLayout = isSidebarCollapsed

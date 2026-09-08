@@ -79,7 +79,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.3.2（Build 21）** 整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
-**Beta v1.3.3-beta.3（Build 24）**：优化侧栏展开收起、紧凑工具栏与禅模式切换，包含 RSS 图片和内容适配修复。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.3)。
+**Beta v1.3.3-beta.4（Build 25）**：修复退出禅模式后的阅读工具栏错位，补充交互回归与发布验收门禁。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.4)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

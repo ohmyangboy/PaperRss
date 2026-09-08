@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.4 · Build 25 · 2026-09-08
+
+本次为工具栏交互修复 Beta；建议使用 v1.3.3-beta.3 的用户升级，稳定通道仍为 v1.3.2。
+
+- 工具栏：修复退出禅模式后阅读工具栏错位到文章列表上方的问题，保持侧栏切换后的布局与阅读工具栏实例。
+- 发布验证：补充禅模式往返回归，新增真实交互发现明显问题即中断发布的门禁。
+
+---
+
+This Beta fixes a toolbar interaction issue. Recommended for users of v1.3.3-beta.3; the stable channel remains on v1.3.2.
+
+- Toolbar: Fix the reader toolbar moving above the article list after leaving Zen mode, preserving layout and the reader toolbar instance across sidebar transitions.
+- Release validation: Add Zen mode round-trip regression coverage and require releases to stop when real interaction checks reveal obvious problems.
+
 ## v1.3.3-beta.3 · Build 24 · 2026-09-08
 
 本次为整合当前代码的体验优化 Beta；建议测试侧栏展开收起与阅读工具栏表现，稳定通道仍为 v1.3.2。
