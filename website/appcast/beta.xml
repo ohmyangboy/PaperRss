@@ -5,11 +5,11 @@
     <link>https://github.com/ohmyangboy/PaperRss/releases</link>
     <description>PaperRss beta updates</description>
     <item>
-      <title>PaperRss 1.3.3-beta.3</title>
-      <sparkle:version>24</sparkle:version>
-      <sparkle:shortVersionString>1.3.3-beta.3</sparkle:shortVersionString>
+      <title>PaperRss 1.3.3-beta.4</title>
+      <sparkle:version>25</sparkle:version>
+      <sparkle:shortVersionString>1.3.3-beta.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.3-beta.3/PaperRss-v1.3.3-beta.3.zip" length="11610395" type="application/octet-stream" sparkle:edSignature="UVqMLalnmBAQXZksp658HBBDPcl+L223AbWupn9K2ybJE1cpEHUONKrOoUg8Vy2o//dXTn7Uf9i/B2IUo1BDDQ==" paperrss:sha256="62d3355f54e98f42fa932f2272e2c25558601e307643e7955fde62890854f36e" sparkle:minimumSystemVersion="14.0" />
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.3.3-beta.4/PaperRss-v1.3.3-beta.4.zip" length="11609862" type="application/octet-stream" sparkle:edSignature="cFmPtt4Y2IotIBXZ6o73jjrtreDO2m9oYVYyBi+Qf6glUSgm2U08HjSYjtHkWp/OBDy1qf62RmHos7cqmIEkAw==" paperrss:sha256="53850b87b9342b0ada9545c1fc7d64065f7f7fdb55f1fab2143559222bb27e88" sparkle:minimumSystemVersion="14.0" />
     </item>
   </channel>
 </rss>
