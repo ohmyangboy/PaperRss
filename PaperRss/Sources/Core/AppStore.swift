@@ -554,6 +554,10 @@ public final class AppStore: ObservableObject {
                 let accID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
                 newFeedsByAccount[accID, default: []].append(feed)
             }
+            Task { [weak self] in
+                guard let self else { return }
+                await FeedIconProbeService.shared.probeMissingIcons(for: allFeeds, database: self.libraryDatabase, iconStore: self.iconStore)
+            }
         }
 
         if let allFolders = try? libraryDatabase.read({ db in
@@ -638,6 +642,10 @@ public final class AppStore: ObservableObject {
         for feed in allFeeds {
             let accountID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
             newFeedsByAccount[accountID, default: []].append(feed)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await FeedIconProbeService.shared.probeMissingIcons(for: allFeeds, database: self.libraryDatabase, iconStore: self.iconStore)
         }
 
         let allFolders = (try? await database.readAsync { db in

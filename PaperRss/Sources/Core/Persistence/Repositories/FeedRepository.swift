@@ -97,7 +97,18 @@ public final class FeedRepository: Sendable {
             f.last_refreshed_at AS last_refreshed_at,
             f.is_deleted AS is_deleted,
             f.updated_at AS updated_at,
-            f.stored_icon_url AS stored_icon_url
+            COALESCE(
+                CASE WHEN f.stored_icon_url NOT LIKE '%f.php%' THEN NULLIF(f.stored_icon_url, '') ELSE NULL END,
+                (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = f.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+            ) AS stored_icon_url
         FROM feeds f
         LEFT JOIN feed_folders ff ON ff.feed_id = f.id
         LEFT JOIN folders fo ON fo.id = ff.folder_id AND fo.is_deleted = 0

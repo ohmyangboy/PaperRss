@@ -114,7 +114,7 @@ public struct Feed: Identifiable, Codable, Hashable, Sendable {
         // Keep the icon advertised by the feed for every source, not only
         // Twitter/X. Some feeds provide a real logo while the generic
         // favicon service returns a globe or another placeholder.
-        if let storedIconURL {
+        if let storedIconURL, !storedIconURL.absoluteString.lowercased().contains("f.php") {
             return storedIconURL
         }
 

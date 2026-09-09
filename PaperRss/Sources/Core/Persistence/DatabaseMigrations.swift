@@ -430,6 +430,28 @@ public enum DatabaseMigrations {
             }
         }
 
+        migrator.registerMigration("v10-sanitize-freshrss-placeholder-icons") { db in
+            guard try db.tableExists("feeds") else { return }
+            let columns = try db.columns(in: "feeds")
+            guard columns.contains(where: { $0.name == "stored_icon_url" }) else { return }
+
+            // 清理被 FreshRSS 内部占位图 (/f.php) 污染的 stored_icon_url。
+            // 优先用同一个数据库中相同 feed_url 且拥有有效真实图标（不含 /f.php）的记录恢复。
+            try db.execute(sql: """
+                UPDATE feeds
+                SET stored_icon_url = (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = feeds.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+                WHERE stored_icon_url LIKE '%f.php%';
+            """)
+        }
+
         return migrator
     }
 }

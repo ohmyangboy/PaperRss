@@ -112,6 +112,9 @@ public final class FeedIconStore: ObservableObject {
     /// 重复调用自动去重（in-flight 与失败窗双重闸门）。
     public func warmUp(feedID: UUID, iconURL: URL?) {
         guard let iconURL else { return } // 无图标源的 feed：兜底徽章即终态
+        if iconURL.path.lowercased().contains("f.php") || iconURL.absoluteString.lowercased().contains("/f.php") {
+            return
+        }
 
         if iconURLByFeedID[feedID] != iconURL {
             iconURLByFeedID[feedID] = iconURL
@@ -229,10 +232,13 @@ public final class FeedIconStore: ObservableObject {
 
         iconURLByFeedID = index.feeds.reduce(into: [UUID: URL]()) { result, pair in
             guard let id = UUID(uuidString: pair.key), let url = URL(string: pair.value) else { return }
+            let lower = url.absoluteString.lowercased()
+            if lower.contains("f.php") { return }
             result[id] = url
         }
         let now = Date()
         failures = index.failures.reduce(into: [String: Date]()) { result, pair in
+            if pair.key.lowercased().contains("f.php") { return }
             let date = Date(timeIntervalSince1970: pair.value)
             // 过期失败记录就地清理（保留期外），避免索引无限膨胀。
             guard now.timeIntervalSince(date) < Self.failureRetentionInterval else { return }

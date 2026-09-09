@@ -340,6 +340,7 @@ final class FreshRSSIntegrationTests: XCTestCase {
                     "title": "Rust Blog",
                     "url": "https://rust-lang.org/rss",
                     "htmlUrl": "https://rust-lang.org",
+                    "iconUrl": "https://freshrss.example.com/f.php?rust",
                     "categories": []
                 }
             ]
@@ -364,6 +365,34 @@ final class FreshRSSIntegrationTests: XCTestCase {
             throw URLError(.badURL)
         }
 
+        // 预置同 feed_url 的本地已有真实头像（模拟本地账号已抓取过微信头像）
+        try database.write { db in
+            var localAcc = AccountRecord(
+                id: "local-default",
+                type: "local",
+                displayName: "Local",
+                endpointURL: nil,
+                username: nil,
+                isEnabled: true,
+                createdAt: 0,
+                updatedAt: 0
+            )
+            try localAcc.save(db)
+
+            var localFeed = FeedRecord(
+                id: UUID().uuidString,
+                accountID: "local-default",
+                title: "Local Swift News",
+                siteURL: "https://swift.org",
+                feedURL: "https://swift.org/rss",
+                isDeleted: false,
+                updatedAt: Date().timeIntervalSince1970,
+                storedIconURL: "https://wx.qlogo.cn/mmhead/swift",
+                sortOrder: 0
+            )
+            try localFeed.save(db)
+        }
+
         let provider = FreshRSSAccountProvider(
             accountID: accountID,
             endpointURL: endpoint,
@@ -373,7 +402,9 @@ final class FreshRSSIntegrationTests: XCTestCase {
             session: mockSession
         )
 
-        // 1. 首次拉取订阅与分类
+        // 1. 首次拉取订阅与分类：
+        // - Swift News 自动跨账号复用本地真实头像 https://wx.qlogo.cn/mmhead/swift
+        // - Rust Blog 返回 f.php?rust，因为是占位图，被严格拒绝，保持为 nil
         try await provider.syncSubscriptionsAndFolders()
 
         try database.read { db in
@@ -382,17 +413,30 @@ final class FreshRSSIntegrationTests: XCTestCase {
             let swiftFeed = feeds.first { $0.externalID == "feed/100" }
             XCTAssertNotNil(swiftFeed)
             XCTAssertEqual(swiftFeed?.title, "Swift News")
+            XCTAssertEqual(swiftFeed?.storedIconURL, "https://wx.qlogo.cn/mmhead/swift")
+            XCTAssertNil(feeds.first { $0.externalID == "feed/200" }?.storedIconURL)
 
             let folders = try FolderRecord.filter(Column("account_id") == accountID && Column("is_deleted") == false).fetchAll(db)
             XCTAssertEqual(folders.count, 1)
             XCTAssertEqual(folders[0].name, "Tech")
         }
 
-        // 2. 幂等二次拉取（数据无变化，不产生重复条目）
+        // 2. 下一次同步：
+        // - Rust Blog 远端返回了合法的外部真实图标 https://rust-lang.org/icon.png，被正常保存
+        // - Swift News 远端返回了 f.php?swift，但已有有效真实头像，绝不被覆盖
+        subsJSONBox.value = subsJSONBox.value.replacingOccurrences(
+            of: "\"iconUrl\": \"https://freshrss.example.com/f.php?rust\"",
+            with: "\"iconUrl\": \"https://rust-lang.org/icon.png\""
+        ).replacingOccurrences(
+            of: "\"htmlUrl\": \"https://swift.org\",",
+            with: "\"htmlUrl\": \"https://swift.org\", \"iconUrl\": \"https://freshrss.example.com/f.php?swift\","
+        )
         try await provider.syncSubscriptionsAndFolders()
         try database.read { db in
             let feeds = try FeedRecord.filter(Column("account_id") == accountID && Column("is_deleted") == false).fetchAll(db)
             XCTAssertEqual(feeds.count, 2)
+            XCTAssertEqual(feeds.first { $0.externalID == "feed/100" }?.storedIconURL, "https://wx.qlogo.cn/mmhead/swift")
+            XCTAssertEqual(feeds.first { $0.externalID == "feed/200" }?.storedIconURL, "https://rust-lang.org/icon.png")
         }
 
         // 3. 远端删除了 feed/200（Rust Blog）
@@ -2712,5 +2756,99 @@ final class FreshRSSIntegrationTests: XCTestCase {
         XCTAssertTrue(deletedExtIDs.contains("user/-/state/org.freshrss/main"))
         XCTAssertTrue(deletedExtIDs.contains("user/-/state/org.freshrss/important"))
         XCTAssertTrue(deletedExtIDs.contains("user/-/label/test"))
+    }
+
+    func testSanitizeFreshRSSPlaceholderMigration() throws {
+        let database = try DatabaseQueue()
+        try DatabaseMigrations.migrator.migrate(database)
+
+        try database.write { db in
+            var localAcc = AccountRecord(
+                id: "local-default",
+                type: "local",
+                displayName: "Local",
+                endpointURL: nil,
+                username: nil,
+                isEnabled: true,
+                createdAt: 0,
+                updatedAt: 0
+            )
+            try localAcc.save(db)
+
+            var remoteAcc = AccountRecord(
+                id: "freshrss-acc",
+                type: "freshRSS",
+                displayName: "FreshRSS",
+                endpointURL: "https://freshrss.example.com",
+                username: "alice",
+                isEnabled: true,
+                createdAt: 0,
+                updatedAt: 0
+            )
+            try remoteAcc.save(db)
+
+            var local = FeedRecord(
+                id: "local-feed-1",
+                accountID: "local-default",
+                title: "微信测试号",
+                siteURL: "https://wechat.example.com",
+                feedURL: "https://wechat.example.com/feed.xml",
+                isDeleted: false,
+                updatedAt: Date().timeIntervalSince1970,
+                storedIconURL: "https://wx.qlogo.cn/mmhead/test12345",
+                sortOrder: 0
+            )
+            try local.save(db)
+
+            var remote = FeedRecord(
+                id: "remote-feed-1",
+                accountID: "freshrss-acc",
+                title: "微信测试号 (远端)",
+                siteURL: "https://wechat.example.com",
+                feedURL: "https://wechat.example.com/feed.xml",
+                isDeleted: false,
+                updatedAt: Date().timeIntervalSince1970,
+                storedIconURL: "http://47.251.82.23/f.php?h=345dc5ce",
+                sortOrder: 1
+            )
+            try remote.save(db)
+
+            var remoteWithoutLocal = FeedRecord(
+                id: "remote-feed-2",
+                accountID: "freshrss-acc",
+                title: "无本地匹配源",
+                siteURL: "https://example.com",
+                feedURL: "https://example.com/no-local.xml",
+                isDeleted: false,
+                updatedAt: Date().timeIntervalSince1970,
+                storedIconURL: "http://47.251.82.23/f.php?h=abcdef",
+                sortOrder: 2
+            )
+            try remoteWithoutLocal.save(db)
+        }
+
+        try database.write { db in
+            try db.execute(sql: """
+                UPDATE feeds
+                SET stored_icon_url = (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = feeds.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+                WHERE stored_icon_url LIKE '%f.php%';
+            """)
+        }
+
+        try database.read { db in
+            let remote1 = try FeedRecord.fetchOne(db, key: "remote-feed-1")
+            XCTAssertEqual(remote1?.storedIconURL, "https://wx.qlogo.cn/mmhead/test12345")
+
+            let remote2 = try FeedRecord.fetchOne(db, key: "remote-feed-2")
+            XCTAssertNil(remote2?.storedIconURL)
+        }
     }
 }

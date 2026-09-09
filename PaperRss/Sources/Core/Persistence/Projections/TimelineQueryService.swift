@@ -309,7 +309,18 @@ public final class TimelineQueryService: Sendable {
             a.url AS url,
             COALESCE(a.summary, '') AS summary,
             f.title AS feed_title,
-            f.stored_icon_url AS stored_icon_url,
+            COALESCE(
+                CASE WHEN f.stored_icon_url NOT LIKE '%f.php%' THEN NULLIF(f.stored_icon_url, '') ELSE NULL END,
+                (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = f.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+            ) AS stored_icon_url,
             f.site_url AS site_url,
             f.feed_url AS feed_url,
             a.published_at AS published_at,
@@ -527,7 +538,18 @@ public final class TimelineQueryService: Sendable {
             a.url AS url,
             COALESCE(a.summary, '') AS summary,
             f.title AS feed_title,
-            f.stored_icon_url AS stored_icon_url,
+            COALESCE(
+                CASE WHEN f.stored_icon_url NOT LIKE '%f.php%' THEN NULLIF(f.stored_icon_url, '') ELSE NULL END,
+                (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = f.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+            ) AS stored_icon_url,
             f.site_url AS site_url,
             f.feed_url AS feed_url,
             a.published_at AS published_at,
@@ -597,7 +619,7 @@ public final class TimelineQueryService: Sendable {
         siteURLString: String?,
         feedURLString: String
     ) -> URL? {
-        if let storedIconURLString, let url = URL(string: storedIconURLString) {
+        if let storedIconURLString, !storedIconURLString.lowercased().contains("f.php"), let url = URL(string: storedIconURLString) {
             return url
         }
         let siteHost = siteURLString.flatMap { URL(string: $0)?.host }

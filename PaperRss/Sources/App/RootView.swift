@@ -1603,6 +1603,9 @@ private struct FeedFaviconView: View {
             state: icons.state(for: feedID)
         )
         .onAppear { icons.warmUp(feedID: feedID, iconURL: iconURL) }
+        .onChange(of: iconURL) { _, newURL in
+            icons.warmUp(feedID: feedID, iconURL: newURL)
+        }
     }
 }
 

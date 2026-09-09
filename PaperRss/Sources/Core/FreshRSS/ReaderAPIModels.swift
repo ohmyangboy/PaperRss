@@ -20,6 +20,7 @@ public struct ReaderAPISubscription: Codable, Sendable, Equatable {
     public let categories: [ReaderAPICategory]
     public let url: String?
     public let htmlUrl: String?
+    public let iconUrl: String?
     public let sortid: String?
     public let firstitemmsec: String?
 
@@ -29,6 +30,7 @@ public struct ReaderAPISubscription: Codable, Sendable, Equatable {
         categories: [ReaderAPICategory] = [],
         url: String? = nil,
         htmlUrl: String? = nil,
+        iconUrl: String? = nil,
         sortid: String? = nil,
         firstitemmsec: String? = nil
     ) {
@@ -37,6 +39,7 @@ public struct ReaderAPISubscription: Codable, Sendable, Equatable {
         self.categories = categories
         self.url = url
         self.htmlUrl = htmlUrl
+        self.iconUrl = iconUrl
         self.sortid = sortid
         self.firstitemmsec = firstitemmsec
     }

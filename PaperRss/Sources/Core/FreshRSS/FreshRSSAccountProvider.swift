@@ -104,6 +104,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
     public func syncSubscriptionsAndFolders() async throws {
         let subscriptions = try await apiClient.fetchSubscriptions()
         let now = Date().timeIntervalSince1970
+        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL)
 
         try database.write { db in
             // 1. 仅以 subscriptions[].categories 作为权威的订阅文件夹来源
@@ -160,6 +161,40 @@ public actor FreshRSSAccountProvider: AccountProvider {
             // 2. 同步 feeds 表及多对多 feed_folders 关联
             var activeRemoteFeedIDs = Set<String>()
 
+            // 辅助：解析 Feed 的最佳可用真实图标（对标 NetNewsWire ImageMetadataDatabase 跨账号共享）
+            func resolveStoredIconURL(for feedURL: String, rawRemoteIcon: String?, currentStored: String?) throws -> String? {
+                // A. 若当前记录已有非 f.php 占位符的有效真实图标，直接保留
+                if let current = currentStored, !current.isEmpty, !current.contains("f.php") {
+                    return current
+                }
+
+                // B. 跨账号查找：从全局数据库复用相同 feed_url 已有的真实图标（如本地账号已抓取的微信头像）
+                let sharedIcon = try String.fetchOne(db, sql: """
+                    SELECT stored_icon_url FROM feeds
+                    WHERE feed_url = ?
+                      AND stored_icon_url IS NOT NULL
+                      AND stored_icon_url != ''
+                      AND stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1;
+                """, arguments: [feedURL])
+                if let sharedIcon {
+                    return sharedIcon
+                }
+
+                // C. 检查远端 FreshRSS 返回的 iconUrl：严格排除服务端内部占位代理 (/f.php)
+                if let raw = rawRemoteIcon?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+                   let url = URL(string: raw, relativeTo: iconBaseURL)?.absoluteURL,
+                   ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                   url.host != nil {
+                    let path = url.path.lowercased()
+                    if !path.contains("f.php") && !path.hasSuffix("/f.php") {
+                        return url.absoluteString
+                    }
+                }
+
+                return nil
+            }
+
             for sub in subscriptions {
                 activeRemoteFeedIDs.insert(sub.id)
                 let feedURL = sub.url ?? sub.htmlUrl ?? sub.id
@@ -169,6 +204,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     existing.title = sub.title
                     existing.feedURL = feedURL
                     existing.siteURL = sub.htmlUrl
+                    existing.storedIconURL = try resolveStoredIconURL(for: feedURL, rawRemoteIcon: sub.iconUrl, currentStored: existing.storedIconURL)
                     existing.isDeleted = false
                     existing.updatedAt = now
                     try existing.save(db)
@@ -177,6 +213,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     existingByURL.externalID = sub.id
                     existingByURL.title = sub.title
                     existingByURL.siteURL = sub.htmlUrl
+                    existingByURL.storedIconURL = try resolveStoredIconURL(for: feedURL, rawRemoteIcon: sub.iconUrl, currentStored: existingByURL.storedIconURL)
                     existingByURL.isDeleted = false
                     existingByURL.updatedAt = now
                     try existingByURL.save(db)
@@ -196,7 +233,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                         lastRefreshedAt: now,
                         isDeleted: false,
                         updatedAt: now,
-                        storedIconURL: nil,
+                        storedIconURL: try resolveStoredIconURL(for: feedURL, rawRemoteIcon: sub.iconUrl, currentStored: nil),
                         sortOrder: maxSort + 1
                     )
                     try record.save(db)
