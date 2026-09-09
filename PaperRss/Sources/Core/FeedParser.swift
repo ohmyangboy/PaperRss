@@ -241,7 +241,3 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
         return components.url
     }
 }
-
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
-}

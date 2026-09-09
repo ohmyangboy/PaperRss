@@ -197,8 +197,8 @@ final class AppFeatureRegressionTests: XCTestCase {
 
     func testFeedAndFolderClickNavigationRegression() async throws {
         // 创建文件夹 "开发" 与 "设计"
-        try store.localProvider.addFolder(name: "开发")
-        try store.localProvider.addFolder(name: "设计")
+        _ = try await store.localProvider.addFolder(name: "开发")
+        _ = try await store.localProvider.addFolder(name: "设计")
 
         // 创建 3 个 Feed
         let feedSwift = try store.localProvider.addFeed(
@@ -350,8 +350,8 @@ final class AppFeatureRegressionTests: XCTestCase {
 
     func testFeedFolderManagementAndReassignmentRegression() async throws {
         // 创建初始文件夹
-        try store.localProvider.addFolder(name: "新闻")
-        try store.localProvider.addFolder(name: "技术")
+        _ = try await store.localProvider.addFolder(name: "新闻")
+        _ = try await store.localProvider.addFolder(name: "技术")
 
         let feed = try store.localProvider.addFeed(
             title: "综合早报",

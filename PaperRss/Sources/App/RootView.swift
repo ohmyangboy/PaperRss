@@ -807,6 +807,13 @@ struct RootView: View {
     }
 }
 
+private struct FolderDeleteTarget: Identifiable, Equatable {
+    var id: String { "\(accountID)::\(name)" }
+    let name: String
+    let accountID: String
+    let isRemote: Bool
+}
+
 private struct SidebarView: View {
     @ObservedObject var store: AppStore
     let appearanceMode: ReaderAppearanceMode
@@ -831,6 +838,7 @@ private struct SidebarView: View {
     @AppStorage("sidebar_collapsed_folders_raw") private var collapsedFoldersRaw: String = ""
     @State private var showsEmptyFeedActions = false
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
+    @State private var folderToDelete: FolderDeleteTarget? = nil
     #if os(macOS)
     @State private var showsFeedbackPopover = false
     #endif
@@ -1088,6 +1096,30 @@ private struct SidebarView: View {
                 Text(I18N.shared.localizedFormat("确定要删除选中的 %lld 个订阅源及其所有文章吗？此操作无法撤销。", ids.count))
             }
         }
+        .alert(I18N.localized("确认删除文件夹"), isPresented: Binding(
+            get: { folderToDelete != nil },
+            set: { if !$0 { folderToDelete = nil } }
+        )) {
+            Button(I18N.localized("取消"), role: .cancel) { folderToDelete = nil }
+            Button(I18N.localized("删除"), role: .destructive) {
+                if let target = folderToDelete {
+                    store.deleteFolder(target.name, accountID: target.accountID)
+                    if case let .folder(acc, f) = selection, acc == target.accountID && f == target.name {
+                        selection = .today
+                    }
+                    onDeleteSelection()
+                }
+                folderToDelete = nil
+            }
+        } message: {
+            if let target = folderToDelete {
+                if target.isRemote {
+                    Text(I18N.localized("删除文件夹将连带删除该目录下的所有订阅及远程订阅，此操作无法撤销。是否继续？"))
+                } else {
+                    Text(I18N.localized("确定要删除此文件夹吗？文件夹内的订阅源将移动到未分类。"))
+                }
+            }
+        }
     }
     @ViewBuilder
     private var settingsFooter: some View {
@@ -1268,6 +1300,14 @@ private struct SidebarView: View {
                 } label: {
                     Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                 }
+
+                Divider()
+
+                Button(role: .destructive) {
+                    folderToDelete = FolderDeleteTarget(name: folder, accountID: accountID, isRemote: true)
+                } label: {
+                    Label(I18N.localized("删除文件夹"), systemImage: "trash")
+                }
             }
     }
 
@@ -1278,18 +1318,54 @@ private struct SidebarView: View {
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
             .contextMenu {
-                TranslationFeedListMenu(store: store, feedID: feed.id, accountID: accountID)
-                Divider()
-                Button {
-                    store.markAllRead(feedID: feed.id)
-                } label: {
-                    Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
-                }
+                if selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 {
+                    Button {
+                        let unreadIDs = store.entryListItems(feedIDs: selectedFeedIDs).filter { !$0.isRead }.map { $0.id }
+                        store.markRead(entryIDs: unreadIDs)
+                    } label: {
+                        Label(I18N.shared.localizedFormat("标记选中源全部已读 (%lld)", selectedFeedIDs.count), systemImage: "checkmark.circle")
+                    }
 
-                Button {
-                    copyToClipboard(feed.feedURL.absoluteString)
-                } label: {
-                    Label(I18N.localized("复制订阅"), systemImage: "doc.on.doc")
+                    Button {
+                        let urls = store.feeds(for: accountID).filter { selectedFeedIDs.contains($0.id) }.map { $0.feedURL.absoluteString }.joined(separator: "\n")
+                        copyToClipboard(urls)
+                    } label: {
+                        Label(I18N.shared.localizedFormat("复制选中订阅链接 (%lld)", selectedFeedIDs.count), systemImage: "doc.on.doc")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        batchDeleteConfirmFeedIDs = selectedFeedIDs
+                    } label: {
+                        Label(I18N.shared.localizedFormat("删除选中的订阅 (%lld)", selectedFeedIDs.count), systemImage: "trash")
+                    }
+                } else {
+                    TranslationFeedListMenu(store: store, feedID: feed.id, accountID: accountID)
+                    Divider()
+                    Button {
+                        store.markAllRead(feedID: feed.id)
+                    } label: {
+                        Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
+                    }
+
+                    Button {
+                        copyToClipboard(feed.feedURL.absoluteString)
+                    } label: {
+                        Label(I18N.localized("复制订阅"), systemImage: "doc.on.doc")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        store.deleteFeed(feed)
+                        if selection == .feed(feed.id) {
+                            selection = .today
+                        }
+                        onDeleteSelection()
+                    } label: {
+                        Label(I18N.localized("删除订阅"), systemImage: "trash")
+                    }
                 }
             }
     }
@@ -1371,11 +1447,7 @@ private struct SidebarView: View {
                 Divider()
 
                 Button(role: .destructive) {
-                    store.deleteFolder(folder)
-                    if case let .folder(acc, f) = selection, acc == accountID && f == folder {
-                        selection = .today
-                    }
-                    onDeleteSelection()
+                    folderToDelete = FolderDeleteTarget(name: folder, accountID: accountID, isRemote: false)
                 } label: {
                     Label(I18N.localized("删除文件夹"), systemImage: "trash")
                 }
@@ -2544,11 +2616,16 @@ private struct EntryRow: View {
     }
 }
 
+private struct FeedTargetDestination: Hashable {
+    let accountID: String
+    let folder: String?
+}
+
 private struct AddFeedSheet: View {
     @ObservedObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
-    @State private var folder = ""
+    @State private var selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
     @State private var isSubmitting = false
 
     private var usesInsecureHTTP: Bool {
@@ -2565,7 +2642,7 @@ private struct AddFeedSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     feedURLField
-                    folderField
+                    destinationPickerField
 
                     Text(I18N.localized("保存后会立即抓取一次 Feed。PaperRss 只保存订阅地址、文章和阅读状态。"))
                         .font(.footnote)
@@ -2592,6 +2669,13 @@ private struct AddFeedSheet: View {
                         }
                     }
                     .disabled(!canSubmit)
+                }
+            }
+            .onAppear {
+                if store.isAccountEnabled("local-default") {
+                    selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
+                } else if let firstFresh = store.accounts.first(where: { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) {
+                    selectedDestination = FeedTargetDestination(accountID: firstFresh.id, folder: nil)
                 }
             }
         }
@@ -2625,14 +2709,32 @@ private struct AddFeedSheet: View {
         }
     }
 
-    private var folderField: some View {
+    private var destinationPickerField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(I18N.localized("可选分类"), systemImage: "folder")
+            Label(I18N.localized("目标文件夹"), systemImage: "folder")
                 .font(.headline)
 
-            TextField(I18N.localized("例如：技术"), text: $folder)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
+            Picker(I18N.localized("文件夹"), selection: $selectedDestination) {
+                if store.isAccountEnabled("local-default") {
+                    Section(header: Text(I18N.localized("本地订阅"))) {
+                        Text(I18N.localized("本地订阅 (根目录)")).tag(FeedTargetDestination(accountID: "local-default", folder: nil))
+                        ForEach(store.folders, id: \.self) { folder in
+                            Text(folder).tag(FeedTargetDestination(accountID: "local-default", folder: folder))
+                        }
+                    }
+                }
+
+                ForEach(store.accounts.filter { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) { account in
+                    Section(header: Text(account.displayName)) {
+                        Text(I18N.shared.localizedFormat("%@ (根目录)", account.displayName)).tag(FeedTargetDestination(accountID: account.id, folder: nil))
+                        ForEach(store.folders(for: account.id), id: \.self) { folder in
+                            Text(folder).tag(FeedTargetDestination(accountID: account.id, folder: folder))
+                        }
+                    }
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
         }
     }
 
@@ -2640,7 +2742,11 @@ private struct AddFeedSheet: View {
         guard canSubmit else { return }
         isSubmitting = true
         Task {
-            await store.addFeed(urlText: url, folder: folder)
+            await store.addFeed(
+                urlText: url,
+                targetAccountID: selectedDestination.accountID,
+                folder: selectedDestination.folder
+            )
             await MainActor.run {
                 isSubmitting = false
                 dismiss()
@@ -2677,6 +2783,11 @@ private struct AddFolderSheet: View {
     @ObservedObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var folderName = ""
+    @State private var selectedAccountID = "local-default"
+
+    private var availableAccounts: [AccountRecord] {
+        store.accounts.filter { $0.isEnabled }
+    }
 
     private var canSubmit: Bool {
         !folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2685,14 +2796,31 @@ private struct AddFolderSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Label(I18N.localized("文件夹名称"), systemImage: "folder")
-                    .font(.headline)
+                if availableAccounts.count > 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(I18N.localized("保存到账号"), systemImage: "person.crop.circle")
+                            .font(.headline)
 
-                TextField(I18N.localized("例如：科技、新闻、设计"), text: $folderName)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(submit)
+                        Picker(I18N.localized("账号"), selection: $selectedAccountID) {
+                            ForEach(availableAccounts) { account in
+                                Text(account.displayName).tag(account.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                }
 
-                Text(I18N.localized("创建后可以将订阅源拖拽归类到此文件夹中。"))
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(I18N.localized("文件夹名称"), systemImage: "folder")
+                        .font(.headline)
+
+                    TextField(I18N.localized("例如：科技、新闻、设计"), text: $folderName)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(submit)
+                }
+
+                Text(I18N.localized("创建后可以将订阅源归类到此文件夹中。"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -2707,6 +2835,11 @@ private struct AddFolderSheet: View {
                         .disabled(!canSubmit)
                 }
             }
+            .onAppear {
+                if let first = availableAccounts.first {
+                    selectedAccountID = first.id
+                }
+            }
         }
         #if os(macOS)
         .frame(minWidth: 420, idealWidth: 450, minHeight: 220)
@@ -2717,7 +2850,7 @@ private struct AddFolderSheet: View {
 
     private func submit() {
         guard canSubmit else { return }
-        store.addFolder(folderName)
+        store.addFolder(folderName, targetAccountID: selectedAccountID)
         dismiss()
     }
 }

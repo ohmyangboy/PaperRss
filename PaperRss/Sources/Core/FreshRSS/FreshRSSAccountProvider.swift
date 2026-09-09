@@ -99,6 +99,233 @@ public actor FreshRSSAccountProvider: AccountProvider {
         _ = try await outboxProcessor.processOutbox(forceAll: true)
     }
 
+    // MARK: - AccountProvider CRUD
+
+    public func addFeed(url: URL, title: String?, folder: String?) async throws -> Feed {
+        // 1. 调用远端 Google Reader API 进行订阅
+        let quickAddResult = try await apiClient.quickAddSubscription(url: url)
+        let resolvedStreamID = quickAddResult.streamId ?? "feed/\(url.absoluteString)"
+        let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+
+        // 2. 若指定了分类或自定义标题，调用 editSubscription 进行打标或更名
+        if cleanFolder != nil || cleanTitle != nil {
+            try await apiClient.editSubscription(
+                streamID: resolvedStreamID,
+                addFolderName: cleanFolder,
+                title: cleanTitle
+            )
+        }
+
+        // 3. 本地落库
+        let now = Date().timeIntervalSince1970
+        let effectiveTitle = cleanTitle ?? (url.host ?? url.absoluteString)
+
+        let feedModel: Feed = try database.write { db in
+            var targetFolderID: String? = nil
+            if let cleanFolder {
+                if let existingFolder = try FolderRecord.filter(
+                    Column("account_id") == self.accountID &&
+                    (Column("name") == cleanFolder || Column("external_id") == "user/-/label/\(cleanFolder)")
+                ).fetchOne(db) {
+                    var mutableFolder = existingFolder
+                    if mutableFolder.isDeleted {
+                        mutableFolder.isDeleted = false
+                        mutableFolder.updatedAt = now
+                        try mutableFolder.save(db)
+                    }
+                    targetFolderID = mutableFolder.id
+                } else {
+                    let folderID = UUID().uuidString
+                    let maxSort = (try Int.fetchOne(db, sql: "SELECT MAX(sort_order) FROM folders WHERE account_id = ?;", arguments: [self.accountID])) ?? 0
+                    let folderRecord = FolderRecord(
+                        id: folderID,
+                        accountID: self.accountID,
+                        externalID: "user/-/label/\(cleanFolder)",
+                        name: cleanFolder,
+                        sortOrder: maxSort + 1,
+                        isDeleted: false,
+                        updatedAt: now
+                    )
+                    try folderRecord.save(db)
+                    targetFolderID = folderID
+                }
+            }
+
+            var feedUUID: UUID
+            let feedURLString = url.absoluteString
+
+            if var existing = try FeedRecord.filter(
+                Column("account_id") == self.accountID &&
+                (Column("external_id") == resolvedStreamID || Column("feed_url") == feedURLString)
+            ).fetchOne(db) {
+                existing.isDeleted = false
+                existing.externalID = resolvedStreamID
+                if let cleanTitle {
+                    existing.title = cleanTitle
+                }
+                existing.updatedAt = now
+                try existing.save(db)
+                feedUUID = UUID(uuidString: existing.id) ?? UUID()
+            } else {
+                let newID = UUID()
+                feedUUID = newID
+                let maxSort = (try Int.fetchOne(db, sql: "SELECT MAX(sort_order) FROM feeds WHERE account_id = ?;", arguments: [self.accountID])) ?? 0
+                let newRecord = FeedRecord(
+                    id: newID.uuidString,
+                    accountID: self.accountID,
+                    externalID: resolvedStreamID,
+                    title: effectiveTitle,
+                    siteURL: nil,
+                    feedURL: feedURLString,
+                    etag: nil,
+                    lastModified: nil,
+                    lastRefreshedAt: nil,
+                    isDeleted: false,
+                    updatedAt: now,
+                    storedIconURL: nil,
+                    sortOrder: maxSort + 1
+                )
+                try newRecord.save(db)
+            }
+
+            // 更新分类映射
+            let feedIDString = feedUUID.uuidString
+            try FeedFolderRecord.filter(Column("feed_id") == feedIDString).deleteAll(db)
+            if let targetFolderID {
+                let link = FeedFolderRecord(feedID: feedIDString, folderID: targetFolderID)
+                try link.save(db)
+            }
+
+            return Feed(
+                id: feedUUID,
+                title: effectiveTitle,
+                siteURL: nil,
+                feedURL: url,
+                folder: cleanFolder,
+                updatedAt: Date(timeIntervalSince1970: now)
+            )
+        }
+
+        return feedModel
+    }
+
+    public func deleteFeed(feedID: UUID) async throws {
+        let externalID: String? = try database.read { db in
+            try FeedRecord.filter(Column("id") == feedID.uuidString && Column("account_id") == self.accountID).fetchOne(db)?.externalID
+        }
+
+        if let externalID, !externalID.isEmpty {
+            try await apiClient.unsubscribe(streamID: externalID)
+        }
+
+        let now = Date().timeIntervalSince1970
+        try database.write { db in
+            if var record = try FeedRecord.filter(Column("id") == feedID.uuidString && Column("account_id") == self.accountID).fetchOne(db) {
+                record.isDeleted = true
+                record.updatedAt = now
+                try record.save(db)
+            }
+            try FeedFolderRecord.filter(Column("feed_id") == feedID.uuidString).deleteAll(db)
+        }
+    }
+
+    public func addFolder(name: String) async throws -> FolderRecord {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            throw LocalAccountError.feedNotFound
+        }
+
+        let now = Date().timeIntervalSince1970
+        return try database.write { db in
+            if var existing = try FolderRecord.filter(
+                Column("account_id") == self.accountID && Column("name") == clean
+            ).fetchOne(db) {
+                if existing.isDeleted {
+                    existing.isDeleted = false
+                    existing.updatedAt = now
+                    try existing.save(db)
+                }
+                return existing
+            }
+
+            let folderID = UUID().uuidString
+            let maxSort = (try Int.fetchOne(db, sql: "SELECT MAX(sort_order) FROM folders WHERE account_id = ?;", arguments: [self.accountID])) ?? 0
+            let record = FolderRecord(
+                id: folderID,
+                accountID: self.accountID,
+                externalID: "user/-/label/\(clean)",
+                name: clean,
+                sortOrder: maxSort + 1,
+                isDeleted: false,
+                updatedAt: now
+            )
+            try record.save(db)
+            return record
+        }
+    }
+
+    public func deleteFolder(name: String) async throws {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+
+        // 1. 查询该文件夹以及级联的所有 feed
+        struct FolderAndFeeds {
+            let folder: FolderRecord?
+            let feeds: [FeedRecord]
+        }
+
+        let info: FolderAndFeeds = try database.read { db in
+            guard let folder = try FolderRecord.filter(
+                Column("account_id") == self.accountID && Column("name") == clean && Column("is_deleted") == false
+            ).fetchOne(db) else {
+                return FolderAndFeeds(folder: nil, feeds: [])
+            }
+
+            let feeds = try FeedRecord.fetchAll(
+                db,
+                sql: """
+                SELECT f.* FROM feeds f
+                JOIN feed_folders ff ON f.id = ff.feed_id
+                WHERE ff.folder_id = ? AND f.account_id = ? AND f.is_deleted = 0;
+                """,
+                arguments: [folder.id, self.accountID]
+            )
+            return FolderAndFeeds(folder: folder, feeds: feeds)
+        }
+
+        guard let folder = info.folder else { return }
+
+        // 2. 远端级联退订该文件夹下的所有 feeds
+        for feed in info.feeds {
+            if let extID = feed.externalID, !extID.isEmpty {
+                try? await apiClient.unsubscribe(streamID: extID)
+            }
+        }
+
+        // 3. 远端禁用标签
+        let folderExtID = folder.externalID ?? "user/-/label/\(clean)"
+        try? await apiClient.disableTag(folderExternalID: folderExtID)
+
+        // 4. 本地软删除 folder 与所有 feeds，并解除关联
+        let now = Date().timeIntervalSince1970
+        try database.write { db in
+            for mutFeed in info.feeds {
+                var f = mutFeed
+                f.isDeleted = true
+                f.updatedAt = now
+                try f.save(db)
+                try FeedFolderRecord.filter(Column("feed_id") == f.id).deleteAll(db)
+            }
+
+            var mutFolder = folder
+            mutFolder.isDeleted = true
+            mutFolder.updatedAt = now
+            try mutFolder.save(db)
+            try FeedFolderRecord.filter(Column("folder_id") == folder.id).deleteAll(db)
+        }
+    }
+
     // MARK: - Subscriptions & Folders Sync
 
     public func syncSubscriptionsAndFolders() async throws {

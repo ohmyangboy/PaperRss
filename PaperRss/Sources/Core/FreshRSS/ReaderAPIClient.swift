@@ -559,13 +559,7 @@ public actor ReaderAPIClient {
             let url = canonicalBaseURL
                 .appendingPathComponent("reader/api/0/edit-tag")
 
-            let password = try getPassword()
-            let writeToken = try await authenticator.ensureWriteToken(
-                endpointURL: endpointURL,
-                username: username,
-                password: password,
-                session: session
-            )
+            let writeToken = try await getWriteToken()
 
             let (data, response) = try await performRequest { authToken in
                 var request = URLRequest(url: url)
@@ -593,5 +587,160 @@ public actor ReaderAPIClient {
                 throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
             }
         }
+    }
+
+    private func getWriteToken() async throws -> String {
+        let password = try getPassword()
+        return try await authenticator.ensureWriteToken(
+            endpointURL: endpointURL,
+            username: username,
+            password: password,
+            session: session
+        )
+    }
+
+    // MARK: - Subscription & Folder Management
+
+    /// 快速新增订阅源 (`/reader/api/0/subscription/quickadd`)
+    public func quickAddSubscription(url: URL) async throws -> ReaderAPIQuickAddResult {
+        let quickAddURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/quickadd")
+        let writeToken = try await getWriteToken()
+
+        let (data, response) = try await performRequest { authToken in
+            var request = URLRequest(url: quickAddURL)
+            request.httpMethod = "POST"
+            request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "T", value: writeToken),
+                URLQueryItem(name: "quickadd", value: url.absoluteString)
+            ]
+            request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+            return request
+        }
+
+        guard response.statusCode == 200 else {
+            let snippet = String(data: data.prefix(200), encoding: .utf8)
+            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
+        }
+
+        do {
+            let result = try JSONDecoder().decode(ReaderAPIQuickAddResult.self, from: data)
+            return result
+        } catch {
+            throw ReaderAPIError.decodingError("quickadd: \(error.localizedDescription)")
+        }
+    }
+
+    /// 修改订阅源（添加/移除文件夹分类或修改标题） (`/reader/api/0/subscription/edit`)
+    public func editSubscription(
+        streamID: String,
+        addFolderName: String? = nil,
+        removeFolderName: String? = nil,
+        title: String? = nil
+    ) async throws {
+        guard addFolderName != nil || removeFolderName != nil || title != nil else { return }
+
+        let editURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/edit")
+        let writeToken = try await getWriteToken()
+
+        let (data, response) = try await performRequest { authToken in
+            var request = URLRequest(url: editURL)
+            request.httpMethod = "POST"
+            request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+            var queryItems = [
+                URLQueryItem(name: "T", value: writeToken),
+                URLQueryItem(name: "s", value: streamID),
+                URLQueryItem(name: "ac", value: "edit")
+            ]
+            if let addFolderName, !addFolderName.isEmpty {
+                queryItems.append(URLQueryItem(name: "a", value: "user/-/label/\(addFolderName)"))
+            }
+            if let removeFolderName, !removeFolderName.isEmpty {
+                queryItems.append(URLQueryItem(name: "r", value: "user/-/label/\(removeFolderName)"))
+            }
+            if let title, !title.isEmpty {
+                queryItems.append(URLQueryItem(name: "t", value: title))
+            }
+
+            var components = URLComponents()
+            components.queryItems = queryItems
+            request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+            return request
+        }
+
+        guard response.statusCode == 200 else {
+            let snippet = String(data: data.prefix(200), encoding: .utf8)
+            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
+        }
+    }
+
+    /// 退订订阅源 (`/reader/api/0/subscription/edit`)
+    public func unsubscribe(streamID: String) async throws {
+        let editURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/edit")
+        let writeToken = try await getWriteToken()
+
+        let (data, response) = try await performRequest { authToken in
+            var request = URLRequest(url: editURL)
+            request.httpMethod = "POST"
+            request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "T", value: writeToken),
+                URLQueryItem(name: "s", value: streamID),
+                URLQueryItem(name: "ac", value: "unsubscribe")
+            ]
+            request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+            return request
+        }
+
+        guard response.statusCode == 200 else {
+            let snippet = String(data: data.prefix(200), encoding: .utf8)
+            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
+        }
+    }
+
+    /// 删除/禁用标签分类 (`/reader/api/0/disable-tag`)
+    public func disableTag(folderExternalID: String) async throws {
+        let disableURL = canonicalBaseURL.appendingPathComponent("reader/api/0/disable-tag")
+        let writeToken = try await getWriteToken()
+
+        let (data, response) = try await performRequest { authToken in
+            var request = URLRequest(url: disableURL)
+            request.httpMethod = "POST"
+            request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+            var components = URLComponents()
+            components.queryItems = [
+                URLQueryItem(name: "T", value: writeToken),
+                URLQueryItem(name: "s", value: folderExternalID)
+            ]
+            request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+            return request
+        }
+
+        guard response.statusCode == 200 else {
+            let snippet = String(data: data.prefix(200), encoding: .utf8)
+            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
+        }
+    }
+}
+
+public struct ReaderAPIQuickAddResult: Codable, Sendable {
+    public let numResults: Int?
+    public let error: String?
+    public let streamId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case numResults
+        case error
+        case streamId
     }
 }

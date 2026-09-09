@@ -956,15 +956,35 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    public func addFolder(_ name: String) {
+    public func addFolder(_ name: String, targetAccountID: String? = nil) {
         guard let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else { return }
-        try? localProvider.addFolder(name: clean)
-        reloadState()
+        let accID = targetAccountID ?? (isAccountEnabled("local-default") ? "local-default" : accounts.first(where: { $0.isEnabled })?.id ?? "local-default")
+
+        if accID == "local-default" {
+            try? localProvider.addFolder(name: clean)
+            reloadState()
+        } else {
+            Task { [weak self, syncCoordinator] in
+                if let provider = await syncCoordinator.provider(for: accID) {
+                    _ = try? await provider.addFolder(name: clean)
+                }
+                await self?.reloadStateAsync()
+            }
+        }
     }
 
-    public func deleteFolder(_ name: String) {
-        try? localProvider.deleteFolder(name: name)
-        reloadState()
+    public func deleteFolder(_ name: String, accountID: String = "local-default") {
+        if accountID == "local-default" {
+            try? localProvider.deleteFolder(name: name)
+            reloadState()
+        } else {
+            Task { [weak self, syncCoordinator] in
+                if let provider = await syncCoordinator.provider(for: accountID) {
+                    try? await provider.deleteFolder(name: name)
+                }
+                await self?.reloadStateAsync()
+            }
+        }
     }
 
     public func renameFolder(from oldName: String, to newName: String) {
@@ -972,7 +992,7 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    public func addFeed(urlText: String, folder: String? = nil) async {
+    public func addFeed(urlText: String, targetAccountID: String? = nil, folder: String? = nil) async {
         guard let url = normalizedURL(urlText) else {
             let message = I18N.localized("请输入有效的 Feed URL。")
             reportErrorMessage(message, module: .settings)
@@ -981,22 +1001,43 @@ public final class AppStore: ObservableObject {
         }
 
         let title = url.host ?? url.absoluteString
-        let feed: Feed
-        do {
-            feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
-        } catch let error as LocalAccountError {
-            let message = error.errorDescription ?? error.localizedDescription
-            reportError(error, module: .settings)
-            lastError = message
-            return
-        } catch {
-            reportError(error, module: .settings)
-            lastError = error.localizedDescription
-            return
-        }
+        let accID = targetAccountID ?? (isAccountEnabled("local-default") ? "local-default" : accounts.first(where: { $0.isEnabled })?.id ?? "local-default")
 
-        reloadState()
-        await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
+        if accID == "local-default" {
+            let feed: Feed
+            do {
+                feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
+            } catch let error as LocalAccountError {
+                let message = error.errorDescription ?? error.localizedDescription
+                reportError(error, module: .settings)
+                lastError = message
+                return
+            } catch {
+                reportError(error, module: .settings)
+                lastError = error.localizedDescription
+                return
+            }
+
+            reloadState()
+            await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
+        } else {
+            guard let provider = await syncCoordinator.provider(for: accID) else {
+                let message = I18N.localized("未找到目标账号提供者。")
+                reportErrorMessage(message, module: .settings)
+                lastError = message
+                return
+            }
+
+            do {
+                _ = try await provider.addFeed(url: url, title: title, folder: folder)
+            } catch {
+                reportError(error, module: .settings)
+                lastError = error.localizedDescription
+                return
+            }
+
+            await reloadStateAsync()
+        }
     }
 
     public func removeFeed(_ feed: Feed) {
@@ -1035,16 +1076,39 @@ public final class AppStore: ObservableObject {
         deleteFeeds(Set(ids))
     }
 
+    public func accountID(for feedID: UUID) -> String? {
+        for (accID, feeds) in feedsByAccount {
+            if feeds.contains(where: { $0.id == feedID }) {
+                return accID
+            }
+        }
+        return (try? libraryDatabase.read { db in
+            try FeedRecord.filter(Column("id") == feedID.uuidString).fetchOne(db)?.accountID
+        })
+    }
+
     @discardableResult
     private func deleteFeedAndInvalidateRefresh(_ feedID: UUID) -> Bool {
-        do {
-            try localProvider.deleteFeed(feedID: feedID)
-            invalidatedRefreshFeedIDs.insert(feedID)
-            activeRefreshFeedTasks[feedID]?.cancel()
+        let accID = accountID(for: feedID) ?? "local-default"
+        invalidatedRefreshFeedIDs.insert(feedID)
+        activeRefreshFeedTasks[feedID]?.cancel()
+
+        if accID == "local-default" {
+            do {
+                try localProvider.deleteFeed(feedID: feedID)
+                return true
+            } catch {
+                // 保持原有删除 API 的静默失败语义；删除未成功时不取消刷新任务。
+                return false
+            }
+        } else {
+            Task { [weak self, syncCoordinator] in
+                if let provider = await syncCoordinator.provider(for: accID) {
+                    try? await provider.deleteFeed(feedID: feedID)
+                }
+                await self?.reloadStateAsync()
+            }
             return true
-        } catch {
-            // 保持原有删除 API 的静默失败语义；删除未成功时不取消刷新任务。
-            return false
         }
     }
 
@@ -3085,7 +3149,6 @@ public final class AppStore: ObservableObject {
 }
 
 private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
     var paperRssNormalizedWhitespace: String {
         components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
     }

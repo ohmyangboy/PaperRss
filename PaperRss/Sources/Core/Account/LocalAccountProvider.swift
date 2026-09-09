@@ -512,4 +512,40 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
     public func pushPendingArticleStates() async throws {
         // Local 账号由本地 authoritative 维护，无需出站推送
     }
+
+    // MARK: - AccountProvider CRUD
+
+    public func addFeed(url: URL, title: String?, folder: String?) async throws -> Feed {
+        let feedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? (url.host ?? url.absoluteString)
+        return try addFeed(title: feedTitle, feedURL: url, siteURL: nil, folder: folder)
+    }
+
+    public func deleteFeed(feedID: UUID) async throws {
+        try database.write { db in
+            try self.feedRepository.softDeleteFeed(id: feedID.uuidString, in: db)
+        }
+    }
+
+    public func addFolder(name: String) async throws -> FolderRecord {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            throw LocalAccountError.feedNotFound
+        }
+        try database.write { db in
+            try self.feedRepository.addFolder(name: clean, accountID: self.accountID, in: db)
+        }
+        let folderID = "\(accountID):folder:\(clean)".stableDigest
+        return try database.read { db in
+            guard let folder = try FolderRecord.filter(Column("id") == folderID).fetchOne(db) else {
+                throw LocalAccountError.feedNotFound
+            }
+            return folder
+        }
+    }
+
+    public func deleteFolder(name: String) async throws {
+        try database.write { db in
+            try self.feedRepository.deleteFolder(name: name, accountID: self.accountID, in: db)
+        }
+    }
 }

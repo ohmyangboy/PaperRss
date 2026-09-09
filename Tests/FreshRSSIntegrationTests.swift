@@ -2851,4 +2851,132 @@ final class FreshRSSIntegrationTests: XCTestCase {
             XCTAssertNil(remote2?.storedIconURL)
         }
     }
+
+    // MARK: - FreshRSS CRUD Lifecycle (Issue #4)
+
+    func testFreshRSSCRUDLifecycle() async throws {
+        let endpoint = URL(string: "http://127.0.0.1:8080/api/greader.php")!
+        let requestsBox = TestStateBox<[String]>([])
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let body = String(data: MockFreshRSSURLProtocol.requestBody(from: request), encoding: .utf8) ?? ""
+            requestsBox.mutate { $0.append("\(request.httpMethod ?? "") \(path) -> \(body)") }
+
+            let okResp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+            if path.contains("ClientLogin") {
+                return (okResp, "Auth=test_token_123\n".data(using: .utf8)!)
+            } else if path.contains("token") {
+                return (okResp, "write_token_abc".data(using: .utf8)!)
+            } else if path.contains("subscription/quickadd") {
+                let json = """
+                {
+                    "numResults": 1,
+                    "streamId": "feed/https://news.example.com/rss",
+                    "query": "https://news.example.com/rss"
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            } else if path.contains("subscription/edit") {
+                return (okResp, "OK".data(using: .utf8)!)
+            } else if path.contains("disable-tag") {
+                return (okResp, "OK".data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                return (okResp, "{\"subscriptions\":[]}".data(using: .utf8)!)
+            } else if path.contains("stream/items/ids") || path.contains("stream/contents") {
+                return (okResp, "{\"items\":[]}".data(using: .utf8)!)
+            }
+            return (okResp, Data())
+        }
+
+        try inMemoryCredentialStore.saveFreshRSSPassword("pwd", accountID: "test-freshrss-crud")
+
+        try database.write { db in
+            let acc = AccountRecord(
+                id: "test-freshrss-crud",
+                type: "freshRSS",
+                displayName: "Test FreshRSS",
+                endpointURL: endpoint.absoluteString,
+                username: "testuser",
+                isEnabled: true,
+                createdAt: 1000,
+                updatedAt: 1000
+            )
+            try acc.save(db)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: "test-freshrss-crud",
+            endpointURL: endpoint,
+            username: "testuser",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        // 1. 新建文件夹
+        let createdFolder = try await provider.addFolder(name: "科技新闻")
+        XCTAssertEqual(createdFolder.name, "科技新闻")
+        XCTAssertEqual(createdFolder.externalID, "user/-/label/科技新闻")
+
+        // 2. 新增订阅源（带分类）
+        let feedURL = URL(string: "https://news.example.com/rss")!
+        let feed = try await provider.addFeed(url: feedURL, title: "科技头条", folder: "科技新闻")
+        XCTAssertEqual(feed.title, "科技头条")
+        XCTAssertEqual(feed.folder, "科技新闻")
+
+        // 验证数据库落库与分类关联
+        let feedRecord = try database.read { db in
+            try FeedRecord.filter(Column("account_id") == "test-freshrss-crud" && Column("feed_url") == feedURL.absoluteString).fetchOne(db)
+        }
+        XCTAssertNotNil(feedRecord)
+        XCTAssertEqual(feedRecord?.externalID, "feed/https://news.example.com/rss")
+
+        let folderRecord = try database.read { db in
+            try FolderRecord.filter(Column("account_id") == "test-freshrss-crud" && Column("name") == "科技新闻").fetchOne(db)
+        }
+        XCTAssertNotNil(folderRecord)
+
+        let linkRecord = try database.read { db in
+            try FeedFolderRecord.filter(Column("feed_id") == feedRecord!.id && Column("folder_id") == folderRecord!.id).fetchOne(db)
+        }
+        XCTAssertNotNil(linkRecord)
+
+        // 验证网络请求包含了 quickadd 和 edit 打标签
+        let reqs = requestsBox.value.compactMap { $0.removingPercentEncoding }
+        let hasQuickAdd = reqs.contains { $0.contains("subscription/quickadd") && $0.contains("quickadd=https://news.example.com/rss") }
+        let hasEditLabel = reqs.contains { $0.contains("subscription/edit") && $0.contains("a=user/-/label/科技新闻") }
+        XCTAssertTrue(hasQuickAdd)
+        XCTAssertTrue(hasEditLabel)
+
+        // 3. 删除单个订阅源
+        try await provider.deleteFeed(feedID: feed.id)
+        let deletedFeed = try database.read { db in
+            try FeedRecord.filter(Column("id") == feed.id.uuidString).fetchOne(db)
+        }
+        XCTAssertEqual(deletedFeed?.isDeleted, true)
+
+        let hasUnsubscribe = requestsBox.value.contains { $0.contains("subscription/edit") && $0.contains("ac=unsubscribe") }
+        XCTAssertTrue(hasUnsubscribe)
+
+        // 4. 新增一个 feed 用于级联删除测试
+        let feed2 = try await provider.addFeed(url: URL(string: "https://news2.example.com/rss")!, title: "科技第二台", folder: "科技新闻")
+        XCTAssertEqual(feed2.folder, "科技新闻")
+
+        // 5. 级联删除文件夹
+        try await provider.deleteFolder(name: "科技新闻")
+        let deletedFolder = try database.read { db in
+            try FolderRecord.filter(Column("account_id") == "test-freshrss-crud" && Column("name") == "科技新闻").fetchOne(db)
+        }
+        XCTAssertEqual(deletedFolder?.isDeleted, true)
+
+        let deletedFeed2 = try database.read { db in
+            try FeedRecord.filter(Column("id") == feed2.id.uuidString).fetchOne(db)
+        }
+        XCTAssertEqual(deletedFeed2?.isDeleted, true)
+
+        let hasDisableTag = requestsBox.value.compactMap { $0.removingPercentEncoding }.contains { $0.contains("disable-tag") && $0.contains("user/-/label/科技新闻") }
+        XCTAssertTrue(hasDisableTag)
+    }
 }

@@ -72,6 +72,12 @@ public protocol AccountProvider: Sendable {
 
     func refresh(reason: RefreshReason) async throws -> RefreshResult
     func pushPendingArticleStates() async throws
+
+    // MARK: - 订阅与文件夹生命周期管理 (CRUD)
+    func addFeed(url: URL, title: String?, folder: String?) async throws -> Feed
+    func deleteFeed(feedID: UUID) async throws
+    func addFolder(name: String) async throws -> FolderRecord
+    func deleteFolder(name: String) async throws
 }
 
 /// 账号刷新进度；总量未知时显示准备状态，计数仅在落库批次完成后发布。

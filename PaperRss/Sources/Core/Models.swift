@@ -677,4 +677,8 @@ public extension String {
             hash &*= 0x100000001b3
         }.description
     }
+
+    var nonEmpty: String? {
+        isEmpty ? nil : self
+    }
 }
