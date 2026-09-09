@@ -127,12 +127,24 @@ struct RootView: View {
                     initialDestination: initialFeedDestination,
                     selection: $selection
                 )
+                .id(initialFeedDestination)
+            }
+            .onChange(of: showsAddFeed) { _, isShowing in
+                if !isShowing {
+                    initialFeedDestination = nil
+                }
             }
             .sheet(isPresented: $showsAddFolder) {
                 AddFolderSheet(
                     store: store,
                     initialAccountID: initialFolderAccountID
                 )
+                .id(initialFolderAccountID)
+            }
+            .onChange(of: showsAddFolder) { _, isShowing in
+                if !isShowing {
+                    initialFolderAccountID = nil
+                }
             }
             .sheet(item: Binding(
                 get: { renamingFolder.map { FolderIdentifiable(name: $0) } },
@@ -243,8 +255,8 @@ struct RootView: View {
                 .ignoresSafeArea(),
             toolbarActions: ToolbarActions(
                 onRefresh: { [store] in Task { await store.refresh() } },
-                onAddFeed: { showsAddFeed = true },
-                onAddFolder: { showsAddFolder = true },
+                onAddFeed: { initialFeedDestination = nil; showsAddFeed = true },
+                onAddFolder: { initialFolderAccountID = nil; showsAddFolder = true },
                 onImport: { showsImporter = true },
                 onExport: { showsExporter = true },
                 isRefreshing: store.isRefreshing,
@@ -1050,6 +1062,7 @@ private struct SidebarView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Button {
                             showsEmptyFeedActions = false
+                            initialFeedDestination = nil
                             showsAddFeed = true
                         } label: {
                             Label(I18N.localized("添加订阅"), systemImage: "plus.circle")
@@ -2697,8 +2710,30 @@ private struct AddFeedSheet: View {
     @Binding var selection: SidebarSelection?
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
-    @State private var selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
+    @State private var selectedDestination: FeedTargetDestination
     @State private var isSubmitting = false
+
+    init(
+        store: AppStore,
+        initialDestination: FeedTargetDestination? = nil,
+        selection: Binding<SidebarSelection?>
+    ) {
+        self.store = store
+        self.initialDestination = initialDestination
+        self._selection = selection
+
+        let initial: FeedTargetDestination
+        if let initialDestination {
+            initial = initialDestination
+        } else if store.isAccountEnabled("local-default") {
+            initial = FeedTargetDestination(accountID: "local-default", folder: nil)
+        } else if let firstFresh = store.accounts.first(where: { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) {
+            initial = FeedTargetDestination(accountID: firstFresh.id, folder: nil)
+        } else {
+            initial = FeedTargetDestination(accountID: "local-default", folder: nil)
+        }
+        self._selectedDestination = State(initialValue: initial)
+    }
 
     private var usesInsecureHTTP: Bool {
         let candidate = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2746,10 +2781,11 @@ private struct AddFeedSheet: View {
             .onAppear {
                 if let initialDestination {
                     selectedDestination = initialDestination
-                } else if store.isAccountEnabled("local-default") {
-                    selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
-                } else if let firstFresh = store.accounts.first(where: { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) {
-                    selectedDestination = FeedTargetDestination(accountID: firstFresh.id, folder: nil)
+                }
+            }
+            .onChange(of: initialDestination) { _, newDestination in
+                if let newDestination {
+                    selectedDestination = newDestination
                 }
             }
         }
@@ -2861,7 +2897,26 @@ private struct AddFolderSheet: View {
     var initialAccountID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var folderName = ""
-    @State private var selectedAccountID = "local-default"
+    @State private var selectedAccountID: String
+
+    init(
+        store: AppStore,
+        initialAccountID: String? = nil
+    ) {
+        self.store = store
+        self.initialAccountID = initialAccountID
+
+        let available = store.accounts.filter { $0.isEnabled }
+        let initial: String
+        if let initialAccountID, available.contains(where: { $0.id == initialAccountID }) {
+            initial = initialAccountID
+        } else if let first = available.first {
+            initial = first.id
+        } else {
+            initial = "local-default"
+        }
+        self._selectedAccountID = State(initialValue: initial)
+    }
 
     private var availableAccounts: [AccountRecord] {
         store.accounts.filter { $0.isEnabled }
@@ -2918,6 +2973,11 @@ private struct AddFolderSheet: View {
                     selectedAccountID = initialAccountID
                 } else if let first = availableAccounts.first {
                     selectedAccountID = first.id
+                }
+            }
+            .onChange(of: initialAccountID) { _, newAccountID in
+                if let newAccountID, availableAccounts.contains(where: { $0.id == newAccountID }) {
+                    selectedAccountID = newAccountID
                 }
             }
         }

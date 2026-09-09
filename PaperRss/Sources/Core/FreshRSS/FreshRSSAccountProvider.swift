@@ -180,6 +180,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 Column("account_id") == self.accountID &&
                 (Column("external_id") == resolvedStreamID || Column("feed_url") == feedURLString)
             ).fetchOne(db) {
+                if existing.isDeleted {
+                    // 复活历史软删除的 feed 时，先清空可能残留的旧 items，确保数据环境干净
+                    try ItemRecord.filter(Column("feed_id") == existing.id).deleteAll(db)
+                }
                 existing.isDeleted = false
                 existing.externalID = resolvedStreamID
                 existing.title = effectiveTitle
@@ -260,6 +264,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 try record.save(db)
             }
             try FeedFolderRecord.filter(Column("feed_id") == feedID.uuidString).deleteAll(db)
+            // 彻底清理该退订 Feed 下的全部本地 items（级联清理 articles 和 states）
+            try ItemRecord.filter(Column("feed_id") == feedID.uuidString).deleteAll(db)
         }
     }
 
@@ -461,6 +467,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
                 var feedRecordID: String
                 if var existing = try FeedRecord.filter(Column("account_id") == self.accountID && Column("external_id") == sub.id).fetchOne(db) {
+                    if existing.isDeleted {
+                        try ItemRecord.filter(Column("feed_id") == existing.id).deleteAll(db)
+                    }
                     existing.title = sub.title
                     existing.feedURL = feedURL
                     existing.siteURL = sub.htmlUrl
@@ -470,6 +479,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     try existing.save(db)
                     feedRecordID = existing.id
                 } else if var existingByURL = try FeedRecord.filter(Column("account_id") == self.accountID && Column("feed_url") == feedURL).fetchOne(db) {
+                    if existingByURL.isDeleted {
+                        try ItemRecord.filter(Column("feed_id") == existingByURL.id).deleteAll(db)
+                    }
                     existingByURL.externalID = sub.id
                     existingByURL.title = sub.title
                     existingByURL.siteURL = sub.htmlUrl
@@ -511,7 +523,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             }
 
-            // 标记远端已删除的 feeds
+            // 标记远端已删除的 feeds，并清理其关联的本地 items
             let localFeeds = try FeedRecord.filter(Column("account_id") == self.accountID && Column("is_deleted") == false).fetchAll(db)
             for localFeed in localFeeds {
                 if let ext = localFeed.externalID, !activeRemoteFeedIDs.contains(ext) {
@@ -519,6 +531,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     updated.isDeleted = true
                     updated.updatedAt = now
                     try updated.save(db)
+                    try FeedFolderRecord.filter(Column("feed_id") == localFeed.id).deleteAll(db)
+                    try ItemRecord.filter(Column("feed_id") == localFeed.id).deleteAll(db)
                 }
             }
 
@@ -746,8 +760,25 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
                 // 查找或新建 item（持久化 raw remote identity）
                 let internalItemID: String
+                let articleURL = item.alternate?.first?.href?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let articleTitle = item.title ?? ""
+
                 if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == rawRemoteID).fetchOne(db) {
                     internalItemID = existingItem.id
+                } else if let articleURL, !articleURL.isEmpty,
+                          var existingByURL = try ItemRecord.fetchOne(db, sql: """
+                              SELECT i.* FROM items i
+                              JOIN articles a ON a.item_id = i.id
+                              WHERE i.account_id = ? AND i.feed_id = ? AND a.url = ?
+                              ORDER BY i.created_at DESC
+                              LIMIT 1;
+                              """, arguments: [self.accountID, targetFeedID, articleURL]) {
+                    // 同一个订阅源下已存在相同文章 URL（如退订重加后服务端分配了新 entry ID）
+                    // 重新绑定 external_id，复用原有 item，杜绝重复插入
+                    existingByURL.externalID = rawRemoteID
+                    existingByURL.updatedAt = item.updated ?? now
+                    try existingByURL.save(db)
+                    internalItemID = existingByURL.id
                 } else {
                     let newID = "\(self.accountID)::\(rawRemoteID)"
                     let newItem = ItemRecord(
@@ -765,9 +796,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 processedItemIDs.insert(internalItemID)
 
                 // 保存/更新 articles 表内容
-                let articleTitle = item.title ?? ""
                 let articleAuthor = item.author
-                let articleURL = item.alternate?.first?.href
                 let articlePublished = item.published
                 let contentHTML = item.content?.content ?? item.summary?.content
                 let articleSummary = contentHTML.flatMap { Self.stripHTML($0) } ?? ""

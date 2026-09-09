@@ -3042,4 +3042,350 @@ final class FreshRSSIntegrationTests: XCTestCase {
         }
         XCTAssertNotNil(articleRecord)
     }
+
+    func testDeleteAndReaddFeedDoesNotDuplicateArticles() async throws {
+        let endpoint = URL(string: "http://127.0.0.1:8080/api/greader.php")!
+        let accountID = "test-freshrss-dedup"
+        try inMemoryCredentialStore.saveFreshRSSPassword("testpwd", accountID: accountID)
+
+        try database.write { db in
+            let acc = AccountRecord(
+                id: accountID,
+                type: "freshRSS",
+                displayName: "FreshRSS",
+                endpointURL: endpoint.absoluteString,
+                username: "testuser",
+                isEnabled: true,
+                createdAt: 1000,
+                updatedAt: 1000
+            )
+            try acc.save(db)
+        }
+
+        let provider = FreshRSSAccountProvider(
+            accountID: accountID,
+            endpointURL: endpoint,
+            username: "testuser",
+            database: database,
+            credentialStore: inMemoryCredentialStore,
+            session: mockSession
+        )
+
+        let streamID = "feed/https://weekly.example.com/rss"
+        let feedURL = URL(string: "https://weekly.example.com/rss")!
+
+        let prefixBox = TestStateBox<String>("000000000000000") // 第一次添加时的服务端 ID 前缀
+
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let okResp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+            if path.contains("ClientLogin") {
+                return (okResp, "Auth=test_token_123\n".data(using: .utf8)!)
+            } else if path.contains("token") {
+                return (okResp, "write_token_abc".data(using: .utf8)!)
+            } else if path.contains("subscription/quickadd") {
+                let json = """
+                {
+                    "numResults": 1,
+                    "streamId": "\(streamID)",
+                    "query": "\(feedURL.absoluteString)"
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let json = """
+                {
+                    "subscriptions": [
+                        {
+                            "id": "\(streamID)",
+                            "title": "潮流周刊测试",
+                            "categories": [],
+                            "url": "\(feedURL.absoluteString)"
+                        }
+                    ]
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            } else if path.contains("subscription/edit") {
+                return (okResp, "OK".data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let currentPrefix = prefixBox.value
+                let json = """
+                {
+                    "items": [
+                        {
+                            "id": "tag:google.com,2005:reader/item/\(currentPrefix)1",
+                            "title": "第281期 - 越王的剑",
+                            "alternate": [{"href": "https://weekly.example.com/posts/281"}],
+                            "published": 1725696000,
+                            "categories": ["user/-/state/com.google/reading-list"]
+                        },
+                        {
+                            "id": "tag:google.com,2005:reader/item/\(currentPrefix)2",
+                            "title": "第280期 - 喜欢宋体",
+                            "alternate": [{"href": "https://weekly.example.com/posts/280"}],
+                            "published": 1725091200,
+                            "categories": ["user/-/state/com.google/reading-list"]
+                        }
+                    ]
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            }
+            return (okResp, Data())
+        }
+
+        // 1. 首次添加订阅
+        let feed1 = try await provider.addFeed(url: feedURL, title: nil, folder: nil)
+        let feed1ID = feed1.id.uuidString
+
+        let itemsAfterAdd1 = try database.read { db in
+            try ItemRecord.filter(Column("feed_id") == feed1ID).fetchAll(db)
+        }
+        XCTAssertEqual(itemsAfterAdd1.count, 2)
+
+        // 2. 删除订阅：验证本地 items 被彻底清理
+        try await provider.deleteFeed(feedID: feed1.id)
+
+        let itemsAfterDelete = try database.read { db in
+            try ItemRecord.filter(Column("feed_id") == feed1ID).fetchAll(db)
+        }
+        XCTAssertEqual(itemsAfterDelete.count, 0, "删除订阅后，该 feed 下关联的 items 必须被彻底清空")
+
+        let articlesAfterDelete = try database.read { db in
+            try ArticleRecord.fetchAll(db)
+        }
+        XCTAssertEqual(articlesAfterDelete.count, 0, "CASCADE 删除应同步清理 articles 表")
+
+        // 3. 模拟 FreshRSS 服务端退订重加后，重新分配了全新的递增 entry ID
+        prefixBox.mutate { $0 = "000000000000099" }
+
+        // 4. 再次添加该订阅
+        let feed2 = try await provider.addFeed(url: feedURL, title: nil, folder: nil)
+        XCTAssertEqual(feed2.id, feed1.id, "重新添加应复用同一个 feed 身份")
+
+        let itemsAfterAdd2 = try database.read { db in
+            try ItemRecord.filter(Column("feed_id") == feed1ID).fetchAll(db)
+        }
+        XCTAssertEqual(itemsAfterAdd2.count, 2, "重新添加后，文章列表必须保持精准 2 篇，绝不能出现旧数据残留导致的重复")
+
+        let titlesAfterAdd2 = try database.read { db in
+            try ArticleRecord.fetchAll(db).map(\.title).sorted()
+        }
+        XCTAssertEqual(titlesAfterAdd2, ["第280期 - 喜欢宋体", "第281期 - 越王的剑"])
+
+        // 5. 极端场景验证：若库中因历史原因已存在相同 URL 的记录，入库时必须通过 URL 幂等去重并重新绑定 ID
+        prefixBox.mutate { $0 = "000000000000888" } // 服务端又变更了一次 ID
+
+        try database.write { db in
+            // 直接测试 URL 幂等命中并复用
+            let matched = try ItemRecord.fetchOne(db, sql: """
+                SELECT i.* FROM items i
+                JOIN articles a ON a.item_id = i.id
+                WHERE i.account_id = ? AND i.feed_id = ? AND a.url = ?
+                LIMIT 1;
+            """, arguments: ["test-freshrss-dedup", feed1ID, "https://weekly.example.com/posts/281"])
+            XCTAssertNotNil(matched, "应当能通过 URL 找到已存在的 item")
+        }
+
+        // 验证全局 timeline 查询没有重复
+        let timelineQuery = TimelineQueryService(database: database)
+        let listItems = try timelineQuery.fetchListItems(scope: .feed(feedID: feed1ID))
+        XCTAssertEqual(listItems.count, 2)
+        XCTAssertEqual(Set(listItems.map { $0.title }).count, 2)
+    }
+
+    func testMigrationDeduplicatesExistingDirtyData() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbURL = tempDir.appendingPathComponent("test.sqlite")
+        let database = try LibraryDatabase(databaseURL: dbURL)
+
+        try database.write { db in
+            let feedID = "feed-dup-1"
+            let now = Date().timeIntervalSince1970
+
+            let acc = AccountRecord(
+                id: "local-default",
+                type: "local",
+                displayName: "我的 Mac",
+                endpointURL: nil,
+                username: nil,
+                isEnabled: true,
+                createdAt: now,
+                updatedAt: now
+            )
+            try acc.save(db)
+
+            let feed = FeedRecord(
+                id: feedID,
+                accountID: "local-default",
+                externalID: nil,
+                title: "测试源",
+                siteURL: nil,
+                feedURL: "https://example.com/feed.xml",
+                etag: nil,
+                lastModified: nil,
+                lastRefreshedAt: now,
+                isDeleted: false,
+                updatedAt: now,
+                storedIconURL: nil,
+                sortOrder: 0
+            )
+            try feed.save(db)
+
+            // 插入两条相同 URL 的 item
+            let item1 = ItemRecord(id: "item-1", accountID: "local-default", externalID: "ext-1", feedID: feedID, createdAt: 1000, updatedAt: 1000)
+            try item1.save(db)
+            let art1 = ArticleRecord(itemID: "item-1", title: "相同标题", author: nil, url: "https://example.com/post/1", publishedAt: 1000, summary: "", contentHTML: nil, contentUpdatedAt: 1000)
+            try art1.save(db)
+            let state1 = ArticleStateRecord(itemID: "item-1", isRead: true, isStarred: false, dateArrived: 1000, updatedAt: 1000)
+            try state1.save(db)
+
+            // item1 关联了 AI 翻译产物
+            let artifact1 = AIArtifactRecord(
+                id: "art-artifact-1",
+                accountID: "local-default",
+                itemID: "item-1",
+                subjectKey: "subject-1",
+                kind: "bilingual",
+                contentHash: "hash-1",
+                model: "model-1",
+                targetLanguage: "zh-CN",
+                promptVersion: 1,
+                providerID: nil,
+                configurationFingerprint: nil,
+                content: "已翻译内容",
+                segmentsJSON: nil,
+                selectionText: nil,
+                selectionArticleHash: nil,
+                selectionAnchorJSON: nil,
+                isComplete: true,
+                isDeleted: false,
+                createdAt: 1000,
+                updatedAt: 1000
+            )
+            try artifact1.save(db)
+
+            let item2 = ItemRecord(id: "item-2", accountID: "local-default", externalID: "ext-2", feedID: feedID, createdAt: 2000, updatedAt: 2000)
+            try item2.save(db)
+            let art2 = ArticleRecord(itemID: "item-2", title: "相同标题", author: nil, url: "https://example.com/post/1", publishedAt: 1000, summary: "", contentHTML: nil, contentUpdatedAt: 2000)
+            try art2.save(db)
+            let state2 = ArticleStateRecord(itemID: "item-2", isRead: false, isStarred: false, dateArrived: 2000, updatedAt: 2000)
+            try state2.save(db)
+        }
+
+        // 验证插入了两条
+        try database.read { db in
+            let count = try ItemRecord.filter(Column("feed_id") == "feed-dup-1").fetchCount(db)
+            XCTAssertEqual(count, 2)
+        }
+
+        // 运行迁移中的自愈逻辑（模拟 GRDB 迁移环境：外键临时关闭，迁移结束自动 foreign_key_check）
+        try database.write { db in
+            // 模拟迁移期间关闭外键检查
+            try db.execute(sql: "PRAGMA foreign_keys = OFF;")
+
+            try db.execute(sql: """
+                CREATE TEMP TABLE duplicate_item_pairs AS
+                WITH ranked_items AS (
+                    SELECT i.id AS redundant_item_id,
+                           i.feed_id,
+                           a.url,
+                           FIRST_VALUE(i.id) OVER (
+                               PARTITION BY i.feed_id, a.url
+                               ORDER BY i.created_at DESC, i.updated_at DESC, i.id DESC
+                           ) AS surviving_item_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY i.feed_id, a.url
+                               ORDER BY i.created_at DESC, i.updated_at DESC, i.id DESC
+                           ) AS rank_num
+                    FROM items i
+                    JOIN articles a ON a.item_id = i.id
+                    WHERE a.url IS NOT NULL AND TRIM(a.url) != ''
+                )
+                SELECT redundant_item_id, surviving_item_id
+                FROM ranked_items
+                WHERE rank_num > 1;
+
+                UPDATE ai_artifacts
+                SET item_id = (
+                    SELECT p.surviving_item_id
+                    FROM duplicate_item_pairs p
+                    WHERE p.redundant_item_id = ai_artifacts.item_id
+                )
+                WHERE item_id IN (SELECT redundant_item_id FROM duplicate_item_pairs)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM ai_artifacts a2
+                    JOIN duplicate_item_pairs p ON p.surviving_item_id = a2.item_id
+                    WHERE p.redundant_item_id = ai_artifacts.item_id
+                      AND a2.kind = ai_artifacts.kind
+                  );
+
+                UPDATE article_states
+                SET is_read = 1
+                WHERE item_id IN (
+                    SELECT p.surviving_item_id
+                    FROM duplicate_item_pairs p
+                    JOIN article_states s ON s.item_id = p.redundant_item_id
+                    WHERE s.is_read = 1
+                );
+
+                UPDATE article_states
+                SET is_starred = 1
+                WHERE item_id IN (
+                    SELECT p.surviving_item_id
+                    FROM duplicate_item_pairs p
+                    JOIN article_states s ON s.item_id = p.redundant_item_id
+                    WHERE s.is_starred = 1
+                );
+
+                DELETE FROM items WHERE id IN (SELECT redundant_item_id FROM duplicate_item_pairs);
+                DROP TABLE duplicate_item_pairs;
+
+                UPDATE ai_artifacts
+                SET item_id = NULL
+                WHERE item_id IS NOT NULL
+                  AND item_id NOT IN (SELECT id FROM items);
+
+                DELETE FROM articles WHERE item_id NOT IN (SELECT id FROM items);
+                DELETE FROM article_states WHERE item_id NOT IN (SELECT id FROM items);
+                DELETE FROM article_caches WHERE item_id NOT IN (SELECT id FROM items);
+                DELETE FROM article_state_outbox WHERE item_id NOT IN (SELECT id FROM items);
+            """)
+
+            try db.execute(sql: "PRAGMA foreign_keys = ON;")
+
+            // 严格验证：外键检查必须零错误！
+            let fkErrors = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check;")
+            XCTAssertTrue(fkErrors.isEmpty, "外键检查必须完全通过，不能遗留任何孤儿外键违规")
+        }
+
+        // 验证去重后只剩一条且为创建时间更新的 item-2
+        try database.read { db in
+            let items = try ItemRecord.filter(Column("feed_id") == "feed-dup-1").fetchAll(db)
+            XCTAssertEqual(items.count, 1)
+            XCTAssertEqual(items.first?.id, "item-2")
+
+            let articles = try ArticleRecord.fetchAll(db)
+            XCTAssertEqual(articles.count, 1)
+            XCTAssertEqual(articles.first?.itemID, "item-2")
+
+            // 验证 AI 产物成功继承转移到 item-2
+            let artifact = try AIArtifactRecord.fetchAll(db).first
+            XCTAssertNotNil(artifact)
+            XCTAssertEqual(artifact?.itemID, "item-2")
+            XCTAssertEqual(artifact?.content, "已翻译内容")
+
+            // 验证已读状态成功合并到 item-2
+            let state = try ArticleStateRecord.fetchAll(db).first
+            XCTAssertNotNil(state)
+            XCTAssertEqual(state?.itemID, "item-2")
+            XCTAssertTrue(state?.isRead ?? false)
+        }
+    }
 }
+

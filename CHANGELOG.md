@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.8 · Build 29 · 2026-09-09
+
+本次为 FreshRSS 订阅生命周期与侧边栏交互修复 Beta；建议测试 FreshRSS 增删改管理的用户升级测试，稳定通道仍为 v1.3.2。
+
+- FreshRSS 文章防重与生命周期：修复退订后重新添加同一订阅时服务端重编 entry ID 导致文章列表出现重复的问题；实现删除时关联清理、重新添加与远端同步时旧数据净化，并在持久化时基于规范 URL 幂等去重与 ID 重新绑定。
+- 历史脏数据自愈迁移：新增 `v11-deduplicate-feed-articles` 数据库自愈迁移，平滑清洗历史存量重复文章；同时无损继承已有的 AI 翻译产物与已读/标星状态，并补齐外键级联清理，杜绝数据库启动约束异常。
+- 侧边栏文件夹右键弹窗修复：修复右键文件夹选择「添加订阅...」时首次弹窗未锚定到当前文件夹、仍默认显示“本地订阅根目录”的 SwiftUI 状态时序问题；显式初始化初态并隔离视图缓存，确保首次打开即精确选中目标。
+- 自动化测试与验证：新增退订重加全流程、多外键关联去重自愈回归测试，确保数据完整性与交互一致性。
+
+---
+
+This Beta fixes FreshRSS article deduplication across subscription lifecycles and sidebar sheet folder anchoring. Recommended for users testing FreshRSS feed management; the stable channel remains on v1.3.2.
+
+- FreshRSS deduplication & lifecycle: Fix duplicate articles appearing after deleting and re-subscribing to feeds due to server-side entry ID reassignment; clean associated items on deletion and re-addition, and bind remote items idempotently by canonical URL on persist.
+- Database self-healing migration: Add `v11-deduplicate-feed-articles` migration to deduplicate existing dirty data while migrating AI translation artifacts and reading states, with full foreign-key cascading checks to prevent initialization crashes.
+- Sidebar right-click sheet anchoring: Fix the sheet picker defaulting to local subscription root on the first right-click of a folder; explicitly initialize SwiftUI state and isolate view identity to accurately anchor to the targeted folder on first click.
+- Tests and stability: Add full integration tests for feed deletion/re-addition lifecycles and complex foreign-key data healing.
+
 ## v1.3.3-beta.7 · Build 28 · 2026-09-09
 
 本次为 FreshRSS 订阅管理与侧边栏操作体验优化 Beta；建议测试 FreshRSS 订阅添加及文件夹管理的用户升级测试，稳定通道仍为 v1.3.2。

@@ -452,6 +452,125 @@ public enum DatabaseMigrations {
             """)
         }
 
+        migrator.registerMigration("v11-deduplicate-feed-articles") { db in
+            guard try db.tableExists("items") && db.tableExists("articles") else { return }
+
+            // 1. 针对同一 feed 内按 URL 重复的 items 进行去重与状态/产物融合
+            try db.execute(sql: """
+                CREATE TEMP TABLE duplicate_item_pairs AS
+                WITH ranked_items AS (
+                    SELECT i.id AS redundant_item_id,
+                           i.feed_id,
+                           a.url,
+                           FIRST_VALUE(i.id) OVER (
+                               PARTITION BY i.feed_id, a.url
+                               ORDER BY i.created_at DESC, i.updated_at DESC, i.id DESC
+                           ) AS surviving_item_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY i.feed_id, a.url
+                               ORDER BY i.created_at DESC, i.updated_at DESC, i.id DESC
+                           ) AS rank_num
+                    FROM items i
+                    JOIN articles a ON a.item_id = i.id
+                    WHERE a.url IS NOT NULL AND TRIM(a.url) != ''
+                )
+                SELECT redundant_item_id, surviving_item_id
+                FROM ranked_items
+                WHERE rank_num > 1;
+            """)
+
+            // 1.1 将冗余 item 上的 ai_artifacts 转移给 surviving item (若 surviving item 尚无该 kind 的产物)
+            if try db.tableExists("ai_artifacts") {
+                try db.execute(sql: """
+                    UPDATE ai_artifacts
+                    SET item_id = (
+                        SELECT p.surviving_item_id
+                        FROM duplicate_item_pairs p
+                        WHERE p.redundant_item_id = ai_artifacts.item_id
+                    )
+                    WHERE item_id IN (SELECT redundant_item_id FROM duplicate_item_pairs)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM ai_artifacts a2
+                        JOIN duplicate_item_pairs p ON p.surviving_item_id = a2.item_id
+                        WHERE p.redundant_item_id = ai_artifacts.item_id
+                          AND a2.kind = ai_artifacts.kind
+                      );
+                """)
+            }
+
+            // 1.2 将冗余 item 的已读/标星状态融合迁移给 surviving item
+            if try db.tableExists("article_states") {
+                try db.execute(sql: """
+                    UPDATE article_states
+                    SET is_read = 1
+                    WHERE item_id IN (
+                        SELECT p.surviving_item_id
+                        FROM duplicate_item_pairs p
+                        JOIN article_states s ON s.item_id = p.redundant_item_id
+                        WHERE s.is_read = 1
+                    );
+
+                    UPDATE article_states
+                    SET is_starred = 1
+                    WHERE item_id IN (
+                        SELECT p.surviving_item_id
+                        FROM duplicate_item_pairs p
+                        JOIN article_states s ON s.item_id = p.redundant_item_id
+                        WHERE s.is_starred = 1
+                    );
+                """)
+            }
+
+            // 1.3 删除冗余 items
+            try db.execute(sql: """
+                DELETE FROM items WHERE id IN (SELECT redundant_item_id FROM duplicate_item_pairs);
+                DROP TABLE duplicate_item_pairs;
+            """)
+
+            // 2. 清理已软删除远端 feeds 残留的 items
+            if try db.tableExists("feeds") {
+                try db.execute(sql: """
+                    DELETE FROM items
+                    WHERE feed_id IN (
+                        SELECT id FROM feeds
+                        WHERE is_deleted = 1 AND account_id != 'local-default'
+                    );
+                """)
+            }
+
+            // 3. 全局外键对齐与防御级联清理 (迁移期间 foreign_keys 禁用，显式模拟外键 ON DELETE SET NULL 与 ON DELETE CASCADE)
+            if try db.tableExists("ai_artifacts") {
+                try db.execute(sql: """
+                    UPDATE ai_artifacts
+                    SET item_id = NULL
+                    WHERE item_id IS NOT NULL
+                      AND item_id NOT IN (SELECT id FROM items);
+                """)
+            }
+
+            try db.execute(sql: """
+                DELETE FROM articles WHERE item_id NOT IN (SELECT id FROM items);
+            """)
+
+            if try db.tableExists("article_states") {
+                try db.execute(sql: """
+                    DELETE FROM article_states WHERE item_id NOT IN (SELECT id FROM items);
+                """)
+            }
+
+            if try db.tableExists("article_caches") {
+                try db.execute(sql: """
+                    DELETE FROM article_caches WHERE item_id NOT IN (SELECT id FROM items);
+                """)
+            }
+
+            if try db.tableExists("article_state_outbox") {
+                try db.execute(sql: """
+                    DELETE FROM article_state_outbox WHERE item_id NOT IN (SELECT id FROM items);
+                """)
+            }
+        }
+
         return migrator
     }
 }
