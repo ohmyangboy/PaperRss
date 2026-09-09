@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.3.3-beta.7 · Build 28 · 2026-09-09
+
+本次为 FreshRSS 订阅管理与侧边栏操作体验优化 Beta；建议测试 FreshRSS 订阅添加及文件夹管理的用户升级测试，稳定通道仍为 v1.3.2。
+
+- FreshRSS 订阅管理：支持从 App 直接添加订阅并自动获取服务端解析的权威标题与真实图标，避免被域名覆盖；添加完成后立即拉取前 50 篇最新文章，自动选中新源展示内容。
+- 订阅源与文件夹操作：支持从“我的 Mac”或 FreshRSS 账号右键直接调起添加订阅与新建文件夹弹窗并预设目标；文件夹右键支持直接添加订阅（杜绝文件夹嵌套）。
+- 文件夹删除反馈：删除文件夹时当前文件夹图标呈现与刷新一致的脉冲闪烁反馈，直至远端退订与本地清理完全结束后平滑移除。
+- 稳定性与测试：新增 FreshRSS 订阅自动元数据提取、初始文章抓取与生命周期自动化测试，保证同步逻辑与交互状态严密闭环。
+
+---
+
+This Beta improves FreshRSS subscription management and sidebar interactions. Recommended for users testing FreshRSS feed addition and folder management; the stable channel remains on v1.3.2.
+
+- FreshRSS subscription management: Automatically retrieve authoritative feed titles and icons parsed by the server when adding feeds from the app, preventing domain fallback override; fetch the latest 50 articles immediately and auto-select the newly added feed.
+- Sidebar shortcuts: Add right-click context menus on accounts to add feeds and create folders with presets; allow adding feeds directly from folder context menus (with nested folders disabled).
+- Folder deletion feedback: Pulsing sync animation on folder icons during deletion until remote unsubscription and local database cleanup are complete.
+- Stability and testing: Add integration tests for metadata extraction, initial article fetching, and CRUD lifecycle.
+
 ## v1.3.3-beta.6 · Build 27 · 2026-09-09
 
 本次为 FreshRSS 同步与侧边栏体验修复 Beta；建议遇到未读缺失或大批量同步卡顿的用户升级测试，稳定通道仍为 v1.3.2。
