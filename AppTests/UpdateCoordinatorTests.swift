@@ -240,16 +240,98 @@ final class UpdateCoordinatorTests: XCTestCase {
         }
     }
 
+    // MARK: - 更新日志与重启跳转及关闭逻辑
+
+    func testInstallAndRelaunchPersistsPendingChangelogNotice() {
+        let updater = FakeUpdaterPort()
+        let preferences = FakeUpdatePreferences()
+        let coordinator = makeCoordinator(updater: updater, preferences: preferences)
+        let release = release("20")
+
+        updater.send(.readyToInstall(release))
+        coordinator.installAndRelaunch()
+
+        XCTAssertEqual(preferences.loadPendingChangelogNotice(), "2.0.0", "重启安装时必须持久化记录目标显示版本")
+    }
+
+    func testNextSessionLoadsPendingNoticeAndRetainsPersistenceUntilDismissed() {
+        let preferences = FakeUpdatePreferences()
+        preferences.savePendingChangelogNotice("2.0.0")
+
+        let updater = FakeUpdaterPort()
+        let nextSession = makeCoordinator(updater: updater, preferences: preferences, currentVersion: "2.0.0")
+
+        XCTAssertEqual(nextSession.pendingChangelogNotice, "2.0.0", "新会话必须激活更新日志提示")
+        XCTAssertEqual(preferences.loadPendingChangelogNotice(), "2.0.0", "用户未点击或关闭前，持久化必须保留以便下次重启继续展示")
+    }
+
+    func testDismissChangelogNoticeClearsInMemoryStateAndPersistence() {
+        let preferences = FakeUpdatePreferences()
+        preferences.savePendingChangelogNotice("2.0.0")
+
+        let updater = FakeUpdaterPort()
+        let session = makeCoordinator(updater: updater, preferences: preferences, currentVersion: "2.0.0")
+
+        XCTAssertNotNil(session.pendingChangelogNotice)
+        session.dismissChangelogNotice()
+        XCTAssertNil(session.pendingChangelogNotice, "手动关闭后内存状态必须立即清空")
+        XCTAssertNil(preferences.loadPendingChangelogNotice(), "手动关闭后持久化必须清空，确保之后不再展示")
+    }
+
+    func testSubsequentSessionRetainsNoticeIfNotDismissed() {
+        let preferences = FakeUpdatePreferences()
+        preferences.savePendingChangelogNotice("2.0.0")
+
+        // 第一次会话启动：用户既没有跳转也没有手动关闭，直接退出
+        let firstUpdater = FakeUpdaterPort()
+        let firstSession = makeCoordinator(updater: firstUpdater, preferences: preferences, currentVersion: "2.0.0")
+        XCTAssertEqual(firstSession.pendingChangelogNotice, "2.0.0")
+
+        // 第二次会话启动：下次重启依旧保留
+        let secondUpdater = FakeUpdaterPort()
+        let secondSession = makeCoordinator(updater: secondUpdater, preferences: preferences, currentVersion: "2.0.0")
+        XCTAssertEqual(secondSession.pendingChangelogNotice, "2.0.0", "若未点击跳转或关闭，下次重启依旧保留展示")
+    }
+
+    func testSubsequentSessionDoesNotShowAfterDismiss() {
+        let preferences = FakeUpdatePreferences()
+        preferences.savePendingChangelogNotice("2.0.0")
+
+        // 第一次会话启动并手动关闭
+        let firstUpdater = FakeUpdaterPort()
+        let firstSession = makeCoordinator(updater: firstUpdater, preferences: preferences, currentVersion: "2.0.0")
+        firstSession.dismissChangelogNotice()
+
+        // 第二次会话启动：不再展示
+        let secondUpdater = FakeUpdaterPort()
+        let secondSession = makeCoordinator(updater: secondUpdater, preferences: preferences, currentVersion: "2.0.0")
+        XCTAssertNil(secondSession.pendingChangelogNotice, "关闭后本次版本之后就不再展示")
+    }
+
+    func testCurrentVersionMismatchClearsStaleNotice() {
+        let preferences = FakeUpdatePreferences()
+        preferences.savePendingChangelogNotice("2.0.0")
+
+        let updater = FakeUpdaterPort()
+        // 假设更新失败，当前依然是旧版本 1.9.0
+        let session = makeCoordinator(updater: updater, preferences: preferences, currentVersion: "1.9.0")
+
+        XCTAssertNil(session.pendingChangelogNotice, "版本不匹配时不得激活更新日志提示")
+        XCTAssertNil(preferences.loadPendingChangelogNotice(), "旧版本失效标记被安全清理")
+    }
+
     // MARK: - Helpers
 
     private func makeCoordinator(
         updater: FakeUpdaterPort,
-        preferences: any UpdatePreferencesPort = FakeUpdatePreferences()
+        preferences: any UpdatePreferencesPort = FakeUpdatePreferences(),
+        currentVersion: String? = nil
     ) -> UpdateCoordinator {
         UpdateCoordinator(
             updater: updater,
             fallbackURL: URL(string: "https://example.com/releases")!,
-            preferences: preferences
+            preferences: preferences,
+            currentVersion: currentVersion
         )
     }
 
@@ -313,6 +395,7 @@ private final class FakeUpdaterPort: UpdaterPort {
 @MainActor
 private final class FakeUpdatePreferences: UpdatePreferencesPort {
     private var storedChannel: UpdateChannel?
+    private var storedChangelogNotice: String?
 
     func loadChannel() -> UpdateChannel? {
         storedChannel
@@ -320,6 +403,14 @@ private final class FakeUpdatePreferences: UpdatePreferencesPort {
 
     func saveChannel(_ channel: UpdateChannel) {
         storedChannel = channel
+    }
+
+    func loadPendingChangelogNotice() -> String? {
+        storedChangelogNotice
+    }
+
+    func savePendingChangelogNotice(_ version: String?) {
+        storedChangelogNotice = version
     }
 }
 

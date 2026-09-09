@@ -14,6 +14,15 @@ public enum AppInfo {
     public static let xiaohongshuURL = URL(string: "https://xhslink.cn/m/972wHfC16uj")!
     public static let releasesPageURL = URL(string: "https://github.com/ohmyangboy/PaperRss/releases")!
 
+    public static func releaseURL(for version: String = currentVersion) -> URL {
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return releasesPageURL
+        }
+        let tag = trimmed.hasPrefix("v") ? trimmed : "v\(trimmed)"
+        return githubRepositoryURL.appendingPathComponent("releases/tag/\(tag)")
+    }
+
     public static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }

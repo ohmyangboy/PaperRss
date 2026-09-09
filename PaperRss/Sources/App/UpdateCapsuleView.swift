@@ -24,21 +24,25 @@ struct UpdateCapsule: View {
     @ViewBuilder
     private var content: some View {
         switch coordinator.state {
-        case .idle:
-            EmptyView()
+        case .idle, .checkingSilently:
+            if let changelogVersion = coordinator.pendingChangelogNotice {
+                changelogCapsule(version: changelogVersion)
+            } else {
+                EmptyView()
+            }
         case .checking:
             capsule(emphasized: false) {
                 ProgressView()
                     .controlSize(.mini)
             }
-        case .checkingSilently:
-            EmptyView()
         case .upToDate:
             if showsUpToDateToast {
                 capsule(emphasized: false) {
                     Image(systemName: "checkmark.circle")
                     Text(I18N.shared.localized("已是最新版本", "You're up to date"))
                 }
+            } else if let changelogVersion = coordinator.pendingChangelogNotice {
+                changelogCapsule(version: changelogVersion)
             } else {
                 EmptyView()
             }
@@ -113,6 +117,31 @@ struct UpdateCapsule: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel(I18N.shared.localized("关闭", "Close"))
             }
+        }
+    }
+
+    @ViewBuilder
+    private func changelogCapsule(version: String) -> some View {
+        capsule(emphasized: false) {
+            actionButton(
+                title: I18N.shared.localized("更新日志", "ChangeLog"),
+                systemImage: "newspaper"
+            ) {
+                let url = AppInfo.releaseURL(for: version)
+                AppInfo.openURL(url)
+                coordinator.dismissChangelogNotice()
+            }
+            .help(I18N.shared.localizedFormat("查看 %@ 更新日志", version))
+
+            Button {
+                coordinator.dismissChangelogNotice()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(I18N.shared.localized("关闭", "Close"))
         }
     }
 

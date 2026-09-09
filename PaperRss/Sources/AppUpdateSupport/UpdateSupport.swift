@@ -11,6 +11,8 @@ public enum UpdateChannel: String, CaseIterable, Equatable, Sendable {
 public protocol UpdatePreferencesPort: AnyObject {
     func loadChannel() -> UpdateChannel?
     func saveChannel(_ channel: UpdateChannel)
+    func loadPendingChangelogNotice() -> String?
+    func savePendingChangelogNotice(_ version: String?)
 }
 
 public struct UpdateRelease: Equatable, Sendable {
@@ -150,6 +152,7 @@ public final class UpdateCoordinator: ObservableObject {
     @Published public private(set) var state: UpdateState = .idle
     @Published public private(set) var channel: UpdateChannel
     @Published public private(set) var lastUpToDateNoticeAt: Date?
+    @Published public private(set) var pendingChangelogNotice: String?
 
     private let updater: any UpdaterPort
     private let fallbackURL: URL
@@ -169,6 +172,7 @@ public final class UpdateCoordinator: ObservableObject {
         updater: any UpdaterPort,
         fallbackURL: URL,
         preferences: any UpdatePreferencesPort,
+        currentVersion: String? = nil,
         now: @escaping () -> Date = { Date() }
     ) {
         self.updater = updater
@@ -176,6 +180,13 @@ public final class UpdateCoordinator: ObservableObject {
         self.preferences = preferences
         self.now = now
         channel = preferences.loadChannel() ?? .stable
+        if let pendingNotice = preferences.loadPendingChangelogNotice() {
+            if currentVersion == nil || currentVersion == pendingNotice {
+                self.pendingChangelogNotice = pendingNotice
+            } else {
+                preferences.savePendingChangelogNotice(nil)
+            }
+        }
         updater.eventHandler = { [weak self] event in
             self?.receive(event)
         }
@@ -229,12 +240,20 @@ public final class UpdateCoordinator: ObservableObject {
     /// 第二段：重启并安装已就绪更新。
     public func installAndRelaunch() {
         guard case let .readyToInstall(release) = state else { return }
+        preferences.savePendingChangelogNotice(release.displayVersion)
         do {
             try updater.installAndRelaunch()
             state = .installing(release)
         } catch {
+            preferences.savePendingChangelogNotice(nil)
             applyFailure(error.localizedDescription)
         }
+    }
+
+    /// 关闭更新日志胶囊（用户点击跳转或手动关闭后调用，之后不再展示）。
+    public func dismissChangelogNotice() {
+        preferences.savePendingChangelogNotice(nil)
+        pendingChangelogNotice = nil
     }
 
     /// 取消当前检查/下载（若底层支持）。
@@ -313,4 +332,6 @@ public final class UpdateCoordinator: ObservableObject {
 private final class VolatileUpdatePreferences: UpdatePreferencesPort {
     func loadChannel() -> UpdateChannel? { nil }
     func saveChannel(_ channel: UpdateChannel) {}
+    func loadPendingChangelogNotice() -> String? { nil }
+    func savePendingChangelogNotice(_ version: String?) {}
 }

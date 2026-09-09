@@ -505,12 +505,14 @@ enum UpdateCoordinatorFactory {
 
     static func make(bundle: Bundle = .main) -> UpdateCoordinator {
         let preferences = UserDefaultsUpdatePreferences(defaults: .standard)
+        let currentVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         do {
             let configuration = try SparkleConfiguration(bundle: bundle)
             return UpdateCoordinator(
                 updater: SparkleUpdaterAdapter(configuration: configuration),
                 fallbackURL: fallbackURL,
-                preferences: preferences
+                preferences: preferences,
+                currentVersion: currentVersion
             )
         } catch let configurationError as SparkleConfigurationError {
             let message: String
@@ -531,23 +533,26 @@ enum UpdateCoordinatorFactory {
                     "This build does not have an HTTPS Beta update feed configured. Switch back to the Stable channel."
                 )
             }
-            return makeUnavailable(message: message, preferences: preferences)
+            return makeUnavailable(message: message, preferences: preferences, currentVersion: currentVersion)
         } catch {
             return makeUnavailable(
                 message: error.localizedDescription,
-                preferences: preferences
+                preferences: preferences,
+                currentVersion: currentVersion
             )
         }
     }
 
     private static func makeUnavailable(
         message: String,
-        preferences: any UpdatePreferencesPort
+        preferences: any UpdatePreferencesPort,
+        currentVersion: String?
     ) -> UpdateCoordinator {
         UpdateCoordinator(
             updater: UnavailableUpdaterPort(error: UpdateConfigurationFailure(message: message)),
             fallbackURL: fallbackURL,
-            preferences: preferences
+            preferences: preferences,
+            currentVersion: currentVersion
         )
     }
 }
@@ -555,6 +560,7 @@ enum UpdateCoordinatorFactory {
 @MainActor
 private final class UserDefaultsUpdatePreferences: UpdatePreferencesPort {
     private static let channelKey = "PaperRss.UpdateChannel"
+    private static let pendingChangelogNoticeKey = "PaperRss.PendingChangelogNoticeVersion"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults) {
@@ -567,6 +573,18 @@ private final class UserDefaultsUpdatePreferences: UpdatePreferencesPort {
 
     func saveChannel(_ channel: UpdateChannel) {
         defaults.set(channel.rawValue, forKey: Self.channelKey)
+    }
+
+    func loadPendingChangelogNotice() -> String? {
+        defaults.string(forKey: Self.pendingChangelogNoticeKey)
+    }
+
+    func savePendingChangelogNotice(_ version: String?) {
+        if let version {
+            defaults.set(version, forKey: Self.pendingChangelogNoticeKey)
+        } else {
+            defaults.removeObject(forKey: Self.pendingChangelogNoticeKey)
+        }
     }
 }
 
