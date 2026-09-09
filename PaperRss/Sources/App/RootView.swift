@@ -64,6 +64,8 @@ struct RootView: View {
     @State private var selectedFeedIDs: Set<UUID> = []
     @State private var showsAddFeed = false
     @State private var showsAddFolder = false
+    @State private var initialFeedDestination: FeedTargetDestination? = nil
+    @State private var initialFolderAccountID: String? = nil
     @State private var renamingFolder: String? = nil
     @State private var showsSettings = false
     @State private var showsImporter = false
@@ -119,8 +121,19 @@ struct RootView: View {
                     scheduleNeighborPrefetch(from: newID)
                 }
             }
-            .sheet(isPresented: $showsAddFeed) { AddFeedSheet(store: store) }
-            .sheet(isPresented: $showsAddFolder) { AddFolderSheet(store: store) }
+            .sheet(isPresented: $showsAddFeed) {
+                AddFeedSheet(
+                    store: store,
+                    initialDestination: initialFeedDestination,
+                    selection: $selection
+                )
+            }
+            .sheet(isPresented: $showsAddFolder) {
+                AddFolderSheet(
+                    store: store,
+                    initialAccountID: initialFolderAccountID
+                )
+            }
             .sheet(item: Binding(
                 get: { renamingFolder.map { FolderIdentifiable(name: $0) } },
                 set: { renamingFolder = $0?.name }
@@ -200,6 +213,8 @@ struct RootView: View {
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
+                initialFeedDestination: $initialFeedDestination,
+                initialFolderAccountID: $initialFolderAccountID,
                 renamingFolder: $renamingFolder,
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
@@ -269,6 +284,8 @@ struct RootView: View {
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
+                initialFeedDestination: $initialFeedDestination,
+                initialFolderAccountID: $initialFolderAccountID,
                 renamingFolder: $renamingFolder,
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
@@ -822,6 +839,8 @@ private struct SidebarView: View {
     @Binding var selectedFeedIDs: Set<UUID>
     @Binding var showsAddFeed: Bool
     @Binding var showsAddFolder: Bool
+    @Binding var initialFeedDestination: FeedTargetDestination?
+    @Binding var initialFolderAccountID: String?
     @Binding var renamingFolder: String?
     @Binding var showsSettings: Bool
     @Binding var showsImporter: Bool
@@ -839,6 +858,7 @@ private struct SidebarView: View {
     @State private var showsEmptyFeedActions = false
     @State private var batchDeleteConfirmFeedIDs: Set<UUID>? = nil
     @State private var folderToDelete: FolderDeleteTarget? = nil
+    @State private var deletingFolderKeys: Set<String> = []
     #if os(macOS)
     @State private var showsFeedbackPopover = false
     #endif
@@ -1103,11 +1123,20 @@ private struct SidebarView: View {
             Button(I18N.localized("取消"), role: .cancel) { folderToDelete = nil }
             Button(I18N.localized("删除"), role: .destructive) {
                 if let target = folderToDelete {
-                    store.deleteFolder(target.name, accountID: target.accountID)
+                    let key = "\(target.accountID)::\(target.name)"
+                    deletingFolderKeys.insert(key)
                     if case let .folder(acc, f) = selection, acc == target.accountID && f == target.name {
                         selection = .today
                     }
                     onDeleteSelection()
+                    Task {
+                        await store.deleteFolderAsync(target.name, accountID: target.accountID)
+                        await MainActor.run {
+                            _ = withAnimation {
+                                deletingFolderKeys.remove(key)
+                            }
+                        }
+                    }
                 }
                 folderToDelete = nil
             }
@@ -1275,13 +1304,29 @@ private struct SidebarView: View {
             .contentShape(Rectangle())
             .tag(SidebarSelection.account(accountID))
             .onTapGesture { selectAccount(accountID) }
+            .contextMenu {
+                Button {
+                    initialFeedDestination = FeedTargetDestination(accountID: accountID, folder: nil)
+                    showsAddFeed = true
+                } label: {
+                    Label(I18N.localized("添加订阅..."), systemImage: "plus")
+                }
+
+                Button {
+                    initialFolderAccountID = accountID
+                    showsAddFolder = true
+                } label: {
+                    Label(I18N.localized("新建文件夹..."), systemImage: "folder.badge.plus")
+                }
+            }
     }
 
     @ViewBuilder
     private func remoteFolderRow(_ folder: String, accountID: String) -> some View {
         let count = store.unreadCount(folder: folder, accountID: accountID)
         let key = "\(accountID)::\(folder)"
-        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isSyncing: store.accountRefreshProgress[accountID] != nil, pulsesWhileSyncing: true, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
+        let isDeleting = deletingFolderKeys.contains(key)
+        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isSyncing: (store.accountRefreshProgress[accountID] != nil) || isDeleting, pulsesWhileSyncing: true, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
             .equatable()
             .contentShape(Rectangle())
             .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
@@ -1295,6 +1340,15 @@ private struct SidebarView: View {
                 }
             }
             .contextMenu {
+                Button {
+                    initialFeedDestination = FeedTargetDestination(accountID: accountID, folder: folder)
+                    showsAddFeed = true
+                } label: {
+                    Label(I18N.localized("添加订阅..."), systemImage: "plus")
+                }
+
+                Divider()
+
                 Button {
                     store.markAllRead(accountID: accountID, folder: folder)
                 } label: {
@@ -1397,8 +1451,14 @@ private struct SidebarView: View {
     @ViewBuilder
     private var addButton: some View {
         Menu {
-            Button { showsAddFeed = true } label: { Label(I18N.localized("添加订阅"), systemImage: "plus") }
-            Button { showsAddFolder = true } label: { Label(I18N.localized("新建文件夹"), systemImage: "folder.badge.plus") }
+            Button {
+                initialFeedDestination = nil
+                showsAddFeed = true
+            } label: { Label(I18N.localized("添加订阅"), systemImage: "plus") }
+            Button {
+                initialFolderAccountID = nil
+                showsAddFolder = true
+            } label: { Label(I18N.localized("新建文件夹"), systemImage: "folder.badge.plus") }
             Divider()
             Button { showsImporter = true } label: { Label(I18N.localized("导入 OPML"), systemImage: "square.and.arrow.down") }
             Button { showsExporter = true } label: { Label(I18N.localized("导出 OPML"), systemImage: "square.and.arrow.up") }
@@ -1412,7 +1472,8 @@ private struct SidebarView: View {
     @ViewBuilder
     private func folderRow(_ folder: String, accountID: String = "local-default") -> some View {
         let key = "\(accountID)::\(folder)"
-        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isSyncing: store.accountRefreshProgress[accountID] != nil, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
+        let isDeleting = deletingFolderKeys.contains(key)
+        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isSyncing: (store.accountRefreshProgress[accountID] != nil) || isDeleting, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
             store.setFeedFolder(feedIDs: feedIDs, folder: folder)
             var current = collapsedFolders
             current.remove(key)
@@ -1431,6 +1492,15 @@ private struct SidebarView: View {
             }
         }
             .contextMenu {
+                Button {
+                    initialFeedDestination = FeedTargetDestination(accountID: accountID, folder: folder)
+                    showsAddFeed = true
+                } label: {
+                    Label(I18N.localized("添加订阅..."), systemImage: "plus")
+                }
+
+                Divider()
+
                 Button {
                     let unreadIDs = store.entryListItems(folder: folder, accountID: accountID).filter { !$0.isRead }.map { $0.id }
                     store.markRead(entryIDs: unreadIDs)
@@ -2623,6 +2693,8 @@ private struct FeedTargetDestination: Hashable {
 
 private struct AddFeedSheet: View {
     @ObservedObject var store: AppStore
+    var initialDestination: FeedTargetDestination? = nil
+    @Binding var selection: SidebarSelection?
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
     @State private var selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
@@ -2672,7 +2744,9 @@ private struct AddFeedSheet: View {
                 }
             }
             .onAppear {
-                if store.isAccountEnabled("local-default") {
+                if let initialDestination {
+                    selectedDestination = initialDestination
+                } else if store.isAccountEnabled("local-default") {
                     selectedDestination = FeedTargetDestination(accountID: "local-default", folder: nil)
                 } else if let firstFresh = store.accounts.first(where: { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) {
                     selectedDestination = FeedTargetDestination(accountID: firstFresh.id, folder: nil)
@@ -2742,12 +2816,15 @@ private struct AddFeedSheet: View {
         guard canSubmit else { return }
         isSubmitting = true
         Task {
-            await store.addFeed(
+            let addedFeed = await store.addFeed(
                 urlText: url,
                 targetAccountID: selectedDestination.accountID,
                 folder: selectedDestination.folder
             )
             await MainActor.run {
+                if let addedFeed {
+                    selection = .feed(addedFeed.id)
+                }
                 isSubmitting = false
                 dismiss()
             }
@@ -2781,6 +2858,7 @@ private struct FolderIdentifiable: Identifiable {
 
 private struct AddFolderSheet: View {
     @ObservedObject var store: AppStore
+    var initialAccountID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var folderName = ""
     @State private var selectedAccountID = "local-default"
@@ -2836,7 +2914,9 @@ private struct AddFolderSheet: View {
                 }
             }
             .onAppear {
-                if let first = availableAccounts.first {
+                if let initialAccountID, availableAccounts.contains(where: { $0.id == initialAccountID }) {
+                    selectedAccountID = initialAccountID
+                } else if let first = availableAccounts.first {
                     selectedAccountID = first.id
                 }
             }

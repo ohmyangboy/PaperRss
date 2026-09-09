@@ -974,16 +974,20 @@ public final class AppStore: ObservableObject {
     }
 
     public func deleteFolder(_ name: String, accountID: String = "local-default") {
+        Task {
+            await deleteFolderAsync(name, accountID: accountID)
+        }
+    }
+
+    public func deleteFolderAsync(_ name: String, accountID: String = "local-default") async {
         if accountID == "local-default" {
-            try? localProvider.deleteFolder(name: name)
-            reloadState()
+            try? await localProvider.deleteFolder(name: name)
+            await reloadStateAsync()
         } else {
-            Task { [weak self, syncCoordinator] in
-                if let provider = await syncCoordinator.provider(for: accountID) {
-                    try? await provider.deleteFolder(name: name)
-                }
-                await self?.reloadStateAsync()
+            if let provider = await syncCoordinator.provider(for: accountID) {
+                try? await provider.deleteFolder(name: name)
             }
+            await reloadStateAsync()
         }
     }
 
@@ -992,51 +996,56 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    public func addFeed(urlText: String, targetAccountID: String? = nil, folder: String? = nil) async {
+    @discardableResult
+    public func addFeed(urlText: String, title: String? = nil, targetAccountID: String? = nil, folder: String? = nil) async -> Feed? {
         guard let url = normalizedURL(urlText) else {
             let message = I18N.localized("请输入有效的 Feed URL。")
             reportErrorMessage(message, module: .settings)
             lastError = message
-            return
+            return nil
         }
 
-        let title = url.host ?? url.absoluteString
+        let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let accID = targetAccountID ?? (isAccountEnabled("local-default") ? "local-default" : accounts.first(where: { $0.isEnabled })?.id ?? "local-default")
 
         if accID == "local-default" {
             let feed: Feed
             do {
-                feed = try localProvider.addFeed(title: title, feedURL: url, folder: folder)
+                let localTitle = cleanTitle ?? (url.host ?? url.absoluteString)
+                feed = try localProvider.addFeed(title: localTitle, feedURL: url, folder: folder)
             } catch let error as LocalAccountError {
                 let message = error.errorDescription ?? error.localizedDescription
                 reportError(error, module: .settings)
                 lastError = message
-                return
+                return nil
             } catch {
                 reportError(error, module: .settings)
                 lastError = error.localizedDescription
-                return
+                return nil
             }
 
             reloadState()
             await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
+            return feed
         } else {
             guard let provider = await syncCoordinator.provider(for: accID) else {
                 let message = I18N.localized("未找到目标账号提供者。")
                 reportErrorMessage(message, module: .settings)
                 lastError = message
-                return
+                return nil
             }
 
+            let addedFeed: Feed
             do {
-                _ = try await provider.addFeed(url: url, title: title, folder: folder)
+                addedFeed = try await provider.addFeed(url: url, title: cleanTitle, folder: folder)
             } catch {
                 reportError(error, module: .settings)
                 lastError = error.localizedDescription
-                return
+                return nil
             }
 
             await reloadStateAsync()
+            return addedFeed
         }
     }
 

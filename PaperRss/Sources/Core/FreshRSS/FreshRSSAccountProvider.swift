@@ -109,6 +109,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
 
         // 2. 若指定了分类或自定义标题，调用 editSubscription 进行打标或更名
+        // 注意：若 cleanTitle 为 nil，绝不向远端传 title 参数，保护服务端自动解析的真实标题
         if cleanFolder != nil || cleanTitle != nil {
             try await apiClient.editSubscription(
                 streamID: resolvedStreamID,
@@ -117,9 +118,29 @@ public actor FreshRSSAccountProvider: AccountProvider {
             )
         }
 
-        // 3. 本地落库
+        // 3. 从远端拉取订阅元数据以获取权威标题与图标（对标 NetNewsWire createSubscription）
+        var remoteTitle: String? = nil
+        var remoteIconURL: String? = nil
+        if let remoteSubs = try? await apiClient.fetchSubscriptions(),
+           let matching = remoteSubs.first(where: { $0.id == resolvedStreamID || $0.url == url.absoluteString }) {
+            remoteTitle = matching.title.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            remoteIconURL = matching.iconUrl
+        }
+
+        let effectiveTitle = cleanTitle ?? remoteTitle ?? (url.host ?? url.absoluteString)
         let now = Date().timeIntervalSince1970
-        let effectiveTitle = cleanTitle ?? (url.host ?? url.absoluteString)
+        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL)
+
+        var resolvedIcon: String? = nil
+        if let raw = remoteIconURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+           let parsedIconURL = URL(string: raw, relativeTo: iconBaseURL)?.absoluteURL,
+           ["http", "https"].contains(parsedIconURL.scheme?.lowercased() ?? ""),
+           parsedIconURL.host != nil {
+            let path = parsedIconURL.path.lowercased()
+            if !path.contains("f.php") && !path.hasSuffix("/f.php") {
+                resolvedIcon = parsedIconURL.absoluteString
+            }
+        }
 
         let feedModel: Feed = try database.write { db in
             var targetFolderID: String? = nil
@@ -161,8 +182,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
             ).fetchOne(db) {
                 existing.isDeleted = false
                 existing.externalID = resolvedStreamID
-                if let cleanTitle {
-                    existing.title = cleanTitle
+                existing.title = effectiveTitle
+                if let resolvedIcon {
+                    existing.storedIconURL = resolvedIcon
                 }
                 existing.updatedAt = now
                 try existing.save(db)
@@ -183,7 +205,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     lastRefreshedAt: nil,
                     isDeleted: false,
                     updatedAt: now,
-                    storedIconURL: nil,
+                    storedIconURL: resolvedIcon,
                     sortOrder: maxSort + 1
                 )
                 try newRecord.save(db)
@@ -203,8 +225,19 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 siteURL: nil,
                 feedURL: url,
                 folder: cleanFolder,
-                updatedAt: Date(timeIntervalSince1970: now)
+                updatedAt: Date(timeIntervalSince1970: now),
+                storedIconURL: resolvedIcon.flatMap { URL(string: $0) }
             )
+        }
+
+        // 4. 抓取新订阅源的初始文章（对标 NetNewsWire initialFeedDownload）
+        do {
+            let (items, _) = try await apiClient.fetchStreamContentsPage(streamID: resolvedStreamID, limit: 50)
+            if !items.isEmpty {
+                try persistArticles(items, fallbackFeedID: feedModel.id.uuidString)
+            }
+        } catch {
+            // 抓取初始文章若遇异常不影响订阅添加成功，后续刷新仍可补齐
         }
 
         return feedModel
@@ -666,6 +699,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
     /// 每批独立事务落库；重新读取待提交状态，保护同步期间产生的本地阅读操作。
     private func persistArticles(
         _ streamItems: [ReaderAPIStreamItem],
+        fallbackFeedID: String? = nil,
         remoteUnreadSet: ReaderItemIDSet? = nil,
         remoteStarredSet: ReaderItemIDSet? = nil,
         processedKeys: Set<String> = [],
@@ -704,8 +738,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 let rawRemoteID = item.id.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !rawRemoteID.isEmpty else { continue }
 
-                // 关联 Feed ID：通过 origin.streamId 精确关联所属源，杜绝伪造 defaultFeedID
-                guard let streamId = item.origin?.streamId, let targetFeedID = feedIDByExternalID[streamId] else {
+                // 关联 Feed ID：通过 origin.streamId 精确关联所属源，未包含时回退到已知的 fallbackFeedID
+                let matchedFeedID = (item.origin?.streamId).flatMap { feedIDByExternalID[$0] } ?? fallbackFeedID
+                guard let targetFeedID = matchedFeedID else {
                     continue
                 }
 

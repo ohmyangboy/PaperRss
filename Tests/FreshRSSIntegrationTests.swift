@@ -2978,5 +2978,68 @@ final class FreshRSSIntegrationTests: XCTestCase {
 
         let hasDisableTag = requestsBox.value.compactMap { $0.removingPercentEncoding }.contains { $0.contains("disable-tag") && $0.contains("user/-/label/科技新闻") }
         XCTAssertTrue(hasDisableTag)
+
+        // 6. 测试不传自定义标题时，自动获取远端权威标题与图标，并自动拉取初始文章
+        MockFreshRSSURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            let body = String(data: MockFreshRSSURLProtocol.requestBody(from: request), encoding: .utf8) ?? ""
+            requestsBox.mutate { $0.append("\(request.httpMethod ?? "") \(path) -> \(body)") }
+            let okResp = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+            if path.contains("ClientLogin") {
+                return (okResp, "Auth=test_token_123\n".data(using: .utf8)!)
+            } else if path.contains("token") {
+                return (okResp, "write_token_abc".data(using: .utf8)!)
+            } else if path.contains("subscription/quickadd") {
+                let json = """
+                {
+                    "numResults": 1,
+                    "streamId": "feed/https://news3.example.com/rss",
+                    "query": "https://news3.example.com/rss"
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            } else if path.contains("subscription/list") {
+                let json = """
+                {
+                    "subscriptions": [
+                        {
+                            "id": "feed/https://news3.example.com/rss",
+                            "title": "权威科技周刊",
+                            "categories": [],
+                            "url": "https://news3.example.com/rss",
+                            "iconUrl": "https://news3.example.com/favicon.png"
+                        }
+                    ]
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            } else if path.contains("stream/contents") {
+                let json = """
+                {
+                    "items": [
+                        {
+                            "id": "tag:google.com,2005:reader/item/0000000000000001",
+                            "title": "首发测试文章",
+                            "published": 1700000000,
+                            "categories": ["user/-/state/com.google/reading-list"]
+                        }
+                    ]
+                }
+                """
+                return (okResp, json.data(using: .utf8)!)
+            }
+            return (okResp, Data())
+        }
+
+        let feed3 = try await provider.addFeed(url: URL(string: "https://news3.example.com/rss")!, title: nil, folder: nil)
+        XCTAssertEqual(feed3.title, "权威科技周刊")
+        XCTAssertEqual(feed3.iconURL?.absoluteString, "https://news3.example.com/favicon.png")
+
+        // 验证初始文章落库
+        let articleRecord = try database.read { db in
+            try ArticleRecord.filter(Column("title") == "首发测试文章").fetchOne(db)
+        }
+        XCTAssertNotNil(articleRecord)
     }
 }
