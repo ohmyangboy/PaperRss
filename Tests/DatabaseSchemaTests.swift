@@ -223,6 +223,60 @@ final class DatabaseSchemaTests: XCTestCase {
         }
     }
 
+    func testV12MigrationPurgesSoftDeletedLocalFeedsAndCascades() throws {
+        let legacyURL = temporaryDirectoryURL.appendingPathComponent("legacy-v11.sqlite")
+        let pool = try DatabasePool(path: legacyURL.path)
+        let migrator = DatabaseMigrations.migrator
+        try migrator.migrate(pool, upTo: "v11-deduplicate-feed-articles")
+
+        try pool.write { db in
+            try db.execute(sql: """
+            INSERT INTO accounts (id, type, display_name, created_at, updated_at)
+            VALUES ('local-default', 'local', 'Local', 1, 1);
+
+            -- 正常活跃源
+            INSERT INTO feeds (id, account_id, title, feed_url, is_deleted, updated_at)
+            VALUES ('feed-active', 'local-default', 'Active', 'https://example.com/active', 0, 1);
+            INSERT INTO items (id, account_id, external_id, feed_id, created_at, updated_at)
+            VALUES ('item-active', 'local-default', 'ext-active', 'feed-active', 1, 1);
+            INSERT INTO articles (item_id, title, published_at, summary, content_updated_at)
+            VALUES ('item-active', 'Active Article', 1, 'Summary', 1);
+            INSERT INTO article_states (item_id, is_read, is_starred, date_arrived, updated_at)
+            VALUES ('item-active', 1, 0, 1, 1);
+
+            -- 软删除待清洗源
+            INSERT INTO feeds (id, account_id, title, feed_url, is_deleted, updated_at)
+            VALUES ('feed-dead', 'local-default', 'Dead', 'https://example.com/dead', 1, 1);
+            INSERT INTO items (id, account_id, external_id, feed_id, created_at, updated_at)
+            VALUES ('item-dead', 'local-default', 'ext-dead', 'feed-dead', 1, 1);
+            INSERT INTO articles (item_id, title, published_at, summary, content_updated_at)
+            VALUES ('item-dead', 'Dead Article', 1, 'Summary', 1);
+            INSERT INTO article_states (item_id, is_read, is_starred, date_arrived, updated_at)
+            VALUES ('item-dead', 0, 0, 1, 1);
+            INSERT INTO article_caches (item_id, text, fetched_at, is_sanitized)
+            VALUES ('item-dead', 'dead cache', 1, 1);
+            """)
+        }
+
+        // 迁移到 v12
+        try migrator.migrate(pool)
+
+        try pool.read { db in
+            // 验证已软删除的 feed 及关联数据被彻底物理清理
+            XCTAssertNil(try Row.fetchOne(db, sql: "SELECT id FROM feeds WHERE id = 'feed-dead'"))
+            XCTAssertNil(try Row.fetchOne(db, sql: "SELECT id FROM items WHERE id = 'item-dead'"))
+            XCTAssertNil(try Row.fetchOne(db, sql: "SELECT item_id FROM articles WHERE item_id = 'item-dead'"))
+            XCTAssertNil(try Row.fetchOne(db, sql: "SELECT item_id FROM article_states WHERE item_id = 'item-dead'"))
+            XCTAssertNil(try Row.fetchOne(db, sql: "SELECT item_id FROM article_caches WHERE item_id = 'item-dead'"))
+
+            // 验证正常活跃源的数据完好无损
+            XCTAssertNotNil(try Row.fetchOne(db, sql: "SELECT id FROM feeds WHERE id = 'feed-active'"))
+            XCTAssertNotNil(try Row.fetchOne(db, sql: "SELECT id FROM items WHERE id = 'item-active'"))
+            XCTAssertNotNil(try Row.fetchOne(db, sql: "SELECT item_id FROM articles WHERE item_id = 'item-active'"))
+            XCTAssertNotNil(try Row.fetchOne(db, sql: "SELECT item_id FROM article_states WHERE item_id = 'item-active'"))
+        }
+    }
+
     // MARK: - C. Foreign Keys & Cascades
 
     func testForeignKeysAreEnforcedAcrossAllTables() throws {

@@ -378,18 +378,18 @@ final class AppFeatureRegressionTests: XCTestCase {
         XCTAssertEqual(store.feeds(in: "硬核科技").count, 0)
         XCTAssertEqual(store.rootFeeds.map(\.title), ["综合早报"])
 
-        // 4. 删除 Feed（软删除）
+        // 4. 删除 Feed（物理级联删除）
         store.deleteFeed(feed)
         XCTAssertEqual(store.feeds.count, 0)
         XCTAssertEqual(store.rootFeeds.count, 0)
 
-        // 5. 重新添加相同 URL 的 Feed，必须平滑恢复原 Feed ID 与关联数据
-        let restoredFeed = try store.localProvider.addFeed(
+        // 5. 重新添加相同 URL 的 Feed，必须作为干净的新源接入（生成全新 UUID，不复用旧 UUID）
+        let newFeed = try store.localProvider.addFeed(
             title: "综合早报恢复版",
             feedURL: URL(string: "https://news.com/rss.xml")!
         )
         store.reloadState()
-        XCTAssertEqual(restoredFeed.id, feed.id, "重复添加同一 URL 必须复用原有 Feed UUID")
+        XCTAssertNotEqual(newFeed.id, feed.id, "重复添加同一 URL 必须作为干净新源生成新 UUID")
         XCTAssertEqual(store.feeds.count, 1)
     }
 
@@ -616,5 +616,87 @@ final class AppFeatureRegressionTests: XCTestCase {
         // 4. 单源作用域查询
         let feedItems = store.fetchTimelinePage(scope: .feed(feedID: feed.id.uuidString))
         XCTAssertEqual(feedItems.count, 5)
+    }
+
+    func testAppStoreReloadFeedTriggersSingleSourceRefreshAndRestoresArticles() async throws {
+        final class ForceRecorder: @unchecked Sendable {
+            var callCount = 0
+            var lastForce: Bool?
+        }
+        let recorder = ForceRecorder()
+
+        let feedURL = URL(string: "https://reload-test.com/rss.xml")!
+        let mockFetcher: @Sendable (Feed, Bool) async throws -> FeedFetchResult = { feed, force in
+            recorder.callCount += 1
+            recorder.lastForce = force
+            let entry = ParsedFeedEntry(
+                id: "entry-reload",
+                title: "Reloaded Article",
+                author: "Tester",
+                url: URL(string: "https://reload-test.com/1"),
+                publishedAt: Date(),
+                summary: "Reloaded Summary",
+                contentHTML: "<p>Reloaded Content</p>"
+            )
+            let parsed = ParsedFeed(title: "Reload Feed Title", siteURL: nil, iconURL: nil, entries: [entry])
+            return .updated(parsed, etag: "new-etag", lastModified: "new-mod")
+        }
+
+        let customStore = AppStore(testDatabase: AppDatabase.empty, customFeedFetcher: mockFetcher)
+        let added = try customStore.localProvider.addFeed(title: "Initial", feedURL: feedURL)
+        customStore.reloadState()
+
+        // 验证初始状态下列表为空
+        XCTAssertEqual(customStore.entryListItems.count, 0)
+        XCTAssertFalse(customStore.isFeedReloading(added.id))
+
+        // 1. 第一次调用 reloadFeed：拉入文章
+        await customStore.reloadFeed(feedID: added.id)
+
+        // 验证单源强制刷新完成
+        XCTAssertEqual(recorder.callCount, 1)
+        XCTAssertEqual(recorder.lastForce, true, "reloadFeed 必须强制 force = true")
+        XCTAssertEqual(customStore.entryListItems.count, 1)
+        XCTAssertEqual(customStore.entryListItems.first?.title, "Reloaded Article")
+        XCTAssertEqual(customStore.unreadCount(feedID: added.id), 1)
+        XCTAssertFalse(customStore.isFeedReloading(added.id), "reload 完成后 isFeedReloading 必须恢复 false")
+
+        // 2. 将文章标记为已读
+        let articleID = customStore.entryListItems.first!.id
+        customStore.markRead(entryIDs: [articleID])
+        customStore.reloadState()
+        XCTAssertEqual(customStore.unreadCount(feedID: added.id), 0)
+
+        // 3. 执行文章保留期清理：淘汰已读正文，条目转为墓碑
+        let futureCutoff = Date().addingTimeInterval(3600)
+        let pruned = try customStore.localProvider.purgeOldReadArticles(cutoffDate: futureCutoff)
+        XCTAssertEqual(pruned, 1, "应淘汰 1 篇已读文章正文")
+        customStore.reloadState()
+
+        // 验证淘汰后时间线查不到正文，列表为空
+        XCTAssertEqual(customStore.entryListItems(feedID: added.id).count, 0, "淘汰后时间线列表应不再展示该文章")
+
+        // 4. 用户右键触发「重新获取此订阅」：强制重新拉取并执行正文回填恢复
+        await customStore.reloadFeed(feedID: added.id)
+        XCTAssertEqual(recorder.callCount, 2)
+        XCTAssertEqual(recorder.lastForce, true, "第二次 reloadFeed 依然强制 force = true")
+
+        // 5. 验证正文回填恢复核心特性：
+        // (a) 时间线列表重新展示该文章
+        let restoredItems = customStore.entryListItems(feedID: added.id)
+        XCTAssertEqual(restoredItems.count, 1, "正文回填后列表必须恢复可见")
+        XCTAssertEqual(restoredItems.first?.title, "Reloaded Article")
+
+        // (b) 阅读状态必须维持已读 (isRead == true)
+        XCTAssertEqual(restoredItems.first?.isRead, true, "回填文章必须保持已读状态，绝不复活为未读")
+
+        // (c) 订阅未读角标计数必须依然为 0
+        XCTAssertEqual(customStore.unreadCount(feedID: added.id), 0, "回填文章不得导致未读计数异常增加")
+
+        if case .completed(let updatedFeeds, _) = customStore.refreshStatus {
+            XCTAssertEqual(updatedFeeds, 1)
+        } else {
+            XCTFail("refreshStatus 必须为 .completed")
+        }
     }
 }

@@ -79,7 +79,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.3.2（Build 21）** 整合多供应商 AI、模型翻译适配与原位译文展示，并改进未读筛选和阅读外观，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
-**Beta v1.3.3-beta.8（Build 29）**：修复 FreshRSS 订阅重加文章重复与数据库迁移约束，优化侧边栏文件夹右键首次弹窗目标锚定。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.8)。
+**Beta v1.4.0-beta.1（Build 30）**：数据库存储治理与历史文章自动淘汰（180天默认/墓碑防幽灵），支持单源右键强制重新拉取与回填，优化启动 CPU 尖峰。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.0-beta.1)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

@@ -515,9 +515,9 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         }
     }
 
-    // MARK: - Test J: Delete and re-add Feed restores same UUID and preserves all history
+    // MARK: - Test J: Delete Feed physically purges data; re-adding inserts clean new Feed
     @MainActor
-    func testJ_DeleteAndReAddFeedRestoresSameUUIDAndPreservesHistory() async throws {
+    func testJ_DeleteAndReAddFeedPhysicallyPurgesAndInsertsCleanNewFeed() async throws {
         let feedURL = URL(string: "https://react.dev/rss.xml")!
         let parsedEntries = [
             ParsedFeedEntry(
@@ -585,40 +585,42 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         )
         try store.localProvider.saveArtifact(artifact)
 
-        // 5. 删除 Feed (Soft Delete)
+        // 5. 删除 Feed (物理级联删除)
         store.deleteFeed(originalFeed)
         XCTAssertEqual(store.feeds.count, 0)
         XCTAssertEqual(store.entryListItems(feedID: originalFeedID).count, 0)
 
+        // 验证底表被级联彻底清除
+        try store.libraryDatabase.read { db in
+            let feedRecord = try FeedRecord.filter(Column("id") == originalFeedID.uuidString).fetchOne(db)
+            XCTAssertNil(feedRecord, "FeedRecord must be physically deleted")
+            let itemRecord = try ItemRecord.filter(Column("id") == entryID).fetchOne(db)
+            XCTAssertNil(itemRecord, "ItemRecord must be cascade deleted")
+        }
+
+        let deletedCache = try store.localProvider.fetchCache(entryID: entryID)
+        XCTAssertNil(deletedCache, "ArticleCache must be cascade deleted")
+
         // 6. 重新添加同一个 URL
-        await store.addFeed(urlText: feedURL.absoluteString, folder: "Tech")
+        let newFeed = await store.addFeed(urlText: feedURL.absoluteString, folder: "Tech")
+        XCTAssertNotNil(newFeed)
+        let newFeedID = try XCTUnwrap(newFeed?.id)
 
         // 7. 验证：
-        // a. 恢复同一个 Feed UUID，分类目录更新为 Tech
+        // a. 作为全新源接入，生成不同于原源的新 UUID，分类目录为 Tech
         XCTAssertEqual(store.feeds.count, 1)
-        let restoredFeed = try XCTUnwrap(store.feeds.first)
-        XCTAssertEqual(restoredFeed.id, originalFeedID, "Must restore the EXACT same Feed UUID")
-        XCTAssertEqual(restoredFeed.folder, "Tech")
+        XCTAssertNotEqual(newFeedID, originalFeedID, "Must NOT resurrect the old Feed UUID")
+        XCTAssertEqual(newFeed?.folder, "Tech")
 
-        // b. 历史文章立即恢复可见，已读和星标状态完好保留
-        let restoredItems = store.entryListItems(feedID: originalFeedID)
-        XCTAssertEqual(restoredItems.count, 1)
-        XCTAssertEqual(restoredItems[0].id, entryID)
-        XCTAssertTrue(restoredItems[0].isRead, "Read state must be preserved")
-        XCTAssertTrue(restoredItems[0].isStarred, "Starred state must be preserved")
+        // b. 新抓取的文章为干净的新文章，已读状态未被污染（为未读）
+        let newItems = store.entryListItems(feedID: newFeedID)
+        XCTAssertEqual(newItems.count, 1)
+        XCTAssertFalse(newItems[0].isRead, "New feed must have fresh unread state")
+        XCTAssertFalse(newItems[0].isStarred, "New feed must not preserve old starred state")
 
-        // c. ArticleCache 和 AIArtifact 完好保留
-        let restoredCache = try store.localProvider.fetchCache(entryID: entryID)
-        XCTAssertNotNil(restoredCache)
-        XCTAssertEqual(restoredCache?.text, "React 19 content")
-
-        let restoredArtifact = try store.localProvider.fetchArtifact(entryID: entryID, kind: .summary, isCompleteOnly: true)
-        XCTAssertNotNil(restoredArtifact)
-        XCTAssertEqual(restoredArtifact?.content, "React 19 摘要")
-
-        // d. 再次刷新能够正常成功，且没有生成重复文章
-        await store.refresh(feedIDs: [originalFeedID], origin: .manual)
-        let itemsAfterRefresh = store.entryListItems(feedID: originalFeedID)
+        // c. 再次刷新能够正常成功，且没有生成重复文章
+        await store.refresh(feedIDs: [newFeedID], origin: .manual)
+        let itemsAfterRefresh = store.entryListItems(feedID: newFeedID)
         XCTAssertEqual(itemsAfterRefresh.count, 1, "Must not duplicate items on refresh")
     }
 

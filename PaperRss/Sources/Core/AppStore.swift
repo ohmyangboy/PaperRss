@@ -75,6 +75,7 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var appTheme: AppTheme = .system
     @Published public private(set) var readerAppearance: ReaderAppearance = .default
     public var articleFontSize: Int { readerAppearance.fontSize }
+    @Published public private(set) var articleRetentionPolicy: ArticleRetentionPolicy = .sixMonths
 
     /// Feed 图标仓库：行渲染经它同步查询已就绪图标，杜绝 AsyncImage 加载期闪烁。
     public let iconStore = FeedIconStore()
@@ -254,6 +255,11 @@ public final class AppStore: ObservableObject {
     private var lastRefreshProgressPublishedAt: [String: Date] = [:]
     @Published public private(set) var accountRefreshProgress: [String: AccountRefreshProgress] = [:]
     @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
+    @Published public private(set) var reloadingFeedIDs: Set<UUID> = []
+
+    public func isFeedReloading(_ feedID: UUID) -> Bool {
+        reloadingFeedIDs.contains(feedID)
+    }
 
     private let persistenceURL: URL
     private let shouldPersistAISettings: Bool
@@ -279,6 +285,8 @@ public final class AppStore: ObservableObject {
         static let aiSettings = "PaperRss.aiSettings.v5"
         static let legacyAISettingsV4 = "PaperRss.aiSettings.v4"
         static let legacyAISettings = "PaperRss.aiSettings.v2"
+        static let articleRetentionPolicy = "PaperRss.articleRetentionPolicy"
+        static let lastMaintenanceTimestamp = "PaperRss.lastMaintenanceTimestamp"
     }
 
     private static func loadReaderAppearance(from preferences: UserDefaults) -> ReaderAppearance {
@@ -307,10 +315,18 @@ public final class AppStore: ObservableObject {
         credentialStore: CredentialStore? = nil,
         customSession: URLSession? = nil,
         pageLoader: (any ArticlePageLoading)? = nil,
-        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil
+        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil,
+        customFeedFetcher: (@Sendable (Feed, Bool) async throws -> FeedFetchResult)? = nil
     ) {
-        let actualFetcher = feedFetcher ?? { try await FeedService.fetch($0) }
-        self.feedFetcher = actualFetcher
+        let actualFetcher: @Sendable (Feed, Bool) async throws -> FeedFetchResult
+        if let customFeedFetcher {
+            actualFetcher = customFeedFetcher
+        } else if let feedFetcher {
+            actualFetcher = { feed, _ in try await feedFetcher(feed) }
+        } else {
+            actualFetcher = { feed, force in try await FeedService.fetch(feed, force: force) }
+        }
+        self.feedFetcher = { feed in try await actualFetcher(feed, false) }
         self.customSession = customSession
         self.llm = LLMService(port: URLSessionAIModelAdapter(session: customSession ?? .shared))
         self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
@@ -338,7 +354,7 @@ public final class AppStore: ObservableObject {
         self.localProvider = LocalAccountProvider(
             accountID: "local-default",
             database: libraryDatabase,
-            feedFetcher: actualFetcher
+            customFeedFetcher: actualFetcher
         )
 
         Task { [syncCoordinator, localProvider] in
@@ -375,6 +391,7 @@ public final class AppStore: ObservableObject {
         let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         readerAppearance = Self.loadReaderAppearance(from: preferences)
+        articleRetentionPolicy = preferences.string(forKey: PreferenceKey.articleRetentionPolicy).flatMap(ArticleRetentionPolicy.init(rawValue:)) ?? .sixMonths
 
         let legacyConfiguration: LLMConfiguration
         var hasLegacyConfiguration = recoveredLegacyConfiguration != nil || !LocalAPIKeyStore.loadAPIKey().isEmpty
@@ -440,18 +457,32 @@ public final class AppStore: ObservableObject {
         if migrationSucceededOrNotNeeded {
             try? localProvider.ensureAccountExists()
             reloadState()
+            scheduleMissingIconProbe(delay: 2.0)
         }
+    }
+
+    deinit {
+        missingIconProbeTask?.cancel()
     }
 
     /// 测试用初始化器（隔离测试沙箱）
     public init(
         testDatabase: AppDatabase,
-        feedFetcher: @escaping @Sendable (Feed) async throws -> FeedFetchResult,
+        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil,
+        customFeedFetcher: (@Sendable (Feed, Bool) async throws -> FeedFetchResult)? = nil,
         credentialStore: CredentialStore? = nil,
         pageLoader: (any ArticlePageLoading)? = nil,
         aiModelPort: (any AIModelPort)? = nil
     ) {
-        self.feedFetcher = feedFetcher
+        let actualFetcher: @Sendable (Feed, Bool) async throws -> FeedFetchResult
+        if let customFeedFetcher {
+            actualFetcher = customFeedFetcher
+        } else if let feedFetcher {
+            actualFetcher = { feed, _ in try await feedFetcher(feed) }
+        } else {
+            actualFetcher = { feed, force in try await FeedService.fetch(feed, force: force) }
+        }
+        self.feedFetcher = { feed in try await actualFetcher(feed, false) }
         self.customSession = nil
         self.llm = LLMService(port: aiModelPort ?? URLSessionAIModelAdapter())
         self.preparationEngine = ArticlePreparationEngine(pageLoader: pageLoader ?? DefaultArticlePageLoader())
@@ -475,7 +506,7 @@ public final class AppStore: ObservableObject {
         self.localProvider = LocalAccountProvider(
             accountID: "local-default",
             database: libraryDatabase,
-            feedFetcher: feedFetcher
+            customFeedFetcher: actualFetcher
         )
 
         Task { [syncCoordinator, localProvider] in
@@ -506,6 +537,7 @@ public final class AppStore: ObservableObject {
         let rawTheme = preferences.string(forKey: PreferenceKey.appTheme) ?? ""
         appTheme = AppTheme(rawValue: rawTheme) ?? .system
         readerAppearance = Self.loadReaderAppearance(from: preferences)
+        articleRetentionPolicy = preferences.string(forKey: PreferenceKey.articleRetentionPolicy).flatMap(ArticleRetentionPolicy.init(rawValue:)) ?? .sixMonths
         aiSettings = AISettings.migrated(from: testDatabase.llmConfiguration)
         llmConfiguration = testDatabase.llmConfiguration
 
@@ -553,10 +585,6 @@ public final class AppStore: ObservableObject {
             for feed in allFeeds {
                 let accID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
                 newFeedsByAccount[accID, default: []].append(feed)
-            }
-            Task { [weak self] in
-                guard let self else { return }
-                await FeedIconProbeService.shared.probeMissingIcons(for: allFeeds, database: self.libraryDatabase, iconStore: self.iconStore)
             }
         }
 
@@ -643,10 +671,6 @@ public final class AppStore: ObservableObject {
             let accountID = accountIDByFeedID[feed.id.uuidString] ?? "local-default"
             newFeedsByAccount[accountID, default: []].append(feed)
         }
-        Task { [weak self] in
-            guard let self else { return }
-            await FeedIconProbeService.shared.probeMissingIcons(for: allFeeds, database: self.libraryDatabase, iconStore: self.iconStore)
-        }
 
         let allFolders = (try? await database.readAsync { db in
             try feedRepository.fetchAllFolders(accountID: nil, in: db)
@@ -718,6 +742,64 @@ public final class AppStore: ObservableObject {
         }
 
         timelineRevision &+= 1
+    }
+
+    // MARK: - Feed Icon Probing
+
+    private var missingIconProbeTask: Task<Void, Never>?
+
+    /// 当探测器找到订阅源真实图标时，同步更新在内存中的 Feed 模型，定向触发侧栏行与视图刷新
+    @MainActor
+    public func updateFeedIcon(feedIDs: [UUID], iconURL: URL) {
+        guard !feedIDs.isEmpty else { return }
+        let idSet = Set(feedIDs)
+        feedsByAccount = feedsByAccount.mapValues { accountFeeds in
+            accountFeeds.map { feed in
+                if idSet.contains(feed.id) && feed.storedIconURL != iconURL {
+                    var updated = feed
+                    updated.storedIconURL = iconURL
+                    return updated
+                }
+                return feed
+            }
+        }
+        feeds = feeds.map { feed in
+            if idSet.contains(feed.id) && feed.storedIconURL != iconURL {
+                var updated = feed
+                updated.storedIconURL = iconURL
+                return updated
+            }
+            return feed
+        }
+    }
+
+    /// 调度后台无图源真实图标探测（带防抖与延时保护，避免与主线程渲染和启动刷新争抢系统资源）
+    public func scheduleMissingIconProbe(delay: TimeInterval = 1.0, force: Bool = false) {
+        missingIconProbeTask?.cancel()
+        let database = self.libraryDatabase
+        let iconStore = self.iconStore
+        missingIconProbeTask = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled, let self else { return }
+            // 若当前仍处于全量/增量刷新流程中，延后重试，绝不与核心文章抓取争抢线程与网络资源
+            if self.isRefreshing {
+                self.scheduleMissingIconProbe(delay: 2.0, force: force)
+                return
+            }
+            let allFeeds = self.feedsByAccount.values.flatMap { $0 }
+            guard !allFeeds.isEmpty else { return }
+            await FeedIconProbeService.shared.probeMissingIcons(
+                for: allFeeds,
+                database: database,
+                iconStore: iconStore,
+                force: force,
+                onIconDiscovered: { [weak self] feedIDs, iconURL in
+                    self?.updateFeedIcon(feedIDs: feedIDs, iconURL: iconURL)
+                }
+            )
+        }
     }
 
     public var enabledAccounts: [AccountRecord] {
@@ -1026,6 +1108,7 @@ public final class AppStore: ObservableObject {
 
             reloadState()
             await refresh(feedIDs: [feed.id], origin: .subscriptionManagement)
+            scheduleMissingIconProbe(delay: 0.5)
             return feed
         } else {
             guard let provider = await syncCoordinator.provider(for: accID) else {
@@ -1045,6 +1128,7 @@ public final class AppStore: ObservableObject {
             }
 
             await reloadStateAsync()
+            scheduleMissingIconProbe(delay: 0.5)
             return addedFeed
         }
     }
@@ -1105,6 +1189,10 @@ public final class AppStore: ObservableObject {
         if accID == "local-default" {
             do {
                 try localProvider.deleteFeed(feedID: feedID)
+                let database = self.libraryDatabase
+                Task.detached(priority: .utility) {
+                    try? database.vacuum()
+                }
                 return true
             } catch {
                 // 保持原有删除 API 的静默失败语义；删除未成功时不取消刷新任务。
@@ -1444,6 +1532,44 @@ public final class AppStore: ObservableObject {
         return outcome
     }
 
+    /// 强制重新拉取指定 Feed 的全部内容并回填恢复正文
+    public func reloadFeed(feedID: UUID) async {
+        guard !isRefreshing && !reloadingFeedIDs.contains(feedID) else { return }
+        isRefreshing = true
+        reloadingFeedIDs.insert(feedID)
+        refreshStatus = .refreshing
+        let accID = accountID(for: feedID) ?? "local-default"
+        accountRefreshProgress[accID] = AccountRefreshProgress(completed: 0, total: 1)
+        defer {
+            reloadingFeedIDs.remove(feedID)
+            accountRefreshProgress.removeValue(forKey: accID)
+            isRefreshing = false
+        }
+
+        do {
+            if accID == "local-default" {
+                let outcome = try await localProvider.refreshFeed(id: feedID, force: true)
+                await reloadStateAsync()
+                refreshStatus = .completed(updatedFeeds: outcome.updated ? 1 : 0, finishedAt: Date.now)
+            } else {
+                if let provider = await syncCoordinator.provider(for: accID) {
+                    let result = try await provider.refresh(reason: .manual)
+                    if case let .failed(msg) = result.status {
+                        throw NSError(domain: "PaperRss", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+                    }
+                }
+                await reloadStateAsync()
+                refreshStatus = .completed(updatedFeeds: 1, finishedAt: Date.now)
+            }
+        } catch {
+            let message = error.localizedDescription
+            refreshStatus = .failed(message: message, finishedAt: Date.now)
+            reportErrorMessage(message, module: .refresh)
+            lastError = message
+            await reloadStateAsync()
+        }
+    }
+
     // MARK: - State Management
 
     private func updateLocalEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
@@ -1666,7 +1792,10 @@ public final class AppStore: ObservableObject {
 
         // 账号持久化成功即可关闭添加界面；首次同步由 Store 持有，不依赖弹窗生命周期。
         if waitForInitialSync {
-            defer { reloadState() }
+            defer {
+                reloadState()
+                scheduleMissingIconProbe(delay: 0.5)
+            }
             _ = try await provider.refresh(reason: .manual)
         } else {
             reloadState()
@@ -1675,6 +1804,7 @@ public final class AppStore: ObservableObject {
                 defer {
                     accountRefreshProgress.removeValue(forKey: accountID)
                     reloadState()
+                    scheduleMissingIconProbe(delay: 0.5)
                 }
                 do {
                     _ = try await provider.refresh(reason: .manual)
@@ -1894,6 +2024,96 @@ public final class AppStore: ObservableObject {
     /// 当前网页正文缓存文章数与占用大小（供设置页「缓存数据」展示）。
     public func articleCacheStats() throws -> ArticleCacheStats {
         try localProvider.cacheStats()
+    }
+
+    /// 当前本地 SQLite 数据库物理磁盘占用与文章/缓存统计。
+    /// 缺省计算当前历史文章保留期限下的超期可清理数据量。
+    public func storageStats(cutoffDate: Date? = nil) throws -> LibraryDatabase.StorageStats {
+        let cutoff = cutoffDate ?? articleRetentionPolicy.cutoffDate()
+        return try localProvider.storageStats(cutoffDate: cutoff)
+    }
+
+    /// 一键深度清理历史已读文章、网页正文提取缓存与内存缓存，并回收 SQLite 磁盘空间。
+    ///
+    /// 遵循安全铁律：未读文章与星标文章绝对保留。
+    /// 遵循墓碑机制：仅删除正文与缓存，保留轻量条目身份与已读状态，防止幽灵复活。
+    /// 返回淘汰的文章篇数与物理释放的磁盘字节数。
+    @discardableResult
+    public func deepCleanStorage() async throws -> (prunedArticles: Int, freedBytes: Int64) {
+        let provider = localProvider
+        let database = libraryDatabase
+        let policy = articleRetentionPolicy
+
+        let beforeStats = try storageStats()
+        preparedArticleMemoryCache.removeAll()
+
+        let pruned = try await Task.detached(priority: .userInitiated) { () -> Int in
+            var count = 0
+            if let cutoff = policy.cutoffDate() {
+                count = try provider.purgeOldReadArticles(cutoffDate: cutoff, maxDuration: 5.0)
+                let tombstoneDays = max(180, (policy.days ?? 180) * 2)
+                let tombstoneCutoff = Calendar.current.date(
+                    byAdding: .day,
+                    value: -tombstoneDays,
+                    to: Date()
+                ) ?? cutoff
+                _ = try? provider.purgeExpiredTombstones(cutoffDate: tombstoneCutoff, maxDuration: 5.0)
+            }
+            try database.vacuum()
+            return count
+        }.value
+
+        let afterStats = try storageStats()
+        let freedBytes = max(0, beforeStats.totalDiskBytes - afterStats.totalDiskBytes)
+
+        await reloadStateAsync()
+        return (pruned, freedBytes)
+    }
+
+    private var isPerformingMaintenance = false
+
+    /// 后台空闲或退到后台时的静默维护任务。
+    ///
+    /// 遵循策略低频节流（默认距上次维护超过 24 小时执行一次），分批渐进清理过期已读文章，
+    /// 若清理数量达到阈值则触发 vacuum 回收物理空间。
+    public func performBackgroundMaintenance(force: Bool = false) async {
+        guard !isPerformingMaintenance else { return }
+        isPerformingMaintenance = true
+        defer { isPerformingMaintenance = false }
+
+        let now = Date().timeIntervalSince1970
+        let lastMaintenance = UserDefaults.standard.double(forKey: PreferenceKey.lastMaintenanceTimestamp)
+        if !force && lastMaintenance > 0 && (now - lastMaintenance) < 86400 {
+            return
+        }
+
+        let policy = articleRetentionPolicy
+        guard let days = policy.days, let cutoff = policy.cutoffDate() else {
+            return
+        }
+
+        let provider = localProvider
+        let database = libraryDatabase
+
+        let (pruned, _) = await Task.detached(priority: .utility) { () -> (Int, Int) in
+            let count = (try? provider.purgeOldReadArticles(cutoffDate: cutoff, maxDuration: 2.0)) ?? 0
+            let tombstoneCutoff = Calendar.current.date(
+                byAdding: .day,
+                value: -max(180, days * 2),
+                to: Date()
+            ) ?? cutoff
+            let tombstones = (try? provider.purgeExpiredTombstones(cutoffDate: tombstoneCutoff, maxDuration: 2.0)) ?? 0
+            if count > 200 {
+                try? database.vacuum()
+            }
+            return (count, tombstones)
+        }.value
+
+        UserDefaults.standard.set(now, forKey: PreferenceKey.lastMaintenanceTimestamp)
+
+        if pruned > 0 {
+            await reloadStateAsync()
+        }
     }
 
     /// 按条目 ID 重新拉取正文；条目不存在时返回 `false`。
@@ -3036,6 +3256,12 @@ public final class AppStore: ObservableObject {
         guard appTheme != theme else { return }
         appTheme = theme
         UserDefaults.standard.set(theme.rawValue, forKey: PreferenceKey.appTheme)
+    }
+
+    public func setArticleRetentionPolicy(_ policy: ArticleRetentionPolicy) {
+        guard articleRetentionPolicy != policy else { return }
+        articleRetentionPolicy = policy
+        UserDefaults.standard.set(policy.rawValue, forKey: PreferenceKey.articleRetentionPolicy)
     }
 
     public func setArticleFontSize(_ size: Int) {

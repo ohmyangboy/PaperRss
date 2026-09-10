@@ -134,6 +134,7 @@ public final class I18N: ObservableObject {
         "再按一次 C 切换对照翻译": "Press C again to toggle bilingual translation",
         "再按一次 V 查看 AI 摘要": "Press V again to view the AI summary",
         "再按一次 M 切换收藏": "Press M again to toggle star",
-        "再按一次 F 切换禅模式": "Press F again to toggle Focus Mode"
+        "再按一次 F 切换禅模式": "Press F again to toggle Focus Mode",
+        "重新获取此订阅": "Reload Feed"
     ]
 }

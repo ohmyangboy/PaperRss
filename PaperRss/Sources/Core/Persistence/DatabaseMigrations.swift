@@ -571,6 +571,105 @@ public enum DatabaseMigrations {
             }
         }
 
+        migrator.registerMigration("v12-purge-soft-deleted-local-feeds") { db in
+            guard try db.tableExists("feeds") else { return }
+
+            // 1. 清理本地已软删除 feeds 关联的 items
+            if try db.tableExists("items") {
+                try db.execute(sql: """
+                    DELETE FROM items
+                    WHERE feed_id IN (
+                        SELECT id FROM feeds
+                        WHERE is_deleted = 1 AND (account_id = 'local-default' OR account_id IN (SELECT id FROM accounts WHERE type = 'local'))
+                    );
+                """)
+            }
+
+            // 2. 清理本地已软删除 feeds 关联的 feed_folders 映射
+            if try db.tableExists("feed_folders") {
+                try db.execute(sql: """
+                    DELETE FROM feed_folders
+                    WHERE feed_id IN (
+                        SELECT id FROM feeds
+                        WHERE is_deleted = 1 AND (account_id = 'local-default' OR account_id IN (SELECT id FROM accounts WHERE type = 'local'))
+                    );
+                """)
+            }
+
+            // 3. 清理本地已软删除 feeds 关联的 translation_feed_lists
+            if try db.tableExists("translation_feed_lists") {
+                try db.execute(sql: """
+                    DELETE FROM translation_feed_lists
+                    WHERE feed_id IN (
+                        SELECT id FROM feeds
+                        WHERE is_deleted = 1 AND (account_id = 'local-default' OR account_id IN (SELECT id FROM accounts WHERE type = 'local'))
+                    );
+                """)
+            }
+
+            // 4. 清理本地已软删除 feeds 关联的语言提示
+            if try db.tableExists("source_language_hints") {
+                try db.execute(sql: """
+                    DELETE FROM source_language_hints
+                    WHERE scope = 'feed'
+                      AND entity_id IN (
+                        SELECT id FROM feeds
+                        WHERE is_deleted = 1 AND (account_id = 'local-default' OR account_id IN (SELECT id FROM accounts WHERE type = 'local'))
+                    );
+                """)
+            }
+
+            // 5. 物理删除所有已软删除的本地 feeds
+            try db.execute(sql: """
+                DELETE FROM feeds
+                WHERE is_deleted = 1 AND (account_id = 'local-default' OR account_id IN (SELECT id FROM accounts WHERE type = 'local'));
+            """)
+
+            // 6. 防御性全局外键对齐与级联清理 (迁移期间 foreign_keys 禁用，显式清理悬空的 articles/states/caches/outbox/exemptions)
+            if try db.tableExists("items") {
+                if try db.tableExists("ai_artifacts") {
+                    try db.execute(sql: """
+                        UPDATE ai_artifacts
+                        SET item_id = NULL
+                        WHERE item_id IS NOT NULL
+                          AND item_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+
+                if try db.tableExists("articles") {
+                    try db.execute(sql: """
+                        DELETE FROM articles WHERE item_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+
+                if try db.tableExists("article_states") {
+                    try db.execute(sql: """
+                        DELETE FROM article_states WHERE item_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+
+                if try db.tableExists("article_caches") {
+                    try db.execute(sql: """
+                        DELETE FROM article_caches WHERE item_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+
+                if try db.tableExists("article_state_outbox") {
+                    try db.execute(sql: """
+                        DELETE FROM article_state_outbox WHERE item_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+
+                if try db.tableExists("source_language_hints") {
+                    try db.execute(sql: """
+                        DELETE FROM source_language_hints
+                        WHERE scope = 'article'
+                          AND entity_id NOT IN (SELECT id FROM items);
+                    """)
+                }
+            }
+        }
+
         return migrator
     }
 }

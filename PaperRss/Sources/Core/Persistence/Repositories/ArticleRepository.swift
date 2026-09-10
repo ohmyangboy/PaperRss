@@ -69,7 +69,7 @@ public final class ArticleRepository: Sendable {
             COALESCE(s.is_starred, 0) AS is_starred,
             COALESCE(s.updated_at, i.updated_at) AS updated_at
         FROM items i
-        LEFT JOIN articles a ON a.item_id = i.id
+        INNER JOIN articles a ON a.item_id = i.id
         LEFT JOIN article_states s ON s.item_id = i.id
         WHERE i.id = ?;
         """
@@ -93,7 +93,7 @@ public final class ArticleRepository: Sendable {
             COALESCE(s.updated_at, i.updated_at) AS updated_at
         FROM items i
         INNER JOIN feeds f ON f.id = i.feed_id
-        LEFT JOIN articles a ON a.item_id = i.id
+        INNER JOIN articles a ON a.item_id = i.id
         LEFT JOIN article_states s ON s.item_id = i.id
         WHERE i.account_id = ? AND f.is_deleted = 0
         ORDER BY COALESCE(a.published_at, i.created_at) DESC, i.id DESC;
@@ -167,7 +167,7 @@ public final class ArticleRepository: Sendable {
                 )
                 newUnreadEntries.append(newEntry)
             } else {
-                // 2. 已有条目：仅在内容发生改变时更新 Article 正文
+                // 2. 已有条目：仅在内容发生改变时更新 Article 正文；正文被清理时执行回填恢复
                 if let existingArticle = try ArticleRecord.filter(Column("item_id") == itemID).fetchOne(db) {
                     var needsUpdate = false
                     var updatedArticle = existingArticle
@@ -183,9 +183,42 @@ public final class ArticleRepository: Sendable {
                         updatedArticle.contentHTML = parsedHTML
                         needsUpdate = true
                     }
+                    let parsedSummary = parsed.summary.plainText
+                    if !parsedSummary.isEmpty && updatedArticle.summary != parsedSummary {
+                        updatedArticle.summary = parsedSummary
+                        needsUpdate = true
+                    }
+                    if let parsedURL = parsed.url?.absoluteString, updatedArticle.url != parsedURL {
+                        updatedArticle.url = parsedURL
+                        needsUpdate = true
+                    }
                     if needsUpdate {
                         updatedArticle.contentUpdatedAt = now
                         try updatedArticle.save(db)
+                    }
+                } else {
+                    // 正文曾被清理淘汰（existingArticle == nil），源站 XML 依然包含该条目，执行正文回填恢复
+                    let restoredArticle = ArticleRecord(
+                        itemID: itemID,
+                        title: parsed.title,
+                        author: parsed.author,
+                        url: parsed.url?.absoluteString,
+                        publishedAt: parsed.publishedAt?.timeIntervalSince1970,
+                        summary: parsed.summary.plainText,
+                        contentHTML: parsed.contentHTML,
+                        contentUpdatedAt: now
+                    )
+                    try restoredArticle.save(db)
+                    // 保持 article_states 状态不变（is_read 保持原有值，不增加未读数，不加入 newUnreadEntries）
+                    if try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db) == nil {
+                        let fallbackState = ArticleStateRecord(
+                            itemID: itemID,
+                            isRead: true,
+                            isStarred: false,
+                            dateArrived: now,
+                            updatedAt: now
+                        )
+                        try fallbackState.save(db)
                     }
                 }
             }
@@ -284,6 +317,142 @@ public final class ArticleRepository: Sendable {
     public func saveArticle(_ record: ArticleRecord) async throws {
         try database.write { db in
             try saveArticle(record, in: db)
+        }
+    }
+
+    // MARK: - Cleanup & Retention
+
+    /// 清理早于截止日期的已读且未标星文章（正文、离线网页缓存与 AI 衍生数据）。
+    ///
+    /// 遵循墓碑模型（Tombstone Preservation，对齐 NetNewsWire）：
+    /// - 仅物理删除 articles、article_caches、ai_artifacts；
+    /// - 严格保留 items（身份）与 article_states（is_read = 1），防止老文章再次刷新时幽灵复活。
+    /// - 采用阶梯式限时清理与分批执行，单次事务最多执行 maxDuration 秒（默认 2.0s），防止长时间排他锁库导致 UI 冻结。
+    /// - 返回本次实际清理的文章篇数。
+    public func purgeOldReadArticles(
+        cutoffDate: Date,
+        maxDuration: TimeInterval = 2.0,
+        in db: Database
+    ) throws -> Int {
+        let now = Date()
+        let calendar = Calendar.current
+        let targetDays = max(0, calendar.dateComponents([.day], from: cutoffDate, to: now).day ?? 0)
+
+        // 阶梯式步长（由远及近）：优先清理远古老文章
+        let candidateIntervals = [365, 270, 180, 120, 90, 60]
+        let ladder = candidateIntervals.filter { $0 > targetDays }
+
+        let startTime = Date()
+        func tooMuchTimeHasPassed() -> Bool {
+            Date().timeIntervalSince(startTime) > maxDuration
+        }
+
+        var totalDeleted = 0
+        let batchLimit = 500
+
+        func purgeBatch(stepCutoff: Date) throws -> Int {
+            let cutoffTimestamp = stepCutoff.timeIntervalSince1970
+            let sql = """
+            SELECT a.item_id
+            FROM articles a
+            INNER JOIN article_states s ON s.item_id = a.item_id
+            INNER JOIN items i ON i.id = a.item_id
+            WHERE s.is_read = 1
+              AND s.is_starred = 0
+              AND (s.date_arrived < ? OR (s.date_arrived IS NULL AND i.created_at < ?))
+            LIMIT ?;
+            """
+            var stepDeleted = 0
+            while !tooMuchTimeHasPassed() {
+                let itemIDs = try String.fetchAll(db, sql: sql, arguments: [cutoffTimestamp, cutoffTimestamp, batchLimit])
+                if itemIDs.isEmpty {
+                    break
+                }
+                let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ", ")
+                let args = StatementArguments(itemIDs)
+
+                try db.execute(sql: "DELETE FROM article_caches WHERE item_id IN (\(placeholders));", arguments: args)
+                try db.execute(sql: "DELETE FROM ai_artifacts WHERE item_id IN (\(placeholders));", arguments: args)
+                try db.execute(sql: "DELETE FROM articles WHERE item_id IN (\(placeholders));", arguments: args)
+
+                stepDeleted += itemIDs.count
+                if itemIDs.count < batchLimit {
+                    break
+                }
+            }
+            return stepDeleted
+        }
+
+        for interval in ladder {
+            guard let stepCutoff = calendar.date(byAdding: .day, value: -interval, to: now) else { continue }
+            totalDeleted += try purgeBatch(stepCutoff: stepCutoff)
+            if tooMuchTimeHasPassed() {
+                return totalDeleted
+            }
+        }
+
+        if !tooMuchTimeHasPassed() {
+            totalDeleted += try purgeBatch(stepCutoff: cutoffDate)
+        }
+
+        return totalDeleted
+    }
+
+    /// 清理超远期孤立墓碑（仅在 items 与 article_states 存在，但 articles 正文已被清理，且时间早于 cutoffDate）。
+    ///
+    /// 仅清理已读且未标星的墓碑条目。同样受 maxDuration 耗时保护（默认 2.0s）。返回清理的条目数。
+    public func purgeExpiredTombstones(
+        cutoffDate: Date,
+        maxDuration: TimeInterval = 2.0,
+        batchLimit: Int = 500,
+        in db: Database
+    ) throws -> Int {
+        let startTime = Date()
+        func tooMuchTimeHasPassed() -> Bool {
+            Date().timeIntervalSince(startTime) > maxDuration
+        }
+
+        let cutoffTimestamp = cutoffDate.timeIntervalSince1970
+        let sql = """
+        SELECT i.id
+        FROM items i
+        LEFT JOIN articles a ON a.item_id = i.id
+        LEFT JOIN article_states s ON s.item_id = i.id
+        WHERE a.item_id IS NULL
+          AND (s.date_arrived < ? OR (s.date_arrived IS NULL AND i.created_at < ?))
+          AND COALESCE(s.is_read, 1) = 1
+          AND COALESCE(s.is_starred, 0) = 0
+        LIMIT ?;
+        """
+        var totalDeleted = 0
+        while !tooMuchTimeHasPassed() {
+            let itemIDs = try String.fetchAll(db, sql: sql, arguments: [cutoffTimestamp, cutoffTimestamp, batchLimit])
+            if itemIDs.isEmpty {
+                break
+            }
+            let placeholders = Array(repeating: "?", count: itemIDs.count).joined(separator: ", ")
+            let args = StatementArguments(itemIDs)
+
+            try db.execute(sql: "DELETE FROM article_states WHERE item_id IN (\(placeholders));", arguments: args)
+            try db.execute(sql: "DELETE FROM items WHERE id IN (\(placeholders));", arguments: args)
+
+            totalDeleted += itemIDs.count
+            if itemIDs.count < batchLimit {
+                break
+            }
+        }
+        return totalDeleted
+    }
+
+    public func purgeOldReadArticles(cutoffDate: Date, maxDuration: TimeInterval = 2.0) async throws -> Int {
+        try database.write { db in
+            try self.purgeOldReadArticles(cutoffDate: cutoffDate, maxDuration: maxDuration, in: db)
+        }
+    }
+
+    public func purgeExpiredTombstones(cutoffDate: Date, maxDuration: TimeInterval = 2.0) async throws -> Int {
+        try database.write { db in
+            try self.purgeExpiredTombstones(cutoffDate: cutoffDate, maxDuration: maxDuration, in: db)
         }
     }
 }

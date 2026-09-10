@@ -116,41 +116,77 @@ public final class FeedRepository: Sendable {
         ORDER BY f.sort_order ASC, f.title ASC;
         """
         let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+        return rows.compactMap { feedFromRow($0) }
+    }
 
-        return rows.compactMap { row in
-            guard let idString: String = row["id"],
-                  let uuid = UUID(uuidString: idString),
-                  let feedURLString: String = row["feed_url"],
-                  let feedURL = URL(string: feedURLString) else { return nil }
+    public func fetchFeedModel(id: String, in db: Database) throws -> Feed? {
+        let sql = """
+        SELECT
+            f.id AS id,
+            f.title AS title,
+            f.site_url AS site_url,
+            f.feed_url AS feed_url,
+            fo.name AS folder_name,
+            f.etag AS etag,
+            f.last_modified AS last_modified,
+            f.last_refreshed_at AS last_refreshed_at,
+            f.is_deleted AS is_deleted,
+            f.updated_at AS updated_at,
+            COALESCE(
+                CASE WHEN f.stored_icon_url NOT LIKE '%f.php%' THEN NULLIF(f.stored_icon_url, '') ELSE NULL END,
+                (
+                    SELECT f2.stored_icon_url
+                    FROM feeds f2
+                    WHERE f2.feed_url = f.feed_url
+                      AND f2.stored_icon_url IS NOT NULL
+                      AND f2.stored_icon_url != ''
+                      AND f2.stored_icon_url NOT LIKE '%f.php%'
+                    LIMIT 1
+                )
+            ) AS stored_icon_url
+        FROM feeds f
+        LEFT JOIN feed_folders ff ON ff.feed_id = f.id
+        LEFT JOIN folders fo ON fo.id = ff.folder_id AND fo.is_deleted = 0
+        WHERE f.id = ? AND f.is_deleted = 0
+        LIMIT 1;
+        """
+        guard let row = try Row.fetchOne(db, sql: sql, arguments: [id]) else { return nil }
+        return feedFromRow(row)
+    }
 
-            let title: String = row["title"]
-            let siteURLString: String? = row["site_url"]
-            let siteURL = siteURLString.flatMap { URL(string: $0) }
-            let folderName: String? = row["folder_name"]
-            let etag: String? = row["etag"]
-            let lastModified: String? = row["last_modified"]
-            let lastRefreshedAtTimestamp: Double? = row["last_refreshed_at"]
-            let lastRefreshedAt = lastRefreshedAtTimestamp.map { Date(timeIntervalSince1970: $0) }
-            let isDeletedInt: Int = row["is_deleted"]
-            let updatedAtTimestamp: Double = row["updated_at"]
-            let updatedAt = Date(timeIntervalSince1970: updatedAtTimestamp)
-            let storedIconURLString: String? = row["stored_icon_url"]
-            let storedIconURL = storedIconURLString.flatMap { URL(string: $0) }
+    private func feedFromRow(_ row: Row) -> Feed? {
+        guard let idString: String = row["id"],
+              let uuid = UUID(uuidString: idString),
+              let feedURLString: String = row["feed_url"],
+              let feedURL = URL(string: feedURLString) else { return nil }
 
-            return Feed(
-                id: uuid,
-                title: title,
-                siteURL: siteURL,
-                feedURL: feedURL,
-                folder: folderName,
-                etag: etag,
-                lastModified: lastModified,
-                lastRefreshedAt: lastRefreshedAt,
-                isDeleted: isDeletedInt == 1,
-                updatedAt: updatedAt,
-                storedIconURL: storedIconURL
-            )
-        }
+        let title: String = row["title"]
+        let siteURLString: String? = row["site_url"]
+        let siteURL = siteURLString.flatMap { URL(string: $0) }
+        let folderName: String? = row["folder_name"]
+        let etag: String? = row["etag"]
+        let lastModified: String? = row["last_modified"]
+        let lastRefreshedAtTimestamp: Double? = row["last_refreshed_at"]
+        let lastRefreshedAt = lastRefreshedAtTimestamp.map { Date(timeIntervalSince1970: $0) }
+        let isDeletedInt: Int = row["is_deleted"]
+        let updatedAtTimestamp: Double = row["updated_at"]
+        let updatedAt = Date(timeIntervalSince1970: updatedAtTimestamp)
+        let storedIconURLString: String? = row["stored_icon_url"]
+        let storedIconURL = storedIconURLString.flatMap { URL(string: $0) }
+
+        return Feed(
+            id: uuid,
+            title: title,
+            siteURL: siteURL,
+            feedURL: feedURL,
+            folder: folderName,
+            etag: etag,
+            lastModified: lastModified,
+            lastRefreshedAt: lastRefreshedAt,
+            isDeleted: isDeletedInt == 1,
+            updatedAt: updatedAt,
+            storedIconURL: storedIconURL
+        )
     }
 
     // MARK: - Folders & Management
@@ -315,6 +351,12 @@ public final class FeedRepository: Sendable {
         }
     }
 
+    public func deleteFeed(id: String) async throws {
+        try database.write { db in
+            try deleteFeed(id: id, in: db)
+        }
+    }
+
     public func softDeleteFeed(id: String) async throws {
         try database.write { db in
             try softDeleteFeed(id: id, in: db)
@@ -348,6 +390,12 @@ public final class FeedRepository: Sendable {
     public func fetchFolderIDs(forFeedID feedID: String) async throws -> [String] {
         try database.read { db in
             try fetchFolderIDs(forFeedID: feedID, in: db)
+        }
+    }
+
+    public func fetchFeedModel(id: String) async throws -> Feed? {
+        try database.read { db in
+            try self.fetchFeedModel(id: id, in: db)
         }
     }
 }

@@ -33,12 +33,13 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
     public let cacheRepository: CacheRepository
     public let artifactRepository: AIArtifactRepository
     public let timelineQueryService: TimelineQueryService
-    private let feedFetcher: @Sendable (Feed) async throws -> FeedFetchResult
+    private let feedFetcher: @Sendable (Feed, Bool) async throws -> FeedFetchResult
 
     public init(
         accountID: String = "local-default",
         database: LibraryDatabase,
-        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil
+        feedFetcher: (@Sendable (Feed) async throws -> FeedFetchResult)? = nil,
+        customFeedFetcher: (@Sendable (Feed, Bool) async throws -> FeedFetchResult)? = nil
     ) {
         self.accountID = accountID
         self.database = database
@@ -48,8 +49,16 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         self.cacheRepository = CacheRepository(database: database)
         self.artifactRepository = AIArtifactRepository(database: database)
         self.timelineQueryService = TimelineQueryService(database: database)
-        self.feedFetcher = feedFetcher ?? { feed in
-            try await FeedService.fetch(feed)
+        if let customFeedFetcher {
+            self.feedFetcher = customFeedFetcher
+        } else if let feedFetcher {
+            self.feedFetcher = { feed, _ in
+                try await feedFetcher(feed)
+            }
+        } else {
+            self.feedFetcher = { feed, force in
+                try await FeedService.fetch(feed, force: force)
+            }
         }
     }
 
@@ -91,37 +100,17 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         let now = Date().timeIntervalSince1970
 
         return try database.write { db in
-            if let existing = try self.feedRepository.fetchFeedByURL(accountID: self.accountID, feedURL: feedURLString, includeDeleted: true, in: db) {
-                if !existing.isDeleted {
-                    throw LocalAccountError.alreadySubscribed
-                }
+            let existingFeeds = try FeedRecord
+                .filter(Column("account_id") == self.accountID && Column("feed_url") == feedURLString)
+                .fetchAll(db)
 
-                // 恢复同一个 Feed 记录（保留 feeds.id / items / states / cache / artifacts）
-                var restored = existing
-                restored.isDeleted = false
-                restored.updatedAt = now
-                if !title.isEmpty && (title != existing.title) {
-                    restored.title = title
-                }
-                if let siteURL {
-                    restored.siteURL = siteURL.absoluteString
-                }
-                try self.feedRepository.saveFeed(restored, in: db)
+            if existingFeeds.contains(where: { !$0.isDeleted }) {
+                throw LocalAccountError.alreadySubscribed
+            }
 
-                // 应用新的分类目录
-                try self.feedRepository.setFeedFolder(feedID: restored.id, folderName: folder, accountID: self.accountID, in: db)
-
-                guard let feedUUID = UUID(uuidString: restored.id) else {
-                    fatalError("Invalid UUID in database: \(restored.id)")
-                }
-                return Feed(
-                    id: feedUUID,
-                    title: restored.title,
-                    siteURL: restored.siteURL.flatMap { URL(string: $0) },
-                    feedURL: feedURL,
-                    folder: folder,
-                    updatedAt: Date(timeIntervalSince1970: now)
-                )
+            // 移除旧记录就地复活逻辑：若存在软删除的历史残留旧源，彻底物理清除并级联回收文章与状态
+            for oldDeleted in existingFeeds where oldDeleted.isDeleted {
+                try self.feedRepository.deleteFeed(id: oldDeleted.id, in: db)
             }
 
             // 全新添加 Feed
@@ -162,7 +151,7 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
 
     public func deleteFeed(feedID: UUID) throws {
         try database.write { db in
-            try self.feedRepository.softDeleteFeed(id: feedID.uuidString, in: db)
+            try self.feedRepository.deleteFeed(id: feedID.uuidString, in: db)
         }
     }
 
@@ -205,13 +194,13 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         public let result: Result<FeedFetchResult, Error>
     }
 
-    public func fetchSingleFeed(feed: Feed, timeoutSeconds: Double = 10.0) async -> SingleFeedRefreshResult {
+    public func fetchSingleFeed(feed: Feed, timeoutSeconds: Double = 10.0, force: Bool = false) async -> SingleFeedRefreshResult {
         let feedID = feed.id
         let title = feed.title
         do {
             let fetchResult = try await withThrowingTaskGroup(of: FeedFetchResult.self) { group in
                 group.addTask {
-                    try await self.feedFetcher(feed)
+                    try await self.feedFetcher(feed, force)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
@@ -224,6 +213,25 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
             return SingleFeedRefreshResult(feedID: feedID, oldTitle: title, result: .success(fetchResult))
         } catch {
             return SingleFeedRefreshResult(feedID: feedID, oldTitle: title, result: .failure(error))
+        }
+    }
+
+    /// 单源拉取与增量合并，支持 force: true 忽略 304 强制重新拉取
+    @discardableResult
+    public func refreshFeed(id: UUID, force: Bool = true) async throws -> (updated: Bool, newUnreadEntries: [Entry]) {
+        let feedIDString = id.uuidString
+        guard let feed = try database.read({ db in
+            try self.feedRepository.fetchFeedModel(id: feedIDString, in: db)
+        }) else {
+            throw LocalAccountError.feedNotFound
+        }
+
+        let singleRes = await fetchSingleFeed(feed: feed, force: force)
+        switch singleRes.result {
+        case .success:
+            return try await applyRefreshResultAsync(singleRes)
+        case .failure(let error):
+            throw error
         }
     }
 
@@ -376,6 +384,30 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
         }
     }
 
+    /// 当前本地 SQLite 数据库文件与文章/缓存统计。
+    public func storageStats(cutoffDate: Date? = nil) throws -> LibraryDatabase.StorageStats {
+        try database.storageStats(cutoffDate: cutoffDate)
+    }
+
+    /// 清理早于截止日期的已读且未标星文章（正文、离线缓存与 AI 产物）。
+    public func purgeOldReadArticles(cutoffDate: Date, maxDuration: TimeInterval = 2.0) throws -> Int {
+        try database.write { db in
+            try self.articleRepository.purgeOldReadArticles(cutoffDate: cutoffDate, maxDuration: maxDuration, in: db)
+        }
+    }
+
+    /// 清理超远期孤立墓碑记录。
+    public func purgeExpiredTombstones(cutoffDate: Date, maxDuration: TimeInterval = 2.0) throws -> Int {
+        try database.write { db in
+            try self.articleRepository.purgeExpiredTombstones(cutoffDate: cutoffDate, maxDuration: maxDuration, in: db)
+        }
+    }
+
+    /// 回收数据库磁盘空间。
+    public func vacuum() throws {
+        try database.vacuum()
+    }
+
     public func fetchArtifact(entryID: String, kind: AIArtifactKind, isCompleteOnly: Bool = false, configurationFingerprint: String? = nil) throws -> AIArtifact? {
         try database.read { db in
             try self.artifactRepository.fetchLatestArtifactModel(entryID: entryID, kind: kind, isCompleteOnly: isCompleteOnly, configurationFingerprint: configurationFingerprint, in: db)
@@ -522,7 +554,7 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
 
     public func deleteFeed(feedID: UUID) async throws {
         try database.write { db in
-            try self.feedRepository.softDeleteFeed(id: feedID.uuidString, in: db)
+            try self.feedRepository.deleteFeed(id: feedID.uuidString, in: db)
         }
     }
 

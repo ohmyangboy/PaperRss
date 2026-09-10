@@ -79,7 +79,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 **Stable v1.3.2 (Build 21)** brings multi-provider AI, model-aware translation and in-place translated text, plus unread filtering and reading appearance improvements. Recommended for all users. See the [changelog](CHANGELOG.md).
 
-**Beta v1.3.3-beta.8 (Build 29)**: Fix FreshRSS re-add article duplication and database migration constraints, and resolve sidebar folder right-click sheet target anchoring. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.3.3-beta.8).
+**Beta v1.4.0-beta.1 (Build 30)**: Database storage governance, retention policy (180 days default with tombstone preservation), context menu feed force-reload with content restoration, and startup CPU peak optimization. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.0-beta.1).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

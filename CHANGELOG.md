@@ -1,5 +1,27 @@
 # 更新记录 / Changelog
 
+## v1.4.0-beta.1 · Build 30 · 2026-09-10
+
+本次为数据库存储治理、自动淘汰保留策略与启动性能优化的实验性调整 Beta；稳定通道仍为 v1.3.2。
+
+- 存储治理与历史文章自动淘汰：在设置中提供「存储与历史记录」管理，支持配置历史文章保留期限（180天默认 / 1年 / 永久），严格以拉取下载到达时间为准淘汰超期已读文章，并提供带二次确认的原生弹窗清理工具。
+- 铁律保护与墓碑防幽灵机制：未读与星标文章绝对永久保留；清理历史文章时采用墓碑保留机制，杜绝源站刷新时老文章复活为未读。
+- 订阅源右键强制重新获取：侧边栏订阅源右键菜单新增「重新获取此订阅」，支持绕过 HTTP 304 缓存强制拉取最新条目并自动回填正文，配有局部旋转 Loading 反馈。
+- 数据库性能与空闲空间回收：清理后自动执行 WAL 截断与 VACUUM 物理释放磁盘碎片，并在应用退至后台时提供限时防锁库空闲自动维护。
+- 启动 CPU 尖峰优化：限制图标探测并发，采用轻量早停 XML 剪枝与持久化探测冷却，彻底消除冷启动时的瞬时 CPU 飙升。
+- 订阅源级联物理清理：修复删除订阅源时的僵尸数据残留，通过 `v12` 迁移彻底清洗存量软删除废弃条目。
+
+---
+
+This Beta introduces experimental adjustments for database storage governance, retention policies, and startup performance optimizations; the stable channel remains on v1.3.2.
+
+- Storage governance & retention policy: Add "Storage & History" management in Settings with configurable retention periods (180 days default / 1 year / keep forever), pruning read articles based on arrival time with confirmation alerts.
+- Protection & tombstone preservation: Unread and starred articles are kept forever; pruned read articles preserve tombstones to prevent ghost resurrection upon feed refreshes.
+- Context menu feed reload: Add "Reload Feed" to sidebar feed context menus to force-fetch latest items bypassing HTTP 304 caches and restore missing article content with inline loading spinners.
+- Database compaction & background maintenance: Automatically reclaim disk space via VACUUM and WAL truncation, with staged non-blocking maintenance during background idle periods.
+- Startup CPU peak optimization: Throttle feed icon probe concurrency, introduce early-exit XML pruning, and persist probe cooldowns to eliminate cold-start CPU spikes.
+- Feed deletion cascading & cleanup: Cascading physical deletion for removed feeds with `v12` migration purging leftover soft-deleted records.
+
 ## v1.3.3-beta.8 · Build 29 · 2026-09-09
 
 本次为 FreshRSS 订阅生命周期与侧边栏交互修复 Beta；建议测试 FreshRSS 增删改管理的用户升级测试，稳定通道仍为 v1.3.2。

@@ -76,10 +76,14 @@ final class LocalAccountProviderTests: XCTestCase {
         feeds = try provider.fetchFeeds()
         XCTAssertNil(feeds.first?.folder)
 
-        // 软删除 Feed
+        // 物理级联删除 Feed
         try provider.deleteFeed(feedID: feed.id)
         feeds = try provider.fetchFeeds()
         XCTAssertEqual(feeds.count, 0)
+        try database.dbPool.read { db in
+            let record = try FeedRecord.filter(Column("id") == feed.id.uuidString).fetchOne(db)
+            XCTAssertNil(record, "FeedRecord must be physically deleted")
+        }
     }
 
     func testIncrementalMergeAndStateTransitions() throws {
@@ -315,4 +319,351 @@ final class LocalAccountProviderTests: XCTestCase {
         items = try provider.timelineQueryService.fetchListItems(scope: .all)
         XCTAssertEqual(items.count, 1)
     }
+
+    func testPhysicalCascadeDeletionPurgesAllAssociatedData() throws {
+        let feed = try provider.addFeed(
+            title: "Swift News",
+            feedURL: URL(string: "https://example.com/swift-news")!,
+            folder: "Languages"
+        )
+        let feedID = feed.id.uuidString
+
+        let itemID = "swift-news-item-1"
+        try database.dbPool.write { db in
+            let item = ItemRecord(
+                id: itemID,
+                accountID: "local-default",
+                externalID: "ext-swift-1",
+                feedID: feedID,
+                createdAt: 1000.0,
+                updatedAt: 1000.0
+            )
+            try item.save(db)
+
+            let article = ArticleRecord(
+                itemID: itemID,
+                title: "Swift 6 Released",
+                author: "Apple",
+                url: "https://example.com/swift-6",
+                publishedAt: 1000.0,
+                summary: "Swift 6 is here",
+                contentHTML: "<p>Details</p>",
+                contentUpdatedAt: 1000.0
+            )
+            try article.save(db)
+
+            let state = ArticleStateRecord(
+                itemID: itemID,
+                isRead: true,
+                isStarred: true,
+                dateArrived: 1000.0,
+                updatedAt: 1000.0
+            )
+            try state.save(db)
+
+            let cache = ArticleCacheRecord(
+                itemID: itemID,
+                text: "Clean text",
+                html: "<p>Clean</p>",
+                imageUrlsJSON: nil,
+                fetchedAt: 1000.0,
+                sourceURL: "https://example.com/swift-6",
+                isSanitized: true
+            )
+            try cache.save(db)
+
+            let artifact = AIArtifactRecord(
+                id: "artifact-swift-1",
+                accountID: "local-default",
+                itemID: itemID,
+                subjectKey: itemID,
+                kind: "summary",
+                contentHash: "hash1",
+                model: "model1",
+                targetLanguage: "zh",
+                promptVersion: 1,
+                content: "AI Summary",
+                segmentsJSON: nil,
+                selectionText: nil,
+                selectionArticleHash: nil,
+                selectionAnchorJSON: nil,
+                isComplete: true,
+                isDeleted: false,
+                createdAt: 1000.0,
+                updatedAt: 1000.0
+            )
+            try artifact.save(db)
+        }
+
+        // 验证插入成功
+        try database.dbPool.read { db in
+            XCTAssertNotNil(try FeedRecord.filter(Column("id") == feedID).fetchOne(db))
+            XCTAssertNotNil(try ItemRecord.filter(Column("id") == itemID).fetchOne(db))
+            XCTAssertNotNil(try ArticleRecord.filter(Column("item_id") == itemID).fetchOne(db))
+            XCTAssertNotNil(try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db))
+            XCTAssertNotNil(try ArticleCacheRecord.filter(Column("item_id") == itemID).fetchOne(db))
+            XCTAssertFalse(try FeedFolderRecord.filter(Column("feed_id") == feedID).fetchAll(db).isEmpty)
+        }
+
+        // 物理删除订阅源
+        try provider.deleteFeed(feedID: feed.id)
+
+        // 验证原生外键级联全部彻底清除
+        try database.dbPool.read { db in
+            XCTAssertNil(try FeedRecord.filter(Column("id") == feedID).fetchOne(db), "Feed 必须物理删除")
+            XCTAssertNil(try ItemRecord.filter(Column("id") == itemID).fetchOne(db), "Items 必须级联删除")
+            XCTAssertNil(try ArticleRecord.filter(Column("item_id") == itemID).fetchOne(db), "Articles 必须级联删除")
+            XCTAssertNil(try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db), "ArticleStates 必须级联删除")
+            XCTAssertNil(try ArticleCacheRecord.filter(Column("item_id") == itemID).fetchOne(db), "ArticleCaches 必须级联删除")
+            XCTAssertTrue(try FeedFolderRecord.filter(Column("feed_id") == feedID).fetchAll(db).isEmpty, "FeedFolders 必须级联删除")
+            // ai_artifacts 设置为 ON DELETE SET NULL
+            let artifactRecord = try AIArtifactRecord.filter(Column("id") == "artifact-swift-1").fetchOne(db)
+            XCTAssertNil(artifactRecord?.itemID, "AI Artifact item_id 必须置 NULL")
+        }
+    }
+
+    func testReAddingFeedCreatesCleanNewFeedWithoutResurrectingOldData() throws {
+        let feedURL = URL(string: "https://example.com/clean-test")!
+        let firstFeed = try provider.addFeed(
+            title: "Initial Title",
+            feedURL: feedURL,
+            folder: "OldFolder"
+        )
+        let firstUUID = firstFeed.id
+
+        // 物理删除
+        try provider.deleteFeed(feedID: firstUUID)
+        XCTAssertEqual(try provider.fetchFeeds().count, 0)
+
+        // 重新添加相同 URL
+        let secondFeed = try provider.addFeed(
+            title: "New Title",
+            feedURL: feedURL,
+            folder: "NewFolder"
+        )
+
+        // 必须为全新 UUID，而非复用已删除旧源的 ID
+        XCTAssertNotEqual(secondFeed.id, firstUUID, "Must allocate a brand new UUID")
+        XCTAssertEqual(secondFeed.title, "New Title")
+        XCTAssertEqual(secondFeed.folder, "NewFolder")
+
+        let feeds = try provider.fetchFeeds()
+        XCTAssertEqual(feeds.count, 1)
+        XCTAssertEqual(feeds.first?.id, secondFeed.id)
+    }
+
+    func testAddFeedPurgesAnyLingeringSoftDeletedRecords() throws {
+        let feedURL = URL(string: "https://example.com/lingering")!
+        let oldID = UUID().uuidString
+        let oldItemID = "lingering-item"
+
+        // 模拟存量软删除脏数据
+        try database.dbPool.write { db in
+            let oldFeed = FeedRecord(
+                id: oldID,
+                accountID: "local-default",
+                externalID: nil,
+                title: "Old Dead Feed",
+                siteURL: nil,
+                feedURL: feedURL.absoluteString,
+                etag: "old-etag",
+                lastModified: "old-mod",
+                lastRefreshedAt: 1000.0,
+                isDeleted: true,
+                updatedAt: 1000.0,
+                storedIconURL: nil,
+                sortOrder: 1
+            )
+            try oldFeed.save(db)
+
+            let item = ItemRecord(
+                id: oldItemID,
+                accountID: "local-default",
+                externalID: "ext-lingering",
+                feedID: oldID,
+                createdAt: 1000.0,
+                updatedAt: 1000.0
+            )
+            try item.save(db)
+        }
+
+        // 添加该 URL 的 Feed
+        let added = try provider.addFeed(
+            title: "Clean Replacement",
+            feedURL: feedURL
+        )
+
+        XCTAssertNotEqual(added.id.uuidString, oldID)
+
+        // 验证旧软删除记录和关联数据已被物理清除
+        try database.dbPool.read { db in
+            XCTAssertNil(try FeedRecord.filter(Column("id") == oldID).fetchOne(db))
+            XCTAssertNil(try ItemRecord.filter(Column("id") == oldItemID).fetchOne(db))
+            let activeFeeds = try FeedRecord.filter(Column("feed_url") == feedURL.absoluteString).fetchAll(db)
+            XCTAssertEqual(activeFeeds.count, 1)
+            XCTAssertEqual(activeFeeds.first?.id, added.id.uuidString)
+            XCTAssertFalse(activeFeeds.first?.isDeleted ?? true)
+        }
+    }
+
+    func testRefreshFeedSingleSourceWithForce() async throws {
+        final class ForceRecorder: @unchecked Sendable {
+            var recordedForce: Bool?
+        }
+        let recorder = ForceRecorder()
+
+        let mockFetcher: @Sendable (Feed, Bool) async throws -> FeedFetchResult = { feed, force in
+            recorder.recordedForce = force
+            let entry = ParsedFeedEntry(
+                id: "entry-single",
+                title: "Single Entry",
+                author: "Author",
+                url: URL(string: "https://example.com/single"),
+                publishedAt: Date(),
+                summary: "Summary",
+                contentHTML: "<p>Content</p>"
+            )
+            let parsed = ParsedFeed(title: "Single Feed", siteURL: nil, iconURL: nil, entries: [entry])
+            return .updated(parsed, etag: "etag-single", lastModified: "mod-single")
+        }
+
+        let customProvider = LocalAccountProvider(
+            accountID: "local-default",
+            database: database,
+            customFeedFetcher: mockFetcher
+        )
+
+        let feed = try customProvider.addFeed(
+            title: "Original Feed",
+            feedURL: URL(string: "https://example.com/single.xml")!
+        )
+
+        let outcome = try await customProvider.refreshFeed(id: feed.id, force: true)
+        XCTAssertTrue(outcome.updated)
+        XCTAssertEqual(outcome.newUnreadEntries.count, 1)
+        XCTAssertEqual(recorder.recordedForce, true, "refreshFeed 必须将 force = true 传给 fetcher")
+
+        // 再次强制刷新，由于 entry 已存在，正文回填/更新，newUnreadEntries 为空
+        let secondOutcome = try await customProvider.refreshFeed(id: feed.id, force: true)
+        XCTAssertTrue(secondOutcome.updated)
+        XCTAssertEqual(secondOutcome.newUnreadEntries.count, 0)
+    }
+
+    func testRefreshFeedThrowsWhenFeedNotFound() async throws {
+        do {
+            _ = try await provider.refreshFeed(id: UUID(), force: true)
+            XCTFail("Should throw LocalAccountError.feedNotFound")
+        } catch let error as LocalAccountError {
+            XCTAssertEqual(error, .feedNotFound)
+        }
+    }
+
+    func testFeedServiceFetchConditionalHeadersRespectForce() async throws {
+        URLProtocol.registerClass(FeedServiceHeaderCaptureURLProtocol.self)
+        defer { URLProtocol.unregisterClass(FeedServiceHeaderCaptureURLProtocol.self) }
+
+        let feed = Feed(
+            id: UUID(),
+            title: "Header Test",
+            feedURL: URL(string: "https://feedservice-header-test.com/rss.xml")!,
+            etag: "\"etag-123\"",
+            lastModified: "Wed, 21 Oct 2015 07:28:00 GMT"
+        )
+
+        // 1. force == false 应当附带 If-None-Match 和 If-Modified-Since
+        _ = try? await FeedService.fetch(feed, force: false)
+        let reqNormal = FeedServiceHeaderCaptureURLProtocol.lock.withLock {
+            FeedServiceHeaderCaptureURLProtocol.lastRequest
+        }
+        XCTAssertEqual(reqNormal?.value(forHTTPHeaderField: "If-None-Match"), "\"etag-123\"")
+        XCTAssertEqual(reqNormal?.value(forHTTPHeaderField: "If-Modified-Since"), "Wed, 21 Oct 2015 07:28:00 GMT")
+
+        // 2. force == true 应当完全忽略条件请求头并设置 reloadIgnoringLocalCacheData
+        _ = try? await FeedService.fetch(feed, force: true)
+        let reqForced = FeedServiceHeaderCaptureURLProtocol.lock.withLock {
+            FeedServiceHeaderCaptureURLProtocol.lastRequest
+        }
+        XCTAssertNil(reqForced?.value(forHTTPHeaderField: "If-None-Match"), "force 为 true 时绝不能包含 If-None-Match")
+        XCTAssertNil(reqForced?.value(forHTTPHeaderField: "If-Modified-Since"), "force 为 true 时绝不能包含 If-Modified-Since")
+        XCTAssertEqual(reqForced?.cachePolicy, .reloadIgnoringLocalCacheData, "force 为 true 时必须强制绕过本地缓存")
+    }
+
+    func testBackfillCreatesFallbackStateIfArticleStateMissing() async throws {
+        let feed = try provider.addFeed(
+            title: "Fallback State Test",
+            feedURL: URL(string: "https://example.com/fallback-state.xml")!
+        )
+        let feedID = feed.id.uuidString
+        let itemID = "\(feedID)|missing-state-item".stableDigest
+
+        // 创建孤立 ItemRecord（没有 ArticleRecord，也没有 ArticleStateRecord）
+        try database.write { db in
+            let item = ItemRecord(
+                id: itemID,
+                accountID: "local-default",
+                externalID: itemID,
+                feedID: feedID,
+                createdAt: Date().timeIntervalSince1970,
+                updatedAt: Date().timeIntervalSince1970
+            )
+            try item.save(db)
+        }
+
+        let parsed = ParsedFeedEntry(
+            id: "missing-state-item",
+            title: "Recovered",
+            author: nil,
+            url: nil,
+            publishedAt: Date(),
+            summary: "Summary",
+            contentHTML: "<p>Text</p>"
+        )
+
+        let unreads = try database.write { db in
+            try self.provider.articleRepository.mergeParsedEntries(
+                accountID: "local-default",
+                feedID: feedID,
+                parsedEntries: [parsed],
+                in: db
+            )
+        }
+        XCTAssertTrue(unreads.isEmpty, "回填条目绝不能计入未读条目")
+
+        let state = try database.read { db in
+            try ArticleStateRecord.filter(Column("item_id") == itemID).fetchOne(db)
+        }
+        XCTAssertNotNil(state, "当 state 丢失时回填必须创建防御性 state 兜底")
+        XCTAssertEqual(state?.isRead, true, "回填条目兜底状态必须为已读，防止幽灵复活")
+    }
+}
+
+private final class FeedServiceHeaderCaptureURLProtocol: URLProtocol, @unchecked Sendable {
+    static let lock = NSLock()
+    nonisolated(unsafe) static var lastRequest: URLRequest?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        guard let url = request.url else { return false }
+        return url.host == "feedservice-header-test.com"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.lock.withLock {
+            Self.lastRequest = request
+        }
+
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 304,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

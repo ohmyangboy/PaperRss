@@ -1619,7 +1619,15 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func remoteFeedRow(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
-        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
+        SidebarRow(
+            feed.title,
+            systemImage: "dot.radiowaves.left.and.right",
+            iconURL: feed.iconURL,
+            count: store.unreadCount(feedID: feed.id),
+            feedID: feed.id,
+            syncProgress: store.isFeedReloading(feed.id) ? AccountRefreshProgress(phase: .preparing) : nil,
+            pulsesWhileSyncing: true
+        )
             .equatable()
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
@@ -1649,6 +1657,14 @@ private struct SidebarView: View {
                         Label(I18N.shared.localizedFormat("删除选中的订阅 (%lld)", selectedFeedIDs.count), systemImage: "trash")
                     }
                 } else {
+                    Button {
+                        Task {
+                            await store.reloadFeed(feedID: feed.id)
+                        }
+                    } label: {
+                        Label(I18N.localized("重新获取此订阅", englishFallback: "Reload Feed"), systemImage: "arrow.clockwise")
+                    }
+                    Divider()
                     TranslationFeedListMenu(store: store, feedID: feed.id, accountID: accountID)
                     Divider()
                     Button {
@@ -1784,7 +1800,15 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func feedRow(_ feed: Feed, inFolder: Bool = false) -> some View {
-        SidebarRow(feed.title, systemImage: "dot.radiowaves.left.and.right", iconURL: feed.iconURL, count: store.unreadCount(feedID: feed.id), feedID: feed.id)
+        SidebarRow(
+            feed.title,
+            systemImage: "dot.radiowaves.left.and.right",
+            iconURL: feed.iconURL,
+            count: store.unreadCount(feedID: feed.id),
+            feedID: feed.id,
+            syncProgress: store.isFeedReloading(feed.id) ? AccountRefreshProgress(phase: .preparing) : nil,
+            pulsesWhileSyncing: true
+        )
             .equatable()
             .padding(.leading, inFolder ? -12 : 0)
             .tag(SidebarSelection.feed(feed.id))
@@ -1874,6 +1898,15 @@ private struct SidebarView: View {
                         Label(I18N.shared.localizedFormat("删除选中的订阅 (%lld)", selectedFeedIDs.count), systemImage: "trash")
                     }
                 } else {
+                    Button {
+                        Task {
+                            await store.reloadFeed(feedID: feed.id)
+                        }
+                    } label: {
+                        Label(I18N.localized("重新获取此订阅", englishFallback: "Reload Feed"), systemImage: "arrow.clockwise")
+                    }
+                    Divider()
+
                     Button {
                         let unreadIDs = store.entryListItems(feedID: feed.id).filter { !$0.isRead }.map { $0.id }
                         store.markRead(entryIDs: unreadIDs)
@@ -2171,7 +2204,7 @@ struct SidebarRow: View, Equatable {
                 .accessibilityLabel(I18N.shared.localized("正在同步", "Syncing"))
                 .accessibilityValue(syncProgress.fraction.map { "\(Int($0 * 100))%" } ?? "")
             }
-            if count > 0 || syncProgress != nil {
+            if count > 0 || (syncProgress != nil && feedID == nil) {
                 Text(count, format: .number)
                     .font(.caption.monospacedDigit())
                     .fixedSize()

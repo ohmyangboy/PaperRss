@@ -46,6 +46,11 @@ struct PaperRssApp: App {
                     application.activate(ignoringOtherApps: true)
                     updateCoordinator.start()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    Task {
+                        await store.performBackgroundMaintenance()
+                    }
+                }
             #else
             RootView(store: store, navigation: navigation)
             #endif

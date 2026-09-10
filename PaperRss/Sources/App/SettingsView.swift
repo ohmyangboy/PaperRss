@@ -236,10 +236,11 @@ struct SettingsView: View {
     @State private var isAddingFreshRSS = false
     @State private var addFreshRSSError: String?
     @State private var addFreshRSSSuccess: String?
-    @State private var cacheClearMessage: String?
-    @State private var cacheClearDismissTask: Task<Void, Never>?
-    @State private var isClearingCache = false
-    @State private var cacheStats: ArticleCacheStats?
+    @State private var storageCleanFeedbackMessage: String?
+    @State private var storageCleanDismissTask: Task<Void, Never>?
+    @State private var isClearingStorage = false
+    @State private var isShowingCleanConfirmation = false
+    @State private var storageStats: LibraryDatabase.StorageStats?
     @State private var hoveredSection: SettingsSection?
     @State private var isFontPickerPresented = false
     @State private var fontSearchText = ""
@@ -2771,11 +2772,60 @@ struct SettingsView: View {
         #endif
     }
 
-    /// 「已缓存 XX 篇文章，大小 xx MB」；stats 未加载时返回空格占位（保持行高稳定）。
-    private var cacheStatsText: String {
-        guard let cacheStats else { return " " }
-        let mb = Double(cacheStats.totalBytes) / 1_048_576.0
-        return I18N.shared.localizedFormat("已缓存 %lld 篇文章，大小 %.1f MB", cacheStats.count, mb)
+    /// 存储统计文案展示：清晰区分可清理历史数据与数据库总占用，避免用户误判。
+    private var storageStatsText: String {
+        guard let storageStats else { return " " }
+        let totalMB = Double(storageStats.totalDiskBytes) / 1_048_576.0
+        let prunableMB = Double(storageStats.prunableDataSizeBytes) / 1_048_576.0
+        let historyMB = Double(storageStats.readArticlesDataSizeBytes) / 1_048_576.0
+
+        if storageStats.prunableArticlesCount > 0 {
+            if I18N.shared.isEnglish {
+                return String(format: "%lld prunable articles (~%.1f MB) · Total: %.1f MB", Int64(storageStats.prunableArticlesCount), prunableMB, totalMB)
+            } else {
+                return String(format: "可清理历史文章 %lld 篇（约 %.1f MB）· 数据库总占用 %.1f MB", Int64(storageStats.prunableArticlesCount), prunableMB, totalMB)
+            }
+        } else {
+            if I18N.shared.isEnglish {
+                return String(format: "No expired articles · History: ~%.1f MB · Total: %.1f MB", historyMB, totalMB)
+            } else {
+                return String(format: "暂无超期文章 · 历史数据约 %.1f MB · 总占用 %.1f MB", historyMB, totalMB)
+            }
+        }
+    }
+
+    private func executeStorageClean() {
+        guard !isClearingStorage else { return }
+        isClearingStorage = true
+        storageCleanFeedbackMessage = nil
+        storageCleanDismissTask?.cancel()
+        Task {
+            do {
+                let result = try await store.deepCleanStorage()
+                storageStats = try? store.storageStats()
+                let mbFreed = Double(result.freedBytes) / 1_048_576.0
+                if I18N.shared.isEnglish {
+                    if mbFreed >= 0.1 {
+                        storageCleanFeedbackMessage = String(format: "Cleaned %lld articles, freed %.1f MB", result.prunedArticles, mbFreed)
+                    } else {
+                        storageCleanFeedbackMessage = String(format: "Cleaned %lld articles", result.prunedArticles)
+                    }
+                } else {
+                    if mbFreed >= 0.1 {
+                        storageCleanFeedbackMessage = String(format: "已清理 %lld 篇文章，释放 %.1f MB", result.prunedArticles, mbFreed)
+                    } else {
+                        storageCleanFeedbackMessage = String(format: "已清理 %lld 篇文章", result.prunedArticles)
+                    }
+                }
+            } catch {
+                storageCleanFeedbackMessage = I18N.localized("清理失败", englishFallback: "Cleanup Failed")
+            }
+            isClearingStorage = false
+            storageCleanDismissTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                storageCleanFeedbackMessage = nil
+            }
+        }
     }
 
     private var generalSettings: some View {
@@ -2829,64 +2879,85 @@ struct SettingsView: View {
                 }
             }
 
+            // 维护与恢复：升级为存储与历史记录 (Storage & History)
             settingsGroup(
-                I18N.shared.localized("维护与恢复", "Maintenance & Recovery"),
+                I18N.shared.localized("存储与历史记录", "Storage & History"),
                 info: I18N.shared.localized(
-                    "清除本地缓存不会删除订阅或账号设置。",
-                    "Clearing the local cache does not remove subscriptions or account settings."
+                    "自动清理超出期限的已读文章。未读与标星文章永久保留。",
+                    "Automatically cleans up read articles past retention. Unread and starred articles are kept forever."
                 )
             ) {
-                settingsRow("缓存数据") {
+                settingsRow(I18N.shared.localized("历史文章保留期限", "Article Retention Period")) {
+                    Picker(
+                        "历史文章保留期限",
+                        selection: Binding(
+                            get: { store.articleRetentionPolicy },
+                            set: {
+                                store.setArticleRetentionPolicy($0)
+                                storageStats = try? store.storageStats()
+                            }
+                        )
+                    ) {
+                        ForEach(ArticleRetentionPolicy.allCases) { policy in
+                            Text(policy.title).tag(policy)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 220, alignment: .trailing)
+                }
+
+                Divider().padding(.horizontal, 18).opacity(0.18)
+
+                settingsRow(I18N.shared.localized("存储空间", "Storage Space")) {
                     VStack(alignment: .trailing, spacing: 6) {
                         Button(role: .destructive) {
-                            guard !isClearingCache else { return }
-                            isClearingCache = true
-                            cacheClearMessage = nil
-                            cacheClearDismissTask?.cancel()
-                            Task {
-                                do {
-                                    let count = try await store.clearArticleCaches()
-                                    cacheStats = try? store.articleCacheStats()
-                                    cacheClearMessage = I18N.shared.localizedFormat("已清除 %lld 条缓存", count)
-                                } catch {
-                                    cacheClearMessage = I18N.localized("清除失败")
-                                }
-                                isClearingCache = false
-                                cacheClearDismissTask = Task { @MainActor in
-                                    try? await Task.sleep(nanoseconds: 4_000_000_000)
-                                    cacheClearMessage = nil
-                                }
-                            }
+                            guard !isClearingStorage else { return }
+                            isShowingCleanConfirmation = true
                         } label: {
                             ZStack {
-                                // 隐形占位：以最宽状态（转圈 + 正在清除…）锁定按钮尺寸，避免清除前后左右抖动
+                                // 隐形占位：以最宽状态（转圈 + 正在清理…）锁定按钮尺寸，避免清除前后左右抖动
                                 HStack(spacing: 6) {
                                     ProgressView().controlSize(.small).opacity(0)
-                                    Text(I18N.localized("正在清除…")).hidden()
+                                    Text(I18N.localized("正在清理…", englishFallback: "Cleaning…")).hidden()
                                 }
-                                if isClearingCache {
+                                if isClearingStorage {
                                     HStack(spacing: 6) {
                                         ProgressView().controlSize(.small)
-                                        Text(I18N.localized("正在清除…"))
+                                        Text(I18N.localized("正在清理…", englishFallback: "Cleaning…"))
                                     }
                                 } else {
                                     HStack(spacing: 6) {
                                         Image(systemName: "trash")
-                                        Text(I18N.localized("清除"))
+                                        Text(I18N.localized("立即清理", englishFallback: "Clean Now"))
                                     }
                                 }
                             }
                         }
-                        .disabled(isClearingCache)
+                        .disabled(isClearingStorage)
+                        .alert(
+                            I18N.shared.localized("清理历史文章与缓存", "Clean Up History & Cache"),
+                            isPresented: $isShowingCleanConfirmation
+                        ) {
+                            Button(I18N.localized("立即清理", englishFallback: "Clean Now"), role: .destructive) {
+                                executeStorageClean()
+                            }
+                            Button(I18N.localized("取消", englishFallback: "Cancel"), role: .cancel) {}
+                        } message: {
+                            Text(I18N.shared.localized(
+                                "此操作将永久清理超出保留期的已读文章与网页缓存。未读文章与星标收藏将完好保留。清理后已淘汰的文章在应用内将无法再查看，是否继续？",
+                                "This will permanently clean up read articles past the retention period and offline web caches. Unread and starred articles will be kept safely. Pruned articles will no longer be visible in the app. Continue?"
+                            ))
+                        }
 
-                        // 固定槽位：清除结果消息优先，否则显示缓存统计；空时透明占位，行高恒定
-                        Text(cacheClearMessage ?? cacheStatsText)
+                        // 固定槽位：清理结果消息优先，否则显示存储统计；空时透明占位，行高恒定
+                        Text(storageCleanFeedbackMessage ?? storageStatsText)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .opacity((cacheClearMessage != nil || cacheStats != nil) ? 1 : 0)
+                            .opacity((storageCleanFeedbackMessage != nil || storageStats != nil) ? 1 : 0)
                     }
                     .task {
-                        cacheStats = try? store.articleCacheStats()
+                        storageStats = try? store.storageStats()
                     }
                 }
             }

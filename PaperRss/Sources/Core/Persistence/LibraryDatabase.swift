@@ -82,11 +82,144 @@ public final class LibraryDatabase: Sendable {
         try await dbPool.read(block)
     }
 
-    /// 回收 SQLite 磁盘空间。`VACUUM` 无法运行在事务内，
+    /// 回收 SQLite 磁盘空间并截断 WAL 日志。`VACUUM` 无法运行在事务内，
     /// 因此必须走 `writeWithoutTransaction` 而非 `write`。
-    func vacuum() throws {
+    public func vacuum() throws {
         try dbPool.writeWithoutTransaction { db in
+            try? db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
             try db.execute(sql: "VACUUM")
+            try? db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+    }
+
+    // MARK: - Storage Statistics
+
+    public struct StorageStats: Sendable, Equatable {
+        public let databaseFileSizeBytes: Int64
+        public let walFileSizeBytes: Int64
+        public let totalDiskBytes: Int64
+        public let totalArticlesCount: Int
+        public let readArticlesCount: Int
+        public let starredArticlesCount: Int
+        public let cacheEntriesCount: Int
+        public let readArticlesDataSizeBytes: Int64
+        public let prunableArticlesCount: Int
+        public let prunableDataSizeBytes: Int64
+
+        public init(
+            databaseFileSizeBytes: Int64,
+            walFileSizeBytes: Int64,
+            totalDiskBytes: Int64,
+            totalArticlesCount: Int,
+            readArticlesCount: Int,
+            starredArticlesCount: Int,
+            cacheEntriesCount: Int,
+            readArticlesDataSizeBytes: Int64 = 0,
+            prunableArticlesCount: Int = 0,
+            prunableDataSizeBytes: Int64 = 0
+        ) {
+            self.databaseFileSizeBytes = databaseFileSizeBytes
+            self.walFileSizeBytes = walFileSizeBytes
+            self.totalDiskBytes = totalDiskBytes
+            self.totalArticlesCount = totalArticlesCount
+            self.readArticlesCount = readArticlesCount
+            self.starredArticlesCount = starredArticlesCount
+            self.cacheEntriesCount = cacheEntriesCount
+            self.readArticlesDataSizeBytes = readArticlesDataSizeBytes
+            self.prunableArticlesCount = prunableArticlesCount
+            self.prunableDataSizeBytes = prunableDataSizeBytes
+        }
+    }
+
+    /// 计算 SQLite 数据库物理磁盘文件尺寸与文章及缓存数量、历史数据量和超期可清理数据统计。
+    public func storageStats(cutoffDate: Date? = nil) throws -> StorageStats {
+        let fileManager = FileManager.default
+        func fileSize(at path: String) -> Int64 {
+            guard let attrs = try? fileManager.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? NSNumber else {
+                return 0
+            }
+            return size.int64Value
+        }
+
+        let dbSize = fileSize(at: databasePath)
+        let walSize = fileSize(at: databasePath + "-wal")
+        let shmSize = fileSize(at: databasePath + "-shm")
+        let totalDiskBytes = dbSize + walSize + shmSize
+
+        return try read { db in
+            let totalArticlesCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM articles;") ?? 0
+            let readArticlesCount = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*)
+                FROM articles a
+                INNER JOIN article_states s ON s.item_id = a.item_id
+                WHERE s.is_read = 1;
+            """) ?? 0
+            let starredArticlesCount = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*)
+                FROM articles a
+                INNER JOIN article_states s ON s.item_id = a.item_id
+                WHERE s.is_starred = 1;
+            """) ?? 0
+            let cacheEntriesCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM article_caches;") ?? 0
+
+            let readArticlesDataSizeBytes = try Int64.fetchOne(db, sql: """
+                SELECT
+                    COALESCE(SUM(
+                        LENGTH(CAST(COALESCE(a.content_html, '') AS BLOB))
+                        + LENGTH(CAST(COALESCE(a.summary, '') AS BLOB))
+                        + LENGTH(CAST(COALESCE(c.text, '') AS BLOB))
+                        + LENGTH(CAST(COALESCE(c.html, '') AS BLOB))
+                        + LENGTH(CAST(COALESCE(c.image_urls_json, '') AS BLOB))
+                    ), 0)
+                FROM articles a
+                INNER JOIN article_states s ON s.item_id = a.item_id
+                LEFT JOIN article_caches c ON c.item_id = a.item_id
+                WHERE s.is_read = 1
+                  AND s.is_starred = 0;
+            """) ?? 0
+
+            let prunableArticlesCount: Int
+            let prunableDataSizeBytes: Int64
+            if let cutoffDate {
+                let cutoffTimestamp = cutoffDate.timeIntervalSince1970
+                let prunableRow = try Row.fetchOne(db, sql: """
+                    SELECT
+                        COUNT(a.item_id) AS count,
+                        COALESCE(SUM(
+                            LENGTH(CAST(COALESCE(a.content_html, '') AS BLOB))
+                            + LENGTH(CAST(COALESCE(a.summary, '') AS BLOB))
+                            + LENGTH(CAST(COALESCE(c.text, '') AS BLOB))
+                            + LENGTH(CAST(COALESCE(c.html, '') AS BLOB))
+                            + LENGTH(CAST(COALESCE(c.image_urls_json, '') AS BLOB))
+                        ), 0) AS total_bytes
+                    FROM articles a
+                    INNER JOIN article_states s ON s.item_id = a.item_id
+                    INNER JOIN items i ON i.id = a.item_id
+                    LEFT JOIN article_caches c ON c.item_id = a.item_id
+                    WHERE s.is_read = 1
+                      AND s.is_starred = 0
+                      AND (s.date_arrived < ? OR (s.date_arrived IS NULL AND i.created_at < ?));
+                """, arguments: [cutoffTimestamp, cutoffTimestamp])
+                prunableArticlesCount = Int(prunableRow?["count"] ?? 0)
+                prunableDataSizeBytes = Int64(prunableRow?["total_bytes"] ?? 0)
+            } else {
+                prunableArticlesCount = 0
+                prunableDataSizeBytes = 0
+            }
+
+            return StorageStats(
+                databaseFileSizeBytes: dbSize,
+                walFileSizeBytes: walSize,
+                totalDiskBytes: totalDiskBytes,
+                totalArticlesCount: totalArticlesCount,
+                readArticlesCount: readArticlesCount,
+                starredArticlesCount: starredArticlesCount,
+                cacheEntriesCount: cacheEntriesCount,
+                readArticlesDataSizeBytes: readArticlesDataSizeBytes,
+                prunableArticlesCount: prunableArticlesCount,
+                prunableDataSizeBytes: prunableDataSizeBytes
+            )
         }
     }
 }

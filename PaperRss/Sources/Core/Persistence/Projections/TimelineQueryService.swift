@@ -328,8 +328,8 @@ public final class TimelineQueryService: Sendable {
             COALESCE(s.is_starred, 0) AS is_starred
         FROM items i
         INNER JOIN feeds f ON f.id = i.feed_id
+        INNER JOIN articles a ON a.item_id = i.id
         LEFT JOIN accounts acc ON acc.id = i.account_id
-        LEFT JOIN articles a ON a.item_id = i.id
         LEFT JOIN article_states s ON s.item_id = i.id
         WHERE \(whereClauses.joined(separator: " AND "))
         ORDER BY COALESCE(a.published_at, i.created_at) DESC, i.id DESC
@@ -425,7 +425,7 @@ public final class TimelineQueryService: Sendable {
         let curSql = """
         SELECT COALESCE(a.published_at, i.created_at) AS sort_time
         FROM items i
-        LEFT JOIN articles a ON a.item_id = i.id
+        INNER JOIN articles a ON a.item_id = i.id
         WHERE i.id = :cur_id
         LIMIT 1;
         """
@@ -557,8 +557,8 @@ public final class TimelineQueryService: Sendable {
             COALESCE(s.is_starred, 0) AS is_starred
         FROM items i
         INNER JOIN feeds f ON f.id = i.feed_id
+        INNER JOIN articles a ON a.item_id = i.id
         LEFT JOIN accounts acc ON acc.id = i.account_id
-        LEFT JOIN articles a ON a.item_id = i.id
         LEFT JOIN article_states s ON s.item_id = i.id
         WHERE \(whereClauses.joined(separator: " AND "))
         \(orderClause)
