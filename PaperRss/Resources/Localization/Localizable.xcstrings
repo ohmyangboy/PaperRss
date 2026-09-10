@@ -531,6 +531,40 @@
         }
       }
     },
+    "清除所有订阅过滤" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear All Feed Filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有订阅过滤"
+          }
+        }
+      }
+    },
+    "清除所有文章过滤" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear All Article Filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所有文章过滤"
+          }
+        }
+      }
+    },
     "显示全部" : {
       "extractionState" : "manual",
       "localizations" : {

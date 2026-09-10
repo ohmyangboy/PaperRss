@@ -174,6 +174,34 @@ final class TranslationPresentationTests: XCTestCase, WKNavigationDelegate {
         XCTAssertEqual(restored, true)
     }
 
+    func testTableCellTranslationStaysInsideTheCellAndPreservesTableStructure() async throws {
+        try await load("<table><tr><th data-paper-rss-id='p0'>Page</th><td data-paper-rss-id='p1'>What you can configure</td></tr></table>")
+        // 流式更新必须插进本格内部，afterend 会把译文插成 tr 的非法子元素。
+        try await update("p0", text: "页面")
+        try await update("p1", text: "您可以配置的内容")
+        let inside = try await run("""
+        return document.querySelector('th > .paper-rss-translation') &&
+               document.querySelector('td > .paper-rss-translation') &&
+               document.querySelectorAll('tr').length === 1 &&
+               document.querySelectorAll('th, td').length === 2;
+        """) as? Bool
+        XCTAssertEqual(inside, true, "单元格译文必须留在本格内")
+        _ = try await run("window.paperRssTranslationPresentation.setPreferences('replacement', '#494640');")
+        let stacked = try await run("""
+        return !!document.querySelector('th > .paper-rss-replacement') &&
+               !!document.querySelector('td > .paper-rss-replacement') &&
+               document.querySelectorAll('table tr').length === 1;
+        """) as? Bool
+        XCTAssertEqual(stacked, true, "替换模式层叠必须留在单元格内部，不得把 td 移出 tr")
+        _ = try await run("window.paperRssTranslationPresentation.setPreferences('comparison', '#494640');")
+        let restored = try await run("""
+        return document.querySelector('th').textContent.includes('Page') &&
+               document.querySelector('th').textContent.includes('页面') &&
+               document.querySelectorAll('table tr').length === 1;
+        """) as? Bool
+        XCTAssertEqual(restored, true)
+    }
+
     func testClearingMultiParagraphSelectionRestoresIntermediateParagraphs() async throws {
         try await load((0..<3).map { "<p data-paper-rss-id='p\($0)'>Original paragraph \($0)</p>" }.joined())
         for i in 0..<3 { try await update("p\(i)") }

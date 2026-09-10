@@ -317,6 +317,9 @@ public final class UpdateCoordinator: ObservableObject {
         case let .relaunching(release):
             state = .relaunching(release)
         case let .deferredUntilQuit(release):
+            // 退出补装同样会把应用升级到新版本：与重启安装一样，在安装落地前
+            // 持久化更新日志提示，保证下一次冷启动仍会展示一次。
+            preferences.savePendingChangelogNotice(release.displayVersion)
             state = .deferredUntilQuit(release)
         case let .failed(message):
             applyFailure(message)

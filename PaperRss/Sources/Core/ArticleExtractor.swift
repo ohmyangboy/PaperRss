@@ -273,11 +273,11 @@ public enum ArticleExtractor {
     }
 
     /// RSSHub 把内嵌引用（引用推文/转推来源）包进 `class="rsshub-quote"` 的容器，
-    /// 该容器语义上永远是“被引用的附属内容”而非正文容器。
+    /// 清洗后归一化为 `class="paper-quote-card"`。该容器语义上永远是“被引用的附属内容”而非正文容器。
     private static func isEmbeddedQuoteContainer(_ candidate: ScannedContainer) -> Bool {
         let attributes = parseAttributesMap(from: candidate.attributes)
         let classAndID = "\(attributes["class"] ?? "") \(attributes["id"] ?? "")".lowercased()
-        return classAndID.contains("rsshub-quote")
+        return classAndID.contains("rsshub-quote") || classAndID.contains("paper-quote-card")
     }
 
     private static func isLowNoiseContainer(_ candidate: ScannedContainer) -> Bool {
@@ -623,7 +623,10 @@ public enum ArticleExtractor {
     }
 
     private static func readerBlockMatches(in html: String) -> [ReaderBlockMatch] {
-        let pattern = "(?is)</?(blockquote|pre|table|ul|ol|h[1-6]|figcaption|dt|dd|p|li|div)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
+        // pre 不是翻译单元，而是翻译禁区：pre 完整保留渲染与选择解释。
+        // 语法高亮会把代码包进 div/span（React.dev 等），只移除 pre 匹配会让
+        // 代码内部的 div 变成翻译单元；因此任何与 pre 区域相交的块都不进入管线。
+        let pattern = "(?is)</?(blockquote|table|ul|ol|h[1-6]|figcaption|dt|dd|p|li|div)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(html.startIndex..., in: html)
         var stack: [(tag: String, start: String.Index, hasNestedReaderBlock: Bool)] = []
@@ -660,10 +663,16 @@ public enum ArticleExtractor {
             return $0.range.lowerBound < $1.range.lowerBound
         }
 
+        let preRanges = preformattedRanges(in: html)
         var selected: [ReaderBlockMatch] = []
         var selectedEnd: String.Index?
         for candidate in matches {
             if candidate.tag == "div" && candidate.hasNestedReaderBlock {
+                continue
+            }
+            if preRanges.contains(where: { $0.overlaps(candidate.range) }), candidate.tag != "table" {
+                // 代码禁区：任何相交块都不进入翻译管线。表格例外——
+                // 表格可由单元格拆分计划排除含代码的单元格后继续翻译文本格。
                 continue
             }
             if let end = selectedEnd, candidate.range.lowerBound < end {
@@ -673,6 +682,14 @@ public enum ArticleExtractor {
             selectedEnd = candidate.range.upperBound
         }
         return selected
+    }
+
+    /// 全部 preformatted 区域。代码块（含语法高亮内部标记）是翻译禁区。
+    private static func preformattedRanges(in html: String) -> [Range<String.Index>] {
+        let pattern = "(?is)<pre\\b[^>]*>.*?</pre>"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        return expression.matches(in: html, range: range).compactMap { Range($0.range, in: html) }
     }
 
     /// 结构适配只作用于已经清洗的正文；按固定顺序尝试，无法安全拆分时整块保留。
@@ -692,17 +709,83 @@ public enum ArticleExtractor {
         }
     }
 
-    private static func readerBlockFragments(_ block: String, match: ReaderBlockMatch) -> [String] {
+    /// 表格按单元格成为翻译单元：整表一段会把译文平铺在表格之外，
+    /// 单元格级拆分让每格的译文放回本格内，形成原文/译文对照。
+    /// 校验失败（嵌套表格、单元格外存在文本等异常形态）时返回 nil，
+    /// 整表退回旧的"单一翻译单元"路径，绝不破坏表格结构。
+    private struct ReaderTableCell {
+        /// 单元格之前的结构空隙（table/thead/tr 等标签），必须原样保留。
+        let gapBefore: String
+        let html: String
+        let isTranslatable: Bool
+    }
+
+    private static func tableCellFragments(in block: String) -> (cells: [ReaderTableCell], gapAfter: String)? {
+        let cellPattern = "(?is)<(t[dh])\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>([\\s\\S]*?)</\\1>"
+        guard let expression = try? NSRegularExpression(pattern: cellPattern) else { return nil }
+        let range = NSRange(block.startIndex..., in: block)
+
+        var cells: [(fragment: String, isTranslatable: Bool)] = []
+        var gaps: [String] = []
+        var cursor = block.startIndex
+        for match in expression.matches(in: block, range: range) {
+            guard let fullRange = Range(match.range, in: block),
+                  let innerRange = Range(match.range(at: 3), in: block) else { return nil }
+            let inner = block[innerRange].lowercased()
+            // 内层单元格开标签意味着嵌套表格：非贪婪 inner 会让外层片段提前闭合，
+            // 拆分结果结构不可信，整表保留。
+            guard !inner.contains("<td"), !inner.contains("<th") else { return nil }
+            gaps.append(String(block[cursor..<fullRange.lowerBound]))
+            let fragment = String(block[fullRange])
+            let cellText = fragment.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 空单元格、纯公式单元格与含代码块的单元格不是自然语言，
+            // 不进入翻译管线，但必须原样保留渲染。
+            let isTranslatable = !cellText.isEmpty
+                && !inner.contains("<pre")
+                && !ArticleMathDetector.strippingFormulas(in: cellText)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            cells.append((fragment, isTranslatable))
+            cursor = fullRange.upperBound
+        }
+        let gapAfter = String(block[cursor...])
+        guard cells.contains(where: { $0.isTranslatable }) else { return nil }
+
+        // 完整性校验：单元格之间的空隙必须只有表格结构标签（thead/tr 等），
+        // 不允许承载任何可见文本；这保证拆分不会丢失或搬动任何内容。
+        guard gaps.allSatisfy({
+            $0.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else { return nil }
+
+        let plan = cells.enumerated().map { index, cell in
+            ReaderTableCell(gapBefore: gaps[index], html: cell.fragment, isTranslatable: cell.isTranslatable)
+        }
+        return (plan, gapAfter)
+    }
+
+    /// 段落拆分的统一入口。`tablePlan` 非 nil 表示该表格拆分成了单元格级
+    /// 翻译单元；`fragments` 只含可翻译单元格（段落 ID 依此编号），
+    /// 不可翻译单元格与结构空隙由渲染层按拆分计划原样保留。
+    /// `isPreformatted` 表示该块位于代码禁区且无法单元格化——保留渲染、绝不翻译。
+    private static func readerBlockFragmentPlan(
+        _ block: String,
+        match: ReaderBlockMatch
+    ) -> (fragments: [String], tablePlan: (cells: [ReaderTableCell], gapAfter: String)?, isPreformatted: Bool) {
+        if match.tag == "table", let tablePlan = tableCellFragments(in: block) {
+            return (tablePlan.cells.filter(\.isTranslatable).map(\.html), tablePlan, false)
+        }
+        if block.range(of: "(?is)<pre\\b", options: .regularExpression) != nil {
+            return ([block], nil, true)
+        }
         for adapter in ReaderBlockAdapter.allCases {
             if let fragments = adapter.fragments(for: block, tag: match.tag, hasNestedBlock: match.hasNestedReaderBlock) {
                 // 新增适配策略也必须保留文本及非布局标签的顺序、属性；失败则尝试保留策略。
-                if fragments.count == 1 && fragments[0] == block { return fragments }
+                if fragments.count == 1 && fragments[0] == block { return (fragments, nil, false) }
                 if readerContentSignature(block) == readerContentSignature(fragments.joined()) {
-                    return fragments
+                    return (fragments, nil, false)
                 }
             }
         }
-        return [block]
+        return ([block], nil, false)
     }
 
     /// p/br 是允许改写的分段标记，其余标签（含媒体与链接属性）必须逐一保持。
@@ -784,7 +867,9 @@ public enum ArticleExtractor {
             let original = block.plainText
             guard !original.isEmpty else { continue }
 
-            let fragments = readerBlockFragments(block, match: match)
+            let plan = readerBlockFragmentPlan(block, match: match)
+            guard !plan.isPreformatted else { continue }
+            let fragments = plan.fragments
             for (index, fragment) in fragments.enumerated() {
                 let id = fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
                 paragraphs.append(ReaderParagraph(id: id, original: fragment.plainText))
@@ -819,7 +904,43 @@ public enum ArticleExtractor {
                 continue
             }
 
-            let fragments = readerBlockFragments(block, match: match)
+            let plan = readerBlockFragmentPlan(block, match: match)
+            if plan.isPreformatted {
+                // 代码禁区：完整保留渲染与选择解释，绝不注解、绝不翻译。
+                rendered += block
+                continue
+            }
+            if let tablePlan = plan.tablePlan {
+                // 单元格级翻译：译文插入本格闭合标签之前，保证对照关系留在表格内。
+                // 结构空隙（table/thead/tr 等）与不可翻译单元格（空白/纯公式）
+                // 原样保留，不注解也不翻译。
+                let translatableCount = tablePlan.cells.filter(\.isTranslatable).count
+                var cellIndex = 0
+                for cell in tablePlan.cells {
+                    rendered += cell.gapBefore
+                    guard cell.isTranslatable else {
+                        rendered += cell.html
+                        continue
+                    }
+                    let id = translatableCount > 1 ? "p\(paragraphIndex)_\(cellIndex)" : "p\(paragraphIndex)"
+                    cellIndex += 1
+                    let translationHTML: String?
+                    if let segment = segmentsByID[id],
+                       cell.html.plainText.isSameReaderParagraph(as: segment.original) {
+                        translationHTML = translationMarkup(for: segment.translation, id: id)
+                    } else if pendingIDs.contains(id) {
+                        translationHTML = pendingTranslationMarkup(for: id)
+                    } else {
+                        translationHTML = nil
+                    }
+                    rendered += annotatedTableCell(cell.html, id: id, translationHTML: translationHTML)
+                }
+                rendered += tablePlan.gapAfter
+                paragraphIndex += 1
+                continue
+            }
+
+            let fragments = plan.fragments
             for (index, fragment) in fragments.enumerated() {
                 let id = fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
                 rendered += annotatedReaderBlock(fragment, id: id)
@@ -840,6 +961,17 @@ public enum ArticleExtractor {
         guard let closingBracket = block.firstIndex(of: ">") else { return block }
         var output = block
         output.insert(contentsOf: " data-paper-rss-id=\"\(id)\"", at: closingBracket)
+        return output
+    }
+
+    /// 单元格片段：注解落在 td/th 开标签，译文插在本格闭合标签之前，
+    /// 使原文与译文始终停留在同一个表格单元内。
+    private static func annotatedTableCell(_ cellHTML: String, id: String, translationHTML: String?) -> String {
+        var output = annotatedReaderBlock(cellHTML, id: id)
+        guard let translationHTML else { return output }
+        let closingTag = output.lowercased().hasPrefix("<th") ? "</th>" : "</td>"
+        guard let closingRange = output.range(of: closingTag, options: .backwards) else { return output }
+        output.insert(contentsOf: translationHTML, at: closingRange.lowerBound)
         return output
     }
 
@@ -972,8 +1104,17 @@ public enum ArticleExtractor {
                         .split(whereSeparator: { $0.isWhitespace })
                         .map(String.init)
                     if tag == "div" {
-                        // div 的 class 只放行受控的图片行容器标记，其余一律剥离
-                        let controlledTokens = tokens.filter { $0.lowercased() == "paper-img-row" }
+                        // div 的 class 放行受控的图片行容器与引用卡片容器标记，
+                        // 并将 RSSHub 的 rsshub-quote 归一化为内部受控类 paper-quote-card，其余一律剥离。
+                        var controlledTokens: [String] = []
+                        for token in tokens {
+                            let lower = token.lowercased()
+                            if lower == "paper-img-row" || lower == "paper-quote-card" {
+                                if !controlledTokens.contains(lower) { controlledTokens.append(lower) }
+                            } else if lower == "rsshub-quote" {
+                                if !controlledTokens.contains("paper-quote-card") { controlledTokens.append("paper-quote-card") }
+                            }
+                        }
                         guard !controlledTokens.isEmpty else { return }
                         value = controlledTokens.joined(separator: " ")
                     } else if tag == "code" {

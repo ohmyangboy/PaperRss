@@ -289,7 +289,7 @@ build_archive() {
   # this harness-owned archive so a failed rebuild cannot be mistaken for the
   # current N/N+1 evidence.
   rm -rf "$archive"
-  if ! python3 "$ROOT_DIR/scripts/build-support.py" -- "$XCODEBUILD_BIN" \
+  if ! python3 "$ROOT_DIR/scripts/build-support.py" --lane all -- "$XCODEBUILD_BIN" \
     -project "$ROOT_DIR/PaperRss.xcodeproj" \
     -scheme PaperRss \
     -configuration "$CONFIGURATION" \

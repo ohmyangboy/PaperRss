@@ -448,6 +448,7 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertTrue(content.html.contains("youtube.com/watch?v=LcnBRo11mnk"))
         XCTAssertFalse(content.html.contains("style="))
         XCTAssertFalse(content.html.contains("rsshub-quote"))
+        XCTAssertTrue(content.html.contains("paper-quote-card"))
     }
 
     func testRSSHubQuoteTweetKeepsMainStatusWhenQuoteIsMediaRich() {
@@ -472,6 +473,7 @@ final class PaperRssCoreTests: XCTestCase {
         }
         XCTAssertEqual(content.imageURLs.count, 4, "主文本与引用内的图片都应保留")
         XCTAssertFalse(content.html.contains("rsshub-quote"))
+        XCTAssertTrue(content.html.contains("paper-quote-card"))
     }
 
 

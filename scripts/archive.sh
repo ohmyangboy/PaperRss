@@ -30,7 +30,7 @@ mkdir -p "$DIST_DIR"
 # 1. 执行 Archive 动作
 echo "⏳ 正在打包 .xcarchive..."
 if [ "$PLATFORM" == "iOS" ]; then
-    python3 scripts/build-support.py -- xcodebuild \
+    python3 scripts/build-support.py --lane all -- xcodebuild \
       -derivedDataPath "$PWD/build/archive" \
       -project "${PROJECT_NAME}.xcodeproj" \
       -scheme "$SCHEME_NAME" \
@@ -40,7 +40,7 @@ if [ "$PLATFORM" == "iOS" ]; then
       -archivePath "$ARCHIVE_PATH" \
       -quiet
 else
-    python3 scripts/build-support.py -- xcodebuild \
+    python3 scripts/build-support.py --lane all -- xcodebuild \
       -derivedDataPath "$PWD/build/archive" \
       -project "${PROJECT_NAME}.xcodeproj" \
       -scheme "$SCHEME_NAME" \

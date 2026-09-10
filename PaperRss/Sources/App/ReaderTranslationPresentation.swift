@@ -132,7 +132,9 @@ enum ReaderTranslationPresentation {
         restoreAttribute(aside, 'style', record.asideStyle);
         if (record.container) {
           record.container.append(...source.childNodes);
-          record.container.after(aside);
+          // 表格单元格的译文必须留在本格内；移出 td 会插成 tr 的非法子元素。
+          if (record.cellAsideInside) record.container.append(aside);
+          else record.container.after(aside);
           host.remove();
         } else {
           host.replaceWith(source, aside);
@@ -152,8 +154,10 @@ enum ReaderTranslationPresentation {
         }
         if (records.has(id)) return;
         const computed = getComputedStyle(source);
-        // 列表项、定义及图注保留外层标签，在其内部叠放，避免非法父子结构。
-        const container = ['LI', 'DT', 'DD', 'FIGCAPTION'].includes(source.tagName) ? source : null;
+        // 列表项、定义、图注及表格单元格保留外层标签，在其内部叠放，
+        // 避免非法父子结构（把 td 移出 tr 会直接破坏表格）。
+        const isTableCell = source.tagName === 'TD' || source.tagName === 'TH';
+        const container = ['LI', 'DT', 'DD', 'FIGCAPTION'].includes(source.tagName) || isTableCell ? source : null;
         const host = document.createElement('div');
         host.className = 'paper-rss-replacement';
         host.dataset.translationId = id;
@@ -170,7 +174,7 @@ enum ReaderTranslationPresentation {
           source = document.createElement('div');
           source.append(...container.childNodes);
         }
-        const record = {source, aside, host, container, original: null,
+        const record = {source, aside, host, container, cellAsideInside: isTableCell, original: null,
           sourceAria: source.getAttribute('aria-hidden'), asideAria: aside.getAttribute('aria-hidden'),
           sourceInert: source.inert, asideInert: aside.inert, asideStyle: aside.getAttribute('style')};
         for (const [property, value] of Object.entries(typography)) aside.style.setProperty(property, value);

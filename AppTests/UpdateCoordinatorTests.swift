@@ -254,6 +254,30 @@ final class UpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(preferences.loadPendingChangelogNotice(), "2.0.0", "重启安装时必须持久化记录目标显示版本")
     }
 
+    func testQuitInstallPersistsPendingChangelogNotice() {
+        let updater = FakeUpdaterPort()
+        let preferences = FakeUpdatePreferences()
+        let coordinator = makeCoordinator(updater: updater, preferences: preferences)
+        let release = release("20")
+
+        updater.send(.deferredUntilQuit(release))
+
+        XCTAssertEqual(preferences.loadPendingChangelogNotice(), "2.0.0", "退出补装同样会升级应用，必须在安装落地前持久化更新日志提示")
+    }
+
+    func testQuitInstallShowsChangelogOnNextSession() {
+        let preferences = FakeUpdatePreferences()
+        let updater = FakeUpdaterPort()
+        let firstSession = makeCoordinator(updater: updater, preferences: preferences)
+        let release = release("20")
+
+        updater.send(.deferredUntilQuit(release))
+
+        // 下一次冷启动：应用已被补装为新版本，提示必须激活
+        let secondSession = makeCoordinator(updater: FakeUpdaterPort(), preferences: preferences, currentVersion: "2.0.0")
+        XCTAssertEqual(secondSession.pendingChangelogNotice, "2.0.0", "退出补装升级后，下一次冷启动依旧要展示更新日志提示")
+    }
+
     func testNextSessionLoadsPendingNoticeAndRetainsPersistenceUntilDismissed() {
         let preferences = FakeUpdatePreferences()
         preferences.savePendingChangelogNotice("2.0.0")

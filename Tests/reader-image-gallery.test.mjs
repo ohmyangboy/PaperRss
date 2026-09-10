@@ -188,3 +188,36 @@ test('nested gallery inside a plain wrapper div is still detected', () => {
   assert.equal(gallery.classList.contains('paper-img-row'), true, 'inner gallery must be detected');
   assert.equal(wrapper.classList.contains('paper-img-row'), false, 'wrapper div must stay untouched');
 });
+
+test('emoji-only div keeps inline text-flow semantics and never becomes a wrap row', () => {
+  const emojiRow = new FakeElement('div', '  ');
+  const emojiOne = image();
+  const emojiTwo = image();
+  emojiOne.classList.add('paper-emoji');
+  emojiTwo.classList.add('paper-emoji');
+  emojiRow.appendChild(emojiOne);
+  emojiRow.appendChild(emojiTwo);
+  const { context } = makeFixture([emojiRow]);
+
+  runGalleryScript({ context });
+
+  assert.equal(
+    emojiRow.classList.contains('paper-img-row'),
+    false,
+    '表情图跟随文本流，禁止被归一成画廊行',
+  );
+});
+
+test('mixed div with emoji and real photos still normalizes by the real photos', () => {
+  const mixed = new FakeElement('div');
+  const emoji = image();
+  emoji.classList.add('paper-emoji');
+  mixed.appendChild(emoji);
+  mixed.appendChild(image());
+  mixed.appendChild(image());
+  const { context } = makeFixture([mixed]);
+
+  runGalleryScript({ context });
+
+  assert.equal(mixed.classList.contains('paper-img-row'), true, '两张真实图片仍然构成画廊行');
+});

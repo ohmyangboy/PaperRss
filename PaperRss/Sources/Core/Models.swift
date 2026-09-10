@@ -305,7 +305,9 @@ public struct ArticleCache: Codable, Hashable, Sendable {
     /// Revision 4: 特殊自包含 feed（Twitter/RSSHub）的 revision 刷新改走 feed 候选，
     /// 不再网页升级。此前的 x.com 抽取缓存携带作者行/时间戳/Views/互动数等
     /// 页面 chrome，需重清洗换回干净推文正文。
-    public static let currentNormalizationRevision = 4
+    /// Revision 5: sanitizer 将 Twitter/RSSHub 引用推文容器（rsshub-quote）归一化为受控类 paper-quote-card，
+    /// 旧缓存需重清洗以自愈显示方块卡片容器。
+    public static let currentNormalizationRevision = 5
 
     public var entryID: String
     public var text: String

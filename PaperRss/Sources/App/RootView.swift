@@ -24,6 +24,83 @@ enum SidebarSelection: Hashable {
     case feed(UUID)
     case feeds(Set<UUID>)
 
+    /// 未读订阅过滤只作用在账号与文件夹两级行（订阅行无过滤入口）。
+    /// 持久化用稳定文本编码，随 UserDefaults 存活，文件夹重命名后旧键自然失效。
+    var unreadFilterGroupKey: String? {
+        switch self {
+        case let .account(id):
+            return "account:\(id)"
+        case let .folder(accountID, folderName):
+            return "folder:\(accountID):\(folderName)"
+        default:
+            return nil
+        }
+    }
+
+    static func unreadFilterGroup(from key: String) -> SidebarSelection? {
+        if key.hasPrefix("account:") {
+            let id = String(key.dropFirst("account:".count))
+            return id.isEmpty ? nil : .account(id)
+        }
+        if key.hasPrefix("folder:") {
+            let remainder = key.dropFirst("folder:".count)
+            // 文件夹名可能含冒号，只按第一个冒号切分账号与名称。
+            guard let separator = remainder.firstIndex(of: ":") else { return nil }
+            let accountID = String(remainder[..<separator])
+            let folderName = String(remainder[remainder.index(after: separator)...])
+            guard !accountID.isEmpty, !folderName.isEmpty else { return nil }
+            return .folder(accountID: accountID, folderName: folderName)
+        }
+        return nil
+    }
+
+    /// 文章过滤（列表"仅显示未读"）按侧栏范围独立记忆：单个 Feed、文件夹、
+    /// 账号与多选各自持有开关。与订阅过滤分开编码，互不影响。
+    var articleFilterScopeKey: String? {
+        switch self {
+        case let .account(id):
+            return "account:\(id)"
+        case let .folder(accountID, folderName):
+            return "folder:\(accountID):\(folderName)"
+        case let .feed(id):
+            return "feed:\(id.uuidString)"
+        case let .feeds(ids):
+            guard !ids.isEmpty else { return nil }
+            return "feeds:\(ids.map(\.uuidString).sorted().joined(separator: ","))"
+        case .today, .unread, .starred:
+            return nil
+        }
+    }
+
+    static func articleFilterScope(from key: String) -> SidebarSelection? {
+        if key.hasPrefix("account:") {
+            let id = String(key.dropFirst("account:".count))
+            return id.isEmpty ? nil : .account(id)
+        }
+        if key.hasPrefix("folder:") {
+            let remainder = key.dropFirst("folder:".count)
+            // 文件夹名可能含冒号，只按第一个冒号切分账号与名称。
+            guard let separator = remainder.firstIndex(of: ":") else { return nil }
+            let accountID = String(remainder[..<separator])
+            let folderName = String(remainder[remainder.index(after: separator)...])
+            guard !accountID.isEmpty, !folderName.isEmpty else { return nil }
+            return .folder(accountID: accountID, folderName: folderName)
+        }
+        if key.hasPrefix("feed:") {
+            let raw = String(key.dropFirst("feed:".count))
+            guard let id = UUID(uuidString: raw) else { return nil }
+            return .feed(id)
+        }
+        if key.hasPrefix("feeds:") {
+            let raw = key.dropFirst("feeds:".count)
+            let parts = raw.split(separator: ",")
+            let ids = parts.compactMap { UUID(uuidString: String($0)) }
+            guard !ids.isEmpty, ids.count == parts.count else { return nil }
+            return .feeds(Set(ids))
+        }
+        return nil
+    }
+
     @MainActor
     var title: String {
         switch self {
@@ -36,6 +113,56 @@ enum SidebarSelection: Hashable {
         case let .feeds(ids): I18N.shared.localizedFormat("%lld 个订阅", ids.count)
         }
     }
+}
+
+extension SidebarSelection {
+    /// 判断某个过滤状态键 `candidate` 是否落在本行（`self`）的子树内，供右键
+    /// "按行清除过滤"使用：账号包含其文件夹、订阅与多选；文件夹包含其订阅与多选；
+    /// 订阅行只包含自身，多选行包含选中集合内的订阅。
+    /// Feed 归属关系由调用方注入，避免 App 层策略依赖具体 Store，便于独立测试。
+    func containsFilterScope(
+        _ candidate: SidebarSelection,
+        accountFeeds: (String) -> Set<UUID>,
+        folderFeeds: (_ accountID: String, _ folderName: String) -> Set<UUID>
+    ) -> Bool {
+        switch (self, candidate) {
+        case let (.account(id), .account(candidateID)):
+            return candidateID == id
+        case let (.account(id), .folder(accountID, _)):
+            return accountID == id
+        case let (.account(id), .feed(feedID)):
+            return accountFeeds(id).contains(feedID)
+        case let (.account(id), .feeds(ids)):
+            let accountIDs = accountFeeds(id)
+            return !ids.isEmpty && ids.isSubset(of: accountIDs)
+        case let (.folder(accountID, folderName), .folder(candidateAccount, candidateFolder)):
+            return candidateAccount == accountID && candidateFolder == folderName
+        case let (.folder(accountID, folderName), .feed(feedID)):
+            return folderFeeds(accountID, folderName).contains(feedID)
+        case let (.folder(accountID, folderName), .feeds(ids)):
+            let folderIDs = folderFeeds(accountID, folderName)
+            return !ids.isEmpty && ids.isSubset(of: folderIDs)
+        case let (.feed(id), .feed(candidateID)):
+            return candidateID == id
+        case let (.feeds(selected), .feed(candidateID)):
+            return selected.contains(candidateID)
+        case let (.feeds(selected), .feeds(candidate)):
+            return !candidate.isEmpty && candidate.isSubset(of: selected)
+        default:
+            return false
+        }
+    }
+}
+
+/// `SidebarSelection.containsFilterScope` 的 Store 便捷入口。
+/// RootView（清除）与侧栏（禁用态）共用同一套"按行子树"判定，避免两处口径漂移。
+@MainActor
+private func sidebarScopeContains(_ scope: SidebarSelection, _ candidate: SidebarSelection, store: AppStore) -> Bool {
+    scope.containsFilterScope(
+        candidate,
+        accountFeeds: { Set(store.feeds(for: $0).map(\.id)) },
+        folderFeeds: { Set(store.feeds(in: $1, for: $0).map(\.id)) }
+    )
 }
 
 /// 三栏之间共享当前焦点栏，让列表选中态能区分 active / inactive。
@@ -58,8 +185,11 @@ struct RootView: View {
     // List's synthesized Hashable selection after the first click. A stable ID
     // makes selection, focus, and the visible detail all describe the same item.
     @State private var selectedEntryID: String?
-    @State private var unreadFilteredGroups: Set<SidebarSelection> = []
-    @State private var unreadOnly = false
+    // 两类未读过滤状态跨启动保留，且彼此独立、互不联动：
+    // - 订阅过滤（侧栏隐藏无未读的订阅）按账号/文件夹分组记忆；
+    // - 文章过滤（列表"仅显示未读"）按当前范围（Feed/文件夹/账号/多选）各自记忆。
+    @AppStorage("sidebar_unread_filter_groups_raw") private var unreadFilteredGroupsRaw: String = ""
+    @AppStorage("timeline_unread_filter_scopes_raw") private var articleFilteredScopesRaw: String = ""
     @State private var retainedEntryListIDs: Set<String> = []
     @State private var selectedFeedIDs: Set<UUID> = []
     @State private var showsAddFeed = false
@@ -221,7 +351,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: sidebarSelection,
-                unreadFilteredGroups: $unreadFilteredGroups,
+                unreadFilteredGroups: unreadFilteredGroupsBinding,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
@@ -231,6 +361,9 @@ struct RootView: View {
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
                 showsExporter: $showsExporter,
+                articleFilteredScopes: articleFilteredScopes,
+                onClearFeedFilters: { clearFeedFilters(in: $0) },
+                onClearArticleFilters: { clearArticleFilters(in: $0) },
                 onDeleteSelection: { selectedEntryID = nil },
                 updateCoordinator: updateCoordinator
             )
@@ -292,7 +425,7 @@ struct RootView: View {
                 store: store,
                 appearanceMode: appearanceMode,
                 selection: sidebarSelection,
-                unreadFilteredGroups: $unreadFilteredGroups,
+                unreadFilteredGroups: unreadFilteredGroupsBinding,
                 selectedFeedIDs: $selectedFeedIDs,
                 showsAddFeed: $showsAddFeed,
                 showsAddFolder: $showsAddFolder,
@@ -302,6 +435,9 @@ struct RootView: View {
                 showsSettings: $showsSettings,
                 showsImporter: $showsImporter,
                 showsExporter: $showsExporter,
+                articleFilteredScopes: articleFilteredScopes,
+                onClearFeedFilters: { clearFeedFilters(in: $0) },
+                onClearArticleFilters: { clearArticleFilters(in: $0) },
                 onDeleteSelection: { selectedEntryID = nil }
             )
         } content: {
@@ -640,15 +776,86 @@ struct RootView: View {
         }
     }
 
-    private var effectiveUnreadOnly: Bool { supportsUnreadFilter && unreadOnly }
+    /// 文章过滤按范围独立记忆：当前范围是否"仅显示未读"只看该范围自己的键，
+    /// 不是全局固定开关，切换 Feed/文件夹/账号/多选互不串状态。
+    private var effectiveUnreadOnly: Bool {
+        supportsUnreadFilter && articleFilteredScopes.contains(currentSelection)
+    }
 
     private func toggleUnreadFilter() {
         cancelNavigationConfirmation(dismissToast: true)
+        guard supportsUnreadFilter else { return }
         retainedEntryListIDs.removeAll()
-        unreadOnly.toggle()
-        if unreadOnly, selectedEntry?.isRead == true {
+        var scopes = articleFilteredScopes
+        let enabling: Bool
+        if scopes.contains(currentSelection) {
+            scopes.remove(currentSelection)
+            enabling = false
+        } else {
+            scopes.insert(currentSelection)
+            enabling = true
+        }
+        setArticleFilteredScopes(scopes)
+        if enabling, selectedEntry?.isRead == true {
             selectedEntryID = nil
         }
+    }
+
+    /// 文章过滤范围集合：每个 Feed、文件夹、账号与多选各自持有开关。
+    /// 与订阅过滤一样，真实存储是 UserDefaults 的稳定文本编码，集合按需解码。
+    private var articleFilteredScopes: Set<SidebarSelection> {
+        Set(articleFilteredScopesRaw.split(separator: "\n").map(String.init).compactMap(SidebarSelection.articleFilterScope(from:)))
+    }
+
+    private func setArticleFilteredScopes(_ scopes: Set<SidebarSelection>) {
+        articleFilteredScopesRaw = scopes
+            .compactMap(\.articleFilterScopeKey)
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    /// 按行子树清除文章过滤（各范围自己的"仅显示未读"）。
+    /// 账号行清该账号及其文件夹、订阅与多选；文件夹行清该文件夹的订阅与多选；
+    /// 订阅行清自身，多选行清选中集合。只动文章过滤，不碰订阅过滤。
+    private func clearArticleFilters(in scope: SidebarSelection) {
+        let scopes = articleFilteredScopes
+        let remaining = scopes.filter { !sidebarScopeContains(scope, $0, store: store) }
+        guard remaining.count != scopes.count else { return }
+        // 仅当当前可见范围落在被清除的子树内时，才取消待确认导航。
+        if sidebarScopeContains(scope, currentSelection, store: store) {
+            cancelNavigationConfirmation(dismissToast: true)
+        }
+        setArticleFilteredScopes(remaining)
+    }
+
+    /// 按行子树清除 Feed 源过滤：账号行清该账号及其文件夹；文件夹行清自身。
+    /// 订阅行没有 Feed 源过滤入口，不会传入。行显隐过渡由侧栏行上按可见集合
+    /// 驱动的 animation 处理，这里只改状态。
+    private func clearFeedFilters(in scope: SidebarSelection) {
+        let groups = unreadFilteredGroups
+        let remaining = groups.filter { !sidebarScopeContains(scope, $0, store: store) }
+        guard remaining.count != groups.count else { return }
+        setUnreadFilteredGroups(remaining)
+    }
+
+    /// 订阅级未读过滤集合。真实存储是 UserDefaults 的稳定文本编码，
+    /// 集合按需解码；侧栏通过 Binding 读写，保证侧栏与持久化同步。
+    private var unreadFilteredGroups: Set<SidebarSelection> {
+        Set(unreadFilteredGroupsRaw.split(separator: "\n").map(String.init).compactMap(SidebarSelection.unreadFilterGroup(from:)))
+    }
+
+    private func setUnreadFilteredGroups(_ groups: Set<SidebarSelection>) {
+        unreadFilteredGroupsRaw = groups
+            .compactMap(\.unreadFilterGroupKey)
+            .sorted()
+            .joined(separator: "\n")
+    }
+
+    private var unreadFilteredGroupsBinding: Binding<Set<SidebarSelection>> {
+        Binding(
+            get: { unreadFilteredGroups },
+            set: { setUnreadFilteredGroups($0) }
+        )
     }
 
     private var currentTimelineScope: TimelineScope {
@@ -857,6 +1064,12 @@ private struct SidebarView: View {
     @Binding var showsSettings: Bool
     @Binding var showsImporter: Bool
     @Binding var showsExporter: Bool
+    /// 右键菜单"按行清除过滤"入口：实际副作用由根视图持有，侧栏只负责
+    /// 呈现菜单项与按子树计算的禁用态。`articleFilteredScopes` 只读，用于判断
+    /// 当前行子树内是否有可清除的文章过滤。
+    var articleFilteredScopes: Set<SidebarSelection>
+    var onClearFeedFilters: (SidebarSelection) -> Void
+    var onClearArticleFilters: (SidebarSelection) -> Void
     /// Invoked after any destructive sidebar action (delete feed/folder).
     /// The parent clears the open reader so a deleted feed's article never
     /// leaves a stale selection behind — the toolbar would otherwise render
@@ -985,22 +1198,21 @@ private struct SidebarView: View {
                 } else {
                     unreadFilteredGroups.remove(row)
                 }
+                // 开启 Feed 源过滤时自动展开有未读的账号与文件夹；取消时只恢复订阅可见性，
+                // 不改变当前展开状态，避免把用户原本展开的文件夹收起。
+                // Feed 源过滤（侧栏订阅显隐）与文章过滤（列表仅显示未读）是两套独立状态，
+                // 此处严禁读写 articleFilteredScopes。
+                guard enabling else { return }
                 switch row {
                 case let .account(id):
-                    if enabling { isAccountExpandedBinding(accountID: id).wrappedValue = true }
-                    for folder in store.folders(for: id) {
-                        if !enabling || store.unreadCount(folder: folder, accountID: id) > 0 {
-                            isFolderExpandedBinding(key: "\(id)::\(folder)").wrappedValue = enabling
-                        }
+                    isAccountExpandedBinding(accountID: id).wrappedValue = true
+                    for folder in store.folders(for: id) where store.unreadCount(folder: folder, accountID: id) > 0 {
+                        isFolderExpandedBinding(key: "\(id)::\(folder)").wrappedValue = true
                     }
                 case let .folder(id, name):
-                    if enabling {
-                        if store.unreadCount(folder: name, accountID: id) > 0 {
-                            isAccountExpandedBinding(accountID: id).wrappedValue = true
-                            isFolderExpandedBinding(key: "\(id)::\(name)").wrappedValue = true
-                        }
-                    } else {
-                        isFolderExpandedBinding(key: "\(id)::\(name)").wrappedValue = false
+                    if store.unreadCount(folder: name, accountID: id) > 0 {
+                        isAccountExpandedBinding(accountID: id).wrappedValue = true
+                        isFolderExpandedBinding(key: "\(id)::\(name)").wrappedValue = true
                     }
                 default: break
                 }
@@ -1010,6 +1222,29 @@ private struct SidebarView: View {
 
     private var feedFilterAnimation: Animation? {
         reduceMotion ? nil : .timingCurve(0.23, 1, 0.32, 1, duration: 0.2)
+    }
+
+    /// 右键菜单的"按行清除过滤"组：账号行提供 Feed 源过滤与文章过滤两个清除项；
+    /// 文件夹/订阅行只提供文章过滤清除项（其子树内不存在更深层的 Feed 源过滤分组）。
+    /// 禁用态按该行子树内是否存在可清除项计算，保持入口可发现。
+    @ViewBuilder
+    private func unreadFilterClearMenuItems(for scope: SidebarSelection, includesFeedFilters: Bool) -> some View {
+        Divider()
+        if includesFeedFilters {
+            Button {
+                onClearFeedFilters(scope)
+            } label: {
+                Label(I18N.localized("清除所有订阅过滤"), systemImage: "line.3.horizontal.decrease")
+            }
+            .disabled(!unreadFilteredGroups.contains { sidebarScopeContains(scope, $0, store: store) })
+        }
+
+        Button {
+            onClearArticleFilters(scope)
+        } label: {
+            Label(I18N.localized("清除所有文章过滤"), systemImage: "doc.plaintext")
+        }
+        .disabled(!articleFilteredScopes.contains { sidebarScopeContains(scope, $0, store: store) })
     }
 
     private func selectAccount(_ id: String) {
@@ -1331,6 +1566,8 @@ private struct SidebarView: View {
                 } label: {
                     Label(I18N.localized("新建文件夹..."), systemImage: "folder.badge.plus")
                 }
+
+                unreadFilterClearMenuItems(for: .account(accountID), includesFeedFilters: true)
             }
     }
 
@@ -1368,6 +1605,8 @@ private struct SidebarView: View {
                     Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                 }
 
+                unreadFilterClearMenuItems(for: .folder(accountID: accountID, folderName: folder), includesFeedFilters: false)
+
                 Divider()
 
                 Button(role: .destructive) {
@@ -1400,6 +1639,8 @@ private struct SidebarView: View {
                         Label(I18N.shared.localizedFormat("复制选中订阅链接 (%lld)", selectedFeedIDs.count), systemImage: "doc.on.doc")
                     }
 
+                    unreadFilterClearMenuItems(for: .feeds(selectedFeedIDs), includesFeedFilters: false)
+
                     Divider()
 
                     Button(role: .destructive) {
@@ -1415,6 +1656,8 @@ private struct SidebarView: View {
                     } label: {
                         Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                     }
+
+                    unreadFilterClearMenuItems(for: .feed(feed.id), includesFeedFilters: false)
 
                     Button {
                         copyToClipboard(feed.feedURL.absoluteString)
@@ -1521,6 +1764,8 @@ private struct SidebarView: View {
                     Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                 }
 
+                unreadFilterClearMenuItems(for: .folder(accountID: accountID, folderName: folder), includesFeedFilters: false)
+
                 Button {
                     renamingFolder = folder
                 } label: {
@@ -1619,6 +1864,8 @@ private struct SidebarView: View {
                         Label(I18N.localized("移动选中项到文件夹"), systemImage: "folder")
                     }
 
+                    unreadFilterClearMenuItems(for: .feeds(selectedFeedIDs), includesFeedFilters: false)
+
                     Divider()
 
                     Button(role: .destructive) {
@@ -1633,6 +1880,8 @@ private struct SidebarView: View {
                     } label: {
                         Label(I18N.localized("全部已读"), systemImage: "checkmark.circle")
                     }
+
+                    unreadFilterClearMenuItems(for: .feed(feed.id), includesFeedFilters: false)
 
                     TranslationFeedListMenu(store: store, feedID: feed.id, accountID: "local-default")
                     Divider()

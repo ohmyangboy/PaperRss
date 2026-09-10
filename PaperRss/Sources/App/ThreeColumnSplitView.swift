@@ -356,6 +356,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
+        private weak var titleMaxWidthConstraint: NSLayoutConstraint?
         private weak var unreadFilterButton: NSButton?
         private weak var markAllReadButton: NSButton?
         private var compactToolbarLayout: Bool?
@@ -895,6 +896,15 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     }
                 }
             }
+            center.addObserver(
+                forName: NSSplitView.didResizeSubviewsNotification,
+                object: splitView,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.updateTitleWidthLimit()
+                }
+            }
 
             toolbarConfigured = true
         }
@@ -1369,6 +1379,25 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             return result
         }
 
+        private func currentContentColumnWidth() -> CGFloat {
+            guard let splitVC = splitViewController,
+                  splitVC.splitViewItems.count > 1 else {
+                return 280
+            }
+            let width = splitVC.splitViewItems[1].viewController.view.bounds.width
+            return width > 0 ? width : 280
+        }
+
+        func updateTitleWidthLimit() {
+            guard let constraint = titleMaxWidthConstraint else { return }
+            let columnWidth = currentContentColumnWidth()
+            let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
+            let maxTitleWidth = max(40, columnWidth - reservedWidth)
+            if constraint.constant != maxTitleWidth {
+                constraint.constant = maxTitleWidth
+            }
+        }
+
         /// 同步中间栏标题及全部已读按钮状态
         func syncHeaderState() {
             let isSidebarCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
@@ -1379,14 +1408,16 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 label.isHidden = isSidebarCollapsed
                 if isSidebarCollapsed {
                     label.stringValue = ""
-                    label.frame = .zero
+                    label.toolTip = nil
                 } else {
                     if label.stringValue != actions.selectionTitle {
                         label.stringValue = actions.selectionTitle
-                        label.sizeToFit()
+                        label.toolTip = actions.selectionTitle
+                        label.invalidateIntrinsicContentSize()
                     }
                 }
             }
+            updateTitleWidthLimit()
             if #available(macOS 15.0, *) {
                 entryListTitleItem?.isHidden = isSidebarCollapsed
             }
@@ -1620,12 +1651,30 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 label.drawsBackground = false
                 label.isBezeled = false
                 label.isHidden = isCollapsed
-                if isCollapsed {
-                    label.frame = .zero
-                }
+                label.toolTip = isCollapsed ? nil : actions.selectionTitle
+                label.lineBreakMode = .byTruncatingTail
+                label.cell?.lineBreakMode = .byTruncatingTail
+                label.cell?.truncatesLastVisibleLine = true
+                label.maximumNumberOfLines = 1
+                label.usesSingleLineMode = true
+                label.allowsDefaultTighteningForTruncation = true
+                label.translatesAutoresizingMaskIntoConstraints = false
+                label.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(50), for: .horizontal)
+                label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+                let columnWidth = currentContentColumnWidth()
+                let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
+                let maxTitleWidth = max(40, columnWidth - reservedWidth)
+                let maxWidthConstraint = label.widthAnchor.constraint(lessThanOrEqualToConstant: maxTitleWidth)
+                maxWidthConstraint.priority = .required
+                let heightConstraint = label.heightAnchor.constraint(equalToConstant: 22)
+                NSLayoutConstraint.activate([maxWidthConstraint, heightConstraint])
+
+                label.frame = NSRect(x: 0, y: 0, width: maxTitleWidth, height: 22)
                 item.view = label
                 self.titleLabel = label
                 self.entryListTitleItem = item
+                self.titleMaxWidthConstraint = maxWidthConstraint
                 return item
 
             case .paperUnreadFilter:
@@ -1640,6 +1689,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 button.target = self
                 button.action = #selector(doToggleUnreadFilter)
                 button.setAccessibilityIdentifier("timeline.unreadFilter")
+                button.setContentCompressionResistancePriority(.required, for: .horizontal)
                 item.view = button
                 self.unreadFilterButton = button
                 return item
@@ -1660,6 +1710,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 button.target = self
                 button.action = #selector(doMarkAllRead)
                 button.isEnabled = actions.hasUnread
+                button.setContentCompressionResistancePriority(.required, for: .horizontal)
                 
                 item.view = button
                 self.markAllReadButton = button

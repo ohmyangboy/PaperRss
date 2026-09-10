@@ -1754,6 +1754,26 @@ img.paper-align-right {
   margin-left: auto;
   margin-right: 0;
 }
+/* 表情图（Discourse/WordPress/GitHub 等以 16–32px 小图渲染 emoji）：
+   回归行内文字流，跟随文本换行，不当成内容大图独占一行 */
+img.paper-emoji {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 1.18em;
+  height: 1.18em;
+  max-width: none;
+  margin: 0 .06em;
+  border: none;
+  border-radius: 2px;
+  object-fit: contain;
+  vertical-align: -0.18em;
+  cursor: default;
+}
+/* 仅含小图的包装层（div/span/a）回归行内：表态图标与计数、
+   头像等保持源站的文字流排布 */
+.paper-emoji-wrap {
+  display: inline;
+}
 /* 多图 wrap 行容器：有声明宽度的图尊重原文尺寸、总宽超行时自然换行；
    无声明宽度的图均分共享一行（画廊语义）；整行居中 */
 .paper-img-row {
@@ -1925,6 +1945,35 @@ hr {
   background: var(--paper-rule);
   margin: 2em 0;
 }
+/* 社交/引用推文方块容器卡片（Twitter/X Quote Tweet 等） */
+.paper-quote-card {
+  box-sizing: border-box;
+  width: auto;
+  border: 1px solid var(--paper-rule);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 14px 12px 18px 12px;
+  background: transparent;
+}
+.paper-quote-card > :first-child {
+  margin-top: 0;
+}
+.paper-quote-card > :last-child {
+  margin-bottom: 0;
+}
+.paper-quote-card img,
+.paper-quote-card video {
+  margin-top: 0.8em;
+  margin-bottom: 0.8em;
+}
+/* 消除紧邻卡片的前置分割线，解决 RSSHub 引用推文残留分割线割裂感 */
+hr:has(+ .paper-quote-card),
+hr:has(+ div.paper-quote-card) {
+  display: none;
+}
+hr + .paper-quote-card {
+  margin-top: 14px;
+}
 table {
   display: block;
   max-width: 100%;
@@ -1981,6 +2030,11 @@ th, td {
 }
 .paper-rss-translation p { margin: 0; }
 .paper-rss-translation-text { white-space: pre-wrap; }
+/* 表格单元格内译文：保持本格对照，去除块级负边距对表格行高的拉伸 */
+td > .paper-rss-translation, th > .paper-rss-translation {
+  display: block;
+  margin: .35em 0 0;
+}
 .paper-rss-translation.is-loading {
   color: var(--paper-muted);
   opacity: .72;
@@ -2220,7 +2274,10 @@ enum PaperReaderBridge {
       let aside = document.getElementById(translationNodeID(update.id));
       if (!aside) {
         aside = makeTranslation(update);
-        source.insertAdjacentElement("afterend", aside);
+        // 表格单元格的译文必须放进本格内部；afterend 会把译文插成 tr 的
+        // 非法子元素，破坏表格结构。
+        const placement = (source.tagName === "TD" || source.tagName === "TH") ? "beforeend" : "afterend";
+        source.insertAdjacentElement(placement, aside);
       }
       aside.classList.toggle("is-loading", Boolean(update.isLoading));
       aside.setAttribute("aria-label", update.isLoading
@@ -4062,10 +4119,96 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
+    /// 表情/小图分类：论坛与建站系统常以小图渲染 emoji、表态图标与评论头像
+    /// （Discourse `<img class="emoji" width="20" height="20">`、少数派表态
+    /// `<img width="40">`、评论头像 `/avatar/…` 等）。阅读器默认样式把所有 img
+    /// 当内容大图（块级、居中、描边），这类小图于是每张独占一行。
+    /// 此脚本按三层通用信号给这类 img 打上 `paper-emoji` 受控类，行内化回归文字流：
+    /// 1. 声明尺寸：已声明的一边 ≤48px，另一边缺省或同样 ≤48px；
+    /// 2. URL 特征：含 emoji/avatar 命名段（含 twemoji 与头像占位图）；
+    /// 3. 加载后实测：宽高渲染尺寸均 ≤48px（覆盖无任何声明与命名特征的站点）。
+    /// 前两层立即生效；第三层在 load 事件后测量，缓存旧文章同样生效。
+    static let imageEmojiScript = WKUserScript(
+        source: """
+        (() => {
+          const EMOJI_MAX = 48;
+          const hasEmojiURL = source => source.includes("/emoji/")
+            || source.includes("twemoji")
+            || source.includes("avatar");
+          const shortcode = value => /^:[a-z0-9_+\\-]+:$/i.test(String(value || "").trim());
+          const hasEmojiClass = image => {
+            const className = String(image.getAttribute?.("class") || "").toLowerCase();
+            return /(^|\\s)[a-z0-9_-]*emoji[a-z0-9_-]*($|\\s)/.test(className);
+          };
+          const hasSmallDeclaredSize = image => {
+            const width = parseInt(image.getAttribute?.("width"), 10);
+            const height = parseInt(image.getAttribute?.("height"), 10);
+            const hasWidth = Number.isFinite(width) && width > 0;
+            const hasHeight = Number.isFinite(height) && height > 0;
+            if (!hasWidth && !hasHeight) return false;
+            if (hasWidth && width > EMOJI_MAX) return false;
+            if (hasHeight && height > EMOJI_MAX) return false;
+            return true;
+          };
+          const isSmallWhenRendered = image => {
+            if (!image.complete || !image.naturalWidth) return false;
+            const rect = image.getBoundingClientRect?.() || {};
+            const width = rect.width || image.clientWidth || 0;
+            const height = rect.height || image.clientHeight || 0;
+            return width > 0 && height > 0 && width <= EMOJI_MAX && height <= EMOJI_MAX;
+          };
+          const isEmojiSizeImage = image => hasEmojiClass(image)
+            || hasEmojiURL(String(image.getAttribute?.("src") || "").toLowerCase())
+            || shortcode(image.getAttribute?.("alt"))
+            || shortcode(image.getAttribute?.("title"))
+            || hasSmallDeclaredSize(image)
+            || isSmallWhenRendered(image);
+          const inProtectedContext = image => image.closest?.(
+            "pre, code, .paper-img-row, .paper-summary-card, .paper-header-container, #paper-rss-toc-rail, .paper-rss-explanation"
+          );
+          // 包装层收敛：仅含该小图的 div/span/a 链回归行内，让表态图标与
+          // 计数、图标行等保持源站的文字流排布。表格结构与列表项不参与。
+          const WRAPPABLE_TAGS = new Set(["DIV", "SPAN", "A"]);
+          const collapseImageOnlyWrappers = image => {
+            let child = image;
+            let node = image.parentElement;
+            for (let depth = 0; node && depth < 4; depth += 1) {
+              if (!WRAPPABLE_TAGS.has(node.tagName)) break;
+              const elementChildren = Array.from(node.children || []);
+              if (elementChildren.length !== 1 || elementChildren[0] !== child) break;
+              if (String(node.textContent || "").trim() !== "") break;
+              node.classList.add("paper-emoji-wrap");
+              child = node;
+              node = node.parentElement;
+            }
+          };
+          const classify = image => {
+            if (!image || image.classList.contains("paper-emoji")) return;
+            if (inProtectedContext(image)) return;
+            if (isEmojiSizeImage(image)) {
+              image.classList.add("paper-emoji");
+              collapseImageOnlyWrappers(image);
+            }
+          };
+          document.querySelectorAll("img").forEach(image => {
+            if (image.complete) {
+              classify(image);
+              return;
+            }
+            image.addEventListener("load", () => classify(image), { once: true });
+          });
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
     /// 画廊归一：博客 feed 常以原生 HTML `<div><img><img></div>` 输出多图画廊，
     /// 阅读器默认样式会把每个 img 拉成全宽竖排。此脚本把「子元素全部为 ≥2 个 IMG
     /// 且无可见文本」的 div 归一为 `paper-img-row` wrap 行容器，与 Markdown 管线
     /// 的分组产物共用同一套布局语义（对已缓存的旧文章同样生效）。
+    /// 表情图（paper-emoji）不是画廊内容，全部为表情图的容器保持文本流语义。
     static let imageGalleryScript = WKUserScript(
         source: """
         (() => {
@@ -4073,7 +4216,9 @@ enum PaperReaderBridge {
             if (!element || element.tagName !== "DIV") return false;
             if (element.classList.contains("paper-img-row")) return false;
             if (typeof element.closest === "function" && element.closest("pre, code")) return false;
-            const children = Array.from(element.children || []);
+            const children = Array.from(element.children || []).filter(
+              child => !(child.classList && child.classList.contains("paper-emoji"))
+            );
             if (children.length < 2) return false;
             if (!children.every(child => child && child.tagName === "IMG")) return false;
             return String(element.textContent || "").trim() === "";
@@ -4433,7 +4578,7 @@ enum PaperReaderBridge {
           document.addEventListener("click", event => {
             const target = event.target.closest("img, video");
             if (!target) return;
-            if (target.classList.contains("paper-summary-icon") || target.classList.contains("paper-rss-annotation-icon") || target.closest(".paper-rss-explanation")) {
+            if (target.classList.contains("paper-summary-icon") || target.classList.contains("paper-rss-annotation-icon") || target.classList.contains("paper-emoji") || target.closest(".paper-rss-explanation")) {
               return;
             }
 
@@ -4604,6 +4749,7 @@ enum PaperReaderBridge {
         #endif
         controller.addUserScript(selectionScript)
         controller.addUserScript(imageRecoveryScript)
+        controller.addUserScript(imageEmojiScript)
         controller.addUserScript(imageGalleryScript)
         #if os(macOS)
         controller.addUserScript(readerShortcutScript)

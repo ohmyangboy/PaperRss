@@ -13,7 +13,7 @@
 #   ./scripts/verify.sh --core        # 仅执行 Swift Core 数据与性能全量回归测试
 #   ./scripts/verify.sh --filter <名> # 运行指定测试类或测试方法
 #
-# 注意: 本脚本负责自动化代码/数据/构建校验，真实 macOS 进程与 UI 交互验证请使用 ./scripts/dev.sh
+# 注意: 本脚本负责自动化代码/数据/构建校验，真实 macOS 进程与 UI 交互验证请使用 ./scripts/dev.sh --isolated
 # ==============================================================================
 set -euo pipefail
 
@@ -48,7 +48,7 @@ fi
 
 run_feature_tests() {
     echo -e "\n${BLUE}▶ 执行 App 核心功能回归测试 (AppFeatureRegressionTests)...${NC}"
-    python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build" --filter AppFeatureRegressionTests
+    python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build" --filter AppFeatureRegressionTests
     echo -e "${GREEN}✔ App 核心功能回归测试通过！${NC}"
 }
 
@@ -72,13 +72,13 @@ run_highlight_webkit_test() {
 
 run_core_tests() {
     echo -e "\n${BLUE}▶ 执行 Swift 全量单元与集成测试 (Core/Data/FreshRSS/Performance)...${NC}"
-    python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build"
+    python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build"
     echo -e "${GREEN}✔ Swift 全量回归测试全部通过！${NC}"
 }
 
 run_build_test() {
     echo -e "\n${BLUE}▶ 执行 macOS 宿主增量构建 (xcodebuild)...${NC}"
-    python3 scripts/build-support.py -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination "platform=macOS" -derivedDataPath "$PWD/build" build
+    python3 scripts/build-support.py --lane app -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination "platform=macOS" -derivedDataPath "$PWD/build" build
     echo -e "${GREEN}✔ macOS 宿主编译构建成功！${NC}"
 }
 
@@ -116,7 +116,7 @@ case "$MODE" in
         ;;
     --filter)
         echo -e "\n${BLUE}▶ 执行自定义过滤回归测试: ${FILTER_ARG}...${NC}"
-        python3 scripts/build-support.py --temporary -- swift test --scratch-path "$PWD/.build" --filter "$FILTER_ARG"
+        python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build" --filter "$FILTER_ARG"
         echo -e "${GREEN}✔ 自定义测试 ${FILTER_ARG} 执行完成！${NC}"
         ;;
     all|--all)

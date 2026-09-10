@@ -52,7 +52,7 @@ if [ -z "$DEVELOPER_DIR" ]; then
 fi
 
 echo "🚀 正在编译 PaperRss..."
-python3 scripts/build-support.py -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -configuration Debug -derivedDataPath "$DERIVED_DATA" "${BUILD_OPTIONS[@]}" -quiet
+python3 scripts/build-support.py --lane app -- xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -configuration Debug -derivedDataPath "$DERIVED_DATA" "${BUILD_OPTIONS[@]}" -quiet
 
 # 编译成功后关闭已有运行实例，再启动新实例
 if [ -z "$ISOLATED_DIRECTORY" ] && pgrep -x "PaperRss" >/dev/null 2>&1; then

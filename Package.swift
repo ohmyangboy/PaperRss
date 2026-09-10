@@ -62,6 +62,7 @@ let package = Package(
                 "code-highlighting.test.mjs",
                 "reader-shortcuts.test.mjs",
                 "reader-auto-translation.test.mjs",
+                "reader-emoji-image.test.mjs",
                 "reader-toc.test.mjs",
                 "repository-policy.test.mjs",
                 "selection-assistant-sync.test.mjs",
