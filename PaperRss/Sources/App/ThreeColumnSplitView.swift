@@ -71,6 +71,10 @@ struct ToolbarActions {
     let onDecreaseFontSize: () -> Void
     let onResetFontSize: () -> Void
     let onSelectFirstEntryIfNeeded: () -> Void
+    let timelineControls: AnyView
+    let isTimelineBrowsing: Bool
+    let usesVisualTimeline: Bool
+    let onTimelineKey: (UInt16) -> Void
 
     init(
         onRefresh: @escaping () -> Void,
@@ -94,7 +98,11 @@ struct ToolbarActions {
         onIncreaseFontSize: @escaping () -> Void = {},
         onDecreaseFontSize: @escaping () -> Void = {},
         onResetFontSize: @escaping () -> Void = {},
-        onSelectFirstEntryIfNeeded: @escaping () -> Void = {}
+        onSelectFirstEntryIfNeeded: @escaping () -> Void = {},
+        timelineControls: AnyView = AnyView(EmptyView()),
+        isTimelineBrowsing: Bool = false,
+        usesVisualTimeline: Bool = false,
+        onTimelineKey: @escaping (UInt16) -> Void = { _ in }
     ) {
         self.onRefresh = onRefresh
         self.onAddFeed = onAddFeed
@@ -118,6 +126,10 @@ struct ToolbarActions {
         self.onDecreaseFontSize = onDecreaseFontSize
         self.onResetFontSize = onResetFontSize
         self.onSelectFirstEntryIfNeeded = onSelectFirstEntryIfNeeded
+        self.timelineControls = timelineControls
+        self.isTimelineBrowsing = isTimelineBrowsing
+        self.usesVisualTimeline = usesVisualTimeline
+        self.onTimelineKey = onTimelineKey
     }
 }
 
@@ -191,6 +203,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
         let detailItem = NSSplitViewItem(viewController: detailHost)
         detailItem.allowsFullHeightLayout = true
         detailItem.minimumThickness = 400
+        detailItem.canCollapse = true
 
         splitVC.addSplitViewItem(sidebarItem)
         splitVC.addSplitViewItem(contentItem)
@@ -248,6 +261,10 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
             host.rootView = detail
         }
 
+        // Browsing hides only the reader, independently of reader-only Zen mode.
+        context.coordinator.syncTimelinePresentation()
+        context.coordinator.timelineControlsHost?.rootView = toolbarActions.timelineControls
+
         // 同步刷新按钮及 Header 状态
         context.coordinator.syncLocalizedToolbarText()
         context.coordinator.syncRefreshState()
@@ -270,6 +287,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
         // 禅模式下隐藏除 Article View 阅读胶囊外的所有工具栏按钮
         context.coordinator.syncZenModeState()
+        context.coordinator.syncTimelineToolbarStructure()
 
         // 更新工具栏中的阅读工具胶囊(SwiftUI 状态变化后刷新图标/可用态与显示隐藏)
         if let host = context.coordinator.readerCapsuleHost {
@@ -349,6 +367,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var refreshItem: NSToolbarItem?
         private weak var refreshButton: NSButton?
         private weak var refreshSpinner: NSProgressIndicator?
+        fileprivate weak var timelineControlsHost: NSHostingView<AnyView>?
+        private var readingListWidth: CGFloat?
         fileprivate weak var readerCapsuleItem: NSToolbarItem?
         fileprivate weak var readerCapsuleHost: NSHostingView<AnyView>?
         fileprivate weak var readerCapsuleMaterialContainer: LegacyReaderCapsuleMaterialContainer?
@@ -456,6 +476,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     }
                 }
 
+                if MainActor.assumeIsolated({ self.consumeTimelineKey(event, flags: flags) }) {
+                    return nil
+                }
                 if MainActor.assumeIsolated({ self.consumeReaderShortcut(event, flags: flags) }) {
                     return nil
                 }
@@ -705,6 +728,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
             }
 
+            if let controls = timelineControlsHost, !controls.isHidden, controls.window === window,
+               controls.convert(controls.bounds, to: nil).contains(locationInWindow) {
+                return false
+            }
+
             // 3. 排除已知交互按钮
             if let refreshButton, !refreshButton.isHidden, refreshButton.window === window {
                 let rect = refreshButton.convert(refreshButton.bounds, to: nil)
@@ -798,6 +826,65 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
                 return event
             }
+        }
+
+        /// A visual timeline retains the native three-column focus contract. Only
+        /// its own focused view consumes grid navigation; text editing and WebKit
+        /// keep their events, and arrow-key numericPad/function flags are allowed.
+        private func consumeTimelineKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+            let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+            guard actions.usesVisualTimeline, activeColumnIndex == 1,
+                  flags.intersection(disallowed).isEmpty,
+                  [UInt16(125), 126, 36, 49, 76].contains(event.keyCode),
+                  let splitVC = splitViewController, splitVC.splitViewItems.count == 3,
+                  let window = splitVC.view.window, window.attachedSheet == nil,
+                  NSApp.modalWindow == nil,
+                  let responder = window.firstResponder as? NSView,
+                  !(responder is NSTextView), !(responder is NSTextField),
+                  responder.isDescendant(of: splitVC.splitViewItems[1].viewController.view)
+            else { return false }
+            actions.onTimelineKey(event.keyCode)
+            return true
+        }
+
+        func syncTimelinePresentation() {
+            guard let splitVC = splitViewController, splitVC.splitViewItems.count == 3 else { return }
+            let detail = splitVC.splitViewItems[2]
+            let browsing = actions.isTimelineBrowsing && !actions.isZenMode
+            guard detail.isCollapsed != browsing else { return }
+            if browsing {
+                readingListWidth = splitVC.splitViewItems[1].viewController.view.frame.width
+                detail.isCollapsed = true
+            } else {
+                detail.isCollapsed = false
+                splitVC.view.layoutSubtreeIfNeeded()
+                if !actions.isZenMode, let readingListWidth {
+                    let sidebar = splitVC.splitViewItems[0]
+                    let leading = sidebar.isCollapsed ? 0 : sidebar.viewController.view.frame.width + splitVC.splitView.dividerThickness
+                    let available = splitVC.splitView.bounds.width - leading - detail.minimumThickness - splitVC.splitView.dividerThickness
+                    let width = min(max(280, readingListWidth), max(280, available))
+                    splitVC.splitView.setPosition(leading + width, ofDividerAt: 1)
+                }
+            }
+            reconcileActiveColumnAfterCollapse()
+        }
+
+        /// Do not retain a tracking divider for a collapsed reader. The reader
+        /// capsule and the permanent right-hand view control are never rebuilt.
+        func syncTimelineToolbarStructure() {
+            guard isReaderActive, !actions.isZenMode,
+                  let splitVC = splitViewController,
+                  let toolbar = splitVC.view.window?.toolbar else { return }
+            let shouldHaveTracker = !actions.isTimelineBrowsing && !(splitVC.splitViewItems.first?.isCollapsed ?? false)
+            if !shouldHaveTracker {
+                if let index = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperTimelineTracker }) {
+                    toolbar.removeItem(at: index)
+                }
+            } else if !toolbar.items.contains(where: { $0.itemIdentifier == .paperTimelineTracker }),
+                      let index = toolbar.items.firstIndex(where: { $0.itemIdentifier == .paperReaderCapsule }) {
+                toolbar.insertItem(withItemIdentifier: .paperTimelineTracker, at: max(0, index - 1))
+            }
+            syncHeaderState()
         }
 
         private func consumeReaderShortcut(
@@ -1454,7 +1541,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 var expectedOrder = toolbar.items.map(\.itemIdentifier).filter { !buttonIDs.contains($0) }
                 let insertionIndex = isSidebarCollapsed
                     ? expectedOrder.firstIndex(of: .paperAddMenu).map { $0 + 1 }
-                    : expectedOrder.firstIndex(of: .paperTimelineTracker)
+                    : (expectedOrder.firstIndex(of: .paperTimelineTracker) ?? expectedOrder.firstIndex(of: .paperReaderCapsule))
                 if let insertionIndex {
                     expectedOrder.insert(contentsOf: visibleButtons, at: insertionIndex)
                     if toolbar.items.map(\.itemIdentifier) != expectedOrder {
@@ -1503,7 +1590,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             syncLegacyToolbarItemVisibility(in: toolbar, isZenMode: isZenMode)
 
             for item in toolbar.items {
-                if item.itemIdentifier == .paperReaderCapsule {
+                if item.itemIdentifier == .paperTimelineControls {
+                    if #available(macOS 15.0, *) { item.isHidden = false }
+                    item.view?.isHidden = false
+                } else if item.itemIdentifier == .paperReaderCapsule {
                     if #available(macOS 15.0, *) {
                         item.isHidden = !actions.showsReaderCapsule
                     }
@@ -1724,6 +1814,23 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     dividerIndex: 1
                 )
 
+            case .paperTimelineControls:
+                let item = NSToolbarItem(itemIdentifier: .paperTimelineControls)
+                item.label = I18N.localized("切换文章视图")
+                item.paletteLabel = item.label
+                item.visibilityPriority = .high
+                item.autovalidates = false
+                let host = NSHostingView(rootView: actions.timelineControls)
+                host.translatesAutoresizingMaskIntoConstraints = false
+                host.frame = NSRect(x: 0, y: 0, width: 72, height: 32)
+                NSLayoutConstraint.activate([
+                    host.widthAnchor.constraint(equalToConstant: 72),
+                    host.heightAnchor.constraint(equalToConstant: 32)
+                ])
+                item.view = host
+                timelineControlsHost = host
+                return item
+
             case .paperReaderCapsule:
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
                 item.label = I18N.localized("阅读工具")
@@ -1803,6 +1910,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 .flexibleSpace,
                 .paperReaderCapsule,
                 .flexibleSpace,
+                // Persistent at the trailing edge, also in browsing/Zen mode.
+                .paperTimelineControls,
             ]
         }
 
@@ -1835,6 +1944,7 @@ extension NSToolbarItem.Identifier {
     static let paperEntryListTitle = NSToolbarItem.Identifier("com.paperrss.toolbar.entryListTitle")
     static let paperUnreadFilter = NSToolbarItem.Identifier("com.paperrss.toolbar.unreadFilter")
     static let paperMarkAllRead = NSToolbarItem.Identifier("com.paperrss.toolbar.markAllRead")
+    static let paperTimelineControls = NSToolbarItem.Identifier("com.paperrss.toolbar.timelineControls")
     static let paperReaderCapsule = NSToolbarItem.Identifier("com.paperrss.toolbar.readerCapsule")
 }
 

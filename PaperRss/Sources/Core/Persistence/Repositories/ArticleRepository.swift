@@ -65,6 +65,7 @@ public final class ArticleRepository: Sendable {
             a.published_at AS published_at,
             COALESCE(a.summary, '') AS summary,
             a.content_html AS content_html,
+            a.preview_image_url AS preview_image_url,
             COALESCE(s.is_read, 0) AS is_read,
             COALESCE(s.is_starred, 0) AS is_starred,
             COALESCE(s.updated_at, i.updated_at) AS updated_at
@@ -88,6 +89,7 @@ public final class ArticleRepository: Sendable {
             a.published_at AS published_at,
             COALESCE(a.summary, '') AS summary,
             a.content_html AS content_html,
+            a.preview_image_url AS preview_image_url,
             COALESCE(s.is_read, 0) AS is_read,
             COALESCE(s.is_starred, 0) AS is_starred,
             COALESCE(s.updated_at, i.updated_at) AS updated_at
@@ -114,6 +116,7 @@ public final class ArticleRepository: Sendable {
         var newUnreadEntries: [Entry] = []
 
         for parsed in parsedEntries {
+            let preview = parsed.previewImage ?? EntryPreviewImageExtractor.extract(contentHTML: parsed.contentHTML, baseURL: parsed.url)
             let itemID = "\(feedID)|\(parsed.id)".stableDigest
             try AutoTranslationRepository.saveHints(parsed.languageHints, scope: "article", id: itemID, in: db)
             let existingItem = try ItemRecord.filter(Column("id") == itemID).fetchOne(db)
@@ -138,7 +141,8 @@ public final class ArticleRepository: Sendable {
                     publishedAt: parsed.publishedAt?.timeIntervalSince1970,
                     summary: parsed.summary.plainText,
                     contentHTML: parsed.contentHTML,
-                    contentUpdatedAt: now
+                    contentUpdatedAt: now,
+                    previewImage: preview
                 )
                 try article.save(db)
 
@@ -163,7 +167,8 @@ public final class ArticleRepository: Sendable {
                     contentHTML: parsed.contentHTML,
                     isRead: false,
                     isStarred: false,
-                    updatedAt: Date(timeIntervalSince1970: now)
+                    updatedAt: Date(timeIntervalSince1970: now),
+                    previewImageURL: preview.url
                 )
                 newUnreadEntries.append(newEntry)
             } else {
@@ -171,6 +176,10 @@ public final class ArticleRepository: Sendable {
                 if let existingArticle = try ArticleRecord.filter(Column("item_id") == itemID).fetchOne(db) {
                     var needsUpdate = false
                     var updatedArticle = existingArticle
+                    if updatedArticle.previewInputHash != preview.inputHash || updatedArticle.previewExtractionRevision != preview.revision {
+                        updatedArticle.setPreviewImage(preview)
+                        needsUpdate = true
+                    }
                     if updatedArticle.title != parsed.title {
                         updatedArticle.title = parsed.title
                         needsUpdate = true
@@ -206,7 +215,8 @@ public final class ArticleRepository: Sendable {
                         publishedAt: parsed.publishedAt?.timeIntervalSince1970,
                         summary: parsed.summary.plainText,
                         contentHTML: parsed.contentHTML,
-                        contentUpdatedAt: now
+                        contentUpdatedAt: now,
+                        previewImage: preview
                     )
                     try restoredArticle.save(db)
                     // 保持 article_states 状态不变（is_read 保持原有值，不增加未读数，不加入 newUnreadEntries）
@@ -256,7 +266,8 @@ public final class ArticleRepository: Sendable {
             contentHTML: contentHTML,
             isRead: isReadInt == 1,
             isStarred: isStarredInt == 1,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            previewImageURL: (row["preview_image_url"] as String?).flatMap { EntryPreviewImageExtractor.safeURL($0) }
         )
     }
 

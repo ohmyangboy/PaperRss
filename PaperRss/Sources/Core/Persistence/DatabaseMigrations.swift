@@ -670,6 +670,16 @@ public enum DatabaseMigrations {
             }
         }
 
+        migrator.registerMigration("v12-article-preview-images") { db in
+            guard try db.tableExists("articles") else { return }
+            try db.execute(sql: """
+                ALTER TABLE articles ADD COLUMN preview_image_url TEXT;
+                ALTER TABLE articles ADD COLUMN preview_image_source TEXT;
+                ALTER TABLE articles ADD COLUMN preview_input_hash TEXT;
+                ALTER TABLE articles ADD COLUMN preview_extraction_revision INTEGER NOT NULL DEFAULT 0;
+                """)
+        }
+
         return migrator
     }
 }

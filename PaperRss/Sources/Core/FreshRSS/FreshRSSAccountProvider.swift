@@ -745,6 +745,10 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 }
             )
 
+            let previewBaseURLs = Dictionary(uniqueKeysWithValues: allAccountFeeds.map {
+                ($0.id, URL(string: $0.siteURL ?? $0.feedURL))
+            })
+
             var processedItemIDs = Set<String>()
 
             // A. 处理当前流返回的 streamItems（权威 categories 优先判定）
@@ -800,6 +804,13 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 let articlePublished = item.published
                 let contentHTML = item.content?.content ?? item.summary?.content
                 let articleSummary = contentHTML.flatMap { Self.stripHTML($0) } ?? ""
+                let imageBase = articleURL.flatMap { URL(string: $0) }
+                    ?? previewBaseURLs[targetFeedID].flatMap { $0 }
+                let preview = EntryPreviewImageExtractor.extract(
+                    descriptionHTML: item.summary?.content,
+                    contentHTML: item.content?.content,
+                    baseURL: imageBase
+                )
 
                 if var existingArticle = try ArticleRecord.filter(Column("item_id") == internalItemID).fetchOne(db) {
                     existingArticle.title = articleTitle
@@ -809,6 +820,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     existingArticle.summary = articleSummary
                     existingArticle.contentHTML = contentHTML
                     existingArticle.contentUpdatedAt = now
+                    existingArticle.setPreviewImage(preview)
                     try existingArticle.save(db)
                 } else {
                     let newArticle = ArticleRecord(
@@ -819,7 +831,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
                         publishedAt: articlePublished,
                         summary: articleSummary,
                         contentHTML: contentHTML,
-                        contentUpdatedAt: now
+                        contentUpdatedAt: now,
+                        previewImage: preview
                     )
                     try newArticle.save(db)
                 }

@@ -160,11 +160,12 @@ public struct Entry: Identifiable, Codable, Hashable, Sendable {
     public var publishedAt: Date?
     public var summary: String
     public var contentHTML: String?
+    public var previewImageURL: URL?
     public var isRead: Bool
     public var isStarred: Bool
     public var updatedAt: Date
 
-    public init(id: String, feedID: UUID, title: String, author: String? = nil, url: URL? = nil, publishedAt: Date? = nil, summary: String = "", contentHTML: String? = nil, isRead: Bool = false, isStarred: Bool = false, updatedAt: Date = .now) {
+    public init(id: String, feedID: UUID, title: String, author: String? = nil, url: URL? = nil, publishedAt: Date? = nil, summary: String = "", contentHTML: String? = nil, isRead: Bool = false, isStarred: Bool = false, updatedAt: Date = .now, previewImageURL: URL? = nil) {
         self.id = id
         self.feedID = feedID
         self.title = title
@@ -173,6 +174,7 @@ public struct Entry: Identifiable, Codable, Hashable, Sendable {
         self.publishedAt = publishedAt
         self.summary = summary
         self.contentHTML = contentHTML
+        self.previewImageURL = previewImageURL
         self.isRead = isRead
         self.isStarred = isStarred
         self.updatedAt = updatedAt
@@ -193,6 +195,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
     public let summaryPreview: String
     public let sourceTitle: String
     public let feedIconURL: URL?
+    public let previewImageURL: URL?
     public let publishedAt: Date?
     public var isRead: Bool
     public var isStarred: Bool
@@ -261,7 +264,8 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         accountID: String = "local-default",
         accountType: String = AccountType.local.rawValue,
         accountDisplayName: String = "Local",
-        summaryIsVisible: Bool? = nil
+        summaryIsVisible: Bool? = nil,
+        previewImageURL: URL? = nil
     ) {
         self.id = id
         self.feedID = feedID
@@ -270,6 +274,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         self.summaryPreview = summaryPreview
         self.sourceTitle = sourceTitle
         self.feedIconURL = feedIconURL
+        self.previewImageURL = previewImageURL
         self.publishedAt = publishedAt
         self.isRead = isRead
         self.isStarred = isStarred
@@ -285,6 +290,7 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         title = entry.title
         url = entry.url
         summaryPreview = String(entry.summary.prefix(previewCharacterLimit))
+        previewImageURL = entry.previewImageURL
         self.sourceTitle = sourceTitle
         self.feedIconURL = feedIconURL
         publishedAt = entry.publishedAt

@@ -79,6 +79,8 @@ public final class AppStore: ObservableObject {
 
     /// Feed 图标仓库：行渲染经它同步查询已就绪图标，杜绝 AsyncImage 加载期闪烁。
     public let iconStore = FeedIconStore()
+    public let thumbnailStore = ArticleThumbnailStore()
+    private lazy var previewBackfill = ArticlePreviewBackfill(database: libraryDatabase)
 
     @Published public private(set) var feeds: [Feed] = []
     @Published public private(set) var customFolders: [String] = []
@@ -945,6 +947,17 @@ public final class AppStore: ObservableObject {
 
     public func entryListItems(folder: String, accountID: String = "local-default") -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(scope: .folder(accountID: accountID, folderName: folder))) ?? []
+    }
+
+    /// Metadata only: no image downloads, reader preparation or read-state changes.
+    public func prepareTimelinePreviews(entryIDs: [String]) async {
+        var didChange = false
+        for offset in stride(from: 0, to: entryIDs.count, by: 100) {
+            guard !Task.isCancelled else { break }
+            let ids = Array(entryIDs[offset..<min(offset + 100, entryIDs.count)])
+            if let count = try? await previewBackfill.prepare(entryIDs: ids), count > 0 { didChange = true }
+        }
+        if didChange { timelineRevision &+= 1 }
     }
 
     public func fetchTimelinePage(

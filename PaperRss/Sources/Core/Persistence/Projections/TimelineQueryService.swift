@@ -307,6 +307,7 @@ public final class TimelineQueryService: Sendable {
             COALESCE(acc.display_name, 'Local') AS account_display_name,
             COALESCE(a.title, '') AS title,
             a.url AS url,
+            a.preview_image_url AS preview_image_url,
             COALESCE(a.summary, '') AS summary,
             f.title AS feed_title,
             COALESCE(
@@ -384,7 +385,8 @@ public final class TimelineQueryService: Sendable {
                 isStarred: isStarredInt == 1,
                 accountID: accountID,
                 accountType: accountType,
-                accountDisplayName: accountDisplayName
+                accountDisplayName: accountDisplayName,
+                previewImageURL: (row["preview_image_url"] as String?).flatMap { EntryPreviewImageExtractor.safeURL($0) }
             )
         }
     }
@@ -536,6 +538,7 @@ public final class TimelineQueryService: Sendable {
             COALESCE(acc.display_name, 'Local') AS account_display_name,
             COALESCE(a.title, '') AS title,
             a.url AS url,
+            a.preview_image_url AS preview_image_url,
             COALESCE(a.summary, '') AS summary,
             f.title AS feed_title,
             COALESCE(
@@ -610,7 +613,8 @@ public final class TimelineQueryService: Sendable {
             isStarred: isStarredInt == 1,
             accountID: rowAccountID,
             accountType: accountType,
-            accountDisplayName: accountDisplayName
+            accountDisplayName: accountDisplayName,
+            previewImageURL: (row["preview_image_url"] as String?).flatMap { EntryPreviewImageExtractor.safeURL($0) }
         )
     }
 

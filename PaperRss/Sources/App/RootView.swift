@@ -201,6 +201,11 @@ struct RootView: View {
     @State private var showsImporter = false
     @State private var showsExporter = false
     @State private var isZenMode = false
+    @AppStorage("timeline_view_style") private var timelineStyleRaw = TimelineViewStyle.list.rawValue
+    @AppStorage("timeline_image_preference") private var timelineImagePreferenceRaw = TimelineImagePreference.automatic.rawValue
+    @State private var isTimelineBrowsing = false
+    @State private var timelineKeyRequest: TimelineKeyRequest?
+    @StateObject private var timelineMemory = TimelinePresentationMemory()
     @State private var autoScrollTrigger = UUID()
     @State private var toastMessage: String?
     @State private var toastIcon: String = "checkmark.circle.fill"
@@ -248,6 +253,7 @@ struct RootView: View {
                     cancelNavigationConfirmation(dismissToast: true)
                 }
                 if let newID {
+                    if timelineStyle != .list && isTimelineBrowsing { openTimelineArticle(anchor: newID) }
                     scheduleNeighborPrefetch(from: newID)
                 }
             }
@@ -328,6 +334,10 @@ struct RootView: View {
         .focusedSceneValue(\.openPaperSettings, { showsSettings = true })
         .background(SettingsWindowRoute(open: { showsSettings = true }))
         .focusedSceneValue(\.paperReaderActive, !showsSettings)
+        .onAppear { isTimelineBrowsing = timelineStyle != .list }
+        .onChange(of: timelineShowsImages) { _, enabled in
+            if !enabled { Task { await store.thumbnailStore.cancelAll() } }
+        }
         .onAppear {
             if navigation.opensSettingsOnNextWindow {
                 navigation.opensSettingsOnNextWindow = false
@@ -381,7 +391,13 @@ struct RootView: View {
                 retainedUnreadIDs: $retainedEntryListIDs,
                 columnFocusState: columnFocusState,
                 autoScrollTrigger: autoScrollTrigger,
-                onFeedback: { showToast($0) }
+                onFeedback: { showToast($0) },
+                viewStyle: timelineStyle,
+                showsImages: timelineShowsImages && !showsSettings && !isZenMode,
+                isBrowsing: isTimelineBrowsing,
+                keyboardRequest: timelineKeyRequest,
+                presentation: timelineMemory,
+                onOpenEntry: { openTimelineArticle() }
             )
                 .ignoresSafeArea(),
             detail: detailContent
@@ -402,13 +418,17 @@ struct RootView: View {
                 onFocusAndScrollArticle: { focusAndScrollArticle() },
                 isZenMode: isZenMode,
                 onToggleZenMode: { withAnimation { isZenMode.toggle() } },
-                showsReaderCapsule: selectedEntryID != nil,
+                showsReaderCapsule: selectedEntryID != nil && (!isTimelineBrowsing || isZenMode),
                 readerCapsule: AnyView(readerToolbarCapsule),
                 onReaderShortcut: dispatchReaderShortcut,
                 onIncreaseFontSize: { store.increaseArticleFontSize() },
                 onDecreaseFontSize: { store.decreaseArticleFontSize() },
                 onResetFontSize: { store.resetArticleFontSize() },
-                onSelectFirstEntryIfNeeded: { selectFirstEntryIfNeeded() }
+                onSelectFirstEntryIfNeeded: { if !isTimelineBrowsing { selectFirstEntryIfNeeded() } },
+                timelineControls: AnyView(timelineControls),
+                isTimelineBrowsing: isTimelineBrowsing,
+                usesVisualTimeline: timelineStyle != .list,
+                onTimelineKey: { timelineKeyRequest = TimelineKeyRequest(keyCode: $0) }
             ),
             appearance: store.readerAppearance,
             appearanceMode: appearanceMode,
@@ -459,6 +479,51 @@ struct RootView: View {
         .tint(appearanceAccentColor)
         .accentColor(appearanceAccentColor)
         #endif
+    }
+
+    private var timelineStyle: TimelineViewStyle {
+        TimelineViewStyle(rawValue: timelineStyleRaw) ?? .list
+    }
+
+    private var timelineShowsImages: Bool {
+        (TimelineImagePreference(rawValue: timelineImagePreferenceRaw) ?? .automatic).showsImages(in: timelineStyle)
+    }
+
+    #if os(macOS)
+    private var timelineControls: some View {
+        TimelineViewControls(
+            style: timelineStyle, showsImages: timelineShowsImages,
+            showsReturn: timelineStyle != .list && !isTimelineBrowsing && !isZenMode,
+            onSelect: { style in
+                timelineMemory.prepareRestoration()
+                timelineStyleRaw = style.rawValue
+                isTimelineBrowsing = style != .list
+                isZenMode = false
+                // Existing installs do not gain unsolicited list requests.
+                // An explicit view choice opts in; an explicit off is retained.
+                if timelineImagePreferenceRaw == TimelineImagePreference.automatic.rawValue {
+                    timelineImagePreferenceRaw = TimelineImagePreference.enabled.rawValue
+                }
+            },
+            onToggleImages: { enabled in
+                timelineImagePreferenceRaw = (enabled ? TimelineImagePreference.enabled : .disabled).rawValue
+            },
+            onReturn: {
+                timelineMemory.prepareRestoration(anchor: timelineMemory.browseAnchor)
+                isTimelineBrowsing = true
+            }
+        )
+        .tint(appearanceAccentColor)
+        .environment(\.colorScheme, appearanceColorScheme)
+    }
+    #endif
+
+    private func openTimelineArticle(anchor: String? = nil) {
+        if isTimelineBrowsing {
+            timelineMemory.browseAnchor = timelineMemory.visibleAnchor
+            timelineMemory.prepareRestoration(anchor: anchor)
+        }
+        isTimelineBrowsing = false
     }
 
     private var currentSelection: SidebarSelection {
@@ -879,6 +944,7 @@ struct RootView: View {
     }
 
     private func focusAndScrollArticle() {
+        openTimelineArticle()
         if selectedEntryID == nil {
             selectedEntryID = store.fetchTimelinePage(scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly, limit: 1, offset: 0).first?.id
         }
@@ -990,6 +1056,8 @@ struct RootView: View {
                 cancelNavigationConfirmation(dismissToast: true)
                 selectedEntryID = nil
                 retainedEntryListIDs.removeAll()
+                timelineMemory.resetScope()
+                isTimelineBrowsing = timelineStyle != .list
                 selection = newSelection
             }
         )
@@ -2382,6 +2450,14 @@ private struct EntryListView: View {
     @ObservedObject var columnFocusState: PaperColumnFocusState
     var autoScrollTrigger: UUID
     var onFeedback: (String) -> Void = { _ in }
+    var viewStyle: TimelineViewStyle = .list
+    var showsImages = false
+    var isBrowsing = false
+    var keyboardRequest: TimelineKeyRequest?
+    @ObservedObject var presentation = TimelinePresentationMemory()
+    var onOpenEntry: () -> Void = {}
+    @State private var visualSelectionID: String?
+    @FocusState private var visualHasFocus: Bool
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
@@ -2527,7 +2603,8 @@ private struct EntryListView: View {
     @ViewBuilder
     private func entryRowView(for entry: EntryListItem) -> some View {
         let isSelected = selectedEntryID == entry.id
-        EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused)
+        EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused,
+                 showsImages: showsImages, thumbnailStore: store.thumbnailStore)
             .tag(entry.id)
             .contentShape(Rectangle())
             // 让主题选中卡片与列表边缘、相邻条目保持明确的呼吸空间；
@@ -2540,35 +2617,8 @@ private struct EntryListView: View {
                     palette: appearancePalette
                 )
             )
-            .contextMenu {
-                Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
-                    let nextRead = !entry.isRead
-                    store.markRead(entryID: entry.id, read: nextRead)
-                    patchEntryState(entryID: entry.id, isRead: nextRead)
-                }
-                Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
-                    let nextStarred = !entry.isStarred
-                    store.toggleStar(entryID: entry.id)
-                    patchEntryState(entryID: entry.id, isStarred: nextStarred)
-                }
-                Divider()
-                Button {
-                    Task {
-                        let ok = await store.refetchArticle(entryID: entry.id)
-                        onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
-                    }
-                } label: {
-                    Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
-                }
-                .disabled(store.activeRefetchEntryIDs.contains(entry.id))
-                Divider()
-                Button {
-                    AppInfo.copyToClipboard(entry.id)
-                    onFeedback(I18N.shared.localized("已复制文章 ID"))
-                } label: {
-                    Label(I18N.shared.localized("复制文章 ID"), systemImage: "doc.on.doc")
-                }
-            }
+            .background(rowFrame(entry.id))
+            .contextMenu { entryContextMenu(entry) }
             .onAppear {
                 if entry.id == loadedEntries.last?.id {
                     loadNextPage()
@@ -2576,12 +2626,69 @@ private struct EntryListView: View {
             }
     }
 
-    var body: some View {
-        ScrollViewReader { proxy in
+    @ViewBuilder
+    private func entryContextMenu(_ entry: EntryListItem) -> some View {
+        Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
+            let nextRead = !entry.isRead
+            store.markRead(entryID: entry.id, read: nextRead)
+            patchEntryState(entryID: entry.id, isRead: nextRead)
+        }
+        Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
+            let nextStarred = !entry.isStarred
+            store.toggleStar(entryID: entry.id)
+            patchEntryState(entryID: entry.id, isStarred: nextStarred)
+        }
+        Divider()
+        Button {
+            Task {
+                let ok = await store.refetchArticle(entryID: entry.id)
+                onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
+            }
+        } label: {
+            Label(I18N.shared.localized("重新拉取正文"), systemImage: "arrow.clockwise")
+        }
+        .disabled(store.activeRefetchEntryIDs.contains(entry.id))
+        Divider()
+        Button {
+            AppInfo.copyToClipboard(entry.id)
+            onFeedback(I18N.shared.localized("已复制文章 ID"))
+        } label: {
+            Label(I18N.shared.localized("复制文章 ID"), systemImage: "doc.on.doc")
+        }
+    }
+
+    private func rowFrame(_ id: String) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: TimelineRowFrames.self,
+                value: [id: geometry.frame(in: .named("paper-timeline"))])
+        }
+    }
+
+    private func visualEntry(_ entry: EntryListItem, width: CGFloat) -> some View {
+        Button {
+            onOpenEntry()
+            visualSelectionID = entry.id
+            entryListSelection.wrappedValue = entry.id
+        } label: {
+            TimelineArticleTile(entry: entry, style: viewStyle,
+                isLead: viewStyle == .magazine && entry.id == loadedEntries.first?.id,
+                isSelected: (visualSelectionID ?? selectedEntryID) == entry.id,
+                width: width, showsImages: showsImages, thumbnailStore: store.thumbnailStore)
+        }
+        .buttonStyle(.plain)
+        .id(entry.id)
+        .background(rowFrame(entry.id))
+        .contextMenu { entryContextMenu(entry) }
+        .onAppear { if entry.id == loadedEntries.last?.id { loadNextPage() } }
+    }
+
+    private func cardColumnCount(_ width: CGFloat) -> Int { max(1, Int((width - 14) / 258)) }
+
+    @ViewBuilder
+    private func timelineContent(width: CGFloat) -> some View {
+        if viewStyle == .list {
             List(selection: entryListSelection) {
-                ForEach(loadedEntries) { entry in
-                    entryRowView(for: entry)
-                }
+                ForEach(loadedEntries) { entry in entryRowView(for: entry) }
             }
             #if os(macOS)
             .listStyle(.inset(alternatesRowBackgrounds: false))
@@ -2590,6 +2697,57 @@ private struct EntryListView: View {
             .listStyle(.inset)
             #endif
             .scrollContentBackground(.hidden)
+        } else {
+            ScrollView {
+                if viewStyle == .cards {
+                    let count = cardColumnCount(width)
+                    let tileWidth = max(1, (width - 32 - CGFloat(count - 1) * 18) / CGFloat(count))
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 18), count: count), spacing: 18) {
+                        ForEach(loadedEntries) { entry in visualEntry(entry, width: tileWidth) }
+                    }
+                    .padding(16)
+                } else {
+                    LazyVStack(spacing: 14) {
+                        ForEach(loadedEntries) { entry in
+                            visualEntry(entry, width: max(1, width - 32))
+                            Divider().padding(.horizontal, 14).accessibilityHidden(true)
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .scrollIndicators(.never)
+            .focusable()
+            .focused($visualHasFocus)
+            .focusEffectDisabled()
+            .onAppear { visualHasFocus = isListFocused }
+            .onChange(of: isListFocused) { _, focused in visualHasFocus = focused }
+            .accessibilityIdentifier("timeline.visual.\(viewStyle.rawValue)")
+        }
+    }
+
+    private func handleTimelineKey(_ request: TimelineKeyRequest, proxy: ScrollViewProxy, width: CGFloat) {
+        guard viewStyle != .list, !loadedEntries.isEmpty else { return }
+        let id = visualSelectionID ?? selectedEntryID
+        if request.keyCode == 125 || request.keyCode == 126 {
+            let step = viewStyle == .cards ? cardColumnCount(width) : 1
+            let current = id.flatMap { id in loadedEntries.firstIndex { $0.id == id } }
+            let next = current.map { $0 + (request.keyCode == 125 ? step : -step) } ?? 0
+            let index = min(loadedEntries.count - 1, max(0, next))
+            visualSelectionID = loadedEntries[index].id
+            proxy.scrollTo(loadedEntries[index].id, anchor: .center)
+            if index >= loadedEntries.count - step { loadNextPage() }
+        } else if [36, 49, 76].contains(request.keyCode) {
+            let target = id.flatMap { id in loadedEntries.first { $0.id == id } } ?? loadedEntries[0]
+            onOpenEntry()
+            entryListSelection.wrappedValue = target.id
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+        ScrollViewReader { proxy in
+            timelineContent(width: geometry.size.width)
             .background {
                 AppearanceSurface(
                     role: .articleList,
@@ -2604,12 +2762,35 @@ private struct EntryListView: View {
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
+            .onPreferenceChange(TimelineRowFrames.self) { frames in
+                guard !presentation.isRestoring else { return }
+                let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
+                if let first = frames.filter({ $0.value.intersects(viewport) }).min(by: { $0.value.minY < $1.value.minY }) {
+                    presentation.visibleAnchor = first.key
+                }
+            }
+            .task(id: presentation.restorationID) {
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                if let anchor = presentation.restoreAnchor, loadedEntries.contains(where: { $0.id == anchor }) {
+                    proxy.scrollTo(anchor, anchor: .top)
+                }
+                presentation.finishRestoration()
+            }
+            .task(id: showsImages ? loadedEntries.map(\.id) : []) {
+                guard showsImages else { return }
+                await store.prepareTimelinePreviews(entryIDs: loadedEntries.map(\.id))
+            }
+            .onChange(of: keyboardRequest) { _, request in
+                if let request { handleTimelineKey(request, proxy: proxy, width: geometry.size.width) }
+            }
             .onAppear {
                 if loadedEntries.isEmpty {
                     loadInitialPage()
                 }
             }
             .onChange(of: selection) { _, _ in
+                presentation.resetScope()
+                visualSelectionID = nil
                 retainedUnreadIDs.removeAll()
                 loadInitialPage()
             }
@@ -2621,6 +2802,7 @@ private struct EntryListView: View {
                     if timelineScope == .unread || unreadOnly {
                         retainedUnreadIDs.insert(newID)
                     }
+                    visualSelectionID = newID
                     patchEntryState(entryID: newID, isRead: true)
                 }
             }
@@ -2684,6 +2866,8 @@ private struct EntryListView: View {
                     .accessibilityIdentifier("articles.empty")
                 }
             }
+        }
+        .coordinateSpace(name: "paper-timeline")
         }
     }
 
@@ -2877,6 +3061,9 @@ private struct EntryRow: View {
     let entry: EntryListItem
     let isSelected: Bool
     let isFocused: Bool
+    var showsImages = false
+    var thumbnailStore: ArticleThumbnailStore?
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.paperAppearancePalette) private var appearancePalette
 
     private func formattedDate(_ date: Date) -> String {
@@ -2954,6 +3141,11 @@ private struct EntryRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(secondaryForegroundColor)
+            }
+            if showsImages, let thumbnailStore, let url = entry.previewImageURL {
+                ArticleThumbnailView(request: .init(accountID: entry.accountID, url: url, pixelSize: Int(68 * displayScale)),
+                    store: thumbnailStore, width: 68, height: 54)
+                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 6)

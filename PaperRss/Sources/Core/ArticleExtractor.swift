@@ -130,7 +130,7 @@ public enum ArticleExtractor {
         return bestURL
     }
 
-    private static func parseAttributesMap(from source: String) -> [String: String] {
+    static func parseAttributesMap(from source: String) -> [String: String] {
         guard let expression = try? NSRegularExpression(pattern: "(?is)([a-z][a-z0-9:-]*)(?:\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+)))?") else { return [:] }
         let range = NSRange(source.startIndex..., in: source)
         var map: [String: String] = [:]
@@ -1198,7 +1198,7 @@ public enum ArticleExtractor {
         })
     }
 
-    private static func safeRemoteURL(_ rawValue: String, baseURL: URL?) -> URL? {
+    static func safeRemoteURL(_ rawValue: String, baseURL: URL?) -> URL? {
         let normalized = htmlEntityDecoded(rawValue)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty,
