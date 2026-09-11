@@ -18,9 +18,9 @@ const appcastScript = join(root, 'scripts/sparkle/appcast.mjs');
 async function run(command, args, options = {}) {
   return execFile(command, args, {
     cwd: root,
-    env: { ...process.env, ...options.env },
     maxBuffer: 1024 * 1024,
     ...options,
+    env: { ...process.env, ...options.env },
   });
 }
 

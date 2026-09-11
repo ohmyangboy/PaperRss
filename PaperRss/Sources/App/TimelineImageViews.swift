@@ -225,7 +225,7 @@ struct TimelineViewControls: View {
                         }
                     }
                     Divider()
-                    Toggle(I18N.localized("显示文章配图"), isOn: Binding(get: { showsImages }, set: onToggleImages))
+                    Toggle(I18N.localized("显示文章配图"), isOn: Binding(get: { showsImages }, set: { value in onToggleImages(value) }))
                     Text(I18N.localized("图片按需从原网站加载，不会自动抓取原文网页。"))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

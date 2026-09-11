@@ -18,7 +18,8 @@ final class AppFeatureRegressionTests: XCTestCase {
     var store: AppStore!
 
     override func setUp() async throws {
-        try await super.setUp()
+        // XCTestCase's default async setup is a no-op. Do not send this
+        // MainActor-isolated fixture to its nonisolated async superclass.
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PaperRssFeatureRegression-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -40,7 +41,6 @@ final class AppFeatureRegressionTests: XCTestCase {
         if let tempDir {
             try? FileManager.default.removeItem(at: tempDir)
         }
-        try await super.tearDown()
     }
 
     // MARK: - 非阻断式瞬时提示 (toast) 冷却去重回归

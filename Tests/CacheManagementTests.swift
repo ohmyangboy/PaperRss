@@ -12,7 +12,8 @@ final class CacheManagementTests: XCTestCase {
     var store: AppStore!
 
     override func setUp() async throws {
-        try await super.setUp()
+        // XCTestCase's default async setup is a no-op. Do not send this
+        // MainActor-isolated fixture to its nonisolated async superclass.
         store = AppStore(testDatabase: AppDatabase.empty, feedFetcher: { _ in
             FeedFetchResult.notModified(etag: nil, lastModified: nil)
         })
@@ -20,7 +21,6 @@ final class CacheManagementTests: XCTestCase {
 
     override func tearDown() async throws {
         store = nil
-        try await super.tearDown()
     }
 
     // MARK: - Helpers
