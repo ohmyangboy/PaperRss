@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: apply-preview-implementation
   cancel-in-progress: false
@@ -23,39 +27,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
-      - name: Verify reviewed transport and stage source changes
-        shell: bash
+      - name: Apply checksum-verified test fixture corrections
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          mkdir -p "$RUNNER_TEMP/preview-results"
-          python3 - <<'PY'
-          import base64, gzip, hashlib, pathlib, os
-          root = pathlib.Path('.ci/preview-patch')
-          parts = [p.read_text().strip() for p in sorted(root.glob('*.b64'))]
-          assert len(parts) == 4
-          # Repair text-transport transcription; the decoded source is accepted
-          # only if it matches the independently computed reviewed SHA-256.
-          parts[1] = parts[1].replace('tbXTjj94', 'tbXTj94').replace('NWfMqsTht', 'NWfMqsNht').replace('OO7eH6Fqgzp', 'OO7eH6jgzp').replace('BfZZfXVhtt', 'BfZfXVhtt')
-          patch = gzip.decompress(base64.b64decode(''.join(parts), validate=True))
-          digest = hashlib.sha256(patch).hexdigest()
-          assert digest == '4547ffe8cb5c898922784512a28cedc38b0bf731e50efdb5ebbfd9ca78a5e690', digest
-          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'preview-feature.patch'
-          path.write_bytes(patch)
-          print('Reviewed patch SHA-256:', digest)
-          PY
-          git apply --check "$RUNNER_TEMP/preview-feature.patch"
-          git apply --index "$RUNNER_TEMP/preview-feature.patch"
+          echo '9ddf4b765187bb01de9b46f629bd8ed42799f4e4e004139dab89e41883c0e6c4  .ci/preview-patch/fixes.patch' | shasum -a 256 -c -
+          git apply --check .ci/preview-patch/fixes.patch
+          git apply --index .ci/preview-patch/fixes.patch
+          git rm .ci/preview-patch/fixes.patch
           git diff --cached --check
-          git diff --cached --stat
-      - name: Commit implementation to feature branch (never main)
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF_NAME" = feature/issue-32-18-image-views
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: add article preview images and persistent list magazine card views'
+          git commit -m 'test: repair async fixture isolation and preserve child process environment'
           git push origin HEAD:refs/heads/feature/issue-32-18-image-views
+          mkdir -p "$RUNNER_TEMP/preview-results"
           git rev-parse HEAD | tee "$RUNNER_TEMP/preview-results/verified-commit.txt"
       - uses: actions/checkout@v4
         with:
@@ -81,16 +66,23 @@ jobs:
           git config --global url."file://$GITHUB_WORKSPACE/.ci-deps/swift-cmark/.git".insteadOf https://github.com/swiftlang/swift-cmark.git
           swift package resolve
       - name: Core regression
-        run: ./scripts/verify.sh --core 2>&1 | tee "$RUNNER_TEMP/preview-results/core.log"
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --core 2>&1 | tee "$RUNNER_TEMP/preview-results/core.log"
       - name: Feature regression
         if: ${{ !cancelled() }}
-        run: ./scripts/verify.sh --feature 2>&1 | tee "$RUNNER_TEMP/preview-results/feature.log"
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --feature 2>&1 | tee "$RUNNER_TEMP/preview-results/feature.log"
       - name: Reader and shortcut regression
         if: ${{ !cancelled() }}
-        run: ./scripts/verify.sh --web 2>&1 | tee "$RUNNER_TEMP/preview-results/web.log"
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --web 2>&1 | tee "$RUNNER_TEMP/preview-results/web.log"
       - name: Unsigned macOS host build
         if: ${{ !cancelled() }}
         run: |
+          set -euo pipefail
           xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/PaperRss-build" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/preview-results/xcode.log"
       - name: Archive source and verification logs
         if: always()
