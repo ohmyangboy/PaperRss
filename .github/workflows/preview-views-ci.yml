@@ -1,0 +1,62 @@
+name: Preview Views Verification
+
+on:
+  push:
+    branches:
+      - feature/issue-32-18-image-views
+  pull_request:
+    paths:
+      - 'PaperRss/Sources/**'
+      - 'PaperRss/Resources/Localization/**'
+      - 'Tests/**'
+      - 'AppTests/**'
+      - '.github/workflows/preview-views-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-views-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive exact reviewed source
+        run: git archive --format=tar.gz --output=source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.sha }}
+          path: source.tar.gz
+          retention-days: 3
+          compression-level: 0
+  macos-verification:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Core and integration regression
+        run: ./scripts/verify.sh --core
+      - name: User-visible feature regression
+        if: ${{ !cancelled() }}
+        run: ./scripts/verify.sh --feature
+      - name: Reader and shortcut regression
+        if: ${{ !cancelled() }}
+        run: ./scripts/verify.sh --web
+      - name: macOS host build (no signing or release)
+        if: ${{ !cancelled() }}
+        run: |
+          xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/PaperRss-build" CODE_SIGNING_ALLOWED=NO build
+      - name: Whitespace check
+        run: git diff --check
