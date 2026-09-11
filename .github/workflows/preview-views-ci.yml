@@ -2,39 +2,28 @@ name: Preview Views Verification
 
 on:
   push:
-    branches:
-      - feature/issue-32-18-image-views
+    branches: [feature/issue-32-18-image-views]
   pull_request:
     paths:
       - 'PaperRss/Sources/**'
       - 'PaperRss/Resources/Localization/**'
       - 'Tests/**'
       - 'AppTests/**'
+      - 'scripts/verify.sh'
       - '.github/workflows/preview-views-ci.yml'
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: preview-views-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  source-snapshot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Archive exact reviewed source
-        run: git archive --format=tar.gz --output=source.tar.gz HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: source-${{ github.sha }}
-          path: source.tar.gz
-          retention-days: 3
-          compression-level: 0
   macos-verification:
     runs-on: macos-15
     timeout-minutes: 35
@@ -42,6 +31,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Record source under test
+        run: |
+          mkdir -p "$RUNNER_TEMP/preview-results"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/preview-results/verified-commit.txt"
+      # Pin shallow mirrors to the revisions already in Package.resolved;
+      # avoid transient failures cloning the full Markdown/CMark histories.
       - uses: actions/checkout@v4
         with:
           repository: swiftlang/swift-markdown
@@ -54,8 +49,9 @@ jobs:
           ref: '0.8.0'
           path: .ci-deps/swift-cmark
           persist-credentials: false
-      - name: Verify immutable dependency revisions and use local transport
+      - name: Verify immutable dependency revisions and resolve
         run: |
+          set -euo pipefail
           xcodebuild -version
           swift --version
           test "$(git -C .ci-deps/swift-markdown rev-parse HEAD)" = 3c6f9523da3a1ec2fd829673e472d95b8097a3b8
@@ -65,16 +61,36 @@ jobs:
           git config --global url."file://$GITHUB_WORKSPACE/.ci-deps/swift-cmark/.git".insteadOf https://github.com/swiftlang/swift-cmark.git
           swift package resolve
       - name: Core and integration regression
-        run: ./scripts/verify.sh --core
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --core 2>&1 | tee "$RUNNER_TEMP/preview-results/core.log"
       - name: User-visible feature regression
         if: ${{ !cancelled() }}
-        run: ./scripts/verify.sh --feature
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --feature 2>&1 | tee "$RUNNER_TEMP/preview-results/feature.log"
       - name: Reader and shortcut regression
         if: ${{ !cancelled() }}
-        run: ./scripts/verify.sh --web
+        run: |
+          set -euo pipefail
+          ./scripts/verify.sh --web 2>&1 | tee "$RUNNER_TEMP/preview-results/web.log"
       - name: macOS host build (no signing or release)
         if: ${{ !cancelled() }}
         run: |
-          xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/PaperRss-build" CODE_SIGNING_ALLOWED=NO build
+          set -euo pipefail
+          xcodebuild -project PaperRss.xcodeproj -scheme PaperRss -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/PaperRss-build" CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/preview-results/xcode.log"
       - name: Whitespace check
+        if: ${{ !cancelled() }}
         run: git diff --check
+      - name: Archive exact source and verification boundary
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/preview-results"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/preview-results/source.tar.gz" HEAD
+          printf '%s\n' 'Manual UI verification required. CI does not replace native interactive acceptance.' > "$RUNNER_TEMP/preview-results/manual-ui.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preview-verification-${{ github.sha }}
+          path: ${{ runner.temp }}/preview-results
+          retention-days: 7
