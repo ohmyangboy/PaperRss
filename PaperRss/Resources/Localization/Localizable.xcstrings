@@ -1,6 +1,18 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "页面" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page"}}}},
+    "下一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Next page"}}}},
+    "上一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Previous page"}}}},
+    "翻页方式" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page navigation"}}}},
+    "杂志编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Magazine arrangement"}}}},
+    "折叠翻页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Fold pages"}}}},
+    "滚动浏览" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Continuous scroll"}}}},
+    "本期选读" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "In this edition"}}}},
+    "按时间" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Chronological"}}}},
+    "按文件夹" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "By folder"}}}},
+    "按订阅源" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "By source"}}}},
+    "智能编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Balanced edition"}}}},
     "打开文章" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Open article" } },

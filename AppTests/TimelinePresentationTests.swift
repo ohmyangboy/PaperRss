@@ -196,21 +196,62 @@ final class TimelinePresentationTests: XCTestCase {
         XCTAssertEqual(split.splitViewItems.map(\.isCollapsed), [true, true, false])
     }
 
-    func testReaderHasBalancedAccessoriesAndBackIsOnLeadingEdge() throws {
-        let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: false), appearance: .default,
-            appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
-        let toolbar = NSToolbar(identifier: "ReaderAccessoryTest")
-        let order = coordinator.toolbarItemOrder(sidebarCollapsed: false)
-        let reader = try XCTUnwrap(order.firstIndex(of: .paperReaderCapsule))
-        XCTAssertEqual(Array(order[(reader - 2)...]), [.paperTimelineBack, .flexibleSpace,
-                                                     .paperReaderCapsule, .flexibleSpace, .paperTimelineControls])
-        XCTAssertFalse(order.contains(.paperTimelineTracker))
-        XCTAssertFalse(order.contains(.paperEntryListTitle))
-        let back = try XCTUnwrap(coordinator.toolbar(toolbar, itemForItemIdentifier: .paperTimelineBack, willBeInsertedIntoToolbar: true)?.view)
-        let control = try XCTUnwrap(coordinator.toolbar(toolbar, itemForItemIdentifier: .paperTimelineControls, willBeInsertedIntoToolbar: true)?.view)
-        XCTAssertEqual(back.frame.width, control.frame.width, accuracy: 0.001)
-        let button = try XCTUnwrap(back.subviews.first as? NSButton)
-        XCTAssertFalse(button.isHidden)
-        XCTAssertEqual(button.accessibilityIdentifier(), "timeline.returnToBrowse")
+
+    func testVisualToolbarHasOneCentralClusterWithBackBeforeScopeActions() throws {
+        for browsing in [true, false] {
+            let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: browsing), appearance: .default,
+                appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
+            let order = coordinator.toolbarItemOrder(sidebarCollapsed: false)
+            let springs = order.indices.filter { order[$0] == .flexibleSpace }
+            XCTAssertEqual(springs.count, 2, "A third spring moves the scope actions off centre")
+            let mark = try XCTUnwrap(order.firstIndex(of: .paperMarkAllRead))
+            XCTAssertTrue(springs[0] < mark && mark < springs[1])
+            XCTAssertFalse(order.contains(.paperTimelineTracker))
+            if !browsing {
+                let back = try XCTUnwrap(order.firstIndex(of: .paperTimelineBack))
+                XCTAssertTrue(springs[0] < back && back < mark)
+                XCTAssertEqual(order[back + 1], .space, "Return is a standalone button, not fused into the filter capsule")
+            }
+        }
+    }
+
+    func testMasonryFillsTheShorterColumnAndNeverOverlaps() {
+        for columns in 1...3 {
+            let heights: [CGFloat] = [480, 130, 118, 124, 80, 270, 170, 95, 320]
+            let spans = columns == 3 ? [2,1,1,1,1,1,1,1,1] : Array(repeating: 1, count: heights.count)
+            let frames = MagazineMasonryLayout.frames(width: 1100, columns: columns, spacing: 20,
+                                                      heights: heights, spans: spans)
+            XCTAssertEqual(frames.count, heights.count)
+            for i in frames.indices {
+                XCTAssertEqual(frames[i].height, heights[i])
+                XCTAssertGreaterThanOrEqual(frames[i].minX, 0)
+                XCTAssertLessThanOrEqual(frames[i].maxX, 1100.01)
+                for j in frames.indices where i != j { XCTAssertFalse(frames[i].intersects(frames[j])) }
+            }
+            if columns == 3 {
+                XCTAssertEqual(frames[1].minY, 0)
+                XCTAssertEqual(frames[2].minY, 150)
+                XCTAssertEqual(frames[3].minY, 288, "A third short story fills the former blank space beside the lead")
+            }
+        }
+    }
+
+    func testTextOnlyMasonryDoesNotAlignRowsToTheirTallestNeighbour() {
+        let frames = MagazineMasonryLayout.frames(width: 900, columns: 3, spacing: 20,
+            heights: [90, 250, 140, 100, 75, 100], spans: Array(repeating: 1, count: 6))
+        XCTAssertEqual(frames[3].minY, 110)
+        XCTAssertEqual(frames[3].minX, 0)
+        XCTAssertLessThan(frames[3].minY, frames[1].maxY)
+    }
+
+    func testMagazineAnchorSurvivesArticleRouteButResetsWithScope() {
+        let memory = TimelinePresentationMemory()
+        memory.magazineAnchor = "article-30"
+        memory.browseAnchor = memory.magazineAnchor
+        memory.prepareRestoration(anchor: memory.browseAnchor)
+        XCTAssertEqual(memory.magazineAnchor, "article-30")
+        XCTAssertEqual(memory.restoreAnchor, "article-30")
+        memory.resetScope()
+        XCTAssertNil(memory.magazineAnchor)
     }
 }

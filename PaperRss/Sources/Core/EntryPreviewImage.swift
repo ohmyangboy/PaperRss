@@ -1,9 +1,9 @@
 import Foundation
 
-/// A completed, network-free extraction. A nil URL with revision 1 means “no
+/// A completed, network-free extraction. A nil URL with a completed revision means “no
 /// usable image”, not “unprocessed”. Network failures belong to the byte cache.
 public struct EntryPreviewImage: Sendable, Equatable {
-    public static let currentRevision = 1
+    public static let currentRevision = 2
     public let url: URL?
     public let source: String?
     public let inputHash: String
@@ -48,8 +48,33 @@ public enum EntryPreviewImageExtractor {
             selected = url
             source = "content"
         }
+        // A feed may advertise a 9 MB original enclosure while its HTML already
+        // provides the same photograph through a bounded CDN resize. Prefer that
+        // supplied variant, never manufacture a proxy URL or fetch the webpage.
+        if let original = selected,
+           let responsive = [descriptionHTML, contentHTML].compactMap({ $0 }).compactMap({
+               firstImage(in: $0, baseURL: baseURL)
+           }).first(where: { isSizedVariant($0, of: original) }) {
+            selected = responsive
+            source = "responsive-variant"
+        }
         return EntryPreviewImage(url: selected, source: source, inputHash: hash,
                                  revision: EntryPreviewImage.currentRevision)
+    }
+
+    static func isSizedVariant(_ candidate: URL, of original: URL) -> Bool {
+        guard candidate != original, candidate.scheme == original.scheme,
+              candidate.host == original.host, candidate.port == original.port,
+              candidate.query == original.query else { return false }
+        let prefix = "/cdn-cgi/image/"
+        guard candidate.path.hasPrefix(prefix) else { return false }
+        let remainder = String(candidate.path.dropFirst(prefix.count))
+        guard let slash = remainder.firstIndex(of: "/") else { return false }
+        let options = remainder[..<slash].split(separator: ",")
+        let width = options.first(where: { $0.hasPrefix("width=") })
+            .flatMap { Int($0.dropFirst(6)) }
+        guard let width, (64...4096).contains(width) else { return false }
+        return String(remainder[slash...]) == original.path
     }
 
     public static func safeURL(_ raw: String, baseURL: URL? = nil) -> URL? {

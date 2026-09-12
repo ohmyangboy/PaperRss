@@ -14,6 +14,8 @@ public actor ArticlePreviewBackfill {
         let baseURL: URL?
         let updatedAt: Double
         let revision: Int
+        let previewURL: String?
+        let previewSource: String?
     }
 
     @discardableResult
@@ -25,7 +27,7 @@ public actor ArticlePreviewBackfill {
         let snapshots: [Snapshot] = try await database.readAsync { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT a.item_id, a.content_html, a.url, a.content_updated_at,
-                       a.preview_extraction_revision,
+                       a.preview_extraction_revision, a.preview_image_url, a.preview_image_source,
                        COALESCE(NULLIF(a.url, ''), f.site_url, f.feed_url) AS base_url
                 FROM articles a JOIN items i ON i.id = a.item_id
                 JOIN feeds f ON f.id = i.feed_id
@@ -35,11 +37,19 @@ public actor ArticlePreviewBackfill {
             return rows.map { row in
                 Snapshot(id: row["item_id"], html: row["content_html"], url: row["url"],
                          baseURL: (row["base_url"] as String?).flatMap { URL(string: $0) },
-                         updatedAt: row["content_updated_at"], revision: row["preview_extraction_revision"])
+                         updatedAt: row["content_updated_at"], revision: row["preview_extraction_revision"],
+                         previewURL: row["preview_image_url"], previewSource: row["preview_image_source"])
             }
         }
         let results = snapshots.map { snapshot in
-            (snapshot, EntryPreviewImageExtractor.extract(contentHTML: snapshot.html, baseURL: snapshot.baseURL))
+            // Preserve an explicit cover across extraction revisions, including
+            // when retention has removed the body. Only a verified same-image
+            // responsive variant is allowed to replace it.
+            let explicit = snapshot.previewURL.map {
+                [EntryPreviewImageExtractor.Candidate($0, source: snapshot.previewSource ?? "stored")]
+            } ?? []
+            return (snapshot, EntryPreviewImageExtractor.extract(explicit: explicit,
+                contentHTML: snapshot.html, baseURL: snapshot.baseURL))
         }
         try Task.checkCancellation()
         return try await database.writeAsync { db in

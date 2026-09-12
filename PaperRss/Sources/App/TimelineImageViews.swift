@@ -9,6 +9,7 @@ import PaperRssCore
 final class TimelinePresentationMemory: ObservableObject {
     var visibleAnchor: String?
     var browseAnchor: String?
+    @Published var magazineAnchor: String?
     private(set) var restoreAnchor: String?
     private(set) var isRestoring = false
     @Published private(set) var restorationID = UUID()
@@ -22,6 +23,7 @@ final class TimelinePresentationMemory: ObservableObject {
     func resetScope() {
         visibleAnchor = nil
         browseAnchor = nil
+        magazineAnchor = nil
         restoreAnchor = nil
         isRestoring = false
     }
@@ -170,7 +172,13 @@ struct TimelineArticleTile: View {
     private var isCompact: Bool { layout == .compact || layout == .supporting }
     private var contentWidth: CGFloat { max(1, width - 24) }
     private var imageWidth: CGFloat { isCompact ? min(132, contentWidth * 0.32) : contentWidth }
-    private var imageHeight: CGFloat { min(isLead ? 300 : 180, imageWidth * 9 / 16) }
+    private var imageHeight: CGFloat { min(isLead ? 260 : 180, imageWidth * 9 / 16) }
+    private var isTextNote: Bool { (!showsImages || entry.previewImageURL == nil) && !entry.isSummaryVisible }
+    private var titleSize: CGFloat {
+        if isLead { return entry.title.count > 110 ? 23 : 27 }
+        if isTextNote { return entry.title.count < 90 ? 22 : 19 }
+        return 18
+    }
 
     var body: some View {
         Group {
@@ -225,7 +233,7 @@ struct TimelineArticleTile: View {
             }
             .font(.caption).foregroundStyle(Color(paperHex: palette.mutedHex))
             Text(entry.title)
-                .font(.system(size: isLead ? 25 : 18, weight: entry.isRead ? .regular : .semibold, design: .serif))
+                .font(.system(size: titleSize, weight: entry.isRead ? .regular : .semibold, design: .serif))
                 .foregroundStyle(Color(paperHex: palette.inkHex))
                 .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -253,6 +261,8 @@ struct TimelineViewControls: View {
     let onSelect: (TimelineViewStyle) -> Void
     let onToggleImages: (Bool) -> Void
     @State private var showsPopover = false
+    @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
+    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
 
     var body: some View {
         HStack(spacing: 5) {
@@ -288,6 +298,20 @@ struct TimelineViewControls: View {
                             .accessibilityAddTraits(style == option ? [.isSelected] : [])
                             .accessibilityIdentifier("timeline.style.\(option.rawValue)")
                         }
+                    }
+                    if style == .magazine {
+                        Divider()
+                        Picker(I18N.localized("杂志编排"), selection: $arrangementRaw) {
+                            ForEach(MagazineArrangement.allCases, id: \.rawValue) { option in
+                                Text(option.title).tag(option.rawValue)
+                            }
+                        }
+                        Picker(I18N.localized("翻页方式"), selection: $turningRaw) {
+                            ForEach(MagazineTurning.allCases, id: \.rawValue) { option in
+                                Text(option.title).tag(option.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
                     Divider()
                     Toggle(I18N.localized("显示文章配图"), isOn: Binding(get: { showsImages }, set: { value in onToggleImages(value) }))

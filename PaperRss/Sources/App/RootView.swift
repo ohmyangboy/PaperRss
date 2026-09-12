@@ -432,6 +432,7 @@ struct RootView: View {
                 timelineControls: AnyView(timelineControls),
                 isTimelineBrowsing: isTimelineBrowsing,
                 usesVisualTimeline: timelineStyle != .list,
+                usesMagazineTimeline: timelineStyle == .magazine,
                 onReturnToTimeline: returnToTimeline,
                 onTimelineKey: { timelineKeyRequest = TimelineKeyRequest(keyCode: $0) }
             ),
@@ -520,7 +521,9 @@ struct RootView: View {
 
     private func openTimelineArticle(anchor: String? = nil) {
         if isTimelineBrowsing {
-            timelineMemory.browseAnchor = timelineMemory.visibleAnchor ?? anchor
+            timelineMemory.browseAnchor = timelineStyle == .magazine
+                ? (timelineMemory.magazineAnchor ?? timelineMemory.visibleAnchor ?? anchor)
+                : (timelineMemory.visibleAnchor ?? anchor)
         }
         isTimelineBrowsing = false
     }
@@ -2689,33 +2692,11 @@ private struct EntryListView: View {
         .id(entry.id)
         .background(rowFrame(entry.id))
         .contextMenu { entryContextMenu(entry) }
-        .onAppear { if entry.id == loadedEntries.last?.id { loadNextPage() } }
+        .onAppear { if viewStyle != .magazine && entry.id == loadedEntries.last?.id { loadNextPage() } }
     }
 
     private func cardColumnCount(_ width: CGFloat) -> Int {
         TimelineLayoutMetrics(availableWidth: width).galleryColumns
-    }
-
-    @ViewBuilder
-    private func magazineContent(metrics: TimelineLayoutMetrics) -> some View {
-        if metrics.usesEditorialHeader, loadedEntries.count >= 3 {
-            // Keep chronological order: first article, next two, then the gallery.
-            HStack(alignment: .top, spacing: TimelineLayoutMetrics.spacing) {
-                visualEntry(loadedEntries[0], width: metrics.featureColumnWidth, layout: .lead)
-                VStack(alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
-                    ForEach(Array(loadedEntries.dropFirst().prefix(2))) { entry in
-                        visualEntry(entry, width: metrics.featureColumnWidth, layout: .supporting)
-                    }
-                }
-            }
-            galleryContent(Array(loadedEntries.dropFirst(3)), metrics: metrics)
-        } else {
-            // Small collections and narrow windows have no empty feature slots.
-            ForEach(loadedEntries) { entry in
-                visualEntry(entry, width: metrics.contentWidth,
-                            layout: entry.id == loadedEntries.first?.id ? .lead : .compact)
-            }
-        }
     }
 
     private func galleryContent(_ entries: [EntryListItem], metrics: TimelineLayoutMetrics) -> some View {
@@ -2730,7 +2711,7 @@ private struct EntryListView: View {
     }
 
     @ViewBuilder
-    private func timelineContent(width: CGFloat) -> some View {
+    private func timelineContent(width: CGFloat, height: CGFloat) -> some View {
         if viewStyle == .list {
             List(selection: entryListSelection) {
                 ForEach(loadedEntries) { entry in entryRowView(for: entry) }
@@ -2742,15 +2723,25 @@ private struct EntryListView: View {
             .listStyle(.inset)
             #endif
             .scrollContentBackground(.hidden)
+        } else if viewStyle == .magazine {
+            MagazineBrowserView(entries: loadedEntries,
+                folders: Dictionary(store.feeds.map { ($0.id, $0.folder ?? "") }, uniquingKeysWith: { first, _ in first }),
+                availableSize: CGSize(width: width, height: max(0, height - 52)),
+                showsImages: showsImages, isBrowsing: isBrowsing, hasMore: hasMore,
+                selectedID: visualSelectionID ?? selectedEntryID, keyboardRequest: keyboardRequest,
+                memory: presentation, onHighlight: { visualSelectionID = $0 },
+                onOpen: { entry in onOpenEntry(); entryListSelection.wrappedValue = entry.id },
+                onNeedMore: loadNextPage,
+                tile: { entry, width, layout in visualEntry(entry, width: width, layout: layout) })
+                .focusable().focused($visualHasFocus).focusEffectDisabled()
+                .onAppear { visualHasFocus = isListFocused }
+                .onChange(of: isListFocused) { _, focused in visualHasFocus = focused }
+                .accessibilityIdentifier("timeline.visual.magazine")
         } else {
             let metrics = TimelineLayoutMetrics(availableWidth: width)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
-                    if viewStyle == .cards {
-                        galleryContent(loadedEntries, metrics: metrics)
-                    } else {
-                        magazineContent(metrics: metrics)
-                    }
+                    galleryContent(loadedEntries, metrics: metrics)
                 }
                 .frame(width: metrics.contentWidth, alignment: .leading)
                 .padding(.vertical, 20)
@@ -2767,7 +2758,7 @@ private struct EntryListView: View {
     }
 
     private func handleTimelineKey(_ request: TimelineKeyRequest, proxy: ScrollViewProxy, width: CGFloat) {
-        guard viewStyle != .list, !loadedEntries.isEmpty else { return }
+        guard viewStyle == .cards, !loadedEntries.isEmpty else { return }
         let id = visualSelectionID ?? selectedEntryID
         if request.keyCode == 125 || request.keyCode == 126 {
             let step = viewStyle == .cards ? cardColumnCount(width) : 1
@@ -2787,7 +2778,7 @@ private struct EntryListView: View {
     var body: some View {
         GeometryReader { geometry in
         ScrollViewReader { proxy in
-            timelineContent(width: geometry.size.width)
+            timelineContent(width: geometry.size.width, height: geometry.size.height)
             .background {
                 AppearanceSurface(
                     role: .articleList,
@@ -2803,13 +2794,14 @@ private struct EntryListView: View {
             .navigationTitle(selection.title)
             #endif
             .onPreferenceChange(TimelineRowFrames.self) { frames in
-                guard !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
+                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
                 let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
                 if let first = frames.filter({ $0.value.intersects(viewport) }).min(by: { $0.value.minY < $1.value.minY }) {
                     presentation.visibleAnchor = first.key
                 }
             }
             .task(id: presentation.restorationID) {
+                guard viewStyle != .magazine else { return }
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
                 if let anchor = presentation.restoreAnchor, loadedEntries.contains(where: { $0.id == anchor }) {
                     proxy.scrollTo(anchor, anchor: .top)

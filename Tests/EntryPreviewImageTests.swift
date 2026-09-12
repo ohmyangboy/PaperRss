@@ -142,4 +142,32 @@ final class EntryPreviewImageTests: XCTestCase {
         }
         XCTAssertEqual(TimelineViewStyle.allCases.map(\.rawValue), ["list", "magazine", "cards"])
     }
+    func testLargeOriginalCoverUsesSuppliedSameAssetResize() throws {
+        let original = "https://cdn.tw93.fun/uPic/27342.JPG"
+        let sized = "https://cdn.tw93.fun/cdn-cgi/image/width=2000,quality=80,format=auto,fit=scale-down/uPic/27342.JPG"
+        let entry = try rss("""
+        <m:content url="\(original)" medium="image" type="image/jpeg"/>
+        <description><![CDATA[<img src="\(sized)" data-pswp-src="\(original)" width="800">]]></description>
+        """)
+        XCTAssertEqual(entry.previewImage?.url?.absoluteString, sized)
+        XCTAssertEqual(entry.previewImage?.source, "responsive-variant")
+        XCTAssertEqual(EntryPreviewImage.currentRevision, 2)
+        XCTAssertEqual(ArticleThumbnailStore.maximumDownloadBytes, 8 * 1024 * 1024)
+    }
+
+    func testResizeMustBeSameHostAssetAndBoundedWidth() {
+        let original = URL(string: "https://cdn.example/photo.JPG")!
+        for url in [
+            "https://other.example/cdn-cgi/image/width=1000/photo.JPG",
+            "https://cdn.example/cdn-cgi/image/width=1000/other.JPG",
+            "https://cdn.example/cdn-cgi/image/width=90000/photo.JPG",
+            "https://cdn.example/cdn-cgi/image/quality=80/photo.JPG",
+            "https://cdn.example/cdn-cgi/image/width=1000/photo.JPG?different=1"
+        ] {
+            XCTAssertFalse(EntryPreviewImageExtractor.isSizedVariant(URL(string: url)!, of: original))
+        }
+        XCTAssertTrue(EntryPreviewImageExtractor.isSizedVariant(
+            URL(string: "https://cdn.example/cdn-cgi/image/width%3D1000%2Cquality%3D80/photo.JPG")!, of: original))
+    }
+
 }

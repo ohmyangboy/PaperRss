@@ -34,7 +34,8 @@ final class NSToolbarItem {
     struct Identifier: Hashable {
         let value: String
         init(_ value: String) { self.value = value }
-        static let flexibleSpace = Self("space")
+        static let flexibleSpace = Self("flex")
+        static let space = Self("space")
         static let toggleSidebar = Self("toggle")
     }
     let itemIdentifier: Identifier
@@ -97,9 +98,16 @@ for _ in 0..<3 {
                         if harness.actions.showsTimelineReturn {
                             let back = ids.firstIndex(of: .paperTimelineBack)!
                             let capsule = ids.firstIndex(of: .paperReaderCapsule)!
-                            assert(back < capsule && !ids.contains(.paperMarkAllRead) && !ids.contains(.paperEntryListTitle))
+                            let mark = ids.firstIndex(of: .paperMarkAllRead)!
+                            let spring = ids.firstIndex(of: .flexibleSpace)!
+                            assert(spring < back && back < mark && mark < capsule)
+                            assert(ids[back + 1] == .space)
                         }
-                        if !zen && (!visual || !browsing) {
+                        if visual && !zen {
+                            assert(ids.filter { $0 == .flexibleSpace }.count == 2,
+                                   "可视浏览只能有一对对称弹性空间")
+                        }
+                        if !zen && !visual {
                             let capsule = ids.firstIndex(of: .paperReaderCapsule)!
                             assert(Array(ids[(capsule - 2)...]) == [.paperTimelineBack, .flexibleSpace,
                                 .paperReaderCapsule, .flexibleSpace, .paperTimelineControls],

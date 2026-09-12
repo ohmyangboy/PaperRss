@@ -72,25 +72,72 @@ mkdir -p .scratch/ui-review
 本轮另外修正测试夹具对非隔离 async XCTestCase 默认 setup/teardown 的多余调用，
 以及 Node 测试辅助函数覆盖子进程 PATH 的问题；没有改动相应产品功能或跳过断言。
 
-## Responsive magazine follow-up
+## Content-aware magazine editions and folding navigation
 
-The visual canvas is centered with a maximum content width of 1100pt and 16–28pt
-outer gutters. At 760pt of usable content width and at least three articles,
-magazine mode uses the first article as a vertical image/title lead, the next two
-as compact text-led side cards, and the remainder as a one-to-three-column gallery.
-Narrow windows and small collections use a lead followed by compact rows. Order
-and shared pagination do not change. Cards have intrinsic content height, no
-minimum image slot and no vertical fill spacer. Compact thumbnails may not exceed
-the measured text height; image failure restores the text's available width.
+The magazine canvas stays centered at a maximum 1100pt measure. Each edition page
+contains a bounded set of loaded stories (normally six on a desktop, adapting to
+window width and height). Actual SwiftUI measurements place the next tile in the
+shortest available masonry column, rather than reserving the tallest tile's row
+height. An available photograph can earn a two-column lead and two supporting
+stories; text-only editions do not reserve a lead slot. Short text-only notes use
+slightly larger serif type. Single-column windows use compact text-led rows.
+Images, title and summary keep their intrinsic height with no blank minimum slots.
 
-Opening an article from either visual mode collapses the timeline, not the feed
-sidebar. The reader remains mounted; its controls retain symmetric leading and
-trailing accessories. Return-to-browse is at the leading edge of the reading area;
-the view switcher stays at the trailing edge. Returning restores the saved browse
-anchor without resetting selection or unread retention. List mode keeps three
-columns. Zen temporarily hides the sidebar and restores its prior collapsed state.
+The permanent top-right view popover adds two magazine-only preferences:
 
-Follow-up verification covers intrinsic tile heights, width breakpoints, repeated
-browse/read/Zen/list transitions, controller identity and toolbar-item lifetime.
-Native interactive acceptance remains **Manual UI verification required**, including
-long mixed feeds, live window resizing, image failures and translated articles.
+- Arrangement: balanced edition (default), subscription source, folder, or time.
+  Balanced mode clusters sources inside a bounded page and promotes an illustrated
+  story for layout, without AI, external requests or changing the underlying SQL
+  order. Source/folder grouping is account-aware. Every loaded article is included
+  exactly once. All grouping is confined to the currently loaded timeline;
+  reaching its end uses the existing database pagination. The list and card modes
+  keep their existing sort and filtering semantics.
+- Page navigation: continuous scroll (default) or folding pages. The fold is an
+  application-local two-panel perspective/shading transition, not a screen-capture
+  overlay. Reduce Motion substitutes a short fade. Buttons, Page Up/Page Down and
+  deliberate horizontal drags turn pages. A fixed bottom horizontal tick rail
+  previews that page's article titles on hover, permits direct jumps and includes
+  separate previous/next buttons. It navigates magazine pages of article previews,
+  not the paragraphs of a single article. Oversized content remains scrollable
+  within a page instead of being truncated to viewport height.
+
+A stable article identity anchors the current page across resizing, regrouping and
+reading/return. Page turns only change presentation, never read/star state. Opening
+an article collapses the timeline, not the subscription sidebar. The live reader
+stays mounted. The back button is standalone immediately before the centered
+filter/mark-all cluster; the reader capsule follows it, and the view switcher stays
+at the far right. Visual browsing uses exactly two flexible toolbar spaces, with
+balanced outer accessories. Existing three-column list and Zen routes are retained.
+
+### Cover regression: Weekly issue 273
+
+On 2026-09-12 the public feed `https://weekly.tw93.fun/rss.xml` advertised the cover
+`https://cdn.tw93.fun/uPic/27342.JPG` in Media RSS/enclosure fields. An anonymous
+response probe measured 9,176,164 bytes for this original, exceeding the existing
+8 MiB thumbnail response limit. The same item's description already supplied a
+same-host Cloudflare resized version (width=2000), measured at 759,262 bytes.
+The image was extracted correctly but rejected by the bounded byte loader.
+
+Extraction revision 2 prefers an already supplied, verified same-asset resize
+before downloading. Scheme, host, port, original path, query and bounded width are
+checked; no CDN URL is fabricated and no webpage or Open Graph is fetched.
+Requested older entries are repaired in existing 100-item background batches.
+Previously extracted covers survive retention/purged bodies. The 8 MiB response
+limit, pixel limit, cache isolation and article states are unchanged. A changed URL
+also avoids reusing the failed original URL's negative-cache entry.
+
+### Inspiration and verification boundary
+
+Reviewed Mac-Duo at `e60f71bfc14aa54fc01bb5d672c50906140d4716`:
+`https://github.com/sumimakito/Mac-Duo`. Its depth renderer uses perspective and
+height-dependent dimming/blur over a captured screen texture. The magazine uses
+its own SwiftUI hinge transition inspired by that visual idea; it does not import
+Mac-Duo code, dependencies, hardware sensors or screen-recording permissions.
+
+Automated coverage includes stable grouping/IDs, no omissions/duplicates, masonry
+non-overlap and compact text, source resize verification, v1-to-v2 backfill with
+retained read/star state, toolbar centering/order and controller lifetime. Run
+`--core`, `--feature`, `--web`, shell syntax checks and unsigned macOS host build.
+Real macOS interaction remains **Manual UI verification required**, especially
+fold smoothness, hover rail, repeated fast navigation, large text, long titles,
+image-off layouts, source grouping and returning from a translated article.

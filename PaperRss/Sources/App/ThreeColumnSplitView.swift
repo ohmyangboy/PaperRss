@@ -74,6 +74,7 @@ struct ToolbarActions {
     let timelineControls: AnyView
     let isTimelineBrowsing: Bool
     let usesVisualTimeline: Bool
+    let usesMagazineTimeline: Bool
     let onReturnToTimeline: () -> Void
     var showsTimelineReturn: Bool { usesVisualTimeline && !isTimelineBrowsing && !isZenMode }
     let onTimelineKey: (UInt16) -> Void
@@ -104,6 +105,7 @@ struct ToolbarActions {
         timelineControls: AnyView = AnyView(EmptyView()),
         isTimelineBrowsing: Bool = false,
         usesVisualTimeline: Bool = false,
+        usesMagazineTimeline: Bool = false,
         onReturnToTimeline: @escaping () -> Void = {},
         onTimelineKey: @escaping (UInt16) -> Void = { _ in }
     ) {
@@ -132,6 +134,7 @@ struct ToolbarActions {
         self.timelineControls = timelineControls
         self.isTimelineBrowsing = isTimelineBrowsing
         self.usesVisualTimeline = usesVisualTimeline
+        self.usesMagazineTimeline = usesMagazineTimeline
         self.onReturnToTimeline = onReturnToTimeline
         self.onTimelineKey = onTimelineKey
     }
@@ -372,6 +375,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var titleMaxWidthConstraint: NSLayoutConstraint?
+        private weak var visualTitleWidthConstraint: NSLayoutConstraint?
         private weak var unreadFilterButton: NSButton?
         private weak var markAllReadButton: NSButton?
         nonisolated(unsafe) private var eventMonitor: Any?
@@ -837,7 +841,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
             guard actions.usesVisualTimeline, activeColumnIndex == 1,
                   flags.intersection(disallowed).isEmpty,
-                  [UInt16(125), 126, 36, 49, 76].contains(event.keyCode),
+                  ([UInt16(125), 126, 36, 49, 76].contains(event.keyCode)
+                    || (actions.usesMagazineTimeline && [UInt16(116), 121].contains(event.keyCode))),
                   let splitVC = splitViewController, splitVC.splitViewItems.count == 3,
                   let window = splitVC.view.window, window.attachedSheet == nil,
                   NSApp.modalWindow == nil,
@@ -902,15 +907,23 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             }
             var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu]
             if !sidebarCollapsed { result.append(.paperSidebarTracker) }
-            if actions.showsTimelineReturn { return result + readerRegion }
+            if actions.usesVisualTimeline {
+                // One pair of springs surrounds the whole central cluster.
+                // Previously the invisible reader capsule added a third spring,
+                // pulling unread/mark-all toward the first third of the canvas.
+                if !sidebarCollapsed { result.append(.paperEntryListTitle) }
+                result.append(.flexibleSpace)
+                if actions.showsTimelineReturn { result += [.paperTimelineBack, .space] }
+                if actions.showsUnreadFilter { result.append(.paperUnreadFilter) }
+                result.append(.paperMarkAllRead)
+                if actions.showsTimelineReturn { result.append(.space) }
+                result += [.paperReaderCapsule, .flexibleSpace, .paperTimelineControls]
+                return result
+            }
             if !sidebarCollapsed { result += [.paperEntryListTitle, .flexibleSpace] }
             result += sidebarCollapsed
                 ? [actions.showsUnreadFilter ? .paperUnreadFilter : .paperMarkAllRead]
                 : (actions.showsUnreadFilter ? [.paperUnreadFilter, .paperMarkAllRead] : [.paperMarkAllRead])
-            if actions.usesVisualTimeline {
-                // No tracking separator may target the collapsed reader.
-                return result + [.flexibleSpace, .paperReaderCapsule, .flexibleSpace, .paperTimelineControls]
-            }
             result.append(.paperTimelineTracker)
             return result + readerRegion
         }
@@ -1538,7 +1551,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard let constraint = titleMaxWidthConstraint else { return }
             let columnWidth = currentContentColumnWidth()
             let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
-            let maxTitleWidth = max(40, columnWidth - reservedWidth)
+            let maxTitleWidth = actions.usesVisualTimeline ? Self.timelineAccessoryWidth : max(40, columnWidth - reservedWidth)
+            visualTitleWidthConstraint?.isActive = actions.usesVisualTimeline
             if constraint.constant != maxTitleWidth {
                 constraint.constant = maxTitleWidth
             }
@@ -1715,7 +1729,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
                 let columnWidth = currentContentColumnWidth()
                 let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
-                let maxTitleWidth = max(40, columnWidth - reservedWidth)
+                let maxTitleWidth = actions.usesVisualTimeline ? Self.timelineAccessoryWidth : max(40, columnWidth - reservedWidth)
+                let visualWidth = label.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth)
+                visualWidth.isActive = actions.usesVisualTimeline
+                self.visualTitleWidthConstraint = visualWidth
                 let maxWidthConstraint = label.widthAnchor.constraint(lessThanOrEqualToConstant: maxTitleWidth)
                 maxWidthConstraint.priority = .required
                 let heightConstraint = label.heightAnchor.constraint(equalToConstant: 22)

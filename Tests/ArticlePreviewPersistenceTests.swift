@@ -116,6 +116,61 @@ final class ArticlePreviewPersistenceTests: XCTestCase {
         }
     }
 
+    func testRevisionTwoRepairsOversizedOriginalUsingStoredDescriptionWithoutChangingArticleState() async throws {
+        let (database, root) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let feedID = UUID().uuidString
+        try seed(database, feedID: feedID)
+        let original = "https://cdn.tw93.fun/uPic/27342.JPG"
+        let sized = "https://cdn.tw93.fun/cdn-cgi/image/width=2000,quality=80,format=auto,fit=scale-down/uPic/27342.JPG"
+        try database.write { db in
+            try ItemRecord(id: "273", accountID: "local-default", externalID: "273", feedID: feedID, createdAt: 7, updatedAt: 7).save(db)
+            var article = ArticleRecord(itemID: "273", title: "第273期 - 一堆椅子", contentHTML: "<img src='\(sized)'>", contentUpdatedAt: 7)
+            article.previewImageURL = original
+            article.previewImageSource = "media:content"
+            article.previewExtractionRevision = 1
+            try article.save(db)
+            try ArticleStateRecord(itemID: "273", isRead: true, isStarred: true, dateArrived: 7, updatedAt: 7).save(db)
+        }
+        let backfill = ArticlePreviewBackfill(database: database)
+        let changed = try await backfill.prepare(entryIDs: ["273"])
+        XCTAssertEqual(changed, 1)
+        let repeated = try await backfill.prepare(entryIDs: ["273"])
+        XCTAssertEqual(repeated, 0)
+        try database.read { db in
+            let article = try XCTUnwrap(ArticleRecord.fetchOne(db, key: "273"))
+            XCTAssertEqual(article.previewImageURL, sized)
+            XCTAssertEqual(article.previewImageSource, "responsive-variant")
+            XCTAssertEqual(article.previewExtractionRevision, EntryPreviewImage.currentRevision)
+            XCTAssertEqual(article.contentUpdatedAt, 7)
+            let state = try XCTUnwrap(ArticleStateRecord.fetchOne(db, key: "273"))
+            XCTAssertTrue(state.isRead && state.isStarred)
+            XCTAssertEqual(state.updatedAt, 7)
+        }
+    }
+
+    func testRevisionUpgradePreservesExistingCoverWhenBodyHasBeenPurged() async throws {
+        let (database, root) = try temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let feedID = UUID().uuidString
+        try seed(database, feedID: feedID)
+        try database.write { db in
+            try ItemRecord(id: "purged", accountID: "local-default", externalID: "purged", feedID: feedID, createdAt: 1, updatedAt: 1).save(db)
+            var article = ArticleRecord(itemID: "purged", title: "Retained metadata", contentUpdatedAt: 1)
+            article.previewImageURL = "https://example.org/retained.JPG"
+            article.previewImageSource = "enclosure"
+            article.previewExtractionRevision = 1
+            try article.save(db)
+        }
+        _ = try await ArticlePreviewBackfill(database: database).prepare(entryIDs: ["purged"])
+        try database.read { db in
+            let article = try XCTUnwrap(ArticleRecord.fetchOne(db, key: "purged"))
+            XCTAssertEqual(article.previewImageURL, "https://example.org/retained.JPG")
+            XCTAssertNil(article.contentHTML)
+            XCTAssertEqual(article.previewExtractionRevision, EntryPreviewImage.currentRevision)
+        }
+    }
+
     func testV11UpgradeAddsNullableMetadataWithoutReadingOldHTML() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PreviewMigration-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
