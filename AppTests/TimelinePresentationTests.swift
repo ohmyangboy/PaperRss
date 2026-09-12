@@ -197,20 +197,24 @@ final class TimelinePresentationTests: XCTestCase {
     }
 
 
-    func testVisualToolbarHasOneCentralClusterWithBackBeforeScopeActions() throws {
+    func testVisualToolbarHasOneCentralClusterAndHidesScopeActionsWhileReading() throws {
         for browsing in [true, false] {
             let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: browsing), appearance: .default,
                 appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
             let order = coordinator.toolbarItemOrder(sidebarCollapsed: false)
             let springs = order.indices.filter { order[$0] == .flexibleSpace }
             XCTAssertEqual(springs.count, 2, "A third spring moves the scope actions off centre")
-            let mark = try XCTUnwrap(order.firstIndex(of: .paperMarkAllRead))
-            XCTAssertTrue(springs[0] < mark && mark < springs[1])
             XCTAssertFalse(order.contains(.paperTimelineTracker))
-            if !browsing {
+            if browsing {
+                let mark = try XCTUnwrap(order.firstIndex(of: .paperMarkAllRead))
+                XCTAssertTrue(springs[0] < mark && mark < springs[1])
+            } else {
+                XCTAssertFalse(order.contains(.paperMarkAllRead))
+                XCTAssertFalse(order.contains(.paperUnreadFilter))
                 let back = try XCTUnwrap(order.firstIndex(of: .paperTimelineBack))
-                XCTAssertTrue(springs[0] < back && back < mark)
-                XCTAssertEqual(order[back + 1], .space, "Return is a standalone button, not fused into the filter capsule")
+                let reader = try XCTUnwrap(order.firstIndex(of: .paperReaderCapsule))
+                XCTAssertTrue(springs[0] < back && back < reader && reader < springs[1])
+                XCTAssertEqual(order[back + 1], .space, "Return is a standalone button before reader actions")
             }
         }
     }

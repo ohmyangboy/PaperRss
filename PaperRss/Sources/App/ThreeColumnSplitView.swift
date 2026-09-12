@@ -913,10 +913,12 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 // pulling unread/mark-all toward the first third of the canvas.
                 if !sidebarCollapsed { result.append(.paperEntryListTitle) }
                 result.append(.flexibleSpace)
-                if actions.showsTimelineReturn { result += [.paperTimelineBack, .space] }
-                if actions.showsUnreadFilter { result.append(.paperUnreadFilter) }
-                result.append(.paperMarkAllRead)
-                if actions.showsTimelineReturn { result.append(.space) }
+                if actions.showsTimelineReturn {
+                    result += [.paperTimelineBack, .space]
+                } else if actions.isTimelineBrowsing {
+                    if actions.showsUnreadFilter { result.append(.paperUnreadFilter) }
+                    result.append(.paperMarkAllRead)
+                }
                 result += [.paperReaderCapsule, .flexibleSpace, .paperTimelineControls]
                 return result
             }

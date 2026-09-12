@@ -48,7 +48,7 @@ fi
 
 run_feature_tests() {
     echo -e "\n${BLUE}▶ 执行 App 核心功能回归测试 (AppFeatureRegressionTests)...${NC}"
-    python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build" --filter 'AppFeatureRegressionTests|EntryPreviewImageTests|ArticlePreviewPersistenceTests|ArticleThumbnailStoreTests|TimelinePresentationTests|MagazineEditionTests|testArticlePreviewFromFreshRSS'
+    python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build" --filter 'AppFeatureRegressionTests|EntryPreviewImageTests|ArticlePreviewPersistenceTests|ArticleThumbnailStoreTests|TimelinePresentationTests|MagazineEditionTests|MagazineFoldEffectTests|MagazinePerformanceTests|testArticlePreviewFromFreshRSS'
     echo -e "${GREEN}✔ App 核心功能回归测试通过！${NC}"
 }
 

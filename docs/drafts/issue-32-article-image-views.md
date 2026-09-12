@@ -104,9 +104,9 @@ The permanent top-right view popover adds two magazine-only preferences:
 A stable article identity anchors the current page across resizing, regrouping and
 reading/return. Page turns only change presentation, never read/star state. Opening
 an article collapses the timeline, not the subscription sidebar. The live reader
-stays mounted. The back button is standalone immediately before the centered
-filter/mark-all cluster; the reader capsule follows it, and the view switcher stays
-at the far right. Visual browsing uses exactly two flexible toolbar spaces, with
+stays mounted. The browse-only filter/mark-all cluster disappears when opening an article.
+The back button is standalone immediately before the centered reader capsule,
+and the view switcher stays at the far right. Visual browsing uses exactly two flexible toolbar spaces, with
 balanced outer accessories. Existing three-column list and Zen routes are retained.
 
 ### Cover regression: Weekly issue 273
@@ -131,7 +131,7 @@ also avoids reusing the failed original URL's negative-cache entry.
 Reviewed Mac-Duo at `e60f71bfc14aa54fc01bb5d672c50906140d4716`:
 `https://github.com/sumimakito/Mac-Duo`. Its depth renderer uses perspective and
 height-dependent dimming/blur over a captured screen texture. The magazine uses
-its own SwiftUI hinge transition inspired by that visual idea; it does not import
+its own application-local page transition inspired by that visual idea; it does not import
 Mac-Duo code, dependencies, hardware sensors or screen-recording permissions.
 
 Automated coverage includes stable grouping/IDs, no omissions/duplicates, masonry
@@ -141,3 +141,37 @@ retained read/star state, toolbar centering/order and controller lifetime. Run
 Real macOS interaction remains **Manual UI verification required**, especially
 fold smoothness, hover rail, repeated fast navigation, large text, long titles,
 image-off layouts, source grouping and returning from a translated article.
+
+## Book-leaf turn and scroll hot-path follow-up
+
+Forward navigation keeps the old left half stationary, places the destination
+right half underneath, and rotates the old right half around the exact centre
+crease by 180 degrees. The reverse face is the destination left half, with its
+own 180-degree transform to avoid mirrored text. Backward navigation reverses
+this geometry. Mild blur and shading affect only the turning leaf. Reduce Motion
+uses a short fade. No screen recording or private APIs are used: the native view
+captures only its own visible viewport twice per requested turn, bounded to a
+3-million-pixel budget. It does not duplicate live SwiftUI scroll views per half
+or do per-frame text measurement. Snapshots are released at completion, resize,
+route change and dismantle. Late completions are request-ID checked.
+
+Edition grouping and the article-to-page index are cached by actual inputs.
+Repeated scroll offsets on the same page no longer publish state changes;
+hover/focus state lives inside the rail. Masonry reuses measurements between size
+and placement calls, invalidating for changed geometry/subviews. Magazine no
+longer emits unused per-article frame preferences; one frame per lazy page is
+sufficient. Appending entries or updating read flags does not force a scroll-to-top.
+The image pipeline is still bounded and off-main-thread; it was not loosened.
+
+The bottom rail follows the existing reader TOC's 8-by-3 ticks rotated to 3-by-8,
+with identical-size dark active ticks and pale inactive ticks. It floats without
+an edge-to-edge material bar, divider or changing-width page pill. Hover and
+keyboard focus show only the actual titles on that page, anchored above the tick
+and clamped inside the window. Separate previous/next buttons remain on its sides.
+This rail still navigates pages, never marks articles read.
+
+Validation: full core/feature/web regression and unsigned macOS build; operation
+count tests for grouping/scroll notifications, snapshot bounds, forward/backward
+geometry, no-window fallback, and toolbar routing. These are not a measured FPS
+claim. **Manual UI verification required** on the maintainer's actual Mac for
+capture orientation, fold smoothness, long-page scroll positions and hover edges.

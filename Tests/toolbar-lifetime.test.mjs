@@ -98,12 +98,15 @@ for _ in 0..<3 {
                         if harness.actions.showsTimelineReturn {
                             let back = ids.firstIndex(of: .paperTimelineBack)!
                             let capsule = ids.firstIndex(of: .paperReaderCapsule)!
-                            let mark = ids.firstIndex(of: .paperMarkAllRead)!
                             let spring = ids.firstIndex(of: .flexibleSpace)!
-                            assert(spring < back && back < mark && mark < capsule)
+                            assert(spring < back && back < capsule)
                             assert(ids[back + 1] == .space)
+                            assert(!ids.contains(.paperMarkAllRead) && !ids.contains(.paperUnreadFilter),
+                                   "阅读态不能保留批量已读或筛选按钮")
                         }
                         if visual && !zen {
+                            assert(ids.contains(.paperMarkAllRead) == browsing)
+                            assert(ids.contains(.paperUnreadFilter) == (browsing && filter))
                             assert(ids.filter { $0 == .flexibleSpace }.count == 2,
                                    "可视浏览只能有一对对称弹性空间")
                         }

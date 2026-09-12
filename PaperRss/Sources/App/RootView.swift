@@ -2690,7 +2690,10 @@ private struct EntryListView: View {
         }
         .buttonStyle(.plain)
         .id(entry.id)
-        .background(rowFrame(entry.id))
+        .background {
+            // Magazine tracks one frame per bounded page, not every story.
+            if viewStyle != .magazine { rowFrame(entry.id) }
+        }
         .contextMenu { entryContextMenu(entry) }
         .onAppear { if viewStyle != .magazine && entry.id == loadedEntries.last?.id { loadNextPage() } }
     }

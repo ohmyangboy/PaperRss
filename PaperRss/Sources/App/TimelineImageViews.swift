@@ -9,7 +9,16 @@ import PaperRssCore
 final class TimelinePresentationMemory: ObservableObject {
     var visibleAnchor: String?
     var browseAnchor: String?
-    @Published var magazineAnchor: String?
+    @Published private var storedMagazineAnchor: String?
+    var magazineAnchor: String? {
+        get { storedMagazineAnchor }
+        set {
+            // Geometry notifications fire for every scroll delta, even when
+            // the visible page has not changed. Do not invalidate the timeline.
+            guard storedMagazineAnchor != newValue else { return }
+            storedMagazineAnchor = newValue
+        }
+    }
     private(set) var restoreAnchor: String?
     private(set) var isRestoring = false
     @Published private(set) var restorationID = UUID()

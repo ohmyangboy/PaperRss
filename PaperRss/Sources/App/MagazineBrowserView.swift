@@ -32,71 +32,82 @@ struct MagazineMasonryLayout: Layout {
         }
     }
 
-    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
-        let count = max(1, columns)
-        let columnWidth = max(1, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
-        let spans = subviews.map { min(count, max(1, $0[MagazineColumnSpan.self])) }
-        let heights = subviews.enumerated().map { index, view in
-            view.sizeThatFits(ProposedViewSize(width: columnWidth * CGFloat(spans[index])
-                + spacing * CGFloat(spans[index] - 1), height: nil)).height
+    struct Cache {
+        var width: CGFloat?
+        var columns = 0
+        var spacing: CGFloat = 0
+        var rects: [CGRect] = []
+        mutating func resolve(width: CGFloat, columns: Int, spacing: CGFloat, count: Int,
+                              measure: () -> [CGRect]) -> [CGRect] {
+            if self.width == width, self.columns == columns, self.spacing == spacing,
+               rects.count == count { return rects }
+            let measured = measure()
+            self = Cache(width: width, columns: columns, spacing: spacing, rects: measured)
+            return measured
         }
-        return Self.frames(width: width, columns: count, spacing: spacing, heights: heights, spans: spans)
+    }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+
+    private func frames(width: CGFloat, subviews: Subviews, cache: inout Cache) -> [CGRect] {
+        cache.resolve(width: width, columns: columns, spacing: spacing, count: subviews.count) {
+            let count = max(1, columns)
+            let columnWidth = max(1, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
+            let spans = subviews.map { min(count, max(1, $0[MagazineColumnSpan.self])) }
+            let heights = subviews.enumerated().map { index, view in
+                view.sizeThatFits(ProposedViewSize(width: columnWidth * CGFloat(spans[index])
+                    + spacing * CGFloat(spans[index] - 1), height: nil)).height
+            }
+            return Self.frames(width: width, columns: count, spacing: spacing, heights: heights, spans: spans)
+        }
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 600
-        return CGSize(width: width, height: frames(width: width, subviews: subviews).map(\.maxY).max() ?? 0)
+        return CGSize(width: width, height: frames(width: width, subviews: subviews, cache: &cache).map(\.maxY).max() ?? 0)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (index, rect) in frames(width: bounds.width, subviews: subviews).enumerated() {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        for (index, rect) in frames(width: bounds.width, subviews: subviews, cache: &cache).enumerated() {
             subviews[index].place(at: CGPoint(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY),
                                   anchor: .topLeading, proposal: ProposedViewSize(rect.size))
         }
     }
 }
 
-/// Local page-only hinge effect. No screen capture, lid sensors, private APIs or
-/// continuous rendering loop. The two halves shade toward their common crease.
-struct MagazineFoldEffect: ViewModifier, Animatable, Sendable {
-    // SwiftUI's interpolation contract is nonisolated. These Sendable value
-    // fields have no UI state; only body(content:) needs main-actor isolation.
-    nonisolated var progress: CGFloat
-    nonisolated let direction: CGFloat
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+/// Edition grouping is independent of scroll position, hover and animation.
+/// Rebuild only when actual article/folder/locale/layout inputs change.
+@MainActor
+final class MagazineEditionCache: ObservableObject {
+    struct Input: Equatable {
+        let entries: [EntryListItem]
+        let folders: [UUID: String]
+        let arrangement: MagazineArrangement
+        let capacity: Int
+        let locale: String
     }
-    func body(content: Content) -> some View {
-        let amount = min(1, max(0, progress))
-        content.opacity(amount < 0.001 ? 1 : 0)
-            .overlay {
-                if amount >= 0.001 {
-                    GeometryReader { geometry in
-                        HStack(spacing: 0) {
-                            half(content, size: geometry.size, leading: true, amount: amount)
-                            half(content, size: geometry.size, leading: false, amount: amount)
-                        }
-                        .scaleEffect(1 - amount * 0.035)
-                        .offset(x: direction * amount * geometry.size.width * 0.12)
-                        .opacity(1 - amount)
-                    }
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                }
-            }
+    @Published private(set) var pages: [MagazinePage] = []
+    private var input: Input?
+    private var entryIndex: [String: Int] = [:]
+    private(set) var rebuildCount = 0
+
+    func update(_ input: Input) {
+        guard self.input != input else { return }
+        self.input = input
+        let next = MagazineEdition.pages(entries: input.entries, arrangement: input.arrangement,
+                                          folders: input.folders, capacity: input.capacity)
+        entryIndex.removeAll(keepingCapacity: true)
+        for (index, page) in next.enumerated() {
+            for entry in page.entries { entryIndex[entry.id] = index }
+        }
+        rebuildCount += 1
+        if pages != next { pages = next }
     }
-    private func half(_ content: Content, size: CGSize, leading: Bool, amount: CGFloat) -> some View {
-        content.frame(width: size.width, height: size.height, alignment: .top)
-            .frame(width: size.width / 2, height: size.height, alignment: leading ? .leading : .trailing)
-            .clipped()
-            .overlay(LinearGradient(colors: [.clear, .black.opacity(0.20 * amount)],
-                                    startPoint: leading ? .leading : .trailing,
-                                    endPoint: leading ? .trailing : .leading))
-            .rotation3DEffect(.degrees(Double(amount * (leading ? -78 : 78))),
-                              axis: (x: 0, y: 1, z: 0), anchor: leading ? .trailing : .leading,
-                              perspective: 0.32)
+
+    func pageIndex(containing anchor: String?) -> Int {
+        anchor.flatMap { entryIndex[$0] } ?? 0
     }
+    func contains(_ anchor: String?) -> Bool { anchor.flatMap { entryIndex[$0] } != nil }
 }
 
 private struct MagazinePageFrames: PreferenceKey {
@@ -124,11 +135,12 @@ struct MagazineBrowserView<Tile: View>: View {
     @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hoveredPage: String?
-    @State private var turnDirection: CGFloat = 1
-    @State private var pendingNext = false
-    @State private var isTurning = false
-    @State private var turnTask: Task<Void, Never>?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.locale) private var locale
+    @StateObject private var edition = MagazineEditionCache()
+    @State private var pendingPageIndex: Int?
+    @State private var turnRequest: MagazinePageTurnRequest?
+    private var isTurning: Bool { turnRequest != nil }
 
     private var metrics: TimelineLayoutMetrics { .init(availableWidth: availableSize.width) }
     private var arrangement: MagazineArrangement { .init(rawValue: arrangementRaw) ?? .balanced }
@@ -139,11 +151,11 @@ struct MagazineBrowserView<Tile: View>: View {
         let rows = availableSize.height > 950 ? 3 : 2
         return max(3, metrics.galleryColumns * rows)
     }
-    private var pages: [MagazinePage] {
-        MagazineEdition.pages(entries: entries, arrangement: arrangement, folders: folders, capacity: capacity)
+    private var editionInput: MagazineEditionCache.Input {
+        .init(entries: entries, folders: folders, arrangement: arrangement, capacity: capacity, locale: locale.identifier)
     }
-    private var pageIndex: Int { MagazineEdition.pageIndex(containing: memory.magazineAnchor, in: pages) }
-    private var pageIDs: [String] { pages.map(\.id) }
+    private var pages: [MagazinePage] { edition.pages }
+    private var pageIndex: Int { edition.pageIndex(containing: memory.magazineAnchor) }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -166,21 +178,30 @@ struct MagazineBrowserView<Tile: View>: View {
                     }
                     .scrollIndicators(.never)
                 } else {
-                    ZStack(alignment: .top) {
+                    Group {
                         if pages.indices.contains(pageIndex) {
                             let page = pages[pageIndex]
-                            ScrollView {
-                                pageContent(page, index: pageIndex)
-                                    .padding(.vertical, 20)
-                                    .frame(maxWidth: .infinity, alignment: .top)
-                            }
-                            .scrollIndicators(.never)
-                            .id(page.id)
-                            .transition(reduceMotion ? .opacity : .asymmetric(
-                                insertion: .modifier(active: MagazineFoldEffect(progress: 1, direction: -turnDirection),
-                                                     identity: MagazineFoldEffect(progress: 0, direction: -turnDirection)),
-                                removal: .modifier(active: MagazineFoldEffect(progress: 1, direction: turnDirection),
-                                                   identity: MagazineFoldEffect(progress: 0, direction: turnDirection))))
+                            #if os(macOS)
+                            MagazinePageTurnView(pageID: page.id, request: turnRequest,
+                                reduceMotion: reduceMotion, isActive: isBrowsing,
+                                background: NSColor(Color(paperHex: palette.backgroundHex)),
+                                content: ScrollView {
+                                    pageContent(page, index: pageIndex).padding(.vertical, 20)
+                                        .frame(maxWidth: .infinity, alignment: .top)
+                                }
+                                .scrollIndicators(.never).id(page.id)
+                                .background(Color(paperHex: palette.backgroundHex))
+                                .environment(\.paperAppearancePalette, palette)
+                                .environment(\.colorScheme, colorScheme)
+                                .environment(\.locale, locale),
+                                onComplete: { id in
+                                    if turnRequest?.id == id { turnRequest = nil }
+                                })
+                                .frame(width: metrics.contentWidth)
+                            #else
+                            ScrollView { pageContent(page, index: pageIndex).padding(.vertical, 20) }
+                                .id(page.id)
+                            #endif
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -193,29 +214,40 @@ struct MagazineBrowserView<Tile: View>: View {
                 }
             }
             .coordinateSpace(name: "magazine-viewport")
-            .safeAreaInset(edge: .bottom, spacing: 0) { pageRail(proxy: proxy) }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                MagazinePageRail(pages: pages, currentIndex: pageIndex, hasMore: hasMore,
+                    isTurning: isTurning, availableWidth: availableSize.width,
+                    availableHeight: availableSize.height, onSelect: { go(to: $0, proxy: proxy) })
+            }
             .onPreferenceChange(MagazinePageFrames.self) { frames in
                 guard isBrowsing, turning == .scroll, !memory.isRestoring else { return }
                 if let page = pages.first(where: { (frames[$0.id]?.maxY ?? -1) > 24 && (frames[$0.id]?.minY ?? .infinity) < availableSize.height }) {
                     if let anchor = page.entries.first?.id { memory.magazineAnchor = anchor }
                 }
             }
-            .onChange(of: pageIDs) { _, _ in
-                if pendingNext {
-                    pendingNext = false
-                    go(to: pageIndex + 1, proxy: proxy)
+            .onChange(of: editionInput, initial: true) { old, new in
+                let hadAnchor = edition.contains(memory.magazineAnchor)
+                edition.update(new)
+                turnRequest = nil
+                if let pending = pendingPageIndex, pages.indices.contains(pending) {
+                    pendingPageIndex = nil
+                    go(to: pending, proxy: proxy)
+                } else if old.arrangement != new.arrangement || old.capacity != new.capacity
+                            || old.locale != new.locale || !hadAnchor || !edition.contains(memory.magazineAnchor) {
+                    restore(proxy: proxy)
                 }
-                restore(proxy: proxy)
+                // Appending data / read state updates must not scroll back to
+                // the page's top while the user is reading its lower half.
             }
             .task(id: turningRaw) {
                 // Wait for the destination scroll container to exist before
                 // restoring its anchor when switching reading styles.
+                turnRequest = nil
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 restore(proxy: proxy)
             }
-            .onChange(of: hasMore) { _, value in if !value { pendingNext = false } }
-            .onChange(of: arrangementRaw) { _, _ in restore(proxy: proxy) }
+            .onChange(of: hasMore) { _, value in if !value { pendingPageIndex = nil } }
             .onChange(of: keyboardRequest) { _, request in
                 guard isBrowsing, let request else { return }
                 handle(request, proxy: proxy)
@@ -226,8 +258,10 @@ struct MagazineBrowserView<Tile: View>: View {
                 restore(proxy: proxy, anchor: memory.restoreAnchor)
                 memory.finishRestoration()
             }
-            .onDisappear { turnTask?.cancel(); isTurning = false }
-            .onChange(of: isBrowsing) { _, value in if !value { turnTask?.cancel(); isTurning = false } }
+            .onDisappear { turnRequest = nil }
+            .onChange(of: isBrowsing) { _, value in if !value { turnRequest = nil } }
+            .onChange(of: availableSize) { _, _ in turnRequest = nil }
+            .onChange(of: showsImages) { _, _ in turnRequest = nil }
         }
         .accessibilityIdentifier("magazine.browser")
     }
@@ -261,87 +295,22 @@ struct MagazineBrowserView<Tile: View>: View {
         .foregroundStyle(Color(paperHex: palette.inkHex))
     }
 
-    private func pageRail(proxy: ScrollViewProxy) -> some View {
-        HStack(spacing: 12) {
-            Button { go(to: pageIndex - 1, proxy: proxy) } label: { Image(systemName: "chevron.left") }
-                .disabled(pageIndex == 0 || isTurning)
-                .help(I18N.localized("上一页"))
-                .accessibilityIdentifier("magazine.previousPage")
-            ScrollViewReader { rail in
-                ScrollView(.horizontal) {
-                    HStack(spacing: 3) {
-                        ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
-                            Button { go(to: index, proxy: proxy) } label: {
-                                Capsule().fill(Color(paperHex: index == pageIndex ? palette.accentHex : palette.mutedHex)
-                                    .opacity(index == pageIndex ? 1 : 0.3))
-                                    .frame(width: index == pageIndex ? 26 : 12, height: 4)
-                                    .frame(width: index == pageIndex ? 34 : 22, height: 30)
-                                    .contentShape(Rectangle())
-                            }
-                            .id(page.id)
-                            .onHover { hoveredPage = $0 ? page.id : (hoveredPage == page.id ? nil : hoveredPage) }
-                            .accessibilityLabel("\(I18N.localized("页面")) \(index + 1): \(page.title)")
-                            .accessibilityHint(page.entries.map(\.title).joined(separator: "; "))
-                            .accessibilityAddTraits(index == pageIndex ? [.isSelected] : [])
-                        }
-                    }
-                }
-                .scrollIndicators(.never)
-                .frame(maxWidth: 380)
-                .onChange(of: pageIndex) { _, index in
-                    if pages.indices.contains(index) { rail.scrollTo(pages[index].id, anchor: .center) }
-                }
-            }
-            Button { go(to: pageIndex + 1, proxy: proxy) } label: { Image(systemName: "chevron.right") }
-                .disabled((pageIndex + 1 >= pages.count && !hasMore) || isTurning)
-                .help(I18N.localized("下一页"))
-                .accessibilityIdentifier("magazine.nextPage")
-            Text(pages.isEmpty ? "0 / 0" : "\(pageIndex + 1) / \(pages.count)")
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 20).padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(.regularMaterial)
-        .overlay(alignment: .top) { Divider().opacity(0.35) }
-        .overlay(alignment: .bottom) {
-            if let page = pages.first(where: { $0.id == hoveredPage }) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(page.title).font(.headline)
-                    ForEach(page.entries) { entry in
-                        Text(entry.title).font(.caption).lineLimit(2)
-                    }
-                }
-                .padding(14).frame(width: min(340, max(180, availableSize.width - 48)), alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.1)))
-                .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
-                .offset(y: -60).allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
-    }
-
     private func go(to index: Int, proxy: ScrollViewProxy) {
         guard isBrowsing, !isTurning, index >= 0 else { return }
         if index >= pages.count {
-            if hasMore { pendingNext = true; onNeedMore() }
+            if hasMore { pendingPageIndex = index; onNeedMore() }
             return
         }
         guard let anchor = pages[index].entries.first?.id else { return }
         if index == pageIndex && turning == .fold { return }
-        hoveredPage = nil
-        turnDirection = index >= pageIndex ? 1 : -1
         memory.visibleAnchor = anchor
-        let duration = reduceMotion ? 0.12 : 0.42
         if turning == .fold {
-            isTurning = true
-            withAnimation(.easeInOut(duration: duration)) { memory.magazineAnchor = anchor }
-            turnTask?.cancel()
-            turnTask = Task { @MainActor in
-                do { try await Task.sleep(for: .seconds(duration)) } catch { return }
-                isTurning = false
-            }
+            #if os(macOS)
+            turnRequest = .init(targetPageID: pages[index].id, forward: index >= pageIndex)
+            #endif
+            // The native host freezes the old viewport before replacing its
+            // content; only the leaf textures animate, not this view hierarchy.
+            memory.magazineAnchor = anchor
         } else {
             memory.magazineAnchor = anchor
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(pages[index].id, anchor: .top) }
@@ -350,7 +319,7 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private func restore(proxy: ScrollViewProxy, anchor: String? = nil) {
         let anchor = anchor ?? memory.magazineAnchor
-        let index = MagazineEdition.pageIndex(containing: anchor, in: pages)
+        let index = edition.pageIndex(containing: anchor)
         guard pages.indices.contains(index) else { return }
         let validAnchor = anchor.flatMap { value in pages[index].entries.contains { $0.id == value } ? value : nil }
         memory.magazineAnchor = validAnchor ?? pages[index].entries.first?.id
@@ -377,7 +346,7 @@ struct MagazineBrowserView<Tile: View>: View {
             let next = current.map { $0 + (request.keyCode == 125 ? 1 : -1) } ?? 0
             let target = ordered[min(ordered.count - 1, max(0, next))]
             onHighlight(target.id)
-            let index = MagazineEdition.pageIndex(containing: target.id, in: pages)
+            let index = edition.pageIndex(containing: target.id)
             if index != pageIndex { go(to: index, proxy: proxy) }
             else if turning == .scroll { proxy.scrollTo(target.id, anchor: .center) }
         } else if [36, 49, 76].contains(request.keyCode) {
