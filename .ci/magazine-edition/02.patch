@@ -1,0 +1,286 @@
++                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
++                    .clipped()
++                    .allowsHitTesting(!isTurning)
++                    .simultaneousGesture(DragGesture(minimumDistance: 36).onEnded { value in
++                        guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
++                        go(to: pageIndex + (value.translation.width < 0 ? 1 : -1), proxy: proxy)
++                    })
++                }
++            }
++            .coordinateSpace(name: "magazine-viewport")
++            .safeAreaInset(edge: .bottom, spacing: 0) { pageRail(proxy: proxy) }
++            .onPreferenceChange(MagazinePageFrames.self) { frames in
++                guard isBrowsing, turning == .scroll, !memory.isRestoring else { return }
++                if let page = pages.first(where: { (frames[$0.id]?.maxY ?? -1) > 24 && (frames[$0.id]?.minY ?? .infinity) < availableSize.height }) {
++                    if let anchor = page.entries.first?.id { memory.magazineAnchor = anchor }
++                }
++            }
++            .onChange(of: pageIDs) { _, _ in
++                if pendingNext {
++                    pendingNext = false
++                    go(to: pageIndex + 1, proxy: proxy)
++                }
++                restore(proxy: proxy)
++            }
++            .task(id: turningRaw) {
++                // Wait for the destination scroll container to exist before
++                // restoring its anchor when switching reading styles.
++                await Task.yield()
++                guard !Task.isCancelled else { return }
++                restore(proxy: proxy)
++            }
++            .onChange(of: hasMore) { _, value in if !value { pendingNext = false } }
++            .onChange(of: arrangementRaw) { _, _ in restore(proxy: proxy) }
++            .onChange(of: keyboardRequest) { _, request in
++                guard isBrowsing, let request else { return }
++                handle(request, proxy: proxy)
++            }
++            .task(id: memory.restorationID) {
++                guard isBrowsing else { return }
++                do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
++                restore(proxy: proxy, anchor: memory.restoreAnchor)
++                memory.finishRestoration()
++            }
++            .onDisappear { turnTask?.cancel(); isTurning = false }
++            .onChange(of: isBrowsing) { _, value in if !value { turnTask?.cancel(); isTurning = false } }
++        }
++        .accessibilityIdentifier("magazine.browser")
++    }
++
++    private func pageContent(_ page: MagazinePage, index: Int) -> some View {
++        let columns = metrics.galleryColumns
++        let featured = page.featuredID(showsImages: showsImages)
++        // A layout highlight is a presentation decision, never a database sort.
++        let ordered = displayedEntries(in: page)
++        return VStack(alignment: .leading, spacing: 16) {
++            HStack(alignment: .firstTextBaseline) {
++                Text(page.title).font(.system(size: 15, weight: .semibold, design: .serif))
++                Spacer()
++                Text(String(format: "%02d", index + 1)).font(.system(size: 12, design: .monospaced))
++                    .foregroundStyle(Color(paperHex: palette.mutedHex))
++            }
++            Rectangle().fill(Color(paperHex: palette.mutedHex).opacity(0.23)).frame(height: 0.6)
++            MagazineMasonryLayout(columns: columns, spacing: TimelineLayoutMetrics.spacing) {
++                ForEach(Array(ordered.enumerated()), id: \.element.id) { offset, entry in
++                    let span = entry.id == featured && columns >= 3 && arrangement != .chronological ? 2 : 1
++                    let width = metrics.galleryTileWidth * CGFloat(span) + TimelineLayoutMetrics.spacing * CGFloat(span - 1)
++                    let isSupporting = featured != nil && columns >= 3 && offset > 0 && offset <= 2
++                        && arrangement != .chronological
++                    let role: TimelineTileLayout = span > 1 ? .lead :
++                        (isSupporting ? .supporting : (columns == 1 ? .compact : .gallery))
++                    tile(entry, width, role).layoutValue(key: MagazineColumnSpan.self, value: span)
++                }
++            }
++        }
++        .frame(width: metrics.contentWidth, alignment: .topLeading)
++        .foregroundStyle(Color(paperHex: palette.inkHex))
++    }
++
++    private func pageRail(proxy: ScrollViewProxy) -> some View {
++        HStack(spacing: 12) {
++            Button { go(to: pageIndex - 1, proxy: proxy) } label: { Image(systemName: "chevron.left") }
++                .disabled(pageIndex == 0 || isTurning)
++                .help(I18N.localized("上一页"))
++                .accessibilityIdentifier("magazine.previousPage")
++            ScrollViewReader { rail in
++                ScrollView(.horizontal) {
++                    HStack(spacing: 3) {
++                        ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
++                            Button { go(to: index, proxy: proxy) } label: {
++                                Capsule().fill(Color(paperHex: index == pageIndex ? palette.accentHex : palette.mutedHex)
++                                    .opacity(index == pageIndex ? 1 : 0.3))
++                                    .frame(width: index == pageIndex ? 26 : 12, height: 4)
++                                    .frame(width: index == pageIndex ? 34 : 22, height: 30)
++                                    .contentShape(Rectangle())
++                            }
++                            .id(page.id)
++                            .onHover { hoveredPage = $0 ? page.id : (hoveredPage == page.id ? nil : hoveredPage) }
++                            .accessibilityLabel("\(I18N.localized("页面")) \(index + 1): \(page.title)")
++                            .accessibilityHint(page.entries.map(\.title).joined(separator: "; "))
++                            .accessibilityAddTraits(index == pageIndex ? [.isSelected] : [])
++                        }
++                    }
++                }
++                .scrollIndicators(.never)
++                .frame(maxWidth: 380)
++                .onChange(of: pageIndex) { _, index in
++                    if pages.indices.contains(index) { rail.scrollTo(pages[index].id, anchor: .center) }
++                }
++            }
++            Button { go(to: pageIndex + 1, proxy: proxy) } label: { Image(systemName: "chevron.right") }
++                .disabled((pageIndex + 1 >= pages.count && !hasMore) || isTurning)
++                .help(I18N.localized("下一页"))
++                .accessibilityIdentifier("magazine.nextPage")
++            Text(pages.isEmpty ? "0 / 0" : "\(pageIndex + 1) / \(pages.count)")
++                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
++        }
++        .buttonStyle(.plain)
++        .padding(.horizontal, 20).padding(.vertical, 8)
++        .frame(maxWidth: .infinity)
++        .background(.regularMaterial)
++        .overlay(alignment: .top) { Divider().opacity(0.35) }
++        .overlay(alignment: .bottom) {
++            if let page = pages.first(where: { $0.id == hoveredPage }) {
++                VStack(alignment: .leading, spacing: 8) {
++                    Text(page.title).font(.headline)
++                    ForEach(page.entries) { entry in
++                        Text(entry.title).font(.caption).lineLimit(2)
++                    }
++                }
++                .padding(14).frame(width: min(340, max(180, availableSize.width - 48)), alignment: .leading)
++                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
++                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.1)))
++                .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
++                .offset(y: -60).allowsHitTesting(false)
++                .accessibilityHidden(true)
++            }
++        }
++    }
++
++    private func go(to index: Int, proxy: ScrollViewProxy) {
++        guard isBrowsing, !isTurning, index >= 0 else { return }
++        if index >= pages.count {
++            if hasMore { pendingNext = true; onNeedMore() }
++            return
++        }
++        guard let anchor = pages[index].entries.first?.id else { return }
++        if index == pageIndex && turning == .fold { return }
++        hoveredPage = nil
++        turnDirection = index >= pageIndex ? 1 : -1
++        memory.visibleAnchor = anchor
++        let duration = reduceMotion ? 0.12 : 0.42
++        if turning == .fold {
++            isTurning = true
++            withAnimation(.easeInOut(duration: duration)) { memory.magazineAnchor = anchor }
++            turnTask?.cancel()
++            turnTask = Task { @MainActor in
++                do { try await Task.sleep(for: .seconds(duration)) } catch { return }
++                isTurning = false
++            }
++        } else {
++            memory.magazineAnchor = anchor
++            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(pages[index].id, anchor: .top) }
++        }
++    }
++
++    private func restore(proxy: ScrollViewProxy, anchor: String? = nil) {
++        let anchor = anchor ?? memory.magazineAnchor
++        let index = MagazineEdition.pageIndex(containing: anchor, in: pages)
++        guard pages.indices.contains(index) else { return }
++        let validAnchor = anchor.flatMap { value in pages[index].entries.contains { $0.id == value } ? value : nil }
++        memory.magazineAnchor = validAnchor ?? pages[index].entries.first?.id
++        if turning == .scroll { proxy.scrollTo(pages[index].id, anchor: .top) }
++    }
++
++    private func displayedEntries(in page: MagazinePage) -> [EntryListItem] {
++        guard arrangement != .chronological, let featured = page.featuredID(showsImages: showsImages) else {
++            return page.entries
++        }
++        return page.entries.filter { $0.id == featured } + page.entries.filter { $0.id != featured }
++    }
++
++    private func handle(_ request: TimelineKeyRequest, proxy: ScrollViewProxy) {
++        if request.keyCode == 116 || request.keyCode == 121 {
++            go(to: pageIndex + (request.keyCode == 121 ? 1 : -1), proxy: proxy)
++            return
++        }
++        guard !isTurning else { return }
++        let ordered = pages.flatMap { displayedEntries(in: $0) }
++        guard !ordered.isEmpty else { return }
++        if request.keyCode == 125 || request.keyCode == 126 {
++            let current = ordered.firstIndex { $0.id == selectedID }
++            let next = current.map { $0 + (request.keyCode == 125 ? 1 : -1) } ?? 0
++            let target = ordered[min(ordered.count - 1, max(0, next))]
++            onHighlight(target.id)
++            let index = MagazineEdition.pageIndex(containing: target.id, in: pages)
++            if index != pageIndex { go(to: index, proxy: proxy) }
++            else if turning == .scroll { proxy.scrollTo(target.id, anchor: .center) }
++        } else if [36, 49, 76].contains(request.keyCode) {
++            onOpen(ordered.first { $0.id == selectedID } ?? pages[pageIndex].entries[0])
++        }
++    }
++}
+diff --git a/PaperRss/Sources/App/RootView.swift b/PaperRss/Sources/App/RootView.swift
+index cd312c3..b727072 100644
+--- a/PaperRss/Sources/App/RootView.swift
++++ b/PaperRss/Sources/App/RootView.swift
+@@ -434,0 +435 @@ struct RootView: View {
++                usesMagazineTimeline: timelineStyle == .magazine,
+@@ -523 +524,3 @@ struct RootView: View {
+-            timelineMemory.browseAnchor = timelineMemory.visibleAnchor ?? anchor
++            timelineMemory.browseAnchor = timelineStyle == .magazine
++                ? (timelineMemory.magazineAnchor ?? timelineMemory.visibleAnchor ?? anchor)
++                : (timelineMemory.visibleAnchor ?? anchor)
+@@ -2692 +2695 @@ private struct EntryListView: View {
+-        .onAppear { if entry.id == loadedEntries.last?.id { loadNextPage() } }
++        .onAppear { if viewStyle != .magazine && entry.id == loadedEntries.last?.id { loadNextPage() } }
+@@ -2699,22 +2701,0 @@ private struct EntryListView: View {
+-    @ViewBuilder
+-    private func magazineContent(metrics: TimelineLayoutMetrics) -> some View {
+-        if metrics.usesEditorialHeader, loadedEntries.count >= 3 {
+-            // Keep chronological order: first article, next two, then the gallery.
+-            HStack(alignment: .top, spacing: TimelineLayoutMetrics.spacing) {
+-                visualEntry(loadedEntries[0], width: metrics.featureColumnWidth, layout: .lead)
+-                VStack(alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
+-                    ForEach(Array(loadedEntries.dropFirst().prefix(2))) { entry in
+-                        visualEntry(entry, width: metrics.featureColumnWidth, layout: .supporting)
+-                    }
+-                }
+-            }
+-            galleryContent(Array(loadedEntries.dropFirst(3)), metrics: metrics)
+-        } else {
+-            // Small collections and narrow windows have no empty feature slots.
+-            ForEach(loadedEntries) { entry in
+-                visualEntry(entry, width: metrics.contentWidth,
+-                            layout: entry.id == loadedEntries.first?.id ? .lead : .compact)
+-            }
+-        }
+-    }
+-
+@@ -2733 +2714 @@ private struct EntryListView: View {
+-    private func timelineContent(width: CGFloat) -> some View {
++    private func timelineContent(width: CGFloat, height: CGFloat) -> some View {
+@@ -2744,0 +2726,14 @@ private struct EntryListView: View {
++        } else if viewStyle == .magazine {
++            MagazineBrowserView(entries: loadedEntries,
++                folders: Dictionary(store.feeds.map { ($0.id, $0.folder ?? "") }, uniquingKeysWith: { first, _ in first }),
++                availableSize: CGSize(width: width, height: max(0, height - 52)),
++                showsImages: showsImages, isBrowsing: isBrowsing, hasMore: hasMore,
++                selectedID: visualSelectionID ?? selectedEntryID, keyboardRequest: keyboardRequest,
++                memory: presentation, onHighlight: { visualSelectionID = $0 },
++                onOpen: { entry in onOpenEntry(); entryListSelection.wrappedValue = entry.id },
++                onNeedMore: loadNextPage,
++                tile: { entry, width, layout in visualEntry(entry, width: width, layout: layout) })
++                .focusable().focused($visualHasFocus).focusEffectDisabled()
++                .onAppear { visualHasFocus = isListFocused }
++                .onChange(of: isListFocused) { _, focused in visualHasFocus = focused }
++                .accessibilityIdentifier("timeline.visual.magazine")
+@@ -2749,5 +2744 @@ private struct EntryListView: View {
+-                    if viewStyle == .cards {
+-                        galleryContent(loadedEntries, metrics: metrics)
+-                    } else {
+-                        magazineContent(metrics: metrics)
+-                    }
++                    galleryContent(loadedEntries, metrics: metrics)
+@@ -2770 +2761 @@ private struct EntryListView: View {
+-        guard viewStyle != .list, !loadedEntries.isEmpty else { return }
++        guard viewStyle == .cards, !loadedEntries.isEmpty else { return }
+@@ -2790 +2781 @@ private struct EntryListView: View {
+-            timelineContent(width: geometry.size.width)
++            timelineContent(width: geometry.size.width, height: geometry.size.height)
+@@ -2806 +2797 @@ private struct EntryListView: View {
+-                guard !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
++                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
+@@ -2812,0 +2804 @@ private struct EntryListView: View {
++                guard viewStyle != .magazine else { return }
+diff --git a/PaperRss/Sources/App/ThreeColumnSplitView.swift b/PaperRss/Sources/App/ThreeColumnSplitView.swift
+index 339dc20..1304832 100644
+--- a/PaperRss/Sources/App/ThreeColumnSplitView.swift
++++ b/PaperRss/Sources/App/ThreeColumnSplitView.swift
+@@ -76,0 +77 @@ struct ToolbarActions {
++    let usesMagazineTimeline: Bool
+@@ -106,0 +108 @@ struct ToolbarActions {
++        usesMagazineTimeline: Bool = false,
+@@ -134,0 +137 @@ struct ToolbarActions {
++        self.usesMagazineTimeline = usesMagazineTimeline
+@@ -374,0 +378 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {

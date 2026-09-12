@@ -1,0 +1,71 @@
+name: Apply Reviewed Magazine Build Fix
+on:
+  push:
+    branches: [feature/issue-32-18-image-views]
+    paths: ['.ci/magazine-edition/**', '.github/workflows/apply-magazine-edition.yml']
+permissions:
+  contents: read
+concurrency:
+  group: apply-magazine-edition
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/feature/issue-32-18-image-views'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Apply checksum-reviewed edition and nonisolated animation fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          root = pathlib.Path('.ci/magazine-edition')
+          parts = sorted(root.glob('*.patch'))
+          assert len(parts) == 4
+          patch = b''.join(p.read_bytes() for p in parts)
+          assert hashlib.sha256(patch).hexdigest() == '67654cb59c21e13876c819a95dd4bb07fe08d212c477ff18390e083c1c409179'
+          hashes = json.loads((root / 'hashes.json').read_text())
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          for path, values in hashes.items():
+              if values['before'] is None:
+                  assert not pathlib.Path(path).exists(), path
+              else:
+                  assert git('hash-object', path) == values['before'], path
+          filename = pathlib.Path(os.environ['RUNNER_TEMP']) / 'magazine-edition.patch'
+          filename.write_bytes(patch)
+          subprocess.run(['git','apply','--check','--unidiff-zero',str(filename)], check=True)
+          subprocess.run(['git','apply','--index','--unidiff-zero',str(filename)], check=True)
+          assert set(git('diff','--cached','--name-only').splitlines()) == set(hashes)
+          for path, values in hashes.items():
+              assert git('hash-object', path) == values['after'], path
+          path = pathlib.Path('PaperRss/Sources/App/MagazineBrowserView.swift')
+          old = 'private struct MagazineFoldEffect: AnimatableModifier {\n    var progress: CGFloat\n    let direction: CGFloat\n    var animatableData: CGFloat {'
+          new = 'struct MagazineFoldEffect: ViewModifier, Animatable, Sendable {\n    // SwiftUI\'s interpolation contract is nonisolated. These Sendable value\n    // fields have no UI state; only body(content:) needs main-actor isolation.\n    nonisolated var progress: CGFloat\n    nonisolated let direction: CGFloat\n    nonisolated var animatableData: CGFloat {'
+          text = path.read_text()
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new))
+          assert git('hash-object', str(path)) == '5fac2ff9bdf7f3d9cdba10afb18d163de8922b2b'
+          test_source = root / 'MagazineFoldEffectTests.swift'
+          assert git('hash-object', str(test_source)) == '92743846a2cc5234a04ff50b8a8b97b7b30b1766'
+          test_path = pathlib.Path('AppTests/MagazineFoldEffectTests.swift')
+          assert not test_path.exists()
+          shutil.copyfile(test_source, test_path)
+          subprocess.run(['git', 'add', str(path), str(test_path)], check=True)
+          assert set(git('diff','--cached','--name-only').splitlines()) == set(hashes) | {str(test_path)}
+          PY
+          git diff --cached --check
+          bash -n scripts/verify.sh
+          node --test Tests/toolbar-lifetime.test.mjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: land reviewed magazine edition with nonisolated fold animation data'
+          git push origin HEAD:refs/heads/feature/issue-32-18-image-views
+          git rev-parse HEAD

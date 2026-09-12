@@ -1,0 +1,284 @@
+diff --git a/AppTests/TimelinePresentationTests.swift b/AppTests/TimelinePresentationTests.swift
+index 295d6bf..5476bf6 100644
+--- a/AppTests/TimelinePresentationTests.swift
++++ b/AppTests/TimelinePresentationTests.swift
+@@ -199,16 +199,57 @@ final class TimelinePresentationTests: XCTestCase {
+-    func testReaderHasBalancedAccessoriesAndBackIsOnLeadingEdge() throws {
+-        let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: false), appearance: .default,
+-            appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
+-        let toolbar = NSToolbar(identifier: "ReaderAccessoryTest")
+-        let order = coordinator.toolbarItemOrder(sidebarCollapsed: false)
+-        let reader = try XCTUnwrap(order.firstIndex(of: .paperReaderCapsule))
+-        XCTAssertEqual(Array(order[(reader - 2)...]), [.paperTimelineBack, .flexibleSpace,
+-                                                     .paperReaderCapsule, .flexibleSpace, .paperTimelineControls])
+-        XCTAssertFalse(order.contains(.paperTimelineTracker))
+-        XCTAssertFalse(order.contains(.paperEntryListTitle))
+-        let back = try XCTUnwrap(coordinator.toolbar(toolbar, itemForItemIdentifier: .paperTimelineBack, willBeInsertedIntoToolbar: true)?.view)
+-        let control = try XCTUnwrap(coordinator.toolbar(toolbar, itemForItemIdentifier: .paperTimelineControls, willBeInsertedIntoToolbar: true)?.view)
+-        XCTAssertEqual(back.frame.width, control.frame.width, accuracy: 0.001)
+-        let button = try XCTUnwrap(back.subviews.first as? NSButton)
+-        XCTAssertFalse(button.isHidden)
+-        XCTAssertEqual(button.accessibilityIdentifier(), "timeline.returnToBrowse")
++
++    func testVisualToolbarHasOneCentralClusterWithBackBeforeScopeActions() throws {
++        for browsing in [true, false] {
++            let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: browsing), appearance: .default,
++                appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
++            let order = coordinator.toolbarItemOrder(sidebarCollapsed: false)
++            let springs = order.indices.filter { order[$0] == .flexibleSpace }
++            XCTAssertEqual(springs.count, 2, "A third spring moves the scope actions off centre")
++            let mark = try XCTUnwrap(order.firstIndex(of: .paperMarkAllRead))
++            XCTAssertTrue(springs[0] < mark && mark < springs[1])
++            XCTAssertFalse(order.contains(.paperTimelineTracker))
++            if !browsing {
++                let back = try XCTUnwrap(order.firstIndex(of: .paperTimelineBack))
++                XCTAssertTrue(springs[0] < back && back < mark)
++                XCTAssertEqual(order[back + 1], .space, "Return is a standalone button, not fused into the filter capsule")
++            }
++        }
++    }
++
++    func testMasonryFillsTheShorterColumnAndNeverOverlaps() {
++        for columns in 1...3 {
++            let heights: [CGFloat] = [480, 130, 118, 124, 80, 270, 170, 95, 320]
++            let spans = columns == 3 ? [2,1,1,1,1,1,1,1,1] : Array(repeating: 1, count: heights.count)
++            let frames = MagazineMasonryLayout.frames(width: 1100, columns: columns, spacing: 20,
++                                                      heights: heights, spans: spans)
++            XCTAssertEqual(frames.count, heights.count)
++            for i in frames.indices {
++                XCTAssertEqual(frames[i].height, heights[i])
++                XCTAssertGreaterThanOrEqual(frames[i].minX, 0)
++                XCTAssertLessThanOrEqual(frames[i].maxX, 1100.01)
++                for j in frames.indices where i != j { XCTAssertFalse(frames[i].intersects(frames[j])) }
++            }
++            if columns == 3 {
++                XCTAssertEqual(frames[1].minY, 0)
++                XCTAssertEqual(frames[2].minY, 150)
++                XCTAssertEqual(frames[3].minY, 288, "A third short story fills the former blank space beside the lead")
++            }
++        }
++    }
++
++    func testTextOnlyMasonryDoesNotAlignRowsToTheirTallestNeighbour() {
++        let frames = MagazineMasonryLayout.frames(width: 900, columns: 3, spacing: 20,
++            heights: [90, 250, 140, 100, 75, 100], spans: Array(repeating: 1, count: 6))
++        XCTAssertEqual(frames[3].minY, 110)
++        XCTAssertEqual(frames[3].minX, 0)
++        XCTAssertLessThan(frames[3].minY, frames[1].maxY)
++    }
++
++    func testMagazineAnchorSurvivesArticleRouteButResetsWithScope() {
++        let memory = TimelinePresentationMemory()
++        memory.magazineAnchor = "article-30"
++        memory.browseAnchor = memory.magazineAnchor
++        memory.prepareRestoration(anchor: memory.browseAnchor)
++        XCTAssertEqual(memory.magazineAnchor, "article-30")
++        XCTAssertEqual(memory.restoreAnchor, "article-30")
++        memory.resetScope()
++        XCTAssertNil(memory.magazineAnchor)
+diff --git a/PaperRss/Resources/Localization/Localizable.xcstrings b/PaperRss/Resources/Localization/Localizable.xcstrings
+index 0c2bfb7..c95e89b 100644
+--- a/PaperRss/Resources/Localization/Localizable.xcstrings
++++ b/PaperRss/Resources/Localization/Localizable.xcstrings
+@@ -3,0 +4,12 @@
++    "页面" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page"}}}},
++    "下一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Next page"}}}},
++    "上一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Previous page"}}}},
++    "翻页方式" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page navigation"}}}},
++    "杂志编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Magazine arrangement"}}}},
++    "折叠翻页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Fold pages"}}}},
++    "滚动浏览" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Continuous scroll"}}}},
++    "本期选读" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "In this edition"}}}},
++    "按时间" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Chronological"}}}},
++    "按文件夹" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "By folder"}}}},
++    "按订阅源" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "By source"}}}},
++    "智能编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Balanced edition"}}}},
+diff --git a/PaperRss/Sources/App/MagazineBrowserView.swift b/PaperRss/Sources/App/MagazineBrowserView.swift
+new file mode 100644
+index 0000000..2a9cd0b
+--- /dev/null
++++ b/PaperRss/Sources/App/MagazineBrowserView.swift
+@@ -0,0 +1,385 @@
++import SwiftUI
++#if SWIFT_PACKAGE
++import PaperRssCore
++#endif
++
++private struct MagazineColumnSpan: LayoutValueKey { static let defaultValue = 1 }
++
++/// A measured masonry layout: the next story always uses the lowest available
++/// column. Unlike LazyVGrid, a short note never inherits a neighbour's height.
++struct MagazineMasonryLayout: Layout {
++    var columns: Int
++    var spacing: CGFloat = 20
++
++    static func frames(width: CGFloat, columns: Int, spacing: CGFloat,
++                       heights: [CGFloat], spans: [Int]) -> [CGRect] {
++        let count = max(1, columns)
++        let columnWidth = max(1, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
++        var bottoms = Array(repeating: CGFloat.zero, count: count)
++        return heights.enumerated().map { index, height in
++            let span = min(count, max(1, index < spans.count ? spans[index] : 1))
++            let start = (0...(count - span)).min {
++                let lhs = bottoms[$0..<($0 + span)].max() ?? 0
++                let rhs = bottoms[$1..<($1 + span)].max() ?? 0
++                return lhs == rhs ? $0 < $1 : lhs < rhs
++            } ?? 0
++            let top = bottoms[start..<(start + span)].max() ?? 0
++            let rect = CGRect(x: CGFloat(start) * (columnWidth + spacing), y: top,
++                              width: columnWidth * CGFloat(span) + spacing * CGFloat(span - 1),
++                              height: max(0, height))
++            for column in start..<(start + span) { bottoms[column] = rect.maxY + spacing }
++            return rect
++        }
++    }
++
++    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
++        let count = max(1, columns)
++        let columnWidth = max(1, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
++        let spans = subviews.map { min(count, max(1, $0[MagazineColumnSpan.self])) }
++        let heights = subviews.enumerated().map { index, view in
++            view.sizeThatFits(ProposedViewSize(width: columnWidth * CGFloat(spans[index])
++                + spacing * CGFloat(spans[index] - 1), height: nil)).height
++        }
++        return Self.frames(width: width, columns: count, spacing: spacing, heights: heights, spans: spans)
++    }
++
++    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
++        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 600
++        return CGSize(width: width, height: frames(width: width, subviews: subviews).map(\.maxY).max() ?? 0)
++    }
++
++    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
++        for (index, rect) in frames(width: bounds.width, subviews: subviews).enumerated() {
++            subviews[index].place(at: CGPoint(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY),
++                                  anchor: .topLeading, proposal: ProposedViewSize(rect.size))
++        }
++    }
++}
++
++/// Local page-only hinge effect. No screen capture, lid sensors, private APIs or
++/// continuous rendering loop. The two halves shade toward their common crease.
++private struct MagazineFoldEffect: AnimatableModifier {
++    var progress: CGFloat
++    let direction: CGFloat
++    var animatableData: CGFloat {
++        get { progress }
++        set { progress = newValue }
++    }
++    func body(content: Content) -> some View {
++        let amount = min(1, max(0, progress))
++        content.opacity(amount < 0.001 ? 1 : 0)
++            .overlay {
++                if amount >= 0.001 {
++                    GeometryReader { geometry in
++                        HStack(spacing: 0) {
++                            half(content, size: geometry.size, leading: true, amount: amount)
++                            half(content, size: geometry.size, leading: false, amount: amount)
++                        }
++                        .scaleEffect(1 - amount * 0.035)
++                        .offset(x: direction * amount * geometry.size.width * 0.12)
++                        .opacity(1 - amount)
++                    }
++                    .allowsHitTesting(false)
++                    .accessibilityHidden(true)
++                }
++            }
++    }
++    private func half(_ content: Content, size: CGSize, leading: Bool, amount: CGFloat) -> some View {
++        content.frame(width: size.width, height: size.height, alignment: .top)
++            .frame(width: size.width / 2, height: size.height, alignment: leading ? .leading : .trailing)
++            .clipped()
++            .overlay(LinearGradient(colors: [.clear, .black.opacity(0.20 * amount)],
++                                    startPoint: leading ? .leading : .trailing,
++                                    endPoint: leading ? .trailing : .leading))
++            .rotation3DEffect(.degrees(Double(amount * (leading ? -78 : 78))),
++                              axis: (x: 0, y: 1, z: 0), anchor: leading ? .trailing : .leading,
++                              perspective: 0.32)
++    }
++}
++
++private struct MagazinePageFrames: PreferenceKey {
++    static let defaultValue: [String: CGRect] = [:]
++    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
++        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
++    }
++}
++
++struct MagazineBrowserView<Tile: View>: View {
++    let entries: [EntryListItem]
++    let folders: [UUID: String]
++    let availableSize: CGSize
++    let showsImages: Bool
++    let isBrowsing: Bool
++    let hasMore: Bool
++    let selectedID: String?
++    let keyboardRequest: TimelineKeyRequest?
++    @ObservedObject var memory: TimelinePresentationMemory
++    let onHighlight: (String) -> Void
++    let onOpen: (EntryListItem) -> Void
++    let onNeedMore: () -> Void
++    let tile: (EntryListItem, CGFloat, TimelineTileLayout) -> Tile
++    @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
++    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
++    @Environment(\.paperAppearancePalette) private var palette
++    @Environment(\.accessibilityReduceMotion) private var reduceMotion
++    @State private var hoveredPage: String?
++    @State private var turnDirection: CGFloat = 1
++    @State private var pendingNext = false
++    @State private var isTurning = false
++    @State private var turnTask: Task<Void, Never>?
++
++    private var metrics: TimelineLayoutMetrics { .init(availableWidth: availableSize.width) }
++    private var arrangement: MagazineArrangement { .init(rawValue: arrangementRaw) ?? .balanced }
++    private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .scroll }
++    private var capacity: Int {
++        // Keep normal-size pages short enough to fit a laptop. Overflow still
++        // scrolls within a page at large accessibility sizes; it is never clipped.
++        let rows = availableSize.height > 950 ? 3 : 2
++        return max(3, metrics.galleryColumns * rows)
++    }
++    private var pages: [MagazinePage] {
++        MagazineEdition.pages(entries: entries, arrangement: arrangement, folders: folders, capacity: capacity)
++    }
++    private var pageIndex: Int { MagazineEdition.pageIndex(containing: memory.magazineAnchor, in: pages) }
++    private var pageIDs: [String] { pages.map(\.id) }
++
++    var body: some View {
++        ScrollViewReader { proxy in
++            Group {
++                if turning == .scroll {
++                    ScrollView {
++                        LazyVStack(spacing: 36) {
++                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
++                                pageContent(page, index: index)
++                                    .id(page.id)
++                                    .background(GeometryReader { geometry in
++                                        Color.clear.preference(key: MagazinePageFrames.self,
++                                            value: [page.id: geometry.frame(in: .named("magazine-viewport"))])
++                                    })
++                                    .onAppear { if isBrowsing && page.id == pages.last?.id && hasMore { onNeedMore() } }
++                            }
++                        }
++                        .padding(.vertical, 20)
++                        .frame(maxWidth: .infinity, alignment: .top)
++                    }
++                    .scrollIndicators(.never)
++                } else {
++                    ZStack(alignment: .top) {
++                        if pages.indices.contains(pageIndex) {
++                            let page = pages[pageIndex]
++                            ScrollView {
++                                pageContent(page, index: pageIndex)
++                                    .padding(.vertical, 20)
++                                    .frame(maxWidth: .infinity, alignment: .top)
++                            }
++                            .scrollIndicators(.never)
++                            .id(page.id)
++                            .transition(reduceMotion ? .opacity : .asymmetric(
++                                insertion: .modifier(active: MagazineFoldEffect(progress: 1, direction: -turnDirection),
++                                                     identity: MagazineFoldEffect(progress: 0, direction: -turnDirection)),
++                                removal: .modifier(active: MagazineFoldEffect(progress: 1, direction: turnDirection),
++                                                   identity: MagazineFoldEffect(progress: 0, direction: turnDirection))))
++                        }
++                    }
