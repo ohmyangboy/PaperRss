@@ -29,7 +29,14 @@ final class EntryListTitleToolbarLayoutTests: XCTestCase {
         // 3. 必须通过约束限制最大宽度，并预留按钮所需空间
         XCTAssertTrue(splitViewSource.contains("label.widthAnchor.constraint(lessThanOrEqualToConstant: maxTitleWidth)"))
         XCTAssertTrue(splitViewSource.contains("let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76"))
-        XCTAssertTrue(splitViewSource.contains("let maxTitleWidth = max(40, columnWidth - reservedWidth)"))
+        // 初始化和窗口/模式变化必须采用同一策略：普通列表保留按钮空间；
+        // 杂志/卡片模式使用与右侧切换器等宽的标题槽，避免中心操作组偏移。
+        let widthPolicy = "let maxTitleWidth = actions.usesVisualTimeline ? Self.timelineAccessoryWidth : max(40, columnWidth - reservedWidth)"
+        XCTAssertEqual(splitViewSource.components(separatedBy: widthPolicy).count - 1, 2)
+        XCTAssertTrue(splitViewSource.contains("label.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth)"))
+        XCTAssertTrue(splitViewSource.contains("host.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth)"))
+        XCTAssertTrue(splitViewSource.contains("visualWidth.isActive = actions.usesVisualTimeline"))
+        XCTAssertTrue(splitViewSource.contains("visualTitleWidthConstraint?.isActive = actions.usesVisualTimeline"))
 
         // 4. 按钮必须声明 required 水平抗压缩，避免被撑出中间栏
         XCTAssertTrue(splitViewSource.contains("button.setContentCompressionResistancePriority(.required, for: .horizontal)"))
