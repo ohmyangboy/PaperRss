@@ -11,14 +11,15 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
     func testLegacyZenModeRemovesAndRestoresToolbarItemsWithoutHideSupport() throws {
         let source = try appSource("ThreeColumnSplitView.swift")
 
-        XCTAssertTrue(source.contains("syncLegacyToolbarItemVisibility"))
+        XCTAssertTrue(source.contains("reconcileToolbarItems"))
         XCTAssertTrue(source.contains(".paperSidebarTracker"))
         XCTAssertTrue(source.contains(".paperTimelineTracker"))
         XCTAssertTrue(source.contains("toolbar.removeItem(at: index)"))
         XCTAssertTrue(source.contains("toolbar.insertItem(withItemIdentifier: identifier"))
-        XCTAssertTrue(source.contains("zenRemovedToolbarItemIndexes"))
+        XCTAssertTrue(source.contains("let retained: Set<NSToolbarItem.Identifier> = [.paperReaderCapsule, .paperTimelineControls]"))
 
-        let syncCall = try XCTUnwrap(source.range(of: "syncLegacyToolbarItemVisibility(in: toolbar"))
+        let zenMethod = try XCTUnwrap(source.range(of: "func syncZenModeState()"))
+        let syncCall = try XCTUnwrap(source.range(of: "syncTimelineToolbarStructure()", range: zenMethod.upperBound..<source.endIndex))
         let itemLoop = try XCTUnwrap(
             source.range(of: "for item in toolbar.items", range: syncCall.upperBound..<source.endIndex)
         )

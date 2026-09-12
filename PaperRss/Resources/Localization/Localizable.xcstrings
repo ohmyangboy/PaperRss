@@ -1,6 +1,12 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "打开文章" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open article" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "打开文章" } }
+      }
+    },
     "列表": {
       "extractionState": "manual",
       "localizations": {

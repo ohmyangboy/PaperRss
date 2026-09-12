@@ -239,6 +239,8 @@ struct RootView: View {
                 guard request.destination == .unread else { return }
                 cancelNavigationConfirmation(dismissToast: true)
                 selection = .unread
+                timelineMemory.resetScope()
+                isTimelineBrowsing = timelineStyle != .list
                 selectedEntryID = nil
                 retainedEntryListIDs.removeAll()
                 autoScrollTrigger = UUID()
@@ -252,8 +254,10 @@ struct RootView: View {
                 if oldID != newID {
                     cancelNavigationConfirmation(dismissToast: true)
                 }
+                if let newID, timelineStyle != .list && isTimelineBrowsing {
+                    openTimelineArticle(anchor: newID)
+                }
                 if let newID {
-                    if timelineStyle != .list && isTimelineBrowsing { openTimelineArticle(anchor: newID) }
                     scheduleNeighborPrefetch(from: newID)
                 }
             }
@@ -393,7 +397,7 @@ struct RootView: View {
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) },
                 viewStyle: timelineStyle,
-                showsImages: timelineShowsImages && !showsSettings && !isZenMode,
+                showsImages: timelineShowsImages && !showsSettings && !isZenMode && (timelineStyle == .list || isTimelineBrowsing),
                 isBrowsing: isTimelineBrowsing,
                 keyboardRequest: timelineKeyRequest,
                 presentation: timelineMemory,
@@ -428,6 +432,7 @@ struct RootView: View {
                 timelineControls: AnyView(timelineControls),
                 isTimelineBrowsing: isTimelineBrowsing,
                 usesVisualTimeline: timelineStyle != .list,
+                onReturnToTimeline: returnToTimeline,
                 onTimelineKey: { timelineKeyRequest = TimelineKeyRequest(keyCode: $0) }
             ),
             appearance: store.readerAppearance,
@@ -493,7 +498,6 @@ struct RootView: View {
     private var timelineControls: some View {
         TimelineViewControls(
             style: timelineStyle, showsImages: timelineShowsImages,
-            showsReturn: timelineStyle != .list && !isTimelineBrowsing && !isZenMode,
             onSelect: { style in
                 timelineMemory.prepareRestoration()
                 timelineStyleRaw = style.rawValue
@@ -507,10 +511,6 @@ struct RootView: View {
             },
             onToggleImages: { enabled in
                 timelineImagePreferenceRaw = (enabled ? TimelineImagePreference.enabled : .disabled).rawValue
-            },
-            onReturn: {
-                timelineMemory.prepareRestoration(anchor: timelineMemory.browseAnchor)
-                isTimelineBrowsing = true
             }
         )
         .tint(appearanceAccentColor)
@@ -520,10 +520,18 @@ struct RootView: View {
 
     private func openTimelineArticle(anchor: String? = nil) {
         if isTimelineBrowsing {
-            timelineMemory.browseAnchor = timelineMemory.visibleAnchor
-            timelineMemory.prepareRestoration(anchor: anchor)
+            timelineMemory.browseAnchor = timelineMemory.visibleAnchor ?? anchor
         }
         isTimelineBrowsing = false
+    }
+
+    private func returnToTimeline() {
+        guard timelineStyle != .list else { return }
+        cancelNavigationConfirmation(dismissToast: true)
+        timelineMemory.prepareRestoration(anchor: timelineMemory.browseAnchor)
+        isZenMode = false
+        isTimelineBrowsing = true
+        focusListView()
     }
 
     private var currentSelection: SidebarSelection {
@@ -551,7 +559,7 @@ struct RootView: View {
     }
 
     private var headerTitle: String {
-        if let selectedEntryID,
+        if !isTimelineBrowsing, let selectedEntryID,
            let entry = store.entry(id: selectedEntryID),
            let feed = store.feed(for: entry) {
             return feed.title
@@ -1025,7 +1033,10 @@ struct RootView: View {
                     onReaderShortcut: dispatchReaderShortcut,
                     onShortcutFeedback: { showToast($0) },
                     onSelectNextEntry: { selectNextEntry() },
-                    onFocusListView: { focusListView() },
+                    onFocusListView: {
+                        if timelineStyle == .list { focusListView() }
+                        else { returnToTimeline() }
+                    },
                     isZenMode: isZenMode,
                     onToggleZenMode: { withAnimation { isZenMode.toggle() } }
                 )
@@ -2664,14 +2675,13 @@ private struct EntryListView: View {
         }
     }
 
-    private func visualEntry(_ entry: EntryListItem, width: CGFloat) -> some View {
+    private func visualEntry(_ entry: EntryListItem, width: CGFloat, layout: TimelineTileLayout) -> some View {
         Button {
             onOpenEntry()
             visualSelectionID = entry.id
             entryListSelection.wrappedValue = entry.id
         } label: {
-            TimelineArticleTile(entry: entry, style: viewStyle,
-                isLead: viewStyle == .magazine && entry.id == loadedEntries.first?.id,
+            TimelineArticleTile(entry: entry, layout: layout,
                 isSelected: (visualSelectionID ?? selectedEntryID) == entry.id,
                 width: width, showsImages: showsImages, thumbnailStore: store.thumbnailStore)
         }
@@ -2682,7 +2692,42 @@ private struct EntryListView: View {
         .onAppear { if entry.id == loadedEntries.last?.id { loadNextPage() } }
     }
 
-    private func cardColumnCount(_ width: CGFloat) -> Int { max(1, Int((width - 14) / 258)) }
+    private func cardColumnCount(_ width: CGFloat) -> Int {
+        TimelineLayoutMetrics(availableWidth: width).galleryColumns
+    }
+
+    @ViewBuilder
+    private func magazineContent(metrics: TimelineLayoutMetrics) -> some View {
+        if metrics.usesEditorialHeader, loadedEntries.count >= 3 {
+            // Keep chronological order: first article, next two, then the gallery.
+            HStack(alignment: .top, spacing: TimelineLayoutMetrics.spacing) {
+                visualEntry(loadedEntries[0], width: metrics.featureColumnWidth, layout: .lead)
+                VStack(alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
+                    ForEach(Array(loadedEntries.dropFirst().prefix(2))) { entry in
+                        visualEntry(entry, width: metrics.featureColumnWidth, layout: .supporting)
+                    }
+                }
+            }
+            galleryContent(Array(loadedEntries.dropFirst(3)), metrics: metrics)
+        } else {
+            // Small collections and narrow windows have no empty feature slots.
+            ForEach(loadedEntries) { entry in
+                visualEntry(entry, width: metrics.contentWidth,
+                            layout: entry.id == loadedEntries.first?.id ? .lead : .compact)
+            }
+        }
+    }
+
+    private func galleryContent(_ entries: [EntryListItem], metrics: TimelineLayoutMetrics) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0),
+                                                    spacing: TimelineLayoutMetrics.spacing, alignment: .top),
+                                 count: metrics.galleryColumns),
+                  alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
+            ForEach(entries) { entry in
+                visualEntry(entry, width: metrics.galleryTileWidth, layout: .gallery)
+            }
+        }
+    }
 
     @ViewBuilder
     private func timelineContent(width: CGFloat) -> some View {
@@ -2698,23 +2743,18 @@ private struct EntryListView: View {
             #endif
             .scrollContentBackground(.hidden)
         } else {
+            let metrics = TimelineLayoutMetrics(availableWidth: width)
             ScrollView {
-                if viewStyle == .cards {
-                    let count = cardColumnCount(width)
-                    let tileWidth = max(1, (width - 32 - CGFloat(count - 1) * 18) / CGFloat(count))
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 18), count: count), spacing: 18) {
-                        ForEach(loadedEntries) { entry in visualEntry(entry, width: tileWidth) }
+                LazyVStack(alignment: .leading, spacing: TimelineLayoutMetrics.spacing) {
+                    if viewStyle == .cards {
+                        galleryContent(loadedEntries, metrics: metrics)
+                    } else {
+                        magazineContent(metrics: metrics)
                     }
-                    .padding(16)
-                } else {
-                    LazyVStack(spacing: 14) {
-                        ForEach(loadedEntries) { entry in
-                            visualEntry(entry, width: max(1, width - 32))
-                            Divider().padding(.horizontal, 14).accessibilityHidden(true)
-                        }
-                    }
-                    .padding(16)
                 }
+                .frame(width: metrics.contentWidth, alignment: .leading)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
             .scrollIndicators(.never)
             .focusable()
@@ -2763,7 +2803,7 @@ private struct EntryListView: View {
             .navigationTitle(selection.title)
             #endif
             .onPreferenceChange(TimelineRowFrames.self) { frames in
-                guard !presentation.isRestoring else { return }
+                guard !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
                 let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
                 if let first = frames.filter({ $0.value.intersects(viewport) }).min(by: { $0.value.minY < $1.value.minY }) {
                     presentation.visibleAnchor = first.key

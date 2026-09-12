@@ -71,3 +71,26 @@ mkdir -p .scratch/ui-review
 
 本轮另外修正测试夹具对非隔离 async XCTestCase 默认 setup/teardown 的多余调用，
 以及 Node 测试辅助函数覆盖子进程 PATH 的问题；没有改动相应产品功能或跳过断言。
+
+## Responsive magazine follow-up
+
+The visual canvas is centered with a maximum content width of 1100pt and 16–28pt
+outer gutters. At 760pt of usable content width and at least three articles,
+magazine mode uses the first article as a vertical image/title lead, the next two
+as compact text-led side cards, and the remainder as a one-to-three-column gallery.
+Narrow windows and small collections use a lead followed by compact rows. Order
+and shared pagination do not change. Cards have intrinsic content height, no
+minimum image slot and no vertical fill spacer. Compact thumbnails may not exceed
+the measured text height; image failure restores the text's available width.
+
+Opening an article from either visual mode collapses the timeline, not the feed
+sidebar. The reader remains mounted; its controls retain symmetric leading and
+trailing accessories. Return-to-browse is at the leading edge of the reading area;
+the view switcher stays at the trailing edge. Returning restores the saved browse
+anchor without resetting selection or unread retention. List mode keeps three
+columns. Zen temporarily hides the sidebar and restores its prior collapsed state.
+
+Follow-up verification covers intrinsic tile heights, width breakpoints, repeated
+browse/read/Zen/list transitions, controller identity and toolbar-item lifetime.
+Native interactive acceptance remains **Manual UI verification required**, including
+long mixed feeds, live window resizing, image failures and translated articles.

@@ -42,8 +42,8 @@ struct TimelineRowFrames: PreferenceKey {
 struct ArticleThumbnailView: View {
     let request: ArticleThumbnailRequest
     let store: ArticleThumbnailStore
-    let width: CGFloat
-    let height: CGFloat
+    let width: CGFloat?
+    let height: CGFloat?
     @Environment(\.paperAppearancePalette) private var palette
     @State private var loaded: ArticleThumbnail?
     @State private var loadedRequest: ArticleThumbnailRequest?
@@ -60,7 +60,8 @@ struct ArticleThumbnailView: View {
                         Color(paperHex: palette.mutedHex).opacity(0.07)
                     }
                 }
-                .frame(width: max(1, width), height: max(1, height))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: width.map { max(1, $0) }, height: height.map { max(1, $0) })
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .accessibilityHidden(true)
@@ -83,10 +84,81 @@ struct ArticleThumbnailView: View {
     }
 }
 
+/// Like the reader's centered text column, visual timelines have a readable
+/// maximum measure instead of stretching across every available screen pixel.
+struct TimelineLayoutMetrics {
+    static let maximumWidth: CGFloat = 1100
+    static let editorialBreakpoint: CGFloat = 760
+    static let spacing: CGFloat = 20
+    let contentWidth: CGFloat
+
+    init(availableWidth: CGFloat) {
+        let gutter: CGFloat = availableWidth < 600 ? 16 : 28
+        contentWidth = min(Self.maximumWidth, max(1, availableWidth - gutter * 2))
+    }
+
+    var usesEditorialHeader: Bool { contentWidth >= Self.editorialBreakpoint }
+    var featureColumnWidth: CGFloat { (contentWidth - Self.spacing) / 2 }
+    var galleryColumns: Int { min(3, max(1, Int((contentWidth + Self.spacing) / 260))) }
+    var galleryTileWidth: CGFloat {
+        (contentWidth - CGFloat(galleryColumns - 1) * Self.spacing) / CGFloat(galleryColumns)
+    }
+}
+
+enum TimelineTileLayout {
+    case lead, supporting, compact, gallery
+}
+
+/// Text is measured first. A thumbnail may use that height, never force a short
+/// tweet to occupy a full image-height row. A failed image takes no space.
+struct TimelineCompactTileLayout: Layout {
+    var imageWidth: CGFloat
+    var imageLeading = false
+    var spacing: CGFloat = 14
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        guard !subviews.isEmpty else { return [] }
+        let width = max(1, width)
+        var textWidth = width
+        var textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        var imageSize = CGSize.zero
+        if subviews.count > 1 {
+            let proposedImageWidth = min(imageWidth, width * 0.32)
+            textWidth = max(1, width - proposedImageWidth - spacing)
+            textSize = subviews[0].sizeThatFits(ProposedViewSize(width: textWidth, height: nil))
+            imageSize = subviews[1].sizeThatFits(ProposedViewSize(
+                width: proposedImageWidth, height: min(proposedImageWidth, textSize.height)))
+            if imageSize.width <= 0 || imageSize.height <= 0 {
+                imageSize = .zero
+                textWidth = width
+                textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            }
+        }
+        let textX = imageLeading && imageSize.width > 0 ? imageSize.width + spacing : 0
+        let text = CGRect(x: textX, y: 0, width: textWidth, height: textSize.height)
+        guard subviews.count > 1 else { return [text] }
+        return [text, CGRect(x: imageLeading ? 0 : width - imageSize.width, y: 0,
+                             width: imageSize.width, height: imageSize.height)]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 360
+        let rects = frames(width: width, subviews: subviews)
+        return CGSize(width: max(1, width), height: rects.map(\.maxY).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rects = frames(width: bounds.width, subviews: subviews)
+        for (index, rect) in rects.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY),
+                                  anchor: .topLeading, proposal: ProposedViewSize(rect.size))
+        }
+    }
+}
+
 struct TimelineArticleTile: View {
     let entry: EntryListItem
-    let style: TimelineViewStyle
-    let isLead: Bool
+    let layout: TimelineTileLayout
     let isSelected: Bool
     let width: CGFloat
     let showsImages: Bool
@@ -94,59 +166,59 @@ struct TimelineArticleTile: View {
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.displayScale) private var displayScale
 
-    private var isWideMagazine: Bool { style == .magazine && width >= 560 }
-    private var imageWidth: CGFloat { isWideMagazine ? (isLead ? width * 0.49 : 172) : max(1, width - 28) }
-    private var imageHeight: CGFloat {
-        isWideMagazine ? (isLead ? 240 : 114) : min(isLead ? 260 : 176, imageWidth * 0.60)
-    }
+    private var isLead: Bool { layout == .lead }
+    private var isCompact: Bool { layout == .compact || layout == .supporting }
+    private var contentWidth: CGFloat { max(1, width - 24) }
+    private var imageWidth: CGFloat { isCompact ? min(132, contentWidth * 0.32) : contentWidth }
+    private var imageHeight: CGFloat { min(isLead ? 300 : 180, imageWidth * 9 / 16) }
 
     var body: some View {
         Group {
-            if isWideMagazine {
-                HStack(alignment: .top, spacing: 22) {
-                    if isLead { thumbnail }
-                    textContent.frame(maxWidth: .infinity, alignment: .leading)
-                    if !isLead { thumbnail }
-                }
-                .frame(minHeight: isLead ? 240 : 120, alignment: .top)
-            } else {
-                VStack(alignment: .leading, spacing: 13) {
-                    thumbnail
+            if isCompact {
+                TimelineCompactTileLayout(imageWidth: imageWidth, imageLeading: layout == .supporting) {
                     textContent
-                    Spacer(minLength: 0)
+                    thumbnail(height: nil)
                 }
-                .frame(minHeight: style == .cards ? 232 : 140, alignment: .top)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    thumbnail(height: imageHeight)
+                    textContent
+                }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // No minimum tile height and no vertical Spacer: text-only articles
+        // remain compact, including the lead article and short social posts.
+        .padding(12)
+        .frame(width: width, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(Color(paperHex: isSelected ? palette.accentHex : palette.backgroundHex)
-            .opacity(isSelected ? 0.14 : (style == .cards ? 0.64 : 0)))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+            .opacity(isSelected ? 0.14 : 0.54))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 10).strokeBorder(
+            RoundedRectangle(cornerRadius: 9).strokeBorder(
                 Color(paperHex: isSelected ? palette.accentHex : palette.mutedHex)
-                    .opacity(isSelected ? 0.55 : (style == .cards ? 0.16 : 0)), lineWidth: 0.7)
+                    .opacity(isSelected ? 0.55 : 0.13), lineWidth: 0.7)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
+        .accessibilityHint(I18N.localized("打开文章"))
     }
 
-    @ViewBuilder private var thumbnail: some View {
+    @ViewBuilder private func thumbnail(height: CGFloat?) -> some View {
         if showsImages, let url = entry.previewImageURL {
             ArticleThumbnailView(
                 request: .init(accountID: entry.accountID, url: url, pixelSize: Int(imageWidth * displayScale)),
-                store: thumbnailStore, width: imageWidth, height: imageHeight)
+                store: thumbnailStore, width: isCompact ? nil : imageWidth, height: height)
         }
     }
 
     private var textContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Circle().fill(entry.isRead ? Color.clear : Color(paperHex: palette.accentHex))
-                    .frame(width: 6, height: 6)
+                if !entry.isRead {
+                    Circle().fill(Color(paperHex: palette.accentHex)).frame(width: 6, height: 6)
+                }
                 Text(entry.sourceTitle).lineLimit(1)
                 Spacer(minLength: 0)
                 if entry.isStarred { Image(systemName: "star.fill").foregroundStyle(Color(paperHex: palette.warmHex)) }
@@ -155,7 +227,7 @@ struct TimelineArticleTile: View {
             Text(entry.title)
                 .font(.system(size: isLead ? 25 : 18, weight: entry.isRead ? .regular : .semibold, design: .serif))
                 .foregroundStyle(Color(paperHex: palette.inkHex))
-                .lineLimit(isLead ? 5 : 3)
+                .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
                 .fixedSize(horizontal: false, vertical: true)
             if entry.isSummaryVisible {
                 Text(entry.summaryPreview).font(.system(size: 13))
@@ -170,6 +242,7 @@ struct TimelineArticleTile: View {
             }
             .font(.caption2).foregroundStyle(Color(paperHex: palette.mutedHex))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -177,20 +250,12 @@ struct TimelineArticleTile: View {
 struct TimelineViewControls: View {
     let style: TimelineViewStyle
     let showsImages: Bool
-    let showsReturn: Bool
     let onSelect: (TimelineViewStyle) -> Void
     let onToggleImages: (Bool) -> Void
-    let onReturn: () -> Void
     @State private var showsPopover = false
 
     var body: some View {
         HStack(spacing: 5) {
-            if showsReturn {
-                Button(action: onReturn) { Image(systemName: "arrow.uturn.backward") }
-                    .help(I18N.localized("返回浏览"))
-                    .accessibilityLabel(I18N.localized("返回浏览"))
-                    .accessibilityIdentifier("timeline.returnToBrowse")
-            } else { Spacer(minLength: 0) }
             Button { showsPopover.toggle() } label: {
                 Image(systemName: style.symbol).frame(width: 18, height: 18)
             }
@@ -235,7 +300,7 @@ struct TimelineViewControls: View {
         }
         .buttonStyle(.borderless)
         .font(.system(size: 14))
-        .frame(width: 62, height: 30)
+        .frame(width: 30, height: 30)
     }
 }
 #endif
