@@ -4,12 +4,48 @@ import QuartzCore
 import MetalKit
 import SwiftUI
 
+/// 本地短音效只在翻页提交时播放，不跟随拖动逐帧触发。
+@MainActor
+enum MagazinePageSound {
+    private static let sound: NSSound? = {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        guard let url = bundle.url(forResource: "MagazinePageTurn", withExtension: "wav")
+            ?? bundle.url(forResource: "MagazinePageTurn", withExtension: "wav", subdirectory: "Audio"),
+              let sound = NSSound(contentsOf: url, byReference: false) else { return nil }
+        sound.volume = 0.72
+        return sound
+    }()
+
+    static func play() {
+        guard let sound else { return }
+        if sound.isPlaying { sound.stop() }
+        sound.play()
+    }
+}
+
 struct MagazinePageTurnRequest: Equatable, Sendable {
     let id = UUID()
     let targetPageID: String
     let forward: Bool
     var progress: Double? = nil
     var commit = true
+    var releaseVelocity: Double? = nil
+    let variation = MagazineTurnVariation.random()
+}
+
+/// 每次手势只选一次预设，形变和速度在整次翻页中保持连续。
+struct MagazineTurnVariation: Equatable, Sendable {
+    let corner: Float
+    let duration: Double
+    static let presets: [Self] = [
+        .init(corner: -0.8, duration: 0.28), .init(corner: 0.65, duration: 0.30),
+        .init(corner: -0.35, duration: 0.26), .init(corner: 1, duration: 0.29)
+    ]
+    static func random() -> Self { presets.randomElement()! }
 }
 
 struct MagazineTurnGeometry: Sendable {
@@ -18,6 +54,12 @@ struct MagazineTurnGeometry: Sendable {
     var destinationIsLeft: Bool { forward }
     var anchorX: CGFloat { forward ? 0 : 1 }
     var finalAngle: CGFloat { forward ? -.pi : .pi }
+    /// 初始切线保留手势速度，终点切线为零；回落前允许轻微顺势延伸。
+    static func settled(_ time: Double, slope: Double) -> Double {
+        let t = min(1, max(0, time))
+        return (-2 * t * t * t + 3 * t * t) + slope * (t * t * t - 2 * t * t + t)
+    }
+
     static func snapshotScale(size: CGSize, displayScale: CGFloat) -> CGFloat {
         let pixels = max(1, size.width * size.height)
         return min(max(1, displayScale), 2, sqrt(3_000_000 / pixels))
@@ -28,16 +70,17 @@ struct MagazineTurnGeometry: Sendable {
             width: left ? mid : image.width - mid, height: image.height))
     }
     static func eased(_ value: Double) -> Double {
-        // 0.20, 0.85, 0.25, 1.0 贝塞尔：先反解时间，再求进度。
+        // 0.23, 1.0, 0.32, 1.0 贝塞尔：先反解时间，再求进度。
         let x = min(1, max(0, value))
+        if x == 0 || x == 1 { return x }
         var low = 0.0, high = 1.0
         for _ in 0..<14 {
             let t = (low + high) / 2
-            let bx = 3 * (1-t) * (1-t) * t * 0.20 + 3 * (1-t) * t * t * 0.25 + t*t*t
+            let bx = 3 * (1-t) * (1-t) * t * 0.23 + 3 * (1-t) * t * t * 0.32 + t*t*t
             if bx < x { low = t } else { high = t }
         }
         let t = (low + high) / 2
-        return 3 * (1-t) * (1-t) * t * 0.85 + 3 * (1-t) * t*t + t*t*t
+        return 3 * (1-t) * (1-t) * t + 3 * (1-t) * t*t + t*t*t
     }
 }
 
@@ -53,17 +96,21 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         return try? device.makeRenderPipelineState(descriptor: descriptor)
     }()
+    static func prepare() { _ = pipeline }
+
     let view: MTKView
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let before: MTLTexture
     private let after: MTLTexture
     private let forward: Bool
+    private let insetFraction: Float
+    private let corner: Float
     private(set) var frameCount = 0
     private var requestedProgress = 0.0
     private var drewFrame = false
 
-    init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool) {
+    init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
         guard let device = Self.device, let pipeline = Self.pipeline,
               let queue = device.makeCommandQueue() else { return nil }
         let loader = MTKTextureLoader(device: device)
@@ -71,6 +118,8 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         guard let old = try? loader.newTexture(cgImage: before, options: options),
               let new = try? loader.newTexture(cgImage: after, options: options) else { return nil }
         self.before = old; self.after = new; self.queue = queue; self.pipeline = pipeline; self.forward = forward
+        self.corner = min(1, max(-1, corner))
+        self.insetFraction = Float(min(0.4, max(0, verticalInset / max(1, size.height))))
         view = MTKView(frame: CGRect(origin: .zero, size: size), device: device)
         view.colorPixelFormat = .bgra8Unorm
         view.isPaused = true
@@ -107,7 +156,7 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
-        var parameters = SIMD4<Float>(Float(progress), forward ? 1 : -1, Float(before.width), Float(before.height))
+        var parameters = SIMD4<Float>(Float(progress), forward ? 1 : -1, insetFraction, corner)
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(before, index: 0)
         encoder.setFragmentTexture(after, index: 1)
@@ -117,7 +166,8 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         return true
     }
 
-    // 固定投影使文字沿折线保持对齐；远离折线的部分逐渐模糊和变暗。
+    // 参考 Duo 的核心几何：固定半页不动，另一半围绕中轴旋转。翻动页只在
+    // 自己的投影范围内绘制，避免把整张目标页混成灰色重影。
     private static let shader = """
     #include <metal_stdlib>
     using namespace metal;
@@ -134,39 +184,40 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         float2 uv = r.uv;
         if (p <= 0.00001) return old.sample(s, uv);
         if (p >= 0.99999) return next.sample(s, uv);
+        float inset = params.z, paperHeight = 1.0 - 2.0 * inset;
+        float paperY = (uv.y - inset) / paperHeight;
         float x = (uv.x - 0.5) * 2.0;
         float angle = p * M_PI_F, c = cos(angle), sine = sin(angle);
         bool stationary = x * direction < 0;
         float4 base = stationary ? old.sample(s, uv) : next.sample(s, uv);
-        // 射线与翻动半页的交点；t=0 为书脊，t=1 为外边缘。
-        float divisor = direction * c + x * sine * 0.32;
-        float t = abs(divisor) > 0.00001 ? x / divisor : -1;
-        float depth = 1.0 - t * sine * 0.32;
-        float y = (uv.y - 0.5) * depth + 0.5;
-        if (t < 0 || t > 1 || y < 0 || y > 1) {
-            float shadow = exp(-abs(x) * 30.0) * sine * 0.14;
-            return float4(base.rgb * (1.0 - shadow), 1);
-        }
+        // 透视除法随页上位置变化；外缘向观察者抬起，书脊固定。
+        // 边距缩小时同步降低透视深度，保留真实投影并避免页边超出舞台。
+        float maxDepth = inset > 0.0 ? min(0.16, inset * 1.7) : 0.16;
+        // 上下角的抬起位置不同，但深度始终在原有舞台预算以内。
+        float cornerWeight = clamp(0.72 + params.w * (paperY - 0.5) * 0.5, 0.45, 1.0);
+        float depth = maxDepth * sine * (params.w == 0.0 ? 1.0 : cornerWeight);
+        float projectedEdge = direction * c / (1.0 - depth);
+        bool onLeaf = abs(projectedEdge) > 0.0001
+            && x * projectedEdge >= 0.0 && abs(x) <= abs(projectedEdge);
+        float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 38.0) * sine * 0.12 : 0.0;
+        if (!onLeaf) return float4(base.rgb * (1.0 - hingeShadow), 1);
+        // t=0 为中轴，t=1 为外边缘；正面采旧页，背面采目标页另一半。
+        float localX = x * direction;
+        float t = clamp(localX / (c + localX * depth), 0.0, 1.0);
         bool front = p < 0.5;
         float faceDirection = front ? direction : -direction;
-        // 用观察平面的距离投影，避免整块文字被横向压缩。
-        float sourceX = 0.5 + faceDirection * min(1.0, abs(x)) * 0.5;
-        float2 source = float2(sourceX, uv.y);
-        float motion = sine * sine;
-        float gradient = pow(clamp(t, 0.0, 1.0), 1.35);
-        float radius = 72.0 * motion * gradient;
-        float3 color = float3(0);
-        for (int j = -1; j <= 1; ++j) {
-            for (int i = -1; i <= 1; ++i) {
-                float weight = (i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0) / 16.0;
-                float2 sampleUV = source + float2(i, j) * radius / params.zw;
-                sampleUV.x = clamp(sampleUV.x, faceDirection > 0 ? 0.5 : 0.0, faceDirection > 0 ? 1.0 : 0.5);
-                color += (front ? old.sample(s, sampleUV).rgb : next.sample(s, sampleUV).rgb) * weight;
-            }
-        }
-        color *= 1.0 - min(0.72, motion * gradient * 1.2);
-        float coverage = clamp((1.0 - t) / max(fwidth(t), 0.001), 0.0, 1.0);
-        return float4(mix(base.rgb, color, coverage), 1);
+        float sourceX = 0.5 + faceDirection * t * 0.5;
+        float yScale = 1.0 - depth * t;
+        float2 source = float2(sourceX, (paperY - 0.5) * yScale + 0.5);
+        if (source.y < 0.0 || source.y > 1.0) return float4(base.rgb, 1);
+        source.y = inset + source.y * paperHeight;
+        float edge = pow(t, 1.35), motion = sine * sine;
+        // 文字保持清晰，立体感由真实投影和随角度变化的光照承担。
+        float3 color = front ? old.sample(s, source).rgb : next.sample(s, source).rgb;
+        float faceShade = 1.0 - motion * (0.06 + 0.12 * edge);
+        float outerHighlight = smoothstep(0.94, 1.0, t) * sine * 0.12;
+        color = color * faceShade + outerHighlight;
+        return float4(color, 1);
     }
     """
 }
@@ -177,6 +228,9 @@ struct MagazinePageTurnView<Content: View>: NSViewRepresentable {
     let reduceMotion: Bool
     let isActive: Bool
     let background: NSColor
+    var verticalInset: CGFloat = 0
+    var playsSound = false
+    var fades = false
     let content: Content
     let onComplete: @MainActor (UUID, Bool) -> Void
     func makeNSView(context: Context) -> MagazineTurnSurface<Content> {
@@ -184,7 +238,7 @@ struct MagazinePageTurnView<Content: View>: NSViewRepresentable {
     }
     func updateNSView(_ view: MagazineTurnSurface<Content>, context: Context) {
         view.update(content: content, pageID: pageID, request: request,
-            reduceMotion: reduceMotion, isActive: isActive, background: background, onComplete: onComplete)
+            reduceMotion: reduceMotion, isActive: isActive, background: background, verticalInset: verticalInset, playsSound: playsSound, fades: fades, onComplete: onComplete)
     }
     static func dismantleNSView(_ view: MagazineTurnSurface<Content>, coordinator: ()) {
         view.cancelTurn(notify: false)
@@ -197,6 +251,14 @@ private final class MagazineSnapshotCover: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// 显示时钟只持有弱捕获闭包；结束或离窗时立即停止刷新。
+@MainActor
+private final class MagazineDisplayLinkTarget: NSObject {
+    let callback: (CADisplayLink) -> Void
+    init(_ callback: @escaping (CADisplayLink) -> Void) { self.callback = callback }
+    @objc func tick(_ link: CADisplayLink) { callback(link) }
+}
+
 @MainActor
 final class MagazineTurnSurface<Content: View>: NSView {
     enum Phase { case preparing, interacting, completing }
@@ -204,13 +266,21 @@ final class MagazineTurnSurface<Content: View>: NSView {
     private var pageID: String
     private var currentRequest: MagazinePageTurnRequest?
     private var preparation: Task<Void, Never>?
-    private var animation: Task<Void, Never>?
+    private var displayClock: CADisplayLink?
+    private var animationStart = 0.0
+    private var animationDuration = 0.0
+    private var animationFrom = 0.0
+    private var animationSlope: Double?
+    private var animationTo = 1.0
+    private var sourceContent: Content?
+    private var sourcePageID: String?
     private var completion: (@MainActor (UUID, Bool) -> Void)?
     private var cover: NSView?
     private var metal: MagazineMetalRenderer?
     private var lastSize: CGSize = .zero
     private var progress = 0.0
     private var reduceMotion = false
+    private var playsSound = false
     private(set) var phase: Phase?
     private(set) var snapshotCount = 0
     private(set) var renderedFrames = 0
@@ -235,12 +305,14 @@ final class MagazineTurnSurface<Content: View>: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { cancelTurn() }
+        else { MagazineMetalRenderer.prepare() }
     }
     func update(content: Content, pageID: String, request: MagazinePageTurnRequest?,
-                reduceMotion: Bool, isActive: Bool, background: NSColor,
+                reduceMotion: Bool, isActive: Bool, background: NSColor, verticalInset: CGFloat = 0, playsSound: Bool = false, fades: Bool = false,
                 onComplete: @escaping @MainActor (UUID, Bool) -> Void) {
         completion = onComplete
         self.reduceMotion = reduceMotion
+        self.playsSound = playsSound
         layer?.backgroundColor = background.cgColor
         if pageID == self.pageID {
             if currentRequest == nil {
@@ -257,6 +329,10 @@ final class MagazineTurnSurface<Content: View>: NSView {
         cancelTurn()
         let shouldTurn = isActive && request?.targetPageID == pageID && window != nil
         let before = shouldTurn ? snapshot(background: background) : nil
+        if shouldTurn, before != nil {
+            sourceContent = host.rootView
+            sourcePageID = self.pageID
+        }
         self.pageID = pageID
         host.rootView = content
         guard let request, shouldTurn, let before else {
@@ -280,9 +356,9 @@ final class MagazineTurnSurface<Content: View>: NSView {
             self.host.layoutSubtreeIfNeeded()
             self.host.displayIfNeeded()
             guard self.bounds.size == size, let after = self.snapshot(background: background) else {
-                self.finish(committed: true); return
+                self.finish(committed: self.currentRequest?.commit ?? true); return
             }
-            if !reduceMotion, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward) {
+            if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner) {
                 self.metal = renderer
                 self.cover?.addSubview(renderer.view)
                 if !renderer.draw(progress: 0) { renderer.view.removeFromSuperview(); self.metal = nil }
@@ -293,25 +369,39 @@ final class MagazineTurnSurface<Content: View>: NSView {
     }
     private func advance(_ request: MagazinePageTurnRequest) {
         if let position = request.progress {
-            animation?.cancel(); animation = nil
+            displayClock?.invalidate(); displayClock = nil
             phase = .interacting
             draw(position)
         } else if phase != .completing {
             phase = .completing
+            if request.commit && playsSound { MagazinePageSound.play() }
             let start = progress
             let end = request.commit ? 1.0 : 0.0
-            let duration = (reduceMotion || metal == nil) ? 0.12 : max(0.12, 0.52 * abs(end - start))
-            animation = Task { @MainActor [weak self] in
-                let began = CACurrentMediaTime()
-                while !Task.isCancelled {
-                    guard let self, self.currentRequest?.id == request.id else { return }
-                    let time = min(1, (CACurrentMediaTime() - began) / duration)
-                    self.draw(start + (end - start) * MagazineTurnGeometry.eased(time))
-                    if time >= 1 { self.finish(committed: request.commit); return }
-                    do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                }
-            }
+            animationDuration = reduceMotion ? 0.12 : max(0.12, (metal == nil ? 0.20 : request.variation.duration) * abs(end - start))
+            if let velocity = request.releaseVelocity {
+                animationDuration = reduceMotion ? 0.12 : min(0.42, max(0.22, abs(end - start) * 0.48))
+                // 三次曲线保留松手速度，终点速度为零；限制切线避免越界。
+                let delta = end - start
+                animationSlope = abs(delta) > 0.001 ? min(3, max(-1, velocity * animationDuration / delta)) : 0
+            } else { animationSlope = nil }
+            animationStart = CACurrentMediaTime()
+            animationFrom = start
+            animationTo = end
+            let target = MagazineDisplayLinkTarget { [weak self] link in self?.tick(link) }
+            let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
+            displayClock = clock
+            clock.add(to: .main, forMode: .common)
         }
+    }
+    private func tick(_ link: CADisplayLink) {
+        guard let request = currentRequest, phase == .completing else { return }
+        let time = min(1, max(0, (link.targetTimestamp - animationStart) / animationDuration))
+        let eased: Double
+        if let slope = animationSlope {
+            eased = MagazineTurnGeometry.settled(time, slope: slope)
+        } else { eased = MagazineTurnGeometry.eased(time) }
+        draw(animationFrom + (animationTo - animationFrom) * eased)
+        if time >= 1 { finish(committed: request.commit) }
     }
     private func draw(_ value: Double) {
         progress = min(1, max(0, value))
@@ -332,13 +422,20 @@ final class MagazineTurnSurface<Content: View>: NSView {
         let id = currentRequest?.id
         currentRequest = nil; phase = nil
         preparation?.cancel(); preparation = nil
-        animation?.cancel(); animation = nil
+        displayClock?.invalidate(); displayClock = nil
         metal = nil
+        if let sourceContent, let sourcePageID {
+            host.rootView = sourceContent
+            pageID = sourcePageID
+            host.layoutSubtreeIfNeeded()
+        }
+        sourceContent = nil; sourcePageID = nil
         cover?.removeFromSuperview(); cover = nil
         if notify, let id { completeLater(id, committed: false) }
     }
     private func finish(committed: Bool) {
         let id = currentRequest?.id
+        if committed { sourceContent = nil; sourcePageID = nil }
         cancelTurn(notify: false)
         if let id { completeLater(id, committed: committed) }
     }

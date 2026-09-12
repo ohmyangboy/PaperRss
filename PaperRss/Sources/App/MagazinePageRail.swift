@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
@@ -15,12 +16,15 @@ private struct MagazineRailAnchors: PreferenceKey {
 struct MagazinePageRail: View {
     let pages: [MagazinePage]
     let currentIndex: Int
-    let hasMore: Bool
     let isTurning: Bool
     let availableWidth: CGFloat
     let availableHeight: CGFloat
     let onSelect: (Int) -> Void
     @Environment(\.paperAppearancePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
+    @ObservedObject private var outputVolume = SystemOutputVolumeMonitor.shared
+    @State private var hoverPosition: CGFloat?
     @State private var hoveredID: String?
     @State private var dismissTask: Task<Void, Never>?
     @FocusState private var focusedID: String?
@@ -30,33 +34,36 @@ struct MagazinePageRail: View {
     private var railWidth: CGFloat {
         min(280, max(14, availableWidth * 0.45), max(14, CGFloat(pages.count) * 14))
     }
+    private var previewMaxHeight: CGFloat { min(400, max(96, availableHeight - 100)) }
+
+    // 连续距离让相邻刻度依次抬起；只缩放刻度，不改变命中区域或布局。
+    static func waveHeight(distance: CGFloat) -> CGFloat {
+        let influence = max(0, 1 - abs(distance) / 3)
+        return tickHeight + 16 * influence * influence * (3 - 2 * influence)
+    }
+
+    static func audioWaveHeight(index: Int, volume: CGFloat, time: TimeInterval,
+                                reduceMotion: Bool) -> CGFloat {
+        let level = min(1, max(0, volume))
+        guard level > 0 else { return tickHeight }
+        return reduceMotion ? tickHeight : tickHeight + 16 * level
+    }
+
+    static func previewHeight(titles: [String], width: CGFloat, maximum: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let textWidth = max(1, width - 28 - 28)
+        let heights = titles.map {
+            ($0 as NSString).boundingRect(with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height.rounded(.up)
+        }
+        return min(maximum, 24 + heights.reduce(0, +) + CGFloat(max(0, titles.count - 1)) * 10)
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            arrow("chevron.left", label: I18N.localized("上一页"), enabled: currentIndex > 0 && !isTurning,
-                  identifier: "magazine.previousPage") { select(currentIndex - 1) }
+        HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    LazyHStack(spacing: 0) {
-                        ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
-                            Button { select(index) } label: {
-                                RoundedRectangle(cornerRadius: 1.5)
-                                    .fill(Color(paperHex: palette.inkHex).opacity(index == currentIndex ? 0.88 : 0.22))
-                                    .frame(width: Self.tickWidth, height: index == currentIndex ? 12 : Self.tickHeight)
-                                    .frame(width: 14, height: 28)
-                                    .contentShape(Rectangle())
-                            }
-                            .id(page.id)
-                            .anchorPreference(key: MagazineRailAnchors.self, value: .bounds) { [page.id: $0] }
-                            .disabled(isTurning)
-                            .focused($focusedID, equals: page.id)
-                            .onHover { inside in hover(inside, id: page.id) }
-                            .accessibilityLabel("\(I18N.localized("页面")) \(index + 1) / \(pages.count)")
-                            .accessibilityHint(page.entries.map(\.title).joined(separator: "; "))
-                            .accessibilityAddTraits(index == currentIndex ? [.isSelected] : [])
-                            .accessibilityIdentifier("magazine.page.\(index)")
-                        }
-                    }
+                    pageTicks(at: nil)
                 }
                 .scrollIndicators(.never)
                 .frame(width: railWidth, height: 28)
@@ -64,10 +71,6 @@ struct MagazinePageRail: View {
                     if pages.indices.contains(index) { proxy.scrollTo(pages[index].id, anchor: .center) }
                 }
             }
-
-            arrow("chevron.right", label: I18N.localized("下一页"),
-                  enabled: !isTurning && (currentIndex + 1 < pages.count || hasMore),
-                  identifier: "magazine.nextPage") { select(currentIndex + 1) }
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color(paperHex: palette.inkHex))
@@ -81,10 +84,9 @@ struct MagazinePageRail: View {
                     let width = min(340, max(1, geometry.size.width - 32))
                     let center = min(geometry.size.width - width / 2 - 8,
                                      max(width / 2 + 8, geometry[anchor].midX))
-                    preview(page, width: width)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .offset(x: center - geometry.size.width / 2, y: -42)
+                    let height = Self.previewHeight(titles: page.entries.map(\.title), width: width, maximum: previewMaxHeight)
+                    preview(page, width: width, height: height)
+                        .position(x: center, y: -6 - height / 2)
                 }
             }
         }
@@ -96,28 +98,64 @@ struct MagazinePageRail: View {
         .accessibilityIdentifier("magazine.pageRail")
     }
 
-    private func arrow(_ symbol: String, label: String, enabled: Bool, identifier: String,
-                       action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
-                .frame(width: 26, height: 26)
-                .background(Color(paperHex: palette.mutedHex).opacity(0.08), in: Circle())
-                .contentShape(Circle())
+    @ViewBuilder
+    private func pageTicks(at date: Date?) -> some View {
+        LazyHStack(spacing: 0) {
+            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+                Button { select(index) } label: {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color(paperHex: palette.inkHex).opacity(index == currentIndex ? 0.88 : 0.22))
+                        .frame(width: Self.tickWidth, height: Self.tickHeight)
+                        .scaleEffect(x: 1, y: tickHeight(index: index, date: date) / Self.tickHeight)
+                        .frame(width: 14, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .id(page.id)
+                .anchorPreference(key: MagazineRailAnchors.self, value: .bounds) { [page.id: $0] }
+                .disabled(isTurning)
+                .focused($focusedID, equals: page.id)
+                .onHover { inside in hover(inside, id: page.id) }
+                .accessibilityLabel("\(I18N.localized("页面")) \(index + 1) / \(pages.count)")
+                .accessibilityHint(page.entries.map(\.title).joined(separator: "; "))
+                .accessibilityAddTraits(index == currentIndex ? [.isSelected] : [])
+                .accessibilityIdentifier("magazine.page.\(index)")
+            }
         }
-        .disabled(!enabled).opacity(enabled ? 1 : 0.35)
-        .help(label).accessibilityLabel(label).accessibilityIdentifier(identifier)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point): hoverPosition = point.x
+            case .ended: hoverPosition = nil
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoverPosition)
     }
 
-    private func preview(_ page: MagazinePage, width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .vertical) {
-                previewTitles(page)
-                ScrollView { previewTitles(page) }.scrollIndicators(.never)
-            }
-            .frame(maxHeight: min(220, max(80, availableHeight - 160)))
+    private func tickHeight(index: Int, date: Date?) -> CGFloat {
+        var height = index == currentIndex ? 12 : Self.tickHeight
+        if audioWaveEnabled {
+            height = max(height, Self.audioWaveHeight(
+                index: index,
+                volume: outputVolume.levels[min(outputVolume.levels.count - 1,
+                    index * outputVolume.levels.count / max(1, pages.count))],
+                time: date?.timeIntervalSinceReferenceDate ?? 0,
+                reduceMotion: reduceMotion
+            ))
         }
-        .padding(.vertical, 12).padding(.horizontal, 14)
-        .frame(width: width, alignment: .leading)
+        if let hoverPosition {
+            height = max(height, reduceMotion ? Self.tickHeight : Self.waveHeight(
+                distance: (hoverPosition - (CGFloat(index) * 14 + 7)) / 14
+            ))
+        }
+        return height
+    }
+
+    private func preview(_ page: MagazinePage, width: CGFloat, height: CGFloat) -> some View {
+        // 显式高度独立于导航条，长标题可完整换行，超出可用空间时滚动。
+        ScrollView {
+            previewTitles(page).padding(.vertical, 12).padding(.horizontal, 14)
+        }
+        .scrollIndicators(.automatic)
+        .frame(width: width, height: height)
         .background {
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(paperHex: palette.backgroundHex))
@@ -126,20 +164,20 @@ struct MagazinePageRail: View {
         .overlay(RoundedRectangle(cornerRadius: 12)
             .strokeBorder(Color(paperHex: palette.mutedHex).opacity(0.18), lineWidth: 0.5))
         .onHover { hover($0, id: page.id) }
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .contain)
     }
 
     private func previewTitles(_ page: MagazinePage) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(page.entries.enumerated()), id: \.element.id) { index, entry in
                 HStack(alignment: .top, spacing: 6) {
                     Text("\(index + 1).")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color(paperHex: palette.mutedHex))
+                        .frame(width: 22, alignment: .trailing)
                     Text(entry.title)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color(paperHex: palette.inkHex))
-                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -1,9 +1,68 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "无法读取系统音频，请允许系统音频录制后重新开启音浪。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Unable to access system audio. Allow system audio recording, then turn the audio wave on again." } }
+      }
+    },
+  "已经是最后一页": {
+    "extractionState": "manual",
+    "localizations": {
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "已经是最后一页"
+        }
+      },
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "You’ve reached the last page"
+        }
+      }
+    }
+  },
+  "返回杂志": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Back to magazine"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "返回杂志"
+        }
+      }
+    }
+  },
+  "淡入淡出": {
+    "extractionState": "manual",
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Crossfade"
+        }
+      },
+      "zh-Hans": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "淡入淡出"
+        }
+      }
+    }
+  },
     "页面" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page"}}}},
     "下一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Next page"}}}},
     "上一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Previous page"}}}},
+    "翻页音效" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page-turn sound"}}}},
+    "阅读音浪" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Reading audio wave"}}}},
     "翻页方式" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page navigation"}}}},
     "杂志编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Magazine arrangement"}}}},
     "折叠翻页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Fold pages"}}}},

@@ -132,11 +132,11 @@ final class TimelinePresentationTests: XCTestCase {
         XCTAssertGreaterThan(height(long), height(short) + 30)
     }
 
-    private func actions(visual: Bool = true, browsing: Bool, zen: Bool = false) -> ToolbarActions {
+    private func actions(visual: Bool = true, browsing: Bool, zen: Bool = false, magazine: Bool = false) -> ToolbarActions {
         ToolbarActions(onRefresh: {}, onAddFeed: {}, onAddFolder: {}, onImport: {}, onExport: {},
             isRefreshing: false, selectionTitle: "Feed", hasUnread: false, onMarkAllRead: {},
             isZenMode: zen, showsReaderCapsule: !browsing,
-            isTimelineBrowsing: browsing, usesVisualTimeline: visual)
+            isTimelineBrowsing: browsing, usesVisualTimeline: visual, usesMagazineTimeline: magazine)
     }
 
     private func splitFixture() -> NSSplitViewController {
@@ -182,6 +182,29 @@ final class TimelinePresentationTests: XCTestCase {
         }
     }
 
+    func testMagazineRapidReturnKeepsDestinationImmediatelyAvailable() {
+        func route(_ browsing: Bool) -> ToolbarActions {
+            ToolbarActions(onRefresh: {}, onAddFeed: {}, onAddFolder: {}, onImport: {}, onExport: {},
+                isRefreshing: false, selectionTitle: "杂志", hasUnread: false, onMarkAllRead: {},
+                isTimelineBrowsing: browsing, usesVisualTimeline: true, usesMagazineTimeline: true)
+        }
+        let coordinator = ThreeColumnSplitViewCoordinator(actions: route(true), appearance: .default,
+            appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
+        let split = splitFixture()
+        coordinator.splitViewController = split
+        let reader = split.splitViewItems[2].viewController
+        coordinator.syncTimelinePresentation()
+        for _ in 0..<5 {
+            coordinator.actions = route(false)
+            coordinator.syncTimelinePresentation()
+            XCTAssertEqual(split.splitViewItems.map(\.isCollapsed), [false, true, false])
+            coordinator.actions = route(true)
+            coordinator.syncTimelinePresentation()
+            XCTAssertEqual(split.splitViewItems.map(\.isCollapsed), [false, false, true])
+            XCTAssertTrue(split.splitViewItems[2].viewController === reader)
+        }
+    }
+
     func testZenRestoresUserCollapsedSidebarInVisualReading() {
         let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: false), appearance: .default,
             appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
@@ -215,6 +238,26 @@ final class TimelinePresentationTests: XCTestCase {
                 let reader = try XCTUnwrap(order.firstIndex(of: .paperReaderCapsule))
                 XCTAssertTrue(springs[0] < back && back < reader && reader < springs[1])
                 XCTAssertEqual(order[back + 1], .space, "Return is a standalone button before reader actions")
+                XCTAssertFalse(order.contains(.paperEntryListTitle), "阅读文章时不应残留被截断的订阅源标题")
+            }
+        }
+    }
+
+    func testMagazineTitleStaysCenteredAndActionsStayLeadingWithEitherSidebarState() throws {
+        for collapsed in [true, false] {
+            for browsing in [true, false] {
+                let coordinator = ThreeColumnSplitViewCoordinator(actions: actions(browsing: browsing, magazine: true),
+                    appearance: .default, appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
+                let order = coordinator.toolbarItemOrder(sidebarCollapsed: collapsed)
+                let springs = order.indices.filter { order[$0] == .flexibleSpace }
+                XCTAssertEqual(springs.count, 2)
+                if browsing {
+                    let leading = try XCTUnwrap(order.firstIndex(of: .paperMarkAllRead))
+                    XCTAssertLessThan(leading, springs[0])
+                } else { XCTAssertFalse(order.contains(.paperTimelineBack)) }
+                let center = try XCTUnwrap(order.firstIndex(of: browsing ? .paperEntryListTitle : .paperReaderCapsule))
+                XCTAssertTrue(springs[0] < center && center < springs[1])
+                XCTAssertEqual(order.contains(.paperEntryListTitle), browsing)
             }
         }
     }

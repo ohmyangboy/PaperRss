@@ -10,6 +10,8 @@
     <string>AppIcon</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.news</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>读取系统播放声音的实时强度，让阅读目录随音乐跳动。音频仅在内存中处理，不保存或上传，不使用麦克风。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <!-- RSS feeds are user-entered URLs and may be legacy HTTP endpoints

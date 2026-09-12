@@ -1014,3 +1014,73 @@ test('spacebarScript strictly clamps scroll to bottom and prevents default on re
 });
 
 
+
+test('杂志返回入口复用原有桥接，滚动和靠近时出现，末尾保持可见，关闭时清理', () => {
+  const f = makeFixture();
+  let returned = 0;
+  f.window.paperRssMagazineReturnEnabled = true;
+  f.window.paperRssReaderInteractive = true;
+  f.window.webkit = { messageHandlers: { paperRssFocusList: { postMessage() { returned++; } } } };
+  runRail(f);
+  const back = f.document.getElementById('paper-rss-magazine-return');
+  assert.ok(back);
+  assert.equal(f.document.getElementById('paper-rss-toc-rail-style').textContent.includes('left: 8px; top: 50%'), true);
+  f.document.dispatchEvent({ type: 'scroll' });
+  assert.equal(back.style.opacity, '1');
+  f.window.advanceTime(1500);
+  assert.equal(back.style.opacity, '0');
+  f.document.dispatchEvent({ type: 'pointermove', clientX: 20 });
+  f.window.advanceTime(1500);
+  assert.equal(back.style.opacity, '1');
+  back.dispatchEvent({ type: 'click', preventDefault() {}, stopPropagation() {} });
+  assert.equal(returned, 1);
+  f.document.dispatchEvent({ type: 'pointermove', clientX: 450 });
+  f.window.scrollY = 10000;
+  f.document.dispatchEvent({ type: 'scroll' });
+  f.window.advanceTime(1500);
+  assert.equal(back.style.opacity, '1');
+  f.window.paperRssMagazineReturnEnabled = false;
+  f.window.paperRssTOCRail.syncReturn();
+  assert.equal(f.document.getElementById('paper-rss-magazine-return'), null);
+  f.window.paperRssTOCRail.destroy();
+});
+
+test('TOC 音浪按真实能量缩放刻度并保持一条 rail', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const lines = rail.querySelectorAll('[data-paper-toc-button]').map((button) => button.children[0]);
+
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0.25);
+  assert.equal(rail.classList.contains('audio-wave-enabled'), true);
+  assert.equal(lines[0].style.transform, 'scaleX(1.625)');
+  assert.equal(lines.at(-1).style.animationDelay, undefined);
+
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0.9);
+  assert.equal(lines[0].style.transform, 'scaleX(3)');
+  assert.equal(fixture.document.querySelectorAll('#paper-rss-toc-rail').length, 1);
+
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0, [0, 0.5, 1]);
+  assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(1)', 'scaleX(2.125)', 'scaleX(3.25)']);
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0, [0, 0, 0]);
+  assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(1)', 'scaleX(1)', 'scaleX(1)']);
+  assert.doesNotMatch(tocScript(), /@keyframes paper-toc-audio-wave/);
+
+  fixture.window.paperRssTOCRail.setAudioWave(false, 0);
+  assert.equal(rail.classList.contains('audio-wave-enabled'), false);
+  assert.equal(lines.every((line) => line.style.width === ''), true);
+  assert.equal(lines.every((line) => line.style.transform === ''), true);
+});
+
+test('TOC 音浪与 hover 局部峰值互不破坏，离开 hover 后恢复音量基准', () => {
+  const fixture = makeFixture();
+  const rail = runRail(fixture);
+  const buttons = rail.querySelectorAll('[data-paper-toc-button]');
+  const lines = buttons.map((button) => button.children[0]);
+
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0.5);
+  buttons[1].dispatchEvent({ type: 'mouseenter', relatedTarget: null });
+  assert.deepEqual(lines.map((line) => line.style.width), ['21px', '29px', '21px']);
+  assert.equal(lines.every((line) => line.style.transform === ''), true);
+  buttons[1].dispatchEvent({ type: 'mouseleave', relatedTarget: null });
+  assert.deepEqual(lines.map((line) => line.style.transform), ['scaleX(2.125)', 'scaleX(2.125)', 'scaleX(2.125)']);
+});

@@ -15,9 +15,13 @@ public enum MagazineArrangement: String, CaseIterable, Sendable {
 }
 
 public enum MagazineTurning: String, CaseIterable, Sendable {
-    case scroll, fold
+    case scroll, fold, fade
     public var title: String {
-        self == .scroll ? I18N.localized("滚动浏览") : I18N.localized("折叠翻页")
+        switch self {
+        case .scroll: I18N.localized("滚动浏览")
+        case .fold: I18N.localized("折叠翻页")
+        case .fade: I18N.localized("淡入淡出")
+        }
     }
 }
 

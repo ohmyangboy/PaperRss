@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 import WebKit
 #if os(macOS)
@@ -99,6 +100,7 @@ struct ArticleReaderView: View {
     var onShortcutFeedback: (String) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
+    var showsMagazineReturn = false
     var isZenMode: Bool = false
     var onToggleZenMode: () -> Void = {}
     @State private var translationDocumentReady = false
@@ -130,6 +132,9 @@ struct ArticleReaderView: View {
     @State private var activeAIGeneration: AIDocumentGeneration?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    #if os(macOS)
+    @AppStorage("reader_audio_wave_enabled") private var showsAudioWave = false
+    #endif
 
     private var text: String { preparedArticle?.text ?? "" }
     private var html: String? { preparedArticle?.html }
@@ -496,6 +501,8 @@ struct ArticleReaderView: View {
                     onSelectNextEntry()
                 },
                 onFocusListView: onFocusListView,
+                showsMagazineReturn: showsMagazineReturn,
+                showsAudioWave: showsAudioWave,
                 onAdjustFontSize: { action in
                     switch action {
                     case "increase": store.increaseArticleFontSize()
@@ -569,6 +576,7 @@ struct ArticleReaderView: View {
                     onSelectNextEntry()
                 },
                 onFocusListView: onFocusListView,
+                showsMagazineReturn: showsMagazineReturn,
                 onAdjustFontSize: { action in
                     switch action {
                     case "increase": store.increaseArticleFontSize()
@@ -2328,6 +2336,7 @@ enum PaperReaderBridge {
             "translationLabel": I18N.localized("译文"),
             "showOriginal": I18N.localized("查看原文"),
             "generatingTranslation": I18N.localized("正在生成译文"),
+            "magazineReturn": I18N.localized("返回杂志"),
             "tocRailLabel": I18N.localized("文章章节导航", englishFallback: "Article Navigation")
         ]
     }
@@ -2486,6 +2495,7 @@ enum PaperReaderBridge {
           if (window.paperRssTOCRail?.destroy) window.paperRssTOCRail.destroy();
 
           const root = document.documentElement;
+          const initialAudioWave = window.paperRssAudioWave || {};
           const state = {
             anchors: [], buttons: [], rail: null, preview: null, style: null,
             observer: null, resizeObserver: null, scheduled: false,
@@ -2493,11 +2503,16 @@ enum PaperReaderBridge {
             dragging: false, dragged: false, dragPointerId: null, dragTarget: null,
             dragStartY: 0, dragStartX: 0, hasMovedPastThreshold: false,
             suppressClick: false, navigatingAnchor: null, navigatingTimer: null,
-            hideTimer: null, mouseNear: false, railHovered: false
+            hideTimer: null, mouseNear: false, railHovered: false,
+            audioWaveEnabled: Boolean(initialAudioWave.enabled),
+            audioWaveLevels: Array.isArray(initialAudioWave.levels) ? initialAudioWave.levels : [],
+            audioWaveLevel: Number.isFinite(Number(initialAudioWave.level))
+              ? Math.max(0, Math.min(1, Number(initialAudioWave.level))) : 0
           };
           const currentRailLabel = () => window.paperRssSelectionOptions?.labels?.tocRailLabel || "文章章节导航";
           state.setRailLabel = label => {
             state.rail?.setAttribute("aria-label", label || currentRailLabel());
+            document.getElementById("paper-rss-magazine-return")?.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.magazineReturn || "返回杂志");
           };
           const textOf = node => (node?.textContent || "").replace(/\\s+/g, " ").trim();
           const normalized = value => textOf({ textContent: value })
@@ -2601,6 +2616,7 @@ enum PaperReaderBridge {
               const line = button.children?.[0];
               if (line?.style) line.style.width = "";
             });
+            applyAudioWaveWidths();
             updateActive();
           };
 
@@ -2610,6 +2626,7 @@ enum PaperReaderBridge {
               const line = button.children?.[0];
               if (!line?.style) return;
               const distance = Math.abs(buttonIndex - index);
+              line.style.transform = "";
               line.style.width = distance === 0
                 ? "29px"
                 : distance === 1
@@ -2620,6 +2637,30 @@ enum PaperReaderBridge {
               const active = buttonIndex === index;
               button.classList.toggle("is-current", active);
               button.setAttribute("aria-current", active ? "true" : "false");
+            });
+          };
+
+          const applyAudioWaveWidths = () => {
+            if (!state.audioWaveEnabled || state.hoveredIndex !== null || state.dragging) return;
+            state.buttons.forEach((button, index) => {
+              const line = button.children?.[0];
+              if (!line?.style) return;
+              const sampleIndex = Math.min(state.audioWaveLevels.length - 1,
+                Math.floor(index * state.audioWaveLevels.length / state.buttons.length));
+              const sample = state.audioWaveLevels[sampleIndex] ?? state.audioWaveLevel;
+              const level = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+                ? 0 : Math.min(1, Math.max(0, Number(sample) || 0));
+              line.style.width = "";
+              line.style.transform = `scaleX(${(8 + Math.round(18 * level)) / 8})`;
+            });
+          };
+
+          const clearAudioWaveWidths = () => {
+            state.buttons.forEach(button => {
+              const line = button.children?.[0];
+              if (!line?.style) return;
+              line.style.transform = "";
+              if (state.hoveredIndex === null && !state.dragging) line.style.width = "";
             });
           };
 
@@ -3191,6 +3232,15 @@ enum PaperReaderBridge {
               #paper-rss-floating-scrollbar .paper-floating-thumb.is-fading-out {
                 transition: opacity .28s cubic-bezier(.16, 1, .3, 1);
               }
+              #paper-rss-magazine-return {
+                position: fixed; z-index: 10000; left: 8px; top: 50%; transform: translateY(-50%);
+                width: 42px; height: 44px; display: grid; place-items: center;
+                border: 0; border-radius: 0; padding: 0; background: transparent;
+                color: var(--paper-muted); opacity: 0; cursor: pointer;
+                transition: opacity .28s cubic-bezier(.16, 1, .3, 1);
+              }
+              #paper-rss-magazine-return:hover, #paper-rss-magazine-return:focus-visible { color: var(--paper-ink); }
+              @media (prefers-reduced-motion: reduce) { #paper-rss-magazine-return { transition: none; } }
               #paper-rss-toc-rail {
                 position: fixed; z-index: 10000; right: 8px; top: 50%;
                 transform: translateY(-50%); width: 34px; min-height: 42px;
@@ -3213,7 +3263,12 @@ enum PaperReaderBridge {
               #paper-rss-toc-rail .paper-toc-rail-line {
                 display: block; width: 8px; height: 3px; border-radius: 2px;
                 background: rgba(80, 80, 80, .24);
+                transform-origin: center;
                 transition: width .14s ease, background-color .14s ease;
+              }
+              #paper-rss-toc-rail.audio-wave-enabled { opacity: 1; }
+              #paper-rss-toc-rail.audio-wave-enabled .paper-toc-rail-line {
+                transition: background-color .14s ease;
               }
               #paper-rss-toc-rail .paper-toc-rail-button.is-current .paper-toc-rail-line {
                 width: 8px; background: rgba(45, 45, 45, .78);
@@ -3249,6 +3304,7 @@ enum PaperReaderBridge {
               @media (prefers-reduced-motion: reduce) {
                 #paper-rss-toc-rail { transition: none; }
                 #paper-rss-toc-preview { transition: none; }
+                #paper-rss-toc-rail.audio-wave-enabled .paper-toc-rail-line { animation: none; }
               }
             `;
             document.head.appendChild(style);
@@ -3313,6 +3369,7 @@ enum PaperReaderBridge {
             if (canReuse) {
               state.anchors = newAnchors;
               state.rail.style.height = Math.min(Math.max(42, state.anchors.length * 14), Math.min(viewportHeight() * .45, 280)) + "px";
+              applyAudioWaveWidths();
               updateActive();
               const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
               if (preservedAnchor && state.preview) {
@@ -3395,10 +3452,12 @@ enum PaperReaderBridge {
             rail.addEventListener("pointercancel", endDrag);
             root.appendChild(rail);
             state.rail = rail;
+            rail.classList.toggle("audio-wave-enabled", state.audioWaveEnabled);
             root.classList.add("paper-toc-rail-active");
             if (wasVisible || state.mouseNear || state.railHovered) {
               rail.classList.add("is-visible");
             }
+            applyAudioWaveWidths();
             updateActive();
             const preservedAnchor = state.anchors.find(anchor => anchor.element === previousHoverElement);
             if (preservedAnchor) {
@@ -3416,7 +3475,40 @@ enum PaperReaderBridge {
               buildRail();
             });
           };
+          // 返回入口与章节条使用同一边距、墨色及显隐节奏，短文章也可使用。
+          let returnButton = null, returnTimer = null, returnNear = false;
+          const atEnd = () => currentScrollTop() + viewportHeight() >= documentHeight() - 4;
+          const wakeReturn = () => {
+            if (!returnButton) return;
+            returnButton.style.opacity = "1";
+            if (returnTimer !== null) window.clearTimeout(returnTimer);
+            returnTimer = window.setTimeout(() => {
+              if (returnButton && !returnNear && !atEnd() && !returnButton.matches(":focus")) returnButton.style.opacity = "0";
+            }, 1400);
+          };
+          state.syncReturn = () => {
+            if (!window.paperRssMagazineReturnEnabled) {
+              returnButton?.remove(); returnButton = null;
+              if (returnTimer !== null) window.clearTimeout(returnTimer);
+              return;
+            }
+            if (returnButton) return;
+            ensureStyle();
+            returnButton = document.createElement("button");
+            returnButton.id = "paper-rss-magazine-return";
+            returnButton.type = "button";
+            returnButton.setAttribute("aria-label", window.paperRssSelectionOptions?.labels?.magazineReturn || "返回杂志");
+            returnButton.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg>';
+            returnButton.addEventListener("click", event => {
+              event.preventDefault(); event.stopPropagation();
+              if (window.paperRssReaderInteractive) window.webkit?.messageHandlers?.paperRssFocusList?.postMessage({});
+            });
+            returnButton.addEventListener("focus", wakeReturn);
+            root.appendChild(returnButton);
+            if (atEnd()) wakeReturn();
+          };
           const onScroll = () => {
+            wakeReturn();
             if (state.rail) {
               wakeRail(1400);
               window.requestAnimationFrame(updateActive);
@@ -3433,6 +3525,7 @@ enum PaperReaderBridge {
             refresh();
           };
           const onWheel = () => {
+            wakeReturn();
             if (state.rail) {
               wakeRail(1400);
               if (state.navigatingAnchor) {
@@ -3452,6 +3545,8 @@ enum PaperReaderBridge {
           const onPointerMove = event => {
             const clientX = Number(event?.clientX);
             if (!Number.isFinite(clientX)) return;
+            returnNear = clientX <= 64;
+            if (returnNear) wakeReturn();
             const windowWidth = Number(window.innerWidth || document.documentElement.clientWidth || 0);
             if (state.rail) {
               const nearEdge = windowWidth > 0 && clientX >= windowWidth - 64;
@@ -3480,9 +3575,27 @@ enum PaperReaderBridge {
           const onKeyDown = event => {
             if (event.key === "Escape") dismissPreview();
           };
+          state.setAudioWave = (enabled, level = 0, levels = []) => {
+            state.audioWaveEnabled = Boolean(enabled);
+            state.audioWaveLevels = Array.isArray(levels) ? levels : [];
+            const numericLevel = Number(level);
+            state.audioWaveLevel = Number.isFinite(numericLevel)
+              ? Math.max(0, Math.min(1, numericLevel)) : 0;
+            if (!state.rail) return;
+            state.rail.classList.toggle("audio-wave-enabled", state.audioWaveEnabled);
+            if (state.audioWaveEnabled) {
+              showRail();
+              applyAudioWaveWidths();
+            } else {
+              clearAudioWaveWidths();
+              if (!state.railHovered && !state.mouseNear) scheduleHide(600);
+            }
+          };
           state.refresh = refresh;
           state.syncScrollbarGeometry = syncScrollbarGeometry;
           state.destroy = () => {
+            returnButton?.remove();
+            if (returnTimer !== null) window.clearTimeout(returnTimer);
             if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
             if (state.navigatingTimer !== null) window.clearTimeout(state.navigatingTimer);
             if (state.scrollbarFadeTimer !== null) window.clearTimeout(state.scrollbarFadeTimer);
@@ -3501,6 +3614,7 @@ enum PaperReaderBridge {
             if (window.paperRssTOCRail === state) delete window.paperRssTOCRail;
           };
           window.paperRssTOCRail = state;
+          state.syncReturn();
           document.addEventListener("scroll", onScroll, { passive: true, capture: true });
           document.addEventListener("keydown", onKeyDown, { capture: true });
           document.addEventListener("pointermove", onPointerMove, { passive: true });
@@ -3514,6 +3628,7 @@ enum PaperReaderBridge {
                 if (!el || typeof el.closest !== "function") return false;
                 return el.closest('#paper-summary-card') ||
                        el.closest('.paper-selection-popover') ||
+                       el.closest('#paper-rss-magazine-return') ||
                        el.closest('#paper-rss-toc-rail') ||
                        el.closest('#paper-rss-toc-preview') ||
                        el.closest('#paper-rss-floating-scrollbar');
@@ -4991,11 +5106,14 @@ private struct ArticleHTMLView: NSViewRepresentable {
     var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
+    var showsMagazineReturn = false
+    var showsAudioWave = false
     var onAdjustFontSize: ((String) -> Void)? = nil
 
     private var html: String { article.html }
     private var baseURL: URL? { article.baseURL }
     private var features: ArticleFeatures { article.features }
+    private let outputVolume = SystemOutputVolumeMonitor.shared
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -5093,6 +5211,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeInteractivity(in: webView)
+        context.coordinator.synchronizeAudioWave(in: webView, level: outputVolume.level)
         context.coordinator.synchronizeReaderAppearance(in: webView)
         webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
         guard isInteractive else { return }
@@ -5159,6 +5278,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var renderedReaderAppearance: ReaderAppearance?
         private var renderedReaderAppearanceMode: ReaderAppearanceMode?
         private var renderedSelectionOptionsJSON: String?
+        private var renderedAudioWaveEnabled: Bool?
+        private var renderedAudioWaveLevel: [Int]?
         private struct SummaryRenderSignature: Equatable {
             let content: String
             let isExpanded: Bool
@@ -5176,9 +5297,17 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var pendingSelectionExplanationRequests: [ReaderSelectionRequest] = []
         private var mathScriptsEnabled = false
         weak var webView: WKWebView?
+        private var audioSubscription: AnyCancellable?
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
+            super.init()
+            audioSubscription = parent.outputVolume.$levels.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.parent.showsAudioWave, let webView = self.webView else { return }
+                    self.synchronizeAudioWave(in: webView, level: self.parent.outputVolume.level)
+                }
+            }
         }
 
         func synchronizeReaderAppearance(in webView: WKWebView, force: Bool = false) {
@@ -5210,6 +5339,29 @@ private struct ArticleHTMLView: NSViewRepresentable {
                     contentWorld: .defaultClient
                 )
             }
+        }
+
+        func synchronizeAudioWave(in webView: WKWebView, level: CGFloat, force: Bool = false) {
+            let normalizedLevel = min(1, max(0, level))
+            let samples = parent.outputVolume.levels
+            let levelSignature = samples.map { Int(($0 * 100).rounded()) }
+            guard force || renderedAudioWaveEnabled != parent.showsAudioWave ||
+                    renderedAudioWaveLevel != levelSignature else { return }
+            renderedAudioWaveEnabled = parent.showsAudioWave
+            renderedAudioWaveLevel = levelSignature
+            let enabled = parent.showsAudioWave ? "true" : "false"
+            let level = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), Double(normalizedLevel))
+            let levelsJSON = "[" + samples.map {
+                String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), Double($0))
+            }.joined(separator: ",") + "]"
+            let script = """
+            (() => {
+              const value = { enabled: \(enabled), level: \(level), levels: \(levelsJSON) };
+              window.paperRssAudioWave = value;
+              window.paperRssTOCRail?.setAudioWave(value.enabled, value.level, value.levels);
+            })();
+            """
+            webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { _ in }
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -5598,6 +5750,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 const becameInteractive = !window.paperRssReaderInteractive && \(value);
                 window.paperRssReaderInteractive = \(value);
                 window.paperRssReaderNavigationEnabled = \(navigationValue);
+                window.paperRssMagazineReturnEnabled = \(parent.showsMagazineReturn ? "true" : "false");
+                window.paperRssTOCRail?.syncReturn?.();
                 if (becameInteractive) window.paperRssRequestVisibleParagraphs?.(\(currentLoadGeneration));
                 })();
                 """,
@@ -5729,6 +5883,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.completedArticleKey = load.signature
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
+                self.synchronizeAudioWave(in: webView, level: self.parent.outputVolume.level, force: true)
                 self.synchronizeTranslations(in: webView)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)
@@ -5932,6 +6087,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let onToggleSummary: () -> Void
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
+    var showsMagazineReturn = false
 
     private var html: String { article.html }
     private var baseURL: URL? { article.baseURL }
@@ -6461,6 +6617,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 const becameInteractive = !window.paperRssReaderInteractive && \(value);
                 window.paperRssReaderInteractive = \(value);
                 window.paperRssReaderNavigationEnabled = \(navigationValue);
+                window.paperRssMagazineReturnEnabled = \(parent.showsMagazineReturn ? "true" : "false");
+                window.paperRssTOCRail?.syncReturn?.();
                 if (becameInteractive) window.paperRssRequestVisibleParagraphs?.(\(currentLoadGeneration));
                 })();
                 """,

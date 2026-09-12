@@ -1,0 +1,7 @@
+MagazinePageTurn.wav
+原作：Page Turn (2)，OwlStorm / Ashe Kirk / Owlish Media
+来源：https://freesound.org/people/OwlStorm/sounds/151221/
+公开预览：https://cdn.freesound.org/previews/151/151221_140737-hq.mp3
+许可：CC0 1.0 Universal，https://creativecommons.org/publicdomain/zero/1.0/
+许可核对日期：2026-09-12
+处理：转换为单声道 PCM，轻微高低通滤波，首尾淡化，增益提高 26 dB（峰值约 -8.4 dBFS，无削波）。播放音量由应用控制。

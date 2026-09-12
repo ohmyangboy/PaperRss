@@ -41,7 +41,8 @@ let package = Package(
                 .process("../../Resources/Assets.xcassets"),
                 .process("../../Resources/Localization/Localizable.xcstrings"),
                 .copy("../../Resources/MathJax"),
-                .copy("../../Resources/Highlight")
+                .copy("../../Resources/Highlight"),
+                .process("../../Resources/Audio")
             ]
         ),
         .testTarget(

@@ -9,6 +9,9 @@ import PaperRssCore
 final class TimelinePresentationMemory: ObservableObject {
     var visibleAnchor: String?
     var browseAnchor: String?
+    var openingFrameInWindow: CGRect?
+    @Published var magazineIsOpen = false
+    @Published private(set) var magazineScopeID = UUID()
     @Published private var storedMagazineAnchor: String?
     var magazineAnchor: String? {
         get { storedMagazineAnchor }
@@ -30,6 +33,8 @@ final class TimelinePresentationMemory: ObservableObject {
     }
     func finishRestoration() { isRestoring = false }
     func resetScope() {
+        magazineIsOpen = false
+        magazineScopeID = UUID()
         visibleAnchor = nil
         browseAnchor = nil
         magazineAnchor = nil
@@ -281,6 +286,9 @@ struct TimelineViewControls: View {
     @State private var showsPopover = false
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
     @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
+    @AppStorage("magazine_page_sound") private var pageSoundEnabled = false
+    @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
+    @ObservedObject private var audioMonitor = SystemOutputVolumeMonitor.shared
 
     var body: some View {
         HStack(spacing: 5) {
@@ -293,7 +301,7 @@ struct TimelineViewControls: View {
             .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(I18N.localized("文章视图")).font(.headline)
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         ForEach(TimelineViewStyle.allCases, id: \.rawValue) { option in
                             Button {
                                 onSelect(option)
@@ -310,8 +318,12 @@ struct TimelineViewControls: View {
                                     RoundedRectangle(cornerRadius: 8).strokeBorder(
                                         style == option ? Color.accentColor.opacity(0.6) : .clear)
                                 }
+                                .contentShape(RoundedRectangle(cornerRadius: 8))
                             }
                             .buttonStyle(.plain)
+                            // 固定 Button 本身的命中框，点击方块内的留白也能切换视图。
+                            .frame(width: 70, height: 70)
+                            .contentShape(Rectangle())
                             .accessibilityLabel(option.title)
                             .accessibilityAddTraits(style == option ? [.isSelected] : [])
                             .accessibilityIdentifier("timeline.style.\(option.rawValue)")
@@ -319,30 +331,74 @@ struct TimelineViewControls: View {
                     }
                     if style == .magazine {
                         Divider()
-                        Picker(I18N.localized("杂志编排"), selection: $arrangementRaw) {
-                            ForEach(MagazineArrangement.allCases, id: \.rawValue) { option in
-                                Text(option.title).tag(option.rawValue)
+                        settingRow(title: I18N.localized("杂志编排")) {
+                            Picker("", selection: $arrangementRaw) {
+                                ForEach(MagazineArrangement.allCases, id: \.rawValue) { option in
+                                    Text(option.title).tag(option.rawValue)
+                                }
                             }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
-                        Picker(I18N.localized("翻页方式"), selection: $turningRaw) {
-                            ForEach(MagazineTurning.allCases, id: \.rawValue) { option in
-                                Text(option.title).tag(option.rawValue)
+                        settingRow(title: I18N.localized("翻页方式")) {
+                            Picker("", selection: $turningRaw) {
+                                ForEach(MagazineTurning.allCases, id: \.rawValue) { option in
+                                    Text(option.title).tag(option.rawValue)
+                                }
                             }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
-                        .pickerStyle(.segmented)
+                        settingRow(title: I18N.localized("翻页音效")) {
+                            Toggle("", isOn: $pageSoundEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .disabled(turningRaw == MagazineTurning.scroll.rawValue)
+                            .accessibilityLabel(I18N.localized("翻页音效"))
+                            .accessibilityIdentifier("magazine.pageSound")
+                        }
                     }
                     Divider()
-                    Toggle(I18N.localized("显示文章配图"), isOn: Binding(get: { showsImages }, set: { value in onToggleImages(value) }))
+                    settingRow(title: I18N.localized("阅读音浪")) {
+                        Toggle("", isOn: $audioWaveEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel(I18N.localized("阅读音浪"))
+                            .accessibilityIdentifier("reader.audioWave")
+                    }
+                    if audioWaveEnabled && audioMonitor.captureFailed {
+                        Text(I18N.localized("无法读取系统音频，请允许系统音频录制后重新开启音浪。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Divider()
+                    settingRow(title: I18N.localized("显示文章配图")) {
+                        Toggle("", isOn: Binding(get: { showsImages }, set: { value in onToggleImages(value) }))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .accessibilityLabel(I18N.localized("显示文章配图"))
+                            .accessibilityIdentifier("timeline.showArticleImages")
+                    }
                     Text(I18N.localized("图片按需从原网站加载，不会自动抓取原文网页。"))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(18).frame(width: 260)
+                .padding(18).frame(width: 280)
             }
         }
         .buttonStyle(.borderless)
         .font(.system(size: 14))
         .frame(width: 30, height: 30)
+    }
+
+    @ViewBuilder
+    private func settingRow<Control: View>(title: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+            Spacer(minLength: 8)
+            control()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif

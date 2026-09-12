@@ -397,8 +397,9 @@ struct RootView: View {
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) },
                 viewStyle: timelineStyle,
-                showsImages: timelineShowsImages && !showsSettings && !isZenMode && (timelineStyle == .list || isTimelineBrowsing),
-                isBrowsing: isTimelineBrowsing,
+                showsImages: timelineShowsImages,
+                // 设置覆盖主界面时，停用窗口级杂志事件监听，保留现有分页几何。
+                isBrowsing: isTimelineBrowsing && !showsSettings,
                 keyboardRequest: timelineKeyRequest,
                 presentation: timelineMemory,
                 onOpenEntry: { openTimelineArticle() }
@@ -434,6 +435,7 @@ struct RootView: View {
                 usesVisualTimeline: timelineStyle != .list,
                 usesMagazineTimeline: timelineStyle == .magazine,
                 onReturnToTimeline: returnToTimeline,
+                openingFrameInWindow: timelineMemory.openingFrameInWindow,
                 onTimelineKey: { timelineKeyRequest = TimelineKeyRequest(keyCode: $0) }
             ),
             appearance: store.readerAppearance,
@@ -531,7 +533,8 @@ struct RootView: View {
     private func returnToTimeline() {
         guard timelineStyle != .list else { return }
         cancelNavigationConfirmation(dismissToast: true)
-        timelineMemory.prepareRestoration(anchor: timelineMemory.browseAnchor)
+        if timelineStyle == .magazine { timelineMemory.magazineAnchor = selectedEntryID }
+        timelineMemory.prepareRestoration(anchor: timelineStyle == .magazine ? selectedEntryID : timelineMemory.browseAnchor)
         isZenMode = false
         isTimelineBrowsing = true
         focusListView()
@@ -569,6 +572,9 @@ struct RootView: View {
         }
         if case let .account(id) = currentSelection {
             return store.accounts.first(where: { $0.id == id })?.displayName ?? currentSelection.title
+        }
+        if timelineStyle == .magazine, case let .feed(id) = currentSelection {
+            return store.feeds.first(where: { $0.id == id })?.title ?? currentSelection.title
         }
         return currentSelection.title
     }
@@ -1040,6 +1046,7 @@ struct RootView: View {
                         if timelineStyle == .list { focusListView() }
                         else { returnToTimeline() }
                     },
+                    showsMagazineReturn: timelineStyle == .magazine,
                     isZenMode: isZenMode,
                     onToggleZenMode: { withAnimation { isZenMode.toggle() } }
                 )
@@ -2483,6 +2490,12 @@ private struct EntryListView: View {
         store.readerAppearance.palette(for: appearanceMode)
     }
 
+    private var magazineScopeTitle: String {
+        if case let .feed(id) = selection { return store.feeds.first { $0.id == id }?.title ?? selection.title }
+        if case let .account(id) = selection { return store.accounts.first { $0.id == id }?.displayName ?? selection.title }
+        return selection.title
+    }
+
     private var isListFocused: Bool {
         columnFocusState.activeColumnIndex == 1
     }
@@ -2681,11 +2694,11 @@ private struct EntryListView: View {
     private func visualEntry(_ entry: EntryListItem, width: CGFloat, layout: TimelineTileLayout) -> some View {
         Button {
             onOpenEntry()
-            visualSelectionID = entry.id
+            if viewStyle != .magazine { visualSelectionID = entry.id }
             entryListSelection.wrappedValue = entry.id
         } label: {
             TimelineArticleTile(entry: entry, layout: layout,
-                isSelected: (visualSelectionID ?? selectedEntryID) == entry.id,
+                isSelected: (viewStyle == .magazine ? visualSelectionID : (visualSelectionID ?? selectedEntryID)) == entry.id,
                 width: width, showsImages: showsImages, thumbnailStore: store.thumbnailStore)
         }
         .buttonStyle(.plain)
@@ -2731,10 +2744,12 @@ private struct EntryListView: View {
                 folders: Dictionary(store.feeds.map { ($0.id, $0.folder ?? "") }, uniquingKeysWith: { first, _ in first }),
                 availableSize: CGSize(width: width, height: max(0, height - 52)),
                 showsImages: showsImages, isBrowsing: isBrowsing, hasMore: hasMore,
-                selectedID: visualSelectionID ?? selectedEntryID, keyboardRequest: keyboardRequest,
+                selectedID: visualSelectionID, keyboardRequest: keyboardRequest,
                 memory: presentation, onHighlight: { visualSelectionID = $0 },
                 onOpen: { entry in onOpenEntry(); entryListSelection.wrappedValue = entry.id },
                 onNeedMore: loadNextPage,
+                onFocusSidebar: { ThreeColumnSplitViewCoordinator.current?.setActiveColumn(0) },
+                coverTitle: magazineScopeTitle, onClearSelection: { visualSelectionID = nil },
                 tile: { entry, width, layout in visualEntry(entry, width: width, layout: layout) })
                 .focusable().focused($visualHasFocus).focusEffectDisabled()
                 .onAppear { visualHasFocus = isListFocused }
@@ -2782,6 +2797,8 @@ private struct EntryListView: View {
         GeometryReader { geometry in
         ScrollViewReader { proxy in
             timelineContent(width: geometry.size.width, height: geometry.size.height)
+            // 空杂志没有页面子视图，也必须占满正文视口，提示才能居中。
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background {
                 AppearanceSurface(
                     role: .articleList,
@@ -2837,7 +2854,7 @@ private struct EntryListView: View {
                     if timelineScope == .unread || unreadOnly {
                         retainedUnreadIDs.insert(newID)
                     }
-                    visualSelectionID = newID
+                    if viewStyle != .magazine { visualSelectionID = newID }
                     patchEntryState(entryID: newID, isRead: true)
                 }
             }
@@ -2890,7 +2907,7 @@ private struct EntryListView: View {
             }
             #endif
             .overlay {
-                if loadedEntries.isEmpty && !isLoadingPage {
+                if loadedEntries.isEmpty && !isLoadingPage && viewStyle != .magazine {
                     ColumnEmptyPrompt(
                         title: unreadOnly
                             ? I18N.localized("暂无未读文章")

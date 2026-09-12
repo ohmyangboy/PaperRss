@@ -67,8 +67,10 @@ final class Harness {
         var isZenMode = false
         var showsUnreadFilter = true
         var usesVisualTimeline = false
+        var usesMagazineTimeline = false
         var isTimelineBrowsing = false
         var showsTimelineReturn: Bool { usesVisualTimeline && !isTimelineBrowsing && !isZenMode }
+        var showsEntryListTitle: Bool { !usesVisualTimeline || isTimelineBrowsing }
     }
     var actions = Actions()
     ${order}
@@ -81,13 +83,15 @@ harness.reconcileToolbarItems(in: toolbar, identifiers: initial)
 let reader = toolbar.items.first { $0.itemIdentifier == .paperReaderCapsule }!
 let views = toolbar.items.first { $0.itemIdentifier == .paperTimelineControls }!
 for _ in 0..<3 {
-    for visual in [false, true, true, false] {
+    for mode in 0..<3 {
+        let visual = mode != 0
+        let magazine = mode == 2
         for browsing in [true, false, true] {
             for zen in [false, true, false] {
                 for collapsed in [false, true, false] {
                     for filter in [false, true] {
                         harness.actions = .init(isZenMode: zen, showsUnreadFilter: filter,
-                                                usesVisualTimeline: visual, isTimelineBrowsing: browsing)
+                                                usesVisualTimeline: visual, usesMagazineTimeline: magazine, isTimelineBrowsing: browsing)
                         let expected = harness.toolbarItemOrder(sidebarCollapsed: collapsed)
                         for _ in 0..<2 { harness.reconcileToolbarItems(in: toolbar, identifiers: expected) }
                         let ids = toolbar.items.map(\\.itemIdentifier)
@@ -97,14 +101,24 @@ for _ in 0..<3 {
                         assert(toolbar.items.last === views, "右上角切换器被销毁或移位")
                         assert(ids.contains(.paperTimelineTracker) == (!visual && !zen),
                                "折叠栏仍保留跟踪分隔项")
-                        if harness.actions.showsTimelineReturn {
+                        if harness.actions.showsTimelineReturn && !magazine {
                             let back = ids.firstIndex(of: .paperTimelineBack)!
                             let capsule = ids.firstIndex(of: .paperReaderCapsule)!
                             let spring = ids.firstIndex(of: .flexibleSpace)!
-                            assert(spring < back && back < capsule)
-                            assert(ids[back + 1] == .space)
+                            if magazine {
+                                assert(back < spring && spring < capsule)
+                            } else {
+                                assert(spring < back && back < capsule)
+                                assert(ids[back + 1] == .space)
+                            }
                             assert(!ids.contains(.paperMarkAllRead) && !ids.contains(.paperUnreadFilter),
                                    "阅读态不能保留批量已读或筛选按钮")
+                        }
+                        if magazine && !browsing { assert(!ids.contains(.paperTimelineBack)) }
+                        if magazine && browsing && !zen {
+                            let title = ids.firstIndex(of: .paperEntryListTitle)!
+                            let spring = ids.firstIndex(of: .flexibleSpace)!
+                            assert(ids.firstIndex(of: .paperMarkAllRead)! < spring && spring < title)
                         }
                         if visual && !zen {
                             assert(ids.contains(.paperMarkAllRead) == browsing)
@@ -127,7 +141,7 @@ for _ in 0..<3 {
 harness.actions = .init()
 harness.reconcileToolbarItems(in: toolbar, identifiers: initial)
 assert(toolbar.items.map(\\.itemIdentifier) == initial)
-print("Verified 1296 route transitions and idempotent repeats")
+print("Verified list, cards and magazine route transitions and idempotent repeats")
 `);
     const args = ['-module-cache-path', join(dir, 'module-cache'), path];
     execFileSync(process.platform === 'darwin' ? 'xcrun' : 'swift', process.platform === 'darwin' ? ['swift', ...args] : args,

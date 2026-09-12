@@ -44,6 +44,36 @@ private final class LegacyReaderCapsuleMaterialContainer: NSVisualEffectView {
     }
 }
 
+private struct TimelineReturnGlassButton: View {
+    let label: String
+    let color: Color
+    let action: () -> Void
+
+    private var button: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(color)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("timeline.returnToBrowse")
+    }
+
+    @ViewBuilder var body: some View {
+        if #available(macOS 26.0, *) {
+            button.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            button.buttonStyle(.plain)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
+                .shadow(color: Color.black.opacity(0.10), radius: 5, y: 2)
+        }
+    }
+}
+
 // MARK: - 工具栏动作回调
 
 /// 由 SwiftUI 视图层传入的工具栏动作和状态
@@ -76,7 +106,9 @@ struct ToolbarActions {
     let usesVisualTimeline: Bool
     let usesMagazineTimeline: Bool
     let onReturnToTimeline: () -> Void
+    let openingFrameInWindow: CGRect?
     var showsTimelineReturn: Bool { usesVisualTimeline && !isTimelineBrowsing && !isZenMode }
+    var showsEntryListTitle: Bool { !usesVisualTimeline || isTimelineBrowsing }
     let onTimelineKey: (UInt16) -> Void
 
     init(
@@ -107,6 +139,7 @@ struct ToolbarActions {
         usesVisualTimeline: Bool = false,
         usesMagazineTimeline: Bool = false,
         onReturnToTimeline: @escaping () -> Void = {},
+        openingFrameInWindow: CGRect? = nil,
         onTimelineKey: @escaping (UInt16) -> Void = { _ in }
     ) {
         self.onRefresh = onRefresh
@@ -136,6 +169,7 @@ struct ToolbarActions {
         self.usesVisualTimeline = usesVisualTimeline
         self.usesMagazineTimeline = usesMagazineTimeline
         self.onReturnToTimeline = onReturnToTimeline
+        self.openingFrameInWindow = openingFrameInWindow
         self.onTimelineKey = onTimelineKey
     }
 }
@@ -365,7 +399,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var timelineControlsHost: NSHostingView<AnyView>?
         private var readingListWidth: CGFloat?
         private var sidebarCollapsedBeforeZen: Bool?
-        private weak var timelineBackButton: NSButton?
+        private weak var timelineBackButton: NSHostingView<AnyView>?
         static let timelineAccessoryWidth: CGFloat = 36
         fileprivate weak var readerCapsuleItem: NSToolbarItem?
         fileprivate weak var readerCapsuleHost: NSHostingView<AnyView>?
@@ -434,6 +468,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
         fileprivate func readerCapsuleHeight(for contentHeight: CGFloat) -> CGFloat {
             usesLegacyReaderCapsuleMaterial ? max(36, contentHeight + 8) : max(28, contentHeight)
+        }
+
+        private func timelineBackRootView() -> AnyView {
+            AnyView(TimelineReturnGlassButton(
+                label: I18N.localized("返回浏览"),
+                color: Color(nsColor: chromeInkColor),
+                action: { [weak self] in self?.actions.onReturnToTimeline() }
+            ))
         }
 
         private func setupLocalKeyMonitor() {
@@ -845,7 +887,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard actions.usesVisualTimeline, activeColumnIndex == 1,
                   flags.intersection(disallowed).isEmpty,
                   ([UInt16(125), 126, 36, 49, 76].contains(event.keyCode)
-                    || (actions.usesMagazineTimeline && [UInt16(116), 121].contains(event.keyCode))),
+                    || (actions.usesMagazineTimeline && [UInt16(53), 116, 121, 123, 124].contains(event.keyCode))),
                   let splitVC = splitViewController, splitVC.splitViewItems.count == 3,
                   let window = splitVC.view.window, window.attachedSheet == nil,
                   NSApp.modalWindow == nil,
@@ -871,6 +913,15 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 if width >= content.minimumThickness { readingListWidth = width }
             }
 
+            let entering = actions.usesMagazineTimeline && hideList && wasReaderHidden
+            let returning = actions.usesMagazineTimeline && hideReader && wasListHidden
+            if entering || returning {
+                // 路由切换不在主线程截取整页；反向操作立即结束上一次淡入。
+                for item in [content, detail] {
+                    item.viewController.view.layer?.removeAnimation(forKey: "magazine.route")
+                }
+            }
+
             // Expand the destination before collapsing the source. This avoids
             // an all-collapsed intermediate split and retains the live WKWebView.
             if !hideList && content.isCollapsed { content.isCollapsed = false }
@@ -892,6 +943,16 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let width = min(max(280, readingListWidth), max(280, available))
                 splitVC.splitView.setPosition(leading + width, ofDividerAt: 1)
             }
+            if (entering || returning), !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                let destination = (entering ? detail : content).viewController.view
+                destination.wantsLayer = true
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0.85
+                fade.toValue = 1
+                fade.duration = 0.10
+                fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                destination.layer?.add(fade, forKey: "magazine.route")
+            }
             let previousColumn = activeColumnIndex
             reconcileActiveColumnAfterCollapse()
             if previousColumn != activeColumnIndex {
@@ -910,11 +971,21 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             }
             var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu]
             if !sidebarCollapsed { result.append(.paperSidebarTracker) }
+            if actions.usesMagazineTimeline {
+                if actions.isTimelineBrowsing {
+                    if actions.showsUnreadFilter { result.append(.paperUnreadFilter) }
+                    result.append(.paperMarkAllRead)
+                }
+                result += [.flexibleSpace, .paperVisualLeadingSpace]
+                if actions.isTimelineBrowsing { result.append(.paperEntryListTitle) }
+                result += [.paperReaderCapsule, .paperVisualTrailingSpace, .flexibleSpace, .paperTimelineControls]
+                return result
+            }
             if actions.usesVisualTimeline {
                 // One pair of springs surrounds the whole central cluster.
                 // Previously the invisible reader capsule added a third spring,
                 // pulling unread/mark-all toward the first third of the canvas.
-                if !sidebarCollapsed { result.append(.paperEntryListTitle) }
+                if !sidebarCollapsed, actions.showsEntryListTitle { result.append(.paperEntryListTitle) }
                 result += [.flexibleSpace, .paperVisualLeadingSpace]
                 if actions.showsTimelineReturn {
                     result += [.paperTimelineBack, .space]
@@ -978,7 +1049,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             let region = split.splitViewItems[actions.isTimelineBrowsing ? 1 : 2].viewController.view
             let target = region.convert(region.bounds, to: nil).midX
             let identifiers: Set<NSToolbarItem.Identifier> = actions.isTimelineBrowsing
-                ? [.paperUnreadFilter, .paperMarkAllRead] : [.paperReaderCapsule]
+                ? (actions.usesMagazineTimeline ? [.paperEntryListTitle] : [.paperUnreadFilter, .paperMarkAllRead])
+                : [.paperReaderCapsule]
             let frames = toolbar.items.filter { identifiers.contains($0.itemIdentifier) }.compactMap { item -> CGRect? in
                 guard let view = item.view, !view.isHidden, view.window != nil else { return nil }
                 return view.convert(view.bounds, to: nil)
@@ -1547,7 +1619,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     item.label = I18N.localized("返回浏览")
                     timelineBackButton?.toolTip = item.label
                     timelineBackButton?.setAccessibilityLabel(item.label)
-                    timelineBackButton?.contentTintColor = chromeInkColor
+                    timelineBackButton?.rootView = timelineBackRootView()
                 case .paperTimelineControls:
                     item.label = I18N.localized("切换文章视图")
                     item.paletteLabel = item.label
@@ -1594,8 +1666,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             guard let constraint = titleMaxWidthConstraint else { return }
             let columnWidth = currentContentColumnWidth()
             let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
-            let maxTitleWidth = actions.usesVisualTimeline ? Self.timelineAccessoryWidth : max(40, columnWidth - reservedWidth)
-            visualTitleWidthConstraint?.isActive = actions.usesVisualTimeline
+            let visualTitleWidth = min(180, max(96, columnWidth * 0.32))
+            let maxTitleWidth = actions.usesVisualTimeline ? visualTitleWidth : max(40, columnWidth - reservedWidth)
+            visualTitleWidthConstraint?.constant = visualTitleWidth
+            visualTitleWidthConstraint?.isActive = actions.usesVisualTimeline && actions.showsEntryListTitle
             if constraint.constant != maxTitleWidth {
                 constraint.constant = maxTitleWidth
             }
@@ -1604,12 +1678,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 同步中间栏标题及全部已读按钮状态
         func syncHeaderState() {
             let isSidebarCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
+            let hidesTitle = (isSidebarCollapsed && !actions.usesMagazineTimeline) || !actions.showsEntryListTitle
 
             syncToolbarAppearance()
             
             if let label = titleLabel {
-                label.isHidden = isSidebarCollapsed
-                if isSidebarCollapsed {
+                label.alignment = actions.usesMagazineTimeline ? .center : .left
+                label.isHidden = hidesTitle
+                if hidesTitle {
                     label.stringValue = ""
                     label.toolTip = nil
                 } else {
@@ -1622,7 +1698,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             }
             updateTitleWidthLimit()
             if #available(macOS 15.0, *) {
-                entryListTitleItem?.isHidden = isSidebarCollapsed
+                entryListTitleItem?.isHidden = hidesTitle
             }
             syncTimelineToolbarStructure()
             if let button = unreadFilterButton {
@@ -1747,11 +1823,12 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
             case .paperEntryListTitle:
                 let item = NSToolbarItem(itemIdentifier: .paperEntryListTitle)
-                let isCollapsed = splitViewController?.splitViewItems.first?.isCollapsed ?? false
+                let isCollapsed = (splitViewController?.splitViewItems.first?.isCollapsed ?? false) && !actions.usesMagazineTimeline
                 if #available(macOS 15.0, *) {
                     item.isHidden = isCollapsed
                 }
                 let label = NSTextField(labelWithString: isCollapsed ? "" : actions.selectionTitle)
+                label.alignment = actions.usesMagazineTimeline ? .center : .left
                 label.font = .systemFont(ofSize: 13, weight: .semibold)
                 label.textColor = chromeInkColor
                 label.isEditable = false
@@ -1772,9 +1849,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
                 let columnWidth = currentContentColumnWidth()
                 let reservedWidth: CGFloat = actions.showsUnreadFilter ? 116 : 76
-                let maxTitleWidth = actions.usesVisualTimeline ? Self.timelineAccessoryWidth : max(40, columnWidth - reservedWidth)
-                let visualWidth = label.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth)
-                visualWidth.isActive = actions.usesVisualTimeline
+                let visualTitleWidth = min(180, max(96, columnWidth * 0.32))
+                let maxTitleWidth = actions.usesVisualTimeline ? visualTitleWidth : max(40, columnWidth - reservedWidth)
+                let visualWidth = label.widthAnchor.constraint(equalToConstant: visualTitleWidth)
+                visualWidth.isActive = actions.usesVisualTimeline && actions.showsEntryListTitle
                 self.visualTitleWidthConstraint = visualWidth
                 let maxWidthConstraint = label.widthAnchor.constraint(lessThanOrEqualToConstant: maxTitleWidth)
                 maxWidthConstraint.priority = .required
@@ -1841,30 +1919,20 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 item.autovalidates = false
                 item.isBordered = false
                 item.visibilityPriority = .high
-                let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.timelineAccessoryWidth, height: 32))
-                container.translatesAutoresizingMaskIntoConstraints = false
-                let button = NSButton()
-                button.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: item.label)
-                button.target = self
-                button.action = #selector(doReturnToTimeline)
-                button.bezelStyle = .texturedRounded
-                button.contentTintColor = chromeInkColor
-                button.toolTip = item.label
-                button.setAccessibilityLabel(item.label)
-                button.setAccessibilityIdentifier("timeline.returnToBrowse")
-                button.translatesAutoresizingMaskIntoConstraints = false
-                button.isHidden = !actions.showsTimelineReturn
-                container.addSubview(button)
+                let host = NSHostingView(rootView: timelineBackRootView())
+                host.wantsLayer = true
+                host.layer?.backgroundColor = NSColor.clear.cgColor
+                host.toolTip = item.label
+                host.setAccessibilityLabel(item.label)
+                host.translatesAutoresizingMaskIntoConstraints = false
+                host.isHidden = !actions.showsTimelineReturn
                 NSLayoutConstraint.activate([
-                    container.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth),
-                    container.heightAnchor.constraint(equalToConstant: 32),
-                    button.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                    button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                    button.widthAnchor.constraint(equalToConstant: 30),
-                    button.heightAnchor.constraint(equalToConstant: 30)
+                    host.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth),
+                    host.heightAnchor.constraint(equalToConstant: 32)
                 ])
-                item.view = container
-                timelineBackButton = button
+                host.frame = NSRect(x: 0, y: 0, width: Self.timelineAccessoryWidth, height: 32)
+                item.view = host
+                timelineBackButton = host
                 return item
 
             case .paperTimelineControls:
