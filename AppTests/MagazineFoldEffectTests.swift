@@ -26,8 +26,10 @@ final class MagazineFoldEffectTests: XCTestCase {
     @MainActor
     func testInterpolationOffMainActorUsesAnIndependentValue() async {
         let original = MagazineFoldEffect(progress: 0.25, direction: -1)
-        let result = await Task.detached {
-            Self.interpolate(original, to: 0.75)
+        // Capture only the Sendable value; dynamic Self in an instance method
+        // may capture the non-Sendable XCTestCase fixture on Swift 6 toolchains.
+        let result = await Task.detached { @Sendable [original] in
+            MagazineFoldEffectTests.interpolate(original, to: 0.75)
         }.value
         XCTAssertEqual(result.animatableData, 0.75)
         XCTAssertEqual(result.direction, -1)
