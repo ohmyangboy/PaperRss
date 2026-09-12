@@ -59,6 +59,8 @@ extension NSToolbarItem.Identifier {
     static let paperUnreadFilter = Self("filter")
     static let paperTimelineBack = Self("back")
     static let paperTimelineControls = Self("views")
+    static let paperVisualLeadingSpace = Self("visual-leading")
+    static let paperVisualTrailingSpace = Self("visual-trailing")
 }
 final class Harness {
     struct Actions {

@@ -147,7 +147,7 @@ final class EntryPreviewImageTests: XCTestCase {
         let sized = "https://cdn.tw93.fun/cdn-cgi/image/width=2000,quality=80,format=auto,fit=scale-down/uPic/27342.JPG"
         let entry = try rss("""
         <m:content url="\(original)" medium="image" type="image/jpeg"/>
-        <description><![CDATA[<img src="\(sized)" data-pswp-src="\(original)" width="800">]]></description>
+        <description><![CDATA[<img src="\(sized)" data-lightense-src="\(original)" data-pswp-src="\(original)" loading="eager" fetchpriority="high" data-pswp-width="5496" data-pswp-height="3911" style="aspect-ratio: 1.4053;" width="800">]]></description>
         """)
         XCTAssertEqual(entry.previewImage?.url?.absoluteString, sized)
         XCTAssertEqual(entry.previewImage?.source, "responsive-variant")

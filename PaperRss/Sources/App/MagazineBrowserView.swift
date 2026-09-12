@@ -85,17 +85,48 @@ final class MagazineEditionCache: ObservableObject {
         let arrangement: MagazineArrangement
         let capacity: Int
         let locale: String
+        var viewport: CGSize? = nil
+        var showsImages: Bool = true
     }
     @Published private(set) var pages: [MagazinePage] = []
+    @Published private(set) var layouts: [String: MagazinePageLayout] = [:]
     private var input: Input?
     private var entryIndex: [String: Int] = [:]
     private(set) var rebuildCount = 0
 
     func update(_ input: Input) {
         guard self.input != input else { return }
+        let previous = self.input
         self.input = input
-        let next = MagazineEdition.pages(entries: input.entries, arrangement: input.arrangement,
-                                          folders: input.folders, capacity: input.capacity)
+        let next: [MagazinePage]
+        if let size = input.viewport {
+            let keepsGeometry = previous.map {
+                $0.viewport == input.viewport && $0.showsImages == input.showsImages
+                    && $0.arrangement == input.arrangement && $0.folders == input.folders && $0.locale == input.locale
+                    && $0.entries.count <= input.entries.count
+                    && zip($0.entries, input.entries).allSatisfy { old, new in
+                        old.id == new.id && old.title == new.title && old.summaryPreview == new.summaryPreview
+                            && old.sourceTitle == new.sourceTitle && old.feedID == new.feedID
+                    }
+            } ?? false
+            let retained = keepsGeometry ? pages.compactMap { layouts[$0.id] } : []
+            let start = keepsGeometry ? (previous?.entries.count ?? 0) : 0
+            let retainedIDs = Set(retained.flatMap { $0.page.entries.map(\.id) })
+            let additions = MagazinePaginator.pages(entries: input.entries.dropFirst(start).filter { !retainedIDs.contains($0.id) },
+                folders: input.folders, arrangement: input.arrangement, size: size, showsImages: input.showsImages)
+            let fresh = Dictionary(input.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let resolved = (retained + additions).map { layout in
+                MagazinePageLayout(page: MagazinePage(id: layout.page.id, title: layout.page.title,
+                    entries: layout.page.entries.compactMap { fresh[$0.id] }),
+                    placements: layout.placements, height: layout.height)
+            }
+            layouts = Dictionary(resolved.map { ($0.page.id, $0) }, uniquingKeysWith: { first, _ in first })
+            next = resolved.map(\.page)
+        } else {
+            layouts = [:]
+            next = MagazineEdition.pages(entries: input.entries, arrangement: input.arrangement,
+                                         folders: input.folders, capacity: input.capacity)
+        }
         entryIndex.removeAll(keepingCapacity: true)
         for (index, page) in next.enumerated() {
             for entry in page.entries { entryIndex[entry.id] = index }
@@ -140,29 +171,29 @@ struct MagazineBrowserView<Tile: View>: View {
     @StateObject private var edition = MagazineEditionCache()
     @State private var pendingPageIndex: Int?
     @State private var turnRequest: MagazinePageTurnRequest?
+    @State private var turnSourceAnchor: String?
+    @GestureState private var isDraggingPage = false
     private var isTurning: Bool { turnRequest != nil }
+    private var contentWidth: CGFloat { MagazinePaginator.contentWidth(availableSize.width) }
 
-    private var metrics: TimelineLayoutMetrics { .init(availableWidth: availableSize.width) }
     private var arrangement: MagazineArrangement { .init(rawValue: arrangementRaw) ?? .balanced }
     private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .scroll }
-    private var capacity: Int {
-        // Keep normal-size pages short enough to fit a laptop. Overflow still
-        // scrolls within a page at large accessibility sizes; it is never clipped.
-        let rows = availableSize.height > 950 ? 3 : 2
-        return max(3, metrics.galleryColumns * rows)
-    }
     private var editionInput: MagazineEditionCache.Input {
-        .init(entries: entries, folders: folders, arrangement: arrangement, capacity: capacity, locale: locale.identifier)
+        .init(entries: entries, folders: folders, arrangement: arrangement, capacity: 12,
+              locale: locale.identifier, viewport: availableSize, showsImages: showsImages)
     }
     private var pages: [MagazinePage] { edition.pages }
-    private var pageIndex: Int { edition.pageIndex(containing: memory.magazineAnchor) }
+    private var pageIndex: Int {
+        if let request = turnRequest, let target = pages.firstIndex(where: { $0.id == request.targetPageID }) { return target }
+        return edition.pageIndex(containing: memory.magazineAnchor)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             Group {
                 if turning == .scroll {
                     ScrollView {
-                        LazyVStack(spacing: 36) {
+                        LazyVStack(spacing: 40) {
                             ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
                                 pageContent(page, index: index)
                                     .id(page.id)
@@ -181,43 +212,67 @@ struct MagazineBrowserView<Tile: View>: View {
                     Group {
                         if pages.indices.contains(pageIndex) {
                             let page = pages[pageIndex]
-                            #if os(macOS)
                             MagazinePageTurnView(pageID: page.id, request: turnRequest,
                                 reduceMotion: reduceMotion, isActive: isBrowsing,
                                 background: NSColor(Color(paperHex: palette.backgroundHex)),
-                                content: ScrollView {
-                                    pageContent(page, index: pageIndex).padding(.vertical, 20)
-                                        .frame(maxWidth: .infinity, alignment: .top)
-                                }
-                                .scrollIndicators(.never).id(page.id)
-                                .background(Color(paperHex: palette.backgroundHex))
-                                .environment(\.paperAppearancePalette, palette)
-                                .environment(\.colorScheme, colorScheme)
-                                .environment(\.locale, locale),
-                                onComplete: { id in
-                                    if turnRequest?.id == id { turnRequest = nil }
+                                content: pageContent(page, index: pageIndex)
+                                    .padding(.vertical, 20)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                    .background(Color(paperHex: palette.backgroundHex))
+                                    .environment(\.paperAppearancePalette, palette)
+                                    .environment(\.colorScheme, colorScheme)
+                                    .environment(\.locale, locale),
+                                onComplete: { id, committed in
+                                    guard turnRequest?.id == id else { return }
+                                    if committed {
+                                        memory.magazineAnchor = pages.first(where: { $0.id == turnRequest?.targetPageID })?.entries.first?.id
+                                    } else {
+                                        memory.magazineAnchor = turnSourceAnchor
+                                    }
+                                    memory.visibleAnchor = memory.magazineAnchor
+                                    turnRequest = nil
+                                    turnSourceAnchor = nil
                                 })
-                                .frame(width: metrics.contentWidth)
-                            #else
-                            ScrollView { pageContent(page, index: pageIndex).padding(.vertical, 20) }
-                                .id(page.id)
-                            #endif
                         }
                     }
+                    .frame(width: contentWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .clipped()
-                    .allowsHitTesting(!isTurning)
-                    .simultaneousGesture(DragGesture(minimumDistance: 36).onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-                        go(to: pageIndex + (value.translation.width < 0 ? 1 : -1), proxy: proxy)
-                    })
+                    .simultaneousGesture(DragGesture(minimumDistance: 20)
+                        .updating($isDraggingPage) { _, active, _ in active = true }
+                        .onChanged { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+                            if turnRequest == nil {
+                                go(to: pageIndex + (value.translation.width < 0 ? 1 : -1), proxy: proxy, interactive: true)
+                            }
+                            guard var request = turnRequest, request.progress != nil else { return }
+                            let distance = value.translation.width * (request.forward ? -1 : 1)
+                            request.progress = min(1, max(0, distance / (contentWidth * 0.65)))
+                            turnRequest = request
+                        }
+                        .onEnded { value in
+                            guard var request = turnRequest, request.progress != nil else { return }
+                            let predicted = value.predictedEndTranslation.width * (request.forward ? -1 : 1)
+                            request.commit = (request.progress ?? 0) > 0.4 || predicted > contentWidth * 0.35
+                            request.progress = nil
+                            turnRequest = request
+                        })
+                    .onChange(of: isDraggingPage) { _, active in
+                        // 系统取消手势时不会调用 onEnded，但 GestureState 必定复位。
+                        guard !active, var request = turnRequest, let progress = request.progress else { return }
+                        request.commit = progress > 0.4
+                        request.progress = nil
+                        turnRequest = request
+                    }
                 }
             }
             .coordinateSpace(name: "magazine-viewport")
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                MagazinePageRail(pages: pages, currentIndex: pageIndex, hasMore: hasMore,
-                    isTurning: isTurning, availableWidth: availableSize.width,
-                    availableHeight: availableSize.height, onSelect: { go(to: $0, proxy: proxy) })
+                if !pages.isEmpty {
+                    MagazinePageRail(pages: pages, currentIndex: pageIndex, hasMore: hasMore,
+                        isTurning: isTurning, availableWidth: availableSize.width,
+                        availableHeight: availableSize.height, onSelect: { go(to: $0, proxy: proxy) })
+                }
             }
             .onPreferenceChange(MagazinePageFrames.self) { frames in
                 guard isBrowsing, turning == .scroll, !memory.isRestoring else { return }
@@ -227,12 +282,12 @@ struct MagazineBrowserView<Tile: View>: View {
             }
             .onChange(of: editionInput, initial: true) { old, new in
                 let hadAnchor = edition.contains(memory.magazineAnchor)
+                cancelTurn()
                 edition.update(new)
-                turnRequest = nil
                 if let pending = pendingPageIndex, pages.indices.contains(pending) {
                     pendingPageIndex = nil
                     go(to: pending, proxy: proxy)
-                } else if old.arrangement != new.arrangement || old.capacity != new.capacity
+                } else if old.arrangement != new.arrangement || old.viewport != new.viewport
                             || old.locale != new.locale || !hadAnchor || !edition.contains(memory.magazineAnchor) {
                     restore(proxy: proxy)
                 }
@@ -242,7 +297,7 @@ struct MagazineBrowserView<Tile: View>: View {
             .task(id: turningRaw) {
                 // Wait for the destination scroll container to exist before
                 // restoring its anchor when switching reading styles.
-                turnRequest = nil
+                cancelTurn()
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 restore(proxy: proxy)
@@ -258,44 +313,53 @@ struct MagazineBrowserView<Tile: View>: View {
                 restore(proxy: proxy, anchor: memory.restoreAnchor)
                 memory.finishRestoration()
             }
-            .onDisappear { turnRequest = nil }
-            .onChange(of: isBrowsing) { _, value in if !value { turnRequest = nil } }
-            .onChange(of: availableSize) { _, _ in turnRequest = nil }
-            .onChange(of: showsImages) { _, _ in turnRequest = nil }
+            .onDisappear { cancelTurn() }
+            .onChange(of: isBrowsing) { _, value in if !value { cancelTurn() } }
+            .onChange(of: availableSize) { _, _ in cancelTurn() }
+            .onChange(of: showsImages) { _, _ in cancelTurn() }
         }
         .accessibilityIdentifier("magazine.browser")
     }
 
+    private func cancelTurn() {
+        if turnRequest != nil, let anchor = turnSourceAnchor { memory.magazineAnchor = anchor }
+        turnRequest = nil
+        turnSourceAnchor = nil
+    }
+
     private func pageContent(_ page: MagazinePage, index: Int) -> some View {
-        let columns = metrics.galleryColumns
-        let featured = page.featuredID(showsImages: showsImages)
-        // A layout highlight is a presentation decision, never a database sort.
-        let ordered = displayedEntries(in: page)
-        return VStack(alignment: .leading, spacing: 16) {
+        let layout = edition.layouts[page.id]
+        return VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .firstTextBaseline) {
                 Text(page.title).font(.system(size: 15, weight: .semibold, design: .serif))
                 Spacer()
-                Text(String(format: "%02d", index + 1)).font(.system(size: 12, design: .monospaced))
+                Text(String(format: "%02d", index + 1)).font(.system(size: 11))
                     .foregroundStyle(Color(paperHex: palette.mutedHex))
-            }
-            Rectangle().fill(Color(paperHex: palette.mutedHex).opacity(0.23)).frame(height: 0.6)
-            MagazineMasonryLayout(columns: columns, spacing: TimelineLayoutMetrics.spacing) {
-                ForEach(Array(ordered.enumerated()), id: \.element.id) { offset, entry in
-                    let span = entry.id == featured && columns >= 3 && arrangement != .chronological ? 2 : 1
-                    let width = metrics.galleryTileWidth * CGFloat(span) + TimelineLayoutMetrics.spacing * CGFloat(span - 1)
-                    let isSupporting = featured != nil && columns >= 3 && offset > 0 && offset <= 2
-                        && arrangement != .chronological
-                    let role: TimelineTileLayout = span > 1 ? .lead :
-                        (isSupporting ? .supporting : (columns == 1 ? .compact : .gallery))
-                    tile(entry, width, role).layoutValue(key: MagazineColumnSpan.self, value: span)
+            }.frame(height: 20)
+            ZStack(alignment: .topLeading) {
+                if let layout {
+                    ForEach(Array(zip(page.entries, layout.placements)), id: \.0.id) { entry, placement in
+                        tile(entry, placement.frame.width, .gallery)
+                            .environment(\.magazineStoryStyle, placement.style)
+                            .frame(width: placement.frame.width, height: placement.frame.height, alignment: .topLeading)
+                            .clipped()
+                            .overlay(alignment: .top) {
+                                if placement.frame.minY > 0 {
+                                    Rectangle().fill(Color(paperHex: palette.mutedHex).opacity(0.18))
+                                        .frame(height: 0.5).offset(y: -16)
+                                }
+                            }
+                            .offset(x: placement.frame.minX, y: placement.frame.minY)
+                    }
                 }
             }
+            .frame(width: contentWidth, height: layout?.height ?? 0, alignment: .topLeading)
         }
-        .frame(width: metrics.contentWidth, alignment: .topLeading)
+        .frame(width: contentWidth, alignment: .topLeading)
         .foregroundStyle(Color(paperHex: palette.inkHex))
     }
 
-    private func go(to index: Int, proxy: ScrollViewProxy) {
+    private func go(to index: Int, proxy: ScrollViewProxy, interactive: Bool = false) {
         guard isBrowsing, !isTurning, index >= 0 else { return }
         if index >= pages.count {
             if hasMore { pendingPageIndex = index; onNeedMore() }
@@ -303,15 +367,13 @@ struct MagazineBrowserView<Tile: View>: View {
         }
         guard let anchor = pages[index].entries.first?.id else { return }
         if index == pageIndex && turning == .fold { return }
-        memory.visibleAnchor = anchor
         if turning == .fold {
-            #if os(macOS)
-            turnRequest = .init(targetPageID: pages[index].id, forward: index >= pageIndex)
-            #endif
-            // The native host freezes the old viewport before replacing its
-            // content; only the leaf textures animate, not this view hierarchy.
-            memory.magazineAnchor = anchor
+            turnSourceAnchor = memory.magazineAnchor
+            turnRequest = .init(targetPageID: pages[index].id, forward: index > pageIndex,
+                                progress: interactive ? 0 : nil)
+            // 请求与目标页由同一个 State 原子切换；完成后才写回可观察锚点。
         } else {
+            memory.visibleAnchor = anchor
             memory.magazineAnchor = anchor
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(pages[index].id, anchor: .top) }
         }
@@ -326,20 +388,13 @@ struct MagazineBrowserView<Tile: View>: View {
         if turning == .scroll { proxy.scrollTo(pages[index].id, anchor: .top) }
     }
 
-    private func displayedEntries(in page: MagazinePage) -> [EntryListItem] {
-        guard arrangement != .chronological, let featured = page.featuredID(showsImages: showsImages) else {
-            return page.entries
-        }
-        return page.entries.filter { $0.id == featured } + page.entries.filter { $0.id != featured }
-    }
-
     private func handle(_ request: TimelineKeyRequest, proxy: ScrollViewProxy) {
         if request.keyCode == 116 || request.keyCode == 121 {
             go(to: pageIndex + (request.keyCode == 121 ? 1 : -1), proxy: proxy)
             return
         }
         guard !isTurning else { return }
-        let ordered = pages.flatMap { displayedEntries(in: $0) }
+        let ordered = pages.flatMap(\.entries)
         guard !ordered.isEmpty else { return }
         if request.keyCode == 125 || request.keyCode == 126 {
             let current = ordered.firstIndex { $0.id == selectedID }

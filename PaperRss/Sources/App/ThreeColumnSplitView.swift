@@ -370,6 +370,9 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         fileprivate weak var readerCapsuleItem: NSToolbarItem?
         fileprivate weak var readerCapsuleHost: NSHostingView<AnyView>?
         fileprivate weak var readerCapsuleMaterialContainer: LegacyReaderCapsuleMaterialContainer?
+        private var visualLeadingWidth: NSLayoutConstraint?
+        private var visualTrailingWidth: NSLayoutConstraint?
+        private var visualCenterTask: Task<Void, Never>?
         fileprivate weak var readerCapsuleWidthConstraint: NSLayoutConstraint?
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
         fileprivate weak var entryListTitleItem: NSToolbarItem?
@@ -912,14 +915,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 // Previously the invisible reader capsule added a third spring,
                 // pulling unread/mark-all toward the first third of the canvas.
                 if !sidebarCollapsed { result.append(.paperEntryListTitle) }
-                result.append(.flexibleSpace)
+                result += [.flexibleSpace, .paperVisualLeadingSpace]
                 if actions.showsTimelineReturn {
                     result += [.paperTimelineBack, .space]
                 } else if actions.isTimelineBrowsing {
                     if actions.showsUnreadFilter { result.append(.paperUnreadFilter) }
                     result.append(.paperMarkAllRead)
                 }
-                result += [.paperReaderCapsule, .flexibleSpace, .paperTimelineControls]
+                result += [.paperReaderCapsule, .paperVisualTrailingSpace, .flexibleSpace, .paperTimelineControls]
                 return result
             }
             if !sidebarCollapsed { result += [.paperEntryListTitle, .flexibleSpace] }
@@ -951,6 +954,43 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             reconcileToolbarItems(in: toolbar, identifiers: toolbarItemOrder(
                 sidebarCollapsed: splitVC.splitViewItems.first?.isCollapsed ?? false))
             timelineBackButton?.isHidden = !actions.showsTimelineReturn
+            scheduleVisualToolbarCenter()
+        }
+
+        /// 用窗口坐标对齐阅读区；返回按钮不计入文章工具的视觉中心。
+        func scheduleVisualToolbarCenter() {
+            visualCenterTask?.cancel()
+            guard actions.usesVisualTimeline, !actions.isZenMode else { return }
+            visualCenterTask = Task { @MainActor [weak self] in
+                for _ in 0..<3 {
+                    await Task.yield()
+                    guard !Task.isCancelled, let self else { return }
+                    self.centerVisualToolbar()
+                }
+            }
+        }
+
+        private func centerVisualToolbar() {
+            guard let split = splitViewController, let window = split.view.window,
+                  let toolbar = window.toolbar, split.splitViewItems.count >= 3,
+                  let leading = visualLeadingWidth, let trailing = visualTrailingWidth else { return }
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
+            let region = split.splitViewItems[actions.isTimelineBrowsing ? 1 : 2].viewController.view
+            let target = region.convert(region.bounds, to: nil).midX
+            let identifiers: Set<NSToolbarItem.Identifier> = actions.isTimelineBrowsing
+                ? [.paperUnreadFilter, .paperMarkAllRead] : [.paperReaderCapsule]
+            let frames = toolbar.items.filter { identifiers.contains($0.itemIdentifier) }.compactMap { item -> CGRect? in
+                guard let view = item.view, !view.isHidden, view.window != nil else { return nil }
+                return view.convert(view.bounds, to: nil)
+            }
+            guard let first = frames.first else { return }
+            let actual = frames.dropFirst().reduce(first) { $0.union($1) }.midX
+            let correction = trailing.constant - leading.constant + 2 * (actual - target)
+            let bound = max(0, region.bounds.width - (frames.last?.maxX ?? first.maxX) + first.minX - 100)
+            let nextLeading = min(max(1, bound), max(1, -correction))
+            let nextTrailing = min(max(1, bound), max(1, correction))
+            if abs(leading.constant - nextLeading) > 0.5 { leading.constant = nextLeading }
+            if abs(trailing.constant - nextTrailing) > 0.5 { trailing.constant = nextTrailing }
         }
 
         private func consumeReaderShortcut(
@@ -1056,6 +1096,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.updateTitleWidthLimit()
+                    self?.scheduleVisualToolbarCenter()
                 }
             }
 
@@ -1843,6 +1884,18 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 timelineControlsHost = host
                 return item
 
+            case .paperVisualLeadingSpace, .paperVisualTrailingSpace:
+                let item = NSToolbarItem(itemIdentifier: id)
+                item.isBordered = false
+                let view = NSView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+                view.translatesAutoresizingMaskIntoConstraints = false
+                let width = view.widthAnchor.constraint(equalToConstant: 1)
+                NSLayoutConstraint.activate([width, view.heightAnchor.constraint(equalToConstant: 1)])
+                item.view = view
+                if id == .paperVisualLeadingSpace { visualLeadingWidth = width }
+                else { visualTrailingWidth = width }
+                return item
+
             case .paperReaderCapsule:
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
                 item.label = I18N.localized("阅读工具")
@@ -1938,6 +1991,8 @@ extension NSToolbarItem.Identifier {
     static let paperAddMenu = NSToolbarItem.Identifier("com.paperrss.toolbar.addMenu")
     static let paperSidebarTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.sidebarTracker")
     static let paperTimelineTracker = NSToolbarItem.Identifier("com.paperrss.toolbar.timelineTracker")
+    static let paperVisualLeadingSpace = NSToolbarItem.Identifier("com.paperrss.toolbar.visualLeadingSpace")
+    static let paperVisualTrailingSpace = NSToolbarItem.Identifier("com.paperrss.toolbar.visualTrailingSpace")
     static let paperEntryListTitle = NSToolbarItem.Identifier("com.paperrss.toolbar.entryListTitle")
     static let paperUnreadFilter = NSToolbarItem.Identifier("com.paperrss.toolbar.unreadFilter")
     static let paperMarkAllRead = NSToolbarItem.Identifier("com.paperrss.toolbar.markAllRead")

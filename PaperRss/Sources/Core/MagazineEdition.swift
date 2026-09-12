@@ -26,6 +26,12 @@ public struct MagazinePage: Identifiable, Equatable, Sendable {
     public let title: String
     public let entries: [EntryListItem]
 
+    public init(id: String, title: String, entries: [EntryListItem]) {
+        self.id = id
+        self.title = title
+        self.entries = entries
+    }
+
     /// No fixed lead slot for text-only editions. A real illustration earns a
     /// wider column; the surrounding stories pack into the remaining space.
     public func featuredID(showsImages: Bool) -> String? {

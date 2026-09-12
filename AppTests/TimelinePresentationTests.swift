@@ -258,4 +258,22 @@ final class TimelinePresentationTests: XCTestCase {
         memory.resetScope()
         XCTAssertNil(memory.magazineAnchor)
     }
+    func testMagazineMeasurementContainsRenderedChineseAndEnglishText() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = ArticleThumbnailStore(directory: directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let entry = EntryListItem(id: "measure", feedID: UUID(),
+            title: String(repeating: "设计优雅、排版和谐 An editorial title ", count: 8),
+            summaryPreview: String(repeating: "Mixed 中文 paragraphs need real font measurements.\n", count: 6), sourceTitle: "来源")
+        for width in [CGFloat(260), 440, 720] {
+            for size in [CGFloat(22), 32, 36] {
+                let style = MagazineStoryStyle(titleSize: size, titleLines: 4, summaryLines: 3)
+                let actual = measuredHeight(MagazineStoryView(entry: entry, style: style, width: width,
+                    selected: false, store: store), width: width)
+                XCTAssertLessThanOrEqual(actual, style.height(for: entry, width: width) + 1,
+                    "分页预算必须容纳真实 SwiftUI 字体测量")
+            }
+        }
+    }
+
 }

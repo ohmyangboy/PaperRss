@@ -177,6 +177,8 @@ struct TimelineArticleTile: View {
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.displayScale) private var displayScale
 
+    @Environment(\.magazineStoryStyle) private var magazineStyle
+
     private var isLead: Bool { layout == .lead }
     private var isCompact: Bool { layout == .compact || layout == .supporting }
     private var contentWidth: CGFloat { max(1, width - 24) }
@@ -189,7 +191,14 @@ struct TimelineArticleTile: View {
         return 18
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let magazineStyle {
+            MagazineStoryView(entry: entry, style: magazineStyle, width: width,
+                selected: isSelected, store: thumbnailStore)
+        } else { cardBody }
+    }
+
+    private var cardBody: some View {
         Group {
             if isCompact {
                 TimelineCompactTileLayout(imageWidth: imageWidth, imageLeading: layout == .supporting) {

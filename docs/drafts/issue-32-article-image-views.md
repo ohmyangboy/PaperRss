@@ -72,106 +72,51 @@ mkdir -p .scratch/ui-review
 本轮另外修正测试夹具对非隔离 async XCTestCase 默认 setup/teardown 的多余调用，
 以及 Node 测试辅助函数覆盖子进程 PATH 的问题；没有改动相应产品功能或跳过断言。
 
-## Content-aware magazine editions and folding navigation
+## 2026-09-12 整页出版编排与 Duo 翻页（已批准）
 
-The magazine canvas stays centered at a maximum 1100pt measure. Each edition page
-contains a bounded set of loaded stories (normally six on a desktop, adapting to
-window width and height). Actual SwiftUI measurements place the next tile in the
-shortest available masonry column, rather than reserving the tallest tile's row
-height. An available photograph can earn a two-column lead and two supporting
-stories; text-only editions do not reserve a lead slot. Short text-only notes use
-slightly larger serif type. Single-column windows use compact text-led rows.
-Images, title and summary keep their intrinsic height with no blank minimum slots.
+杂志以一张完整纸面为视觉主体，最大宽度 1100pt，宽窗口两侧各 40pt、
+窄窗口各 20pt。两栏间距 32pt，章节间距 40pt。文章不再使用常驻卡片
+边框，保留选中和悬停反馈；卡片模式沿用原有样式。
 
-The permanent top-right view popover adds two magazine-only preferences:
+App 层测量与显示共用字体、图片高度和标题/摘要行数，生成有序文章、角色
+和位置组成的页面结果。主稿为 32–36pt 衬线标题，次稿 22pt，短讯 20pt，
+摘要 15pt。图片主稿、文字主稿及短讯双栏根据内容确定；窄窗口单栏。
+按可用高度逐篇放入，剩余文章进入下一页，不保留页内滚动。极小窗口的
+单篇预览先去图片、收摘要，再限制标题行数，完整内容仍通过阅读器打开。
 
-- Arrangement: balanced edition (default), subscription source, folder, or time.
-  Balanced mode clusters sources inside a bounded page and promotes an illustrated
-  story for layout, without AI, external requests or changing the underlying SQL
-  order. Source/folder grouping is account-aware. Every loaded article is included
-  exactly once. All grouping is confined to the currently loaded timeline;
-  reaching its end uses the existing database pagination. The list and card modes
-  keep their existing sort and filtering semantics.
-- Page navigation: continuous scroll (default) or folding pages. The fold is an
-  application-local two-panel perspective/shading transition, not a screen-capture
-  overlay. Reduce Motion substitutes a short fade. Buttons, Page Up/Page Down and
-  deliberate horizontal drags turn pages. A fixed bottom horizontal tick rail
-  previews that page's article titles on hover, permits direct jumps and includes
-  separate previous/next buttons. It navigates magazine pages of article previews,
-  not the paragraphs of a single article. Oversized content remains scrollable
-  within a page instead of being truncated to viewport height.
+分页、标题导航和键盘导航共用一个顺序。智能编排不调用 AI；来源、文件夹、
+时间选项保留。追加数据与已读状态更新保留已有页面位置，字号和字重不因已读
+改变。窗口与编排变更按文章身份恢复。图片失败使用同页文字空间，不跨页移动。
 
-A stable article identity anchors the current page across resizing, regrouping and
-reading/return. Page turns only change presentation, never read/star state. Opening
-an article collapses the timeline, not the subscription sidebar. The live reader
-stays mounted. The browse-only filter/mark-all cluster disappears when opening an article.
-The back button is standalone immediately before the centered reader capsule,
-and the view switcher stays at the far right. Visual browsing uses exactly two flexible toolbar spaces, with
-balanced outer accessories. Existing three-column list and Zen routes are retained.
+翻页仅捕获本应用源页和目标页，每张限制三百万像素。原生 Metal 渲染器从固定
+观察平面投影图片，右半页向左翻，背面显示新左半页；上一页对称。模糊和变暗
+随角度与距折线的位置变化，结束帧恢复清晰。点击约 520ms，拖动直接控制进度，
+按距离和预测终点完成或回弹。减少动态效果或渲染不可用时使用 120ms 淡化。
+所有准备与动画任务有请求身份校验、取消与释放机制，不按帧重新测量或解码。
 
-### Cover regression: Weekly issue 273
+底部细刻度带前后按钮，无整体胶囊和常驻页数；悬停、聚焦展示实际文章标题。
+阅读时隐藏浏览操作，独立返回按钮位于文章工具左侧；文章工具以阅读区域为
+视觉中心，浏览时筛选和全部已读以浏览区域为中心。
 
-On 2026-09-12 the public feed `https://weekly.tw93.fun/rss.xml` advertised the cover
-`https://cdn.tw93.fun/uPic/27342.JPG` in Media RSS/enclosure fields. An anonymous
-response probe measured 9,176,164 bytes for this original, exceeding the existing
-8 MiB thumbnail response limit. The same item's description already supplied a
-same-host Cloudflare resized version (width=2000), measured at 759,262 bytes.
-The image was extracted correctly but rejected by the bounded byte loader.
+头图保持提取第 2 版、8 MiB 上限和旧条目后台回填。第 273 期使用 RSS 已有的
+同图压缩链接，保持协议、域名、路径、查询和宽度检查，不新增数据库迁移。
+参考 https://github.com/chuspeeism/iphone-duo 的固定投影与渐变模糊思路，
+使用自编原生渲染实现，无第三方代码或资源移植，无录屏权限。
 
-Extraction revision 2 prefers an already supplied, verified same-asset resize
-before downloading. Scheme, host, port, original path, query and bounded width are
-checked; no CDN URL is fabricated and no webpage or Open Graph is fetched.
-Requested older entries are repaired in existing 100-item background batches.
-Previously extracted covers survive retention/purged bodies. The 8 MiB response
-limit, pixel limit, cache isolation and article states are unchanged. A changed URL
-also avoids reusing the failed original URL's negative-cache entry.
+验证要求：core、feature、工具栏回归、macOS 宿主编译和隔离实例交互。Metal
+关键帧由同一着色器离屏验证。测试设置使用独立域并清理。仅创建本地提交，
+不推送、合并或发布。未经实际观察的视觉项目保留 Manual UI verification required。
 
-### Inspiration and verification boundary
+### 本轮验证结果
 
-Reviewed Mac-Duo at `e60f71bfc14aa54fc01bb5d672c50906140d4716`:
-`https://github.com/sumimakito/Mac-Duo`. Its depth renderer uses perspective and
-height-dependent dimming/blur over a captured screen texture. The magazine uses
-its own application-local page transition inspired by that visual idea; it does not import
-Mac-Duo code, dependencies, hardware sensors or screen-recording permissions.
-
-Automated coverage includes stable grouping/IDs, no omissions/duplicates, masonry
-non-overlap and compact text, source resize verification, v1-to-v2 backfill with
-retained read/star state, toolbar centering/order and controller lifetime. Run
-`--core`, `--feature`, `--web`, shell syntax checks and unsigned macOS host build.
-Real macOS interaction remains **Manual UI verification required**, especially
-fold smoothness, hover rail, repeated fast navigation, large text, long titles,
-image-off layouts, source grouping and returning from a translated article.
-
-## Book-leaf turn and scroll hot-path follow-up
-
-Forward navigation keeps the old left half stationary, places the destination
-right half underneath, and rotates the old right half around the exact centre
-crease by 180 degrees. The reverse face is the destination left half, with its
-own 180-degree transform to avoid mirrored text. Backward navigation reverses
-this geometry. Mild blur and shading affect only the turning leaf. Reduce Motion
-uses a short fade. No screen recording or private APIs are used: the native view
-captures only its own visible viewport twice per requested turn, bounded to a
-3-million-pixel budget. It does not duplicate live SwiftUI scroll views per half
-or do per-frame text measurement. Snapshots are released at completion, resize,
-route change and dismantle. Late completions are request-ID checked.
-
-Edition grouping and the article-to-page index are cached by actual inputs.
-Repeated scroll offsets on the same page no longer publish state changes;
-hover/focus state lives inside the rail. Masonry reuses measurements between size
-and placement calls, invalidating for changed geometry/subviews. Magazine no
-longer emits unused per-article frame preferences; one frame per lazy page is
-sufficient. Appending entries or updating read flags does not force a scroll-to-top.
-The image pipeline is still bounded and off-main-thread; it was not loosened.
-
-The bottom rail follows the existing reader TOC's 8-by-3 ticks rotated to 3-by-8,
-with identical-size dark active ticks and pale inactive ticks. It floats without
-an edge-to-edge material bar, divider or changing-width page pill. Hover and
-keyboard focus show only the actual titles on that page, anchored above the tick
-and clamped inside the window. Separate previous/next buttons remain on its sides.
-This rail still navigates pages, never marks articles read.
-
-Validation: full core/feature/web regression and unsigned macOS build; operation
-count tests for grouping/scroll notifications, snapshot bounds, forward/backward
-geometry, no-window fallback, and toolbar routing. These are not a measured FPS
-claim. **Manual UI verification required** on the maintainer's actual Mac for
-capture orientation, fold smoothness, long-page scroll positions and hover edges.
+- 功能回归通过：49 项 Core、35 项 App；覆盖实测排版、图片晚到、追加稳定性、
+  Metal 中间帧、宿主重挂载、取消与真实渲染生命周期。
+- 工具栏生命周期的 1296 种切换组合通过；macOS 宿主构建成功。
+- Core 全量首次仅 5 万条查询性能项超时，其余通过；该项在并行构建结束后
+  单独复跑通过，未调整门限。两项原有 App 测试按环境跳过。
+- 隔离实例已实际验证连续翻页、拖动完成、跨页跳转、阅读返回、工具栏居中、
+  第 273 期头图、配图开关及深浅主题。
+- 约三百万像素的离屏 GPU 单帧中位约 0.45ms、P95 约 0.89ms；不包含快照和
+  屏幕调度，不能等同于端到端动画帧率。
+- Manual UI verification required：屏幕逐帧接缝、慢拖回弹手感、全部窗口尺寸、
+  自定义主题、导航浮层边界和端到端帧率。
