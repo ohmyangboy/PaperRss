@@ -1,0 +1,262 @@
+[
+('PaperRss/Sources/App/TimelineImageViews.swift', '76dfd8620d985b7f2e5f358176af297661a2d184', 'bcd7f9727ab8db9a9389c2274e9554a17320fffb', [
+(44, 46, r'''    let width: CGFloat?
+    let height: CGFloat?
+'''),
+(62, 63, r'''                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: width.map { max(1, $0) }, height: height.map { max(1, $0) })
+'''),
+(85, 85, r'''/// Like the reader's centered text column, visual timelines have a readable
+/// maximum measure instead of stretching across every available screen pixel.
+struct TimelineLayoutMetrics {
+    static let maximumWidth: CGFloat = 1100
+    static let editorialBreakpoint: CGFloat = 760
+    static let spacing: CGFloat = 20
+    let contentWidth: CGFloat
+
+    init(availableWidth: CGFloat) {
+        let gutter: CGFloat = availableWidth < 600 ? 16 : 28
+        contentWidth = min(Self.maximumWidth, max(1, availableWidth - gutter * 2))
+    }
+
+    var usesEditorialHeader: Bool { contentWidth >= Self.editorialBreakpoint }
+    var featureColumnWidth: CGFloat { (contentWidth - Self.spacing) / 2 }
+    var galleryColumns: Int { min(3, max(1, Int((contentWidth + Self.spacing) / 260))) }
+    var galleryTileWidth: CGFloat {
+        (contentWidth - CGFloat(galleryColumns - 1) * Self.spacing) / CGFloat(galleryColumns)
+    }
+}
+
+enum TimelineTileLayout {
+    case lead, supporting, compact, gallery
+}
+
+/// Text is measured first. A thumbnail may use that height, never force a short
+/// tweet to occupy a full image-height row. A failed image takes no space.
+struct TimelineCompactTileLayout: Layout {
+    var imageWidth: CGFloat
+    var imageLeading = false
+    var spacing: CGFloat = 14
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        guard !subviews.isEmpty else { return [] }
+        let width = max(1, width)
+        var textWidth = width
+        var textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        var imageSize = CGSize.zero
+        if subviews.count > 1 {
+            let proposedImageWidth = min(imageWidth, width * 0.32)
+            textWidth = max(1, width - proposedImageWidth - spacing)
+            textSize = subviews[0].sizeThatFits(ProposedViewSize(width: textWidth, height: nil))
+            imageSize = subviews[1].sizeThatFits(ProposedViewSize(
+                width: proposedImageWidth, height: min(proposedImageWidth, textSize.height)))
+            if imageSize.width <= 0 || imageSize.height <= 0 {
+                imageSize = .zero
+                textWidth = width
+                textSize = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            }
+        }
+        let textX = imageLeading && imageSize.width > 0 ? imageSize.width + spacing : 0
+        let text = CGRect(x: textX, y: 0, width: textWidth, height: textSize.height)
+        guard subviews.count > 1 else { return [text] }
+        return [text, CGRect(x: imageLeading ? 0 : width - imageSize.width, y: 0,
+                             width: imageSize.width, height: imageSize.height)]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 360
+        let rects = frames(width: width, subviews: subviews)
+        return CGSize(width: max(1, width), height: rects.map(\.maxY).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rects = frames(width: bounds.width, subviews: subviews)
+        for (index, rect) in rects.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + rect.minX, y: bounds.minY + rect.minY),
+                                  anchor: .topLeading, proposal: ProposedViewSize(rect.size))
+        }
+    }
+}
+
+'''),
+(87, 89, r'''    let layout: TimelineTileLayout
+'''),
+(96, 101, r'''    private var isLead: Bool { layout == .lead }
+    private var isCompact: Bool { layout == .compact || layout == .supporting }
+    private var contentWidth: CGFloat { max(1, width - 24) }
+    private var imageWidth: CGFloat { isCompact ? min(132, contentWidth * 0.32) : contentWidth }
+    private var imageHeight: CGFloat { min(isLead ? 300 : 180, imageWidth * 9 / 16) }
+'''),
+(104, 109, r'''            if isCompact {
+                TimelineCompactTileLayout(imageWidth: imageWidth, imageLeading: layout == .supporting) {
+                    textContent
+                    thumbnail(height: nil)
+'''),
+(110, 111, r''''''),
+(112, 114, r'''                VStack(alignment: .leading, spacing: 12) {
+                    thumbnail(height: imageHeight)
+'''),
+(115, 116, r''''''),
+(117, 118, r''''''),
+(120, 122, r'''        // No minimum tile height and no vertical Spacer: text-only articles
+        // remain compact, including the lead article and short social posts.
+        .padding(12)
+        .frame(width: width, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+'''),
+(123, 125, r'''            .opacity(isSelected ? 0.14 : 0.54))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+'''),
+(126, 127, r'''            RoundedRectangle(cornerRadius: 9).strokeBorder(
+'''),
+(128, 129, r'''                    .opacity(isSelected ? 0.55 : 0.13), lineWidth: 0.7)
+'''),
+(133, 134, r'''        .accessibilityHint(I18N.localized("打开文章"))
+'''),
+(136, 137, r'''    @ViewBuilder private func thumbnail(height: CGFloat?) -> some View {
+'''),
+(140, 141, r'''                store: thumbnailStore, width: isCompact ? nil : imageWidth, height: height)
+'''),
+(145, 146, r'''        VStack(alignment: .leading, spacing: 8) {
+'''),
+(147, 149, r'''                if !entry.isRead {
+                    Circle().fill(Color(paperHex: palette.accentHex)).frame(width: 6, height: 6)
+                }
+'''),
+(157, 158, r'''                .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
+'''),
+(172, 172, r'''        .frame(maxWidth: .infinity, alignment: .leading)
+'''),
+(179, 180, r''''''),
+(182, 183, r''''''),
+(187, 193, r''''''),
+(237, 238, r'''        .frame(width: 30, height: 30)
+'''),
+]),
+('Tests/MacOS14ZenModeToolbarContractTests.swift', 'deb9e7224b2c636dd5f14bb7da672971a29cc85a', '46c9636369ebcce6cdf07c77ca1ab73afe50950a', [
+(13, 14, r'''        XCTAssertTrue(source.contains("reconcileToolbarItems"))
+'''),
+(18, 19, r'''        XCTAssertTrue(source.contains("let retained: Set<NSToolbarItem.Identifier> = [.paperReaderCapsule, .paperTimelineControls]"))
+'''),
+(20, 21, r'''        let zenMethod = try XCTUnwrap(source.range(of: "func syncZenModeState()"))
+        let syncCall = try XCTUnwrap(source.range(of: "syncTimelineToolbarStructure()", range: zenMethod.upperBound..<source.endIndex))
+'''),
+]),
+('Tests/toolbar-lifetime.test.mjs', '8f7c5566749e2be32ccf5cfb6cf92df711f9282a', '4b2f7e9a74f4825d1baf266ff0cda2be5ea55847', [
+(7, 8, r'''function method(source, signature) {
+  const start = source.indexOf(signature);
+  assert.ok(start >= 0, `Missing production method: ${signature}`);
+  const brace = source.indexOf('{', start);
+  let depth = 1;
+  let end = brace + 1;
+  while (depth && end < source.length) {
+    if (source[end] === '{') depth++;
+    if (source[end] === '}') depth--;
+    end++;
+  }
+  assert.equal(depth, 0);
+  return source.slice(start, end);
+}
+
+test('列表、杂志、卡片阅读、侧栏与禅模式往返保持居中布局和工具栏实例', async () => {
+'''),
+(9, 21, r'''  const order = method(source, 'func toolbarItemOrder(');
+  const reconcile = method(source, 'func reconcileToolbarItems(');
+'''),
+(26, 28, r'''// Execute the production order and reconciliation, not a copied approximation.
+'''),
+(33, 33, r'''        static let toggleSidebar = Self("toggle")
+'''),
+(39, 41, r''''''),
+(51, 51, r'''    static let paperRefresh = Self("refresh")
+'''),
+(54, 54, r'''    static let paperTimelineBack = Self("back")
+    static let paperTimelineControls = Self("views")
+'''),
+(55, 59, r'''final class Harness {
+    struct Actions {
+        var isZenMode = false
+        var showsUnreadFilter = true
+        var usesVisualTimeline = false
+        var isTimelineBrowsing = false
+        var showsTimelineReturn: Bool { usesVisualTimeline && !isTimelineBrowsing && !isZenMode }
+    }
+'''),
+(60, 75, r'''    ${order}
+    ${reconcile}
+'''),
+(77, 82, r'''let toolbar = NSToolbar()
+let initial = harness.toolbarItemOrder(sidebarCollapsed: false)
+harness.reconcileToolbarItems(in: toolbar, identifiers: initial)
+'''),
+(83, 105, r'''let views = toolbar.items.first { $0.itemIdentifier == .paperTimelineControls }!
+for _ in 0..<3 {
+    for visual in [false, true, true, false] {
+        for browsing in [true, false, true] {
+            for zen in [false, true, false] {
+                for collapsed in [false, true, false] {
+                    for filter in [false, true] {
+                        harness.actions = .init(isZenMode: zen, showsUnreadFilter: filter,
+                                                usesVisualTimeline: visual, isTimelineBrowsing: browsing)
+                        let expected = harness.toolbarItemOrder(sidebarCollapsed: collapsed)
+                        for _ in 0..<2 { harness.reconcileToolbarItems(in: toolbar, identifiers: expected) }
+                        let ids = toolbar.items.map(\\.itemIdentifier)
+                        assert(ids == expected, "工具栏顺序与当前路由不一致")
+                        assert(toolbar.items.first { $0.itemIdentifier == .paperReaderCapsule } === reader,
+                               "阅读胶囊被销毁重建")
+                        assert(toolbar.items.last === views, "右上角切换器被销毁或移位")
+                        assert(ids.contains(.paperTimelineTracker) == (!visual && !zen),
+                               "折叠栏仍保留跟踪分隔项")
+                        if harness.actions.showsTimelineReturn {
+                            let back = ids.firstIndex(of: .paperTimelineBack)!
+                            let capsule = ids.firstIndex(of: .paperReaderCapsule)!
+                            assert(back < capsule && !ids.contains(.paperMarkAllRead) && !ids.contains(.paperEntryListTitle))
+                        }
+                        if !zen && (!visual || !browsing) {
+                            let capsule = ids.firstIndex(of: .paperReaderCapsule)!
+                            assert(Array(ids[(capsule - 2)...]) == [.paperTimelineBack, .flexibleSpace,
+                                .paperReaderCapsule, .flexibleSpace, .paperTimelineControls],
+                                "阅读工具两侧的弹性空间必须对称")
+                        }
+                    }
+                }
+            }
+        }
+'''),
+(107, 107, r'''harness.actions = .init()
+harness.reconcileToolbarItems(in: toolbar, identifiers: initial)
+assert(toolbar.items.map(\\.itemIdentifier) == initial)
+print("Verified 1296 route transitions and idempotent repeats")
+'''),
+(108, 109, r'''    const args = ['-module-cache-path', join(dir, 'module-cache'), path];
+    execFileSync(process.platform === 'darwin' ? 'xcrun' : 'swift', process.platform === 'darwin' ? ['swift', ...args] : args,
+      { timeout: 60000, encoding: 'utf8' });
+'''),
+]),
+('docs/drafts/issue-32-article-image-views.md', 'c7a26c9a094d3f1a4e309b2fc017c13d63049d37', '528846ad0383a6df843771494a8b685fcf4858a8', [
+(73, 73, r'''
+## Responsive magazine follow-up
+
+The visual canvas is centered with a maximum content width of 1100pt and 16–28pt
+outer gutters. At 760pt of usable content width and at least three articles,
+magazine mode uses the first article as a vertical image/title lead, the next two
+as compact text-led side cards, and the remainder as a one-to-three-column gallery.
+Narrow windows and small collections use a lead followed by compact rows. Order
+and shared pagination do not change. Cards have intrinsic content height, no
+minimum image slot and no vertical fill spacer. Compact thumbnails may not exceed
+the measured text height; image failure restores the text's available width.
+
+Opening an article from either visual mode collapses the timeline, not the feed
+sidebar. The reader remains mounted; its controls retain symmetric leading and
+trailing accessories. Return-to-browse is at the leading edge of the reading area;
+the view switcher stays at the trailing edge. Returning restores the saved browse
+anchor without resetting selection or unread retention. List mode keeps three
+columns. Zen temporarily hides the sidebar and restores its prior collapsed state.
+
+Follow-up verification covers intrinsic tile heights, width breakpoints, repeated
+browse/read/Zen/list transitions, controller identity and toolbar-item lifetime.
+Native interactive acceptance remains **Manual UI verification required**, including
+long mixed feeds, live window resizing, image failures and translated articles.
+'''),
+]),
+]
