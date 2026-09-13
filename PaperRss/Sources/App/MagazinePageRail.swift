@@ -95,14 +95,25 @@ struct MagazineRailScrub {
 final class MagazineRailFrameInput: NSObject, ObservableObject {
     private var clock: CADisplayLink?
     private var pending: (Double, (Double) -> Void)?
+    private var flushTask: Task<Void, Never>?
+
     func submit(_ position: Double, action: @escaping (Double) -> Void) {
         pending = (position, action)
-        guard clock == nil else { return }
-        guard let screen = NSScreen.main else { flush(); return }
-        let clock = screen.displayLink(target: self, selector: #selector(tick(_:)))
-        clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-        self.clock = clock
-        clock.add(to: .main, forMode: .common)
+        if clock == nil {
+            if let screen = NSScreen.main {
+                let clock = screen.displayLink(target: self, selector: #selector(tick(_:)))
+                clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+                self.clock = clock
+                clock.add(to: .main, forMode: .common)
+            }
+        }
+        if flushTask == nil {
+            flushTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(16))
+                guard let self, !Task.isCancelled else { return }
+                self.flush()
+            }
+        }
     }
     @objc private func tick(_ clock: CADisplayLink) { flush() }
     func flush() {
@@ -112,6 +123,7 @@ final class MagazineRailFrameInput: NSObject, ObservableObject {
     }
     func cancel() {
         clock?.invalidate(); clock = nil
+        flushTask?.cancel(); flushTask = nil
         pending = nil
     }
 }

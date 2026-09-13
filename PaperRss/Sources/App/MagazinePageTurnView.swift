@@ -104,6 +104,7 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     }()
     static func prepare() { _ = pipeline }
 
+    var stageBackground: NSColor
     let view: MTKView
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
@@ -131,24 +132,30 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         return try? loader.newTexture(cgImage: rgba, options: options)
     }
 
-    convenience init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
+    convenience init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0, stageBackground: NSColor = .windowBackgroundColor) {
         guard let old = Self.texture(before), let new = Self.texture(after) else { return nil }
-        self.init(before: old, after: new, size: size, forward: forward, verticalInset: verticalInset, corner: corner)
+        self.init(before: old, after: new, size: size, forward: forward, verticalInset: verticalInset, corner: corner, stageBackground: stageBackground)
     }
 
-    init?(before: MTLTexture, after: MTLTexture, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
+    init?(before: MTLTexture, after: MTLTexture, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0, stageBackground: NSColor = .windowBackgroundColor) {
         guard let device = Self.device, let pipeline = Self.pipeline,
               let queue = device.makeCommandQueue() else { return nil }
         self.before = before; self.after = after; self.queue = queue; self.pipeline = pipeline; self.forward = forward
         self.corner = min(1, max(-1, corner))
         self.insetFraction = Float(min(0.4, max(0, verticalInset / max(1, size.height))))
+        self.stageBackground = stageBackground
         view = MTKView(frame: CGRect(origin: .zero, size: size), device: device)
         view.colorPixelFormat = .bgra8Unorm
         view.isPaused = true
         view.enableSetNeedsDisplay = false
         view.framebufferOnly = true
-        view.autoResizeDrawable = false
-        view.drawableSize = CGSize(width: before.width, height: before.height)
+        view.autoResizeDrawable = true
+        view.wantsLayer = true
+        view.clipsToBounds = true
+        if let metalLayer = view.layer as? CAMetalLayer {
+            metalLayer.isOpaque = false
+            metalLayer.masksToBounds = true
+        }
         super.init()
         view.delegate = self
     }
@@ -180,7 +187,14 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     func encode(progress: Double, target: MTLTexture, buffer: MTLCommandBuffer) -> Bool {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].loadAction = .clear
+        let rgb = stageBackground.usingColorSpace(.deviceRGB) ?? stageBackground
+        pass.colorAttachments[0].clearColor = MTLClearColor(
+            red: Double(rgb.redComponent),
+            green: Double(rgb.greenComponent),
+            blue: Double(rgb.blueComponent),
+            alpha: 1.0
+        )
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         var parameters = SIMD4<Float>(Float(progress), forward ? 1 : -1, insetFraction, corner)
@@ -200,17 +214,25 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     using namespace metal;
     struct Raster { float4 position [[position]]; float2 uv; };
     vertex Raster pageVertex(uint id [[vertex_id]]) {
-        float2 p = float2((id << 1) & 2, id & 2);
-        Raster r; r.position = float4(p * 2.0 - 1.0, 0, 1);
-        r.uv = float2(p.x, 1.0 - p.y); return r;
+        float2 pos[3] = { float2(-1.0, -1.0), float2(7.0, -1.0), float2(-1.0, 7.0) };
+        float2 p = pos[id];
+        Raster r;
+        r.position = float4(p, 0.0, 1.0);
+        r.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+        return r;
+    }
+    inline float2 safeClamp(float2 coord, texture2d<float> tex) {
+        float2 dims = float2(tex.get_width(), tex.get_height());
+        float2 halfPixel = float2(0.5, 0.5) / dims;
+        return clamp(coord, halfPixel, float2(1.0, 1.0) - halfPixel);
     }
     fragment float4 pageFragment(Raster r [[stage_in]], texture2d<float> old [[texture(0)]],
         texture2d<float> next [[texture(1)]], constant float4 &params [[buffer(0)]]) {
         constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
         float p = clamp(params.x, 0.0, 1.0), direction = params.y;
-        float2 uv = r.uv;
-        if (p <= 0.00001) return old.sample(s, uv);
-        if (p >= 0.99999) return next.sample(s, uv);
+        float2 uv = clamp(r.uv, 0.0, 1.0);
+        if (p <= 0.00001) return old.sample(s, safeClamp(uv, old));
+        if (p >= 0.99999) return next.sample(s, safeClamp(uv, next));
         float inset = params.z, paperHeight = 1.0 - 2.0 * inset;
         float paperY = (uv.y - inset) / paperHeight;
         float x = (uv.x - 0.5) * 2.0;
@@ -230,11 +252,11 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         // 纸页之外的舞台条带仍直接采样目标页，保持既有留白行为。
         float coverage = clamp(abs(projectedEdge), 0.0, 1.0);
         float reveal = p < 0.5 ? (1.0 - smoothstep(0.55, 0.92, coverage)) : 1.0;
-        float4 nextColor = next.sample(s, uv);
+        float4 nextColor = next.sample(s, safeClamp(uv, next));
         bool onPaper = paperY >= 0.0 && paperY <= 1.0;
-        float4 paper = next.sample(s, float2(0.985, 0.5));
+        float4 paper = next.sample(s, safeClamp(float2(0.985, 0.5), next));
         float4 under = onPaper ? mix(paper, nextColor, reveal) : nextColor;
-        float4 base = stationary ? old.sample(s, uv) : under;
+        float4 base = stationary ? old.sample(s, safeClamp(uv, old)) : under;
         float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 32.0) * sine * 0.05 : 0.0;
         if (!onLeaf) return float4(base.rgb * (1.0 - hingeShadow), 1);
         // t=0 为中轴，t=1 为外边缘；正面采旧页，背面采目标页另一半。
@@ -249,7 +271,7 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         source.y = inset + source.y * paperHeight;
         float edge = pow(t, 1.35), motion = sine * sine;
         // 文字保持清晰，立体感由真实投影和随角度变化的光照承担。
-        float3 color = front ? old.sample(s, source).rgb : next.sample(s, source).rgb;
+        float3 color = front ? old.sample(s, safeClamp(source, old)).rgb : next.sample(s, safeClamp(source, next)).rgb;
         float faceShade = 1.0 - motion * (0.025 + 0.045 * edge);
         float outerHighlight = smoothstep(0.90, 1.0, t) * sine * 0.035;
         color = color * faceShade + outerHighlight;
@@ -292,6 +314,7 @@ private final class MagazineSnapshotCover: NSView {
         // 分数尺寸下宿主与快照都可能差 1 个物理像素；裁掉越界内容，
         // 不让渲染器或旧快照在纸面外留下细线。
         clipsToBounds = true
+        layer?.masksToBounds = true
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
@@ -365,10 +388,15 @@ final class MagazineTurnSurface<Content: View>: NSView {
         self.pageID = pageID
         super.init(frame: .zero)
         wantsLayer = true
+        clipsToBounds = true
+        layer?.masksToBounds = true
         host.sizingOptions = []
         host.wantsLayer = true
+        host.clipsToBounds = true
+        host.layer?.masksToBounds = true
         host.autoresizingMask = [.width, .height]
         backgroundView.wantsLayer = true
+        backgroundView.layer?.masksToBounds = true
         backgroundView.autoresizingMask = [.width, .height]
         addSubview(backgroundView)
         addSubview(host)
@@ -459,12 +487,15 @@ final class MagazineTurnSurface<Content: View>: NSView {
             return
         }
         let size = bounds.size
+        let scale = window?.backingScaleFactor ?? 2.0
         // 1. 立即挂上 cover 遮盖旧页面，彻底屏蔽底层新页面排版或重绘引起的瞬间穿透闪烁
         let cover = MagazineSnapshotCover(frame: bounds)
         cover.wantsLayer = true
         cover.layer?.contents = before
         cover.layer?.contentsGravity = .resize
+        cover.layer?.contentsScale = scale
         cover.layer?.backgroundColor = background.cgColor
+        cover.layer?.masksToBounds = true
         addSubview(cover)
         self.cover = cover
 
@@ -480,7 +511,7 @@ final class MagazineTurnSurface<Content: View>: NSView {
         currentRequest = request
         phase = .preparing
         progress = 0
-        if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner) {
+        if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner, stageBackground: background) {
             self.metal = renderer
             configure(renderer: renderer)
             self.cover?.addSubview(renderer.view)
@@ -491,9 +522,21 @@ final class MagazineTurnSurface<Content: View>: NSView {
     }
     /// Metal 图层默认以不透明黑兜底；分数尺寸或重挂载时边缘绝不能露黑。
     private func configure(renderer: MagazineMetalRenderer) {
+        let scale = window?.backingScaleFactor ?? 2.0
+        let targetBounds = cover?.bounds ?? bounds
+        renderer.stageBackground = stageBackground
         renderer.view.autoresizingMask = [.width, .height]
-        renderer.view.frame = cover?.bounds ?? bounds
+        renderer.view.frame = targetBounds
+        renderer.view.layer?.contentsScale = scale
+        renderer.view.drawableSize = CGSize(
+            width: ceil(targetBounds.width * scale),
+            height: ceil(targetBounds.height * scale)
+        )
         renderer.view.layer?.backgroundColor = stageBackground.cgColor
+        if let metalLayer = renderer.view.layer as? CAMetalLayer {
+            metalLayer.isOpaque = false
+            metalLayer.masksToBounds = true
+        }
     }
     private func advance(_ request: MagazinePageTurnRequest) {
         if let position = request.progress {
@@ -520,15 +563,43 @@ final class MagazineTurnSurface<Content: View>: NSView {
             startClock()
         }
     }
-    private func startClock() {
-        guard displayClock == nil else { return }
-        let target = MagazineDisplayLinkTarget { [weak self] link in self?.tick(link) }
-        let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
-        clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-        displayClock = clock
-        clock.add(to: .main, forMode: .common)
+    private var clockTask: Task<Void, Never>?
+    private var lastTickTime = 0.0
+
+    private func stopClock() {
+        displayClock?.invalidate()
+        displayClock = nil
+        clockTask?.cancel()
+        clockTask = nil
     }
-    private func tick(_ link: CADisplayLink) {
+
+    private func startClock() {
+        lastTickTime = CACurrentMediaTime()
+        if displayClock == nil {
+            let target = MagazineDisplayLinkTarget { [weak self] link in
+                self?.tick(timestamp: link.targetTimestamp)
+            }
+            let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
+            clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+            displayClock = clock
+            clock.add(to: .main, forMode: .common)
+        }
+        if clockTask == nil {
+            clockTask = Task { @MainActor [weak self] in
+                while let self, self.isAnimating {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    guard !Task.isCancelled, self.isAnimating else { break }
+                    let now = CACurrentMediaTime()
+                    if now - self.lastTickTime >= 0.025 {
+                        self.tick(timestamp: now)
+                    }
+                }
+                self?.clockTask = nil
+            }
+        }
+    }
+    private func tick(timestamp: CFTimeInterval) {
+        lastTickTime = CACurrentMediaTime()
         if let update = pendingScrub {
             pendingScrub = nil
             prepareScrub(update)
@@ -538,11 +609,11 @@ final class MagazineTurnSurface<Content: View>: NSView {
             draw(position)
         }
         if phase != .completing {
-            displayClock?.invalidate(); displayClock = nil
+            stopClock()
             return
         }
         guard let request = currentRequest, phase == .completing else { return }
-        let time = min(1, max(0, (link.targetTimestamp - animationStart) / animationDuration))
+        let time = min(1, max(0, (timestamp - animationStart) / animationDuration))
         let eased: Double
         if let slope = animationSlope {
             eased = MagazineTurnGeometry.settled(time, slope: slope)
@@ -560,7 +631,15 @@ final class MagazineTurnSurface<Content: View>: NSView {
         guard bounds.width > 1, bounds.height > 1 else { return nil }
         // 快速浏览使用逻辑像素预览。直接绘制 SwiftUI 内容，避免反复挂载宿主、
         // 触发文章的 onAppear/task 和 AppKit cacheDisplay 的整棵视图刷新。
-        let renderer = ImageRenderer(content: content)
+        let bleed: CGFloat = 8
+        let paddedContent = ZStack {
+            Color(nsColor: stageBackground)
+                .frame(width: bounds.width + bleed * 2, height: bounds.height + bleed * 2)
+            content
+                .frame(width: bounds.width, height: bounds.height)
+        }
+        .frame(width: bounds.width, height: bounds.height)
+        let renderer = ImageRenderer(content: paddedContent)
         renderer.proposedSize = ProposedViewSize(bounds.size)
         renderer.scale = min(1, sqrt(1_000_000 / max(1, bounds.width * bounds.height)))
         renderer.isOpaque = true
@@ -596,14 +675,19 @@ final class MagazineTurnSurface<Content: View>: NSView {
         sourceContent = before.content; sourcePageID = before.id
         scrubTarget = after.content; pageID = after.id
         preparedSourcePageID = before.id; preparedTargetPageID = after.id
+        let scale = window?.backingScaleFactor ?? 2.0
         if cover == nil {
             let cover = MagazineSnapshotCover(frame: bounds)
             cover.wantsLayer = true
+            cover.layer?.masksToBounds = true
+            cover.layer?.contentsScale = scale
             addSubview(cover)
             self.cover = cover
             let front = CALayer()
             front.frame = cover.bounds
             front.contentsGravity = .resize
+            front.masksToBounds = true
+            front.contentsScale = scale
             cover.layer?.addSublayer(front)
             scrubFront = front
         }
@@ -616,7 +700,7 @@ final class MagazineTurnSurface<Content: View>: NSView {
             if let metal {
                 metal.setPages(before: old, after: new, forward: request.forward, corner: request.variation.corner)
             } else if let renderer = MagazineMetalRenderer(before: old, after: new, size: bounds.size,
-                forward: request.forward, verticalInset: update.verticalInset, corner: request.variation.corner) {
+                forward: request.forward, verticalInset: update.verticalInset, corner: request.variation.corner, stageBackground: stageBackground) {
                 metal = renderer
                 rendererCount += 1
                 configure(renderer: renderer)
@@ -652,7 +736,7 @@ final class MagazineTurnSurface<Content: View>: NSView {
         scrubPages.removeAll()
         preparedSourcePageID = nil; preparedTargetPageID = nil
         preparation?.cancel(); preparation = nil
-        displayClock?.invalidate(); displayClock = nil
+        stopClock()
         metal = nil
         if let sourceContent, let sourcePageID {
             host.rootView = sourceContent
@@ -683,17 +767,23 @@ final class MagazineTurnSurface<Content: View>: NSView {
         let callback = completion
         Task { @MainActor in callback?(id, committed) }
     }
-    private func snapshot(background: NSColor) -> CGImage? {
+    func snapshot(background: NSColor) -> CGImage? {
         guard bounds.width > 1, bounds.height > 1 else { return nil }
         // cacheDisplay 会同步栅格化整个 AppKit 图层树；纸张阴影在这里进入
         // CPU 高斯卷积，足以阻塞整个窗口。普通翻页也直接绘制 SwiftUI，
         // 保留 Retina 像素预算，不把宿主的外层图层再次截图。
-        let renderer = ImageRenderer(content: host.rootView
-            .frame(width: bounds.width, height: bounds.height)
-            .background(Color(nsColor: background)))
+        let bleed: CGFloat = 8
+        let paddedContent = ZStack {
+            Color(nsColor: background)
+                .frame(width: bounds.width + bleed * 2, height: bounds.height + bleed * 2)
+            host.rootView
+                .frame(width: bounds.width, height: bounds.height)
+        }
+        .frame(width: bounds.width, height: bounds.height)
+        let renderer = ImageRenderer(content: paddedContent)
         renderer.proposedSize = ProposedViewSize(bounds.size)
         renderer.scale = MagazineTurnGeometry.snapshotScale(size: bounds.size,
-            displayScale: window?.backingScaleFactor ?? 1)
+            displayScale: window?.backingScaleFactor ?? 2)
         renderer.isOpaque = true
         guard let image = renderer.cgImage else { return nil }
         snapshotCount += 1

@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.3.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.0](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -31,7 +31,9 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 
 ## Highlights
 
-- **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, and dependable three-column navigation.
+- **Immersive Magazine View & Metal Fold Turning**: Reimagined timeline browsing with Balanced Duo editorial layouts, automatic article preview extraction, realistic 3D paper fold turning with native audio, and a scrubbing page rail.
+- **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, and dependable navigation with fluid transitions between list and magazine styles.
+- **Storage Governance & Automated Retention**: Configurable article retention periods (180 days default / 1 year / keep forever), permanent preservation for unread/starred items, tombstone resurrection protection, and background database compaction.
 - **Rendering Engine & LaTeX Math**: Re-engineered article preparation pipeline with native MathJax typesetting and markdown formula shielding for technical articles.
 - **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.

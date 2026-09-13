@@ -843,22 +843,24 @@ extension MagazineFoldEffectTests {
             guard let data = windowImage.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return }
             let bpr = windowImage.bytesPerRow
             let bpp = windowImage.bitsPerPixel / 8
-            print("=== \(label) (image size: \(windowImage.width)x\(windowImage.height)) ===")
-            // In AppKit, window coordinates: y=0 is bottom, but CGImage y=0 is top!
-            // Surface frame in window: (48.0, 52.0, 904.0, 648.0)
-            // Surface top in window: 52 + 648 = 700 (window height is 700)
-            // So in CGImage (y from top): surface y goes from 0 to 648!
-            // Surface right edge is at x = 48 + 904 = 952.
-            // If scale is 2, coordinates double. Let scale = windowImage.width / window.frame.width.
-            let scale = windowImage.width / Int(window.frame.width)
-            let edgeX = 952 * scale
-            for testY in [10, 25, 40, 50, 100, 300, 600, 630, 645] {
-                let imgY = testY * scale
-                var row = String(format: "y=%3d: ", testY)
-                for x in (edgeX - 3)...(edgeX + 3) {
+            let scaleX = Double(windowImage.width) / window.frame.width
+            let scaleY = Double(windowImage.height) / window.frame.height
+            print("=== \(label) (img: \(windowImage.width)x\(windowImage.height), scale: \(scaleX)x\(scaleY)) ===")
+            
+            let surfaceRectInWindow = surface.convert(surface.bounds, to: nil)
+            let rightEdgeInImg = Int(round((surfaceRectInWindow.origin.x + surfaceRectInWindow.width) * scaleX))
+            print("Surface rect: \(surfaceRectInWindow), rightEdgeInImg: \(rightEdgeInImg)")
+            
+            for testY in [10, 25, 40, 50, 100, 300] {
+                let imgY = Int(round(Double(testY) * scaleY))
+                var row = String(format: "y=%3d (imgY=%d): ", testY, imgY)
+                for x in (rightEdgeInImg - 3)...(rightEdgeInImg + 3) {
+                    guard x >= 0 && x < windowImage.width && imgY >= 0 && imgY < windowImage.height else { continue }
                     let offset = imgY * bpr + x * bpp
+                    let b = Double(bytes[offset + 0]) / 255.0
+                    let g = Double(bytes[offset + 1]) / 255.0
                     let r = Double(bytes[offset + 2]) / 255.0
-                    row += String(format: "x=%d:%.2f ", x, r)
+                    row += String(format: "x=%d:(%.2f,%.2f,%.2f) ", x, r, g, b)
                 }
                 print(row)
             }
@@ -871,7 +873,187 @@ extension MagazineFoldEffectTests {
         try await Task.sleep(for: .milliseconds(120))
         printEdgePixels(label: "During Turn (Animating)")
     }
+
+    func testFractionalScaleAndLargeScreenEdgesHaveNoDarkLines() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let stageColor = NSColor(red: 236/255.0, green: 231/255.0, blue: 220/255.0, alpha: 1.0)
+        let rgb = try XCTUnwrap(stageColor.usingColorSpace(.deviceRGB))
+
+        // 测试大屏幕撑满尺寸下的非整数缩放比例
+        for (w, h) in [(1280, 848), (870, 692)] {
+            let size = CGSize(width: w, height: h)
+            let scale = MagazineTurnGeometry.snapshotScale(size: size, displayScale: 2.0)
+            let snapWidth = Int(ceil(CGFloat(w) * scale))
+            let snapHeight = Int(ceil(CGFloat(h) * scale))
+
+            guard let context = CGContext(data: nil, width: snapWidth, height: snapHeight,
+                                          bitsPerComponent: 8, bytesPerRow: snapWidth * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { continue }
+            context.setFillColor(stageColor.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: snapWidth, height: snapHeight))
+            let testImage = try XCTUnwrap(context.makeImage())
+
+            let renderer = try XCTUnwrap(MagazineMetalRenderer(before: testImage, after: testImage,
+                                                               size: size, forward: true,
+                                                               verticalInset: 32, corner: 0.65,
+                                                               stageBackground: stageColor))
+
+            // 目标纹理尺寸匹配图层物理像素尺寸
+            let targetWidth = w * 2
+            let targetHeight = h * 2
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                                                                 width: targetWidth, height: targetHeight, mipmapped: false)
+            desc.usage = [.renderTarget, .shaderRead]
+            let targetTexture = try XCTUnwrap(device.makeTexture(descriptor: desc))
+
+            for p in [0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0] {
+                let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+                XCTAssertTrue(renderer.encode(progress: p, target: targetTexture, buffer: buffer))
+                buffer.commit()
+                buffer.waitUntilCompleted()
+
+                var bytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 4)
+                targetTexture.getBytes(&bytes, bytesPerRow: targetWidth * 4,
+                                       from: MTLRegionMake2D(0, 0, targetWidth, targetHeight),
+                                       mipmapLevel: 0)
+
+                // 检验最右边缘像素列（包括上下留白舞台区和中间纸张区）
+                for testY in [0, 5, 20, targetHeight / 2, targetHeight - 20, targetHeight - 1] {
+                    let offset = (testY * targetWidth + (targetWidth - 1)) * 4
+                    let b = Double(bytes[offset + 0]) / 255.0
+                    let g = Double(bytes[offset + 1]) / 255.0
+                    let r = Double(bytes[offset + 2]) / 255.0
+                    let a = Double(bytes[offset + 3]) / 255.0
+
+                    // 绝不能出现黑边或深灰线（用户复现截图为 rgb ~ 0.37 的 96,95,91）
+                    XCTAssertGreaterThan(r, 0.82, "右边缘出现暗色像素! w=\(w), p=\(p), y=\(testY), r=\(r)")
+                    XCTAssertGreaterThan(g, 0.82, "右边缘出现暗色像素! w=\(w), p=\(p), y=\(testY), g=\(g)")
+                    XCTAssertGreaterThan(b, 0.78, "右边缘出现暗色像素! w=\(w), p=\(p), y=\(testY), b=\(b)")
+                    XCTAssertEqual(a, 1.0, accuracy: 0.01)
+
+                    // 上下舞台留白区域应该精确等于 stageBackground
+                    if testY < 25 || testY > targetHeight - 25 {
+                        XCTAssertEqual(r, Double(rgb.redComponent), accuracy: 0.03)
+                        XCTAssertEqual(g, Double(rgb.greenComponent), accuracy: 0.03)
+                        XCTAssertEqual(b, Double(rgb.blueComponent), accuracy: 0.03)
+                    }
+                }
+            }
+        }
+    }
+
+    func testSurfaceAndLayersEnforceClippingAndTransparency() throws {
+        let stageColor = NSColor(red: 236/255.0, green: 231/255.0, blue: 220/255.0, alpha: 1.0)
+        let surface = MagazineTurnSurface(content: Text("Page 1"), pageID: "page-1")
+        surface.frame = CGRect(x: 0, y: 0, width: 870, height: 692)
+        surface.update(content: Text("Page 1"), pageID: "page-1", request: nil,
+            reduceMotion: false, isActive: true, background: stageColor, onComplete: { _, _ in })
+
+        XCTAssertTrue(surface.clipsToBounds)
+        XCTAssertEqual(surface.layer?.masksToBounds, true)
+
+        let host = try XCTUnwrap(surface.subviews.first { String(describing: type(of: $0)).contains("NSHostingView") })
+        XCTAssertTrue(host.clipsToBounds)
+        XCTAssertEqual(host.layer?.masksToBounds, true)
+
+        let backing = try XCTUnwrap(surface.subviews.first { $0 !== host })
+        XCTAssertEqual(backing.layer?.masksToBounds, true)
+
+        // 验证 Metal 渲染器图层透明与遮罩设置
+        let dummyContext = try XCTUnwrap(CGContext(data: nil, width: 100, height: 100,
+            bitsPerComponent: 8, bytesPerRow: 400, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let dummyImage = try XCTUnwrap(dummyContext.makeImage())
+        let renderer = try XCTUnwrap(MagazineMetalRenderer(before: dummyImage, after: dummyImage,
+            size: CGSize(width: 870, height: 692), forward: true, stageBackground: stageColor))
+
+        XCTAssertTrue(renderer.view.clipsToBounds)
+        if let metalLayer = renderer.view.layer as? CAMetalLayer {
+            XCTAssertFalse(metalLayer.isOpaque, "CAMetalLayer 必须允许透明合成，避免分数拉伸时边缘以不透明黑采样")
+            XCTAssertTrue(metalLayer.masksToBounds)
+        }
+    }
+
+    func testRealSnapshotFromSurfaceBleedsEdgeAndMetalRendersNoBlackEdge() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let stageColor = NSColor(red: 236/255.0, green: 231/255.0, blue: 220/255.0, alpha: 1.0)
+        let size = CGSize(width: 1280, height: 700)
+
+        let surface = MagazineTurnSurface(content: Text("测试页面内容").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: stageColor)), pageID: "page-1")
+        surface.frame = CGRect(origin: .zero, size: size)
+
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = surface
+        window.orderFront(nil)
+        defer { window.close() }
+        surface.layoutSubtreeIfNeeded()
+
+        let snapshot = try XCTUnwrap(surface.snapshot(background: stageColor), "真实快照必须成功生成")
+
+        // 1. 验证生成的真实快照图像最后一列物理像素非黑
+        let snapW = snapshot.width
+        let snapH = snapshot.height
+        let pixelData = try XCTUnwrap(snapshot.dataProvider?.data)
+        let ptr = try XCTUnwrap(CFDataGetBytePtr(pixelData))
+        let bpr = snapshot.bytesPerRow
+        let bpp = snapshot.bitsPerPixel / 8
+        let lastColX = snapW - 1
+
+        for sampleY in [0, snapH / 4, snapH / 2, snapH * 3 / 4, snapH - 1] {
+            let offset = sampleY * bpr + lastColX * bpp
+            let byte0 = Double(ptr[offset + 0]) / 255.0
+            let byte1 = Double(ptr[offset + 1]) / 255.0
+            let byte2 = Double(ptr[offset + 2]) / 255.0
+            let brightness = (byte0 + byte1 + byte2) / 3.0
+            XCTAssertGreaterThan(brightness, 0.75, "快照最右列物理像素 (x=\(lastColX), y=\(sampleY)) 绝不能是黑边/暗色")
+        }
+
+        // 2. 将真实快照送入 MagazineMetalRenderer，验证渲染输出的最右列像素无黑线
+        let renderer = try XCTUnwrap(MagazineMetalRenderer(before: snapshot, after: snapshot,
+                                                           size: size, forward: true,
+                                                           verticalInset: 32, corner: 0.65,
+                                                           stageBackground: stageColor))
+
+        let targetWidth = 1280 * 2
+        let targetHeight = 700 * 2
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                                                             width: targetWidth, height: targetHeight, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        let targetTexture = try XCTUnwrap(device.makeTexture(descriptor: desc))
+
+        for p in [0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0] {
+            let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+            XCTAssertTrue(renderer.encode(progress: p, target: targetTexture, buffer: buffer))
+            buffer.commit()
+            buffer.waitUntilCompleted()
+
+            var bytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 4)
+            targetTexture.getBytes(&bytes, bytesPerRow: targetWidth * 4,
+                                   from: MTLRegionMake2D(0, 0, targetWidth, targetHeight),
+                                   mipmapLevel: 0)
+
+            for testY in [0, 10, targetHeight / 2, targetHeight - 10, targetHeight - 1] {
+                let offset = (testY * targetWidth + (targetWidth - 1)) * 4
+                let b = Double(bytes[offset + 0]) / 255.0
+                let g = Double(bytes[offset + 1]) / 255.0
+                let r = Double(bytes[offset + 2]) / 255.0
+                let a = Double(bytes[offset + 3]) / 255.0
+
+                XCTAssertGreaterThan(r, 0.78, "Metal 渲染后右边缘出现暗色像素! p=\(p), y=\(testY), r=\(r)")
+                XCTAssertGreaterThan(g, 0.78, "Metal 渲染后右边缘出现暗色像素! p=\(p), y=\(testY), g=\(g)")
+                XCTAssertGreaterThan(b, 0.75, "Metal 渲染后右边缘出现暗色像素! p=\(p), y=\(testY), b=\(b)")
+                XCTAssertEqual(a, 1.0, accuracy: 0.01)
+            }
+        }
+    }
 }
+
+
 
 
 

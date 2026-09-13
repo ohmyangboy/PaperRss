@@ -1,5 +1,35 @@
 # 更新记录 / Changelog
 
+## v1.4.0 · Build 31 · 2026-09-14
+
+PaperRss 1.4.0 正式版发布！带来全新的沉浸式杂志浏览体验、原生 Metal 拟真折纸翻页、视觉时间线视图切换，以及完善的数据库存储治理与历史文章保留策略。
+
+### 重点更新：
+- 沉浸式杂志浏览（Magazine View）：重塑信息流展现形态，引入全新双页排版编排（Balanced Duo Layout），支持画报级封面导读、文章首图自适应提取呈现与专题网格布局。
+- 原生拟真翻页与流体交互（Fold Turning）：基于 Metal 着色器开发的高性能卷曲与折纸翻页动效，高度还原纸张真实光影与角落弧度阻尼，搭配原生翻页音效；配备底部快速导读滑轨（Scrubbing Page Rail），支持快速掠览与跳页导航。
+- 阅读模式与流体返回：时间线支持经典列表与画报杂志随心切换，文章正文无缝承接原有沉浸式纸感阅读器；支持双指横向滑动、鼠标侧键或快捷键（ESC / Delete）一键流畅返回杂志时间线。
+- 翻页边缘瑕疵清零：深度重构 Metal 渲染器视口与透明度混合机制，彻底消除翻页动效边缘的白边与暗纹，色彩过渡纯净自然。
+- 存储治理与历史文章自动淘汰：在设置中提供「存储与历史记录」管理，支持配置历史文章保留期限（180天默认 / 1年 / 永久），严格以拉取下载到达时间为准淘汰超期已读文章，并提供带二次确认的原生弹窗清理工具。
+- 铁律保护与墓碑防幽灵机制：未读与星标文章绝对永久保留；清理历史文章时采用墓碑保留机制，杜绝源站刷新时老文章复活为未读。
+- 订阅源右键强制重新获取：侧边栏订阅源右键菜单新增「重新获取此订阅」，支持绕过 HTTP 304 缓存强制拉取最新条目并自动回填正文。
+- 数据库性能与空闲空间回收：清理后自动执行 WAL 截断与 VACUUM 物理释放磁盘碎片，并在应用退至后台时提供限时防锁库空闲自动维护。
+- 启动性能优化：限制图标探测并发，采用轻量早停 XML 剪枝与持久化探测冷却，彻底消除冷启动时的瞬时 CPU 飙升。
+
+---
+
+PaperRss 1.4.0 is officially released! Introducing an all-new immersive Magazine View, native Metal-powered fold page turning, visual timeline style switching, and comprehensive database storage governance with automated retention policies.
+
+### Highlights:
+- Immersive Magazine View: Reimagined timeline browsing with Balanced Duo editorial layouts, cover-led issues, automatic article preview image extraction, and flexible multi-story spreads.
+- Native Metal Fold Turning: Fluid 3D curl-and-fold page transitions powered by Metal shaders with realistic paper lighting and adjustable corner curvature, paired with native page-turning audio; equipped with a bottom scrubbing page rail for rapid skimming and navigation.
+- Reader Modes & Gesture Navigation: Seamless switching between classic list and magazine views; articles open seamlessly into the distraction-free paper reader; return effortlessly to the magazine timeline using two-finger swipe, mouse back button, or shortcut keys (ESC / Delete).
+- Flawless Visual Rendering: Metal renderer viewport and alpha blending refined to eliminate edge artifacts and dark/white border lines during page turning transitions.
+- Storage Governance & History Retention: New "Storage & History" settings to configure article retention periods (180 days default / 1 year / keep forever), pruning read items based on arrival time with confirmation prompts.
+- Protection & Tombstone Preservation: Unread and starred items are permanently preserved; pruned read items keep tombstones to prevent ghost resurrection upon feed refreshes.
+- Force Reload Feeds: Context menu action "Reload Feed" to bypass HTTP 304 caches and retrieve the latest entries with full content backfill.
+- Database Compaction: Automatic WAL truncation and VACUUM compaction to reclaim physical disk space during background idle windows.
+- Startup Performance: Throttled icon probe concurrency with early-exit XML pruning and persistent cooldowns, eliminating cold-start CPU spikes.
+
 ## v1.4.0-beta.1 · Build 30 · 2026-09-10
 
 本次为数据库存储治理、自动淘汰保留策略与启动性能优化的实验性调整 Beta；稳定通道仍为 v1.3.2。

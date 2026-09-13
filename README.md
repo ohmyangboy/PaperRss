@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.3.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.4.0](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -31,7 +31,9 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 核心亮点
 
-- **沉浸式纸感阅读**：适合长文的衬线排版、明暗主题与稳定的三栏导航。
+- **沉浸式杂志模式与拟真折纸翻页**：全新双页排版编排（Balanced Duo），智能提取文章大图画报；基于 Metal 着色器的拟真卷曲与折纸翻页动效，搭配真实翻页音效与底部导读滑轨。
+- **沉浸式纸感阅读**：适合长文的衬线排版、明暗主题与稳定的三栏导航，支持列表与杂志多视图无缝流体切换。
+- **存储治理与自动淘汰机制**：支持配置历史文章保留期限（180天/1年/永久），未读与星标绝对永久保留，墓碑防幽灵机制与空闲磁盘深度整理。
 - **渲染引擎与数学公式（LaTeX）**：重构富文本准备引擎，原生集成 MathJax 排版与公式防转义保护，完美呈现学术长文。
 - **按需 AI 摘要**：所有功能完全可以选用，如果你不喜欢AI，干掉它；或者在需要的时候按下V键
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
