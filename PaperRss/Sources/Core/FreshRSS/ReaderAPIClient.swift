@@ -271,16 +271,21 @@ public actor ReaderAPIClient {
     }
 
     /// 完整拉取未读文章 ID 集合（支持 continuation 多页翻页，显式标记完整性）
-    public func fetchAllUnreadItemIDs(maxTotal: Int = 50000) async throws -> ReaderItemIDSet {
+    public func fetchAllUnreadItemIDs(maxTotal: Int = .max) async throws -> ReaderItemIDSet {
         var allIDs: [String] = []
         var nextContinuation: String? = nil
         var isExhausted = false
+        var visited = Set<String>()
 
         repeat {
+            try Task.checkCancellation()
             let (pageIDs, continuation) = try await fetchUnreadItemIDsPage(continuation: nextContinuation, limit: 10000)
             allIDs.append(contentsOf: pageIDs)
 
-            if let continuation, !continuation.isEmpty, continuation != nextContinuation {
+            if let continuation, !continuation.isEmpty {
+                guard visited.insert(continuation).inserted else {
+                    throw ReaderAPIError.decodingError("Repeated state ID continuation")
+                }
                 if allIDs.count < maxTotal {
                     nextContinuation = continuation
                 } else {
@@ -343,16 +348,21 @@ public actor ReaderAPIClient {
     }
 
     /// 完整拉取星标文章 ID 集合（支持 continuation 多页翻页，显式标记完整性）
-    public func fetchAllStarredItemIDs(maxTotal: Int = 50000) async throws -> ReaderItemIDSet {
+    public func fetchAllStarredItemIDs(maxTotal: Int = .max) async throws -> ReaderItemIDSet {
         var allIDs: [String] = []
         var nextContinuation: String? = nil
         var isExhausted = false
+        var visited = Set<String>()
 
         repeat {
+            try Task.checkCancellation()
             let (pageIDs, continuation) = try await fetchStarredItemIDsPage(continuation: nextContinuation, limit: 10000)
             allIDs.append(contentsOf: pageIDs)
 
-            if let continuation, !continuation.isEmpty, continuation != nextContinuation {
+            if let continuation, !continuation.isEmpty {
+                guard visited.insert(continuation).inserted else {
+                    throw ReaderAPIError.decodingError("Repeated state ID continuation")
+                }
                 if allIDs.count < maxTotal {
                     nextContinuation = continuation
                 } else {
@@ -470,17 +480,19 @@ public actor ReaderAPIClient {
         streamID: String = "user/-/state/com.google/reading-list",
         sinceTimestamp: TimeInterval? = nil,
         pageSize: Int = 100,
-        maxTotal: Int = 10000,
+        maxTotal: Int = .max,
         knownLocalExternalIDs: Set<String>? = nil,
         onPage: (@Sendable ([ReaderAPIStreamItem]) async throws -> Void)? = nil
     ) async throws -> (items: [ReaderAPIStreamItem], reachedBoundary: Bool) {
         var allItems: [ReaderAPIStreamItem] = []
         var nextContinuation: String? = nil
         var reachedBoundary = false
+        var visited = Set<String>()
 
         let cutoff = sinceTimestamp.map { max(0, $0 - 300) } // 5分钟重叠窗口
 
         while true {
+            try Task.checkCancellation()
             let (pageItems, continuation) = try await fetchStreamContentsPage(
                 streamID: streamID,
                 continuation: nextContinuation,
@@ -490,24 +502,13 @@ public actor ReaderAPIClient {
             try await onPage?(pageItems)
             allItems.append(contentsOf: pageItems)
 
-            // 检查边界：如果某条 item 的 published 时间早于 cutoff，且本地已知该 item，说明已与存量历史接轨
-            if let cutoff, let knownIDs = knownLocalExternalIDs {
-                let hitKnownOld = pageItems.contains { item in
-                    if let pub = item.published, pub < cutoff, knownIDs.contains(item.id) {
-                        return true
-                    }
-                    return false
-                }
-                if hitKnownOld {
-                    reachedBoundary = true
-                    break
-                }
-            }
-
-            guard let cont = continuation, !cont.isEmpty, cont != nextContinuation else {
-                // 流已完全穷尽（无下一页 continuation）
+            // FreshRSS 会按最近修改时间返回旧文章，不能用 published 或本地已存在来提前停止。
+            guard let cont = continuation, !cont.isEmpty else {
                 reachedBoundary = true
                 break
+            }
+            guard visited.insert(cont).inserted else {
+                throw ReaderAPIError.decodingError("Repeated stream continuation")
             }
 
             if allItems.count >= maxTotal {

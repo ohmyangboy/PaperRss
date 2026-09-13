@@ -1063,8 +1063,13 @@ final class FreshRSSIntegrationTests: XCTestCase {
             session: mockSession
         )
 
-        // 刷新远端，此时状态拉取失败
-        _ = try await provider.refresh(reason: .manual)
+        // 状态请求失败必须上报，同时保持本地状态不变。
+        do {
+            _ = try await provider.refresh(reason: .manual)
+            XCTFail("状态请求失败不能报为刷新成功")
+        } catch ReaderAPIError.httpError(let statusCode, _) {
+            XCTAssertEqual(statusCode, 500)
+        }
 
         // 校验：本地未读状态与星标状态必须被原样保留，绝对不能被推断置为 isRead=true 或 isStarred=false
         let state = try database.read { db in

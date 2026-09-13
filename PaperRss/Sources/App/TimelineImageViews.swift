@@ -299,7 +299,7 @@ struct TimelineViewControls: View {
             .accessibilityLabel(I18N.localized("切换文章视图"))
             .accessibilityIdentifier("timeline.viewSwitcher")
             .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 10) {
                     Text(I18N.localized("文章视图")).font(.headline)
                     HStack(spacing: 8) {
                         ForEach(TimelineViewStyle.allCases, id: \.rawValue) { option in
@@ -307,11 +307,12 @@ struct TimelineViewControls: View {
                                 onSelect(option)
                                 showsPopover = false
                             } label: {
-                                VStack(spacing: 8) {
-                                    Image(systemName: option.symbol).font(.system(size: 22))
+                                VStack(spacing: 5) {
+                                    Image(systemName: option.symbol).font(.system(size: 20))
                                     Text(option.title).font(.caption)
                                 }
-                                .frame(width: 62, height: 58)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 52)
                                 .background(style == option ? Color.accentColor.opacity(0.14) : .clear,
                                             in: RoundedRectangle(cornerRadius: 8))
                                 .overlay {
@@ -321,9 +322,6 @@ struct TimelineViewControls: View {
                                 .contentShape(RoundedRectangle(cornerRadius: 8))
                             }
                             .buttonStyle(.plain)
-                            // 固定 Button 本身的命中框，点击方块内的留白也能切换视图。
-                            .frame(width: 70, height: 70)
-                            .contentShape(Rectangle())
                             .accessibilityLabel(option.title)
                             .accessibilityAddTraits(style == option ? [.isSelected] : [])
                             .accessibilityIdentifier("timeline.style.\(option.rawValue)")
@@ -338,6 +336,7 @@ struct TimelineViewControls: View {
                                 }
                             }
                             .pickerStyle(.menu)
+                            .controlSize(.small)
                             .labelsHidden()
                         }
                         settingRow(title: I18N.localized("翻页方式")) {
@@ -347,14 +346,16 @@ struct TimelineViewControls: View {
                                 }
                             }
                             .pickerStyle(.menu)
+                            .controlSize(.small)
                             .labelsHidden()
                         }
-                        settingRow(title: I18N.localized("翻页音效")) {
+                        settingRow(title: I18N.localized("打开音效")) {
                             Toggle("", isOn: $pageSoundEnabled)
                                 .labelsHidden()
                                 .toggleStyle(.switch)
+                                .controlSize(.small)
                                 .disabled(turningRaw == MagazineTurning.scroll.rawValue)
-                            .accessibilityLabel(I18N.localized("翻页音效"))
+                            .accessibilityLabel(I18N.localized("打开音效"))
                             .accessibilityIdentifier("magazine.pageSound")
                         }
                     }
@@ -363,12 +364,13 @@ struct TimelineViewControls: View {
                         Toggle("", isOn: $audioWaveEnabled)
                             .labelsHidden()
                             .toggleStyle(.switch)
+                            .controlSize(.small)
                             .accessibilityLabel(I18N.localized("阅读音浪"))
                             .accessibilityIdentifier("reader.audioWave")
                     }
                     if audioWaveEnabled && audioMonitor.captureFailed {
                         Text(I18N.localized("无法读取系统音频，请允许系统音频录制后重新开启音浪。"))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption2).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Divider()
@@ -376,14 +378,15 @@ struct TimelineViewControls: View {
                         Toggle("", isOn: Binding(get: { showsImages }, set: { value in onToggleImages(value) }))
                             .labelsHidden()
                             .toggleStyle(.switch)
+                            .controlSize(.small)
                             .accessibilityLabel(I18N.localized("显示文章配图"))
                             .accessibilityIdentifier("timeline.showArticleImages")
                     }
                     Text(I18N.localized("图片按需从原网站加载，不会自动抓取原文网页。"))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(18).frame(width: 280)
+                .padding(12).frame(width: 232)
             }
         }
         .buttonStyle(.borderless)
@@ -393,8 +396,9 @@ struct TimelineViewControls: View {
 
     @ViewBuilder
     private func settingRow<Control: View>(title: String, @ViewBuilder control: () -> Control) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 8) {
             Text(title)
+                .font(.system(size: 13))
             Spacer(minLength: 8)
             control()
         }

@@ -98,7 +98,10 @@ final class PaperFloatingScrollbarView: NSView {
     // MARK: 绑定目标 NSScrollView (纯观察者，零属性突变)
 
     func attach(to scrollView: NSScrollView) {
-        if targetScrollView === scrollView { return }
+        if targetScrollView === scrollView {
+            syncGeometry()
+            return
+        }
 
         // 清理旧监听
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
@@ -478,4 +481,78 @@ final class PaperColumnContainerController<Content: View>: NSViewController {
         return nil
     }
 }
+
+// MARK: - PaperFloatingScrollView
+
+/// 统一的浮动细条滚动容器（SwiftUI Wrapper）。
+/// 内部包裹原生 ScrollView，通过同级 Overlay 挂载 PaperFloatingScrollbarView，
+/// 隐藏 macOS 默认粗滚动条，实现克制精致的浮动滚动条交互。
+struct PaperFloatingScrollView<Content: View>: View {
+    @ViewBuilder private let content: Content
+    #if os(macOS)
+    @State private var scrollbar = PaperFloatingScrollbarView()
+    #endif
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+                #if os(macOS)
+                .background(PaperScrollTarget(scrollbar: scrollbar))
+                #endif
+        }
+        #if os(macOS)
+        .scrollIndicators(.never, axes: .vertical)
+        .overlay(alignment: .trailing) {
+            PaperScrollbarOverlay(scrollbar: scrollbar)
+                .frame(width: PaperFloatingScrollbarView.hitLaneWidth)
+                .accessibilityHidden(true)
+        }
+        #endif
+    }
+}
+
+#if os(macOS)
+struct PaperScrollbarOverlay: NSViewRepresentable {
+    let scrollbar: PaperFloatingScrollbarView
+
+    func makeNSView(context: Context) -> PaperFloatingScrollbarView { scrollbar }
+    func updateNSView(_ nsView: PaperFloatingScrollbarView, context: Context) {}
+}
+
+/// 从内容内部向上绑定所属滚动容器，避免误选相邻列表或嵌套容器。
+struct PaperScrollTarget: NSViewRepresentable {
+    let scrollbar: PaperFloatingScrollbarView
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.scrollbar = scrollbar
+        return view
+    }
+
+    func updateNSView(_ nsView: Probe, context: Context) {
+        nsView.scrollbar = scrollbar
+        nsView.scheduleAttachment()
+    }
+
+    final class Probe: NSView {
+        weak var scrollbar: PaperFloatingScrollbarView?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scheduleAttachment()
+        }
+
+        func scheduleAttachment() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let scrollView = self.enclosingScrollView else { return }
+                self.scrollbar?.attach(to: scrollView)
+            }
+        }
+    }
+}
+#endif
 #endif

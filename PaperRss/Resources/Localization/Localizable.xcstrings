@@ -61,7 +61,7 @@
     "页面" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page"}}}},
     "下一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Next page"}}}},
     "上一页" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Previous page"}}}},
-    "翻页音效" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page-turn sound"}}}},
+    "打开音效" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Open sound"}}}},
     "阅读音浪" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Reading audio wave"}}}},
     "翻页方式" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Page navigation"}}}},
     "杂志编排" : {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "Magazine arrangement"}}}},

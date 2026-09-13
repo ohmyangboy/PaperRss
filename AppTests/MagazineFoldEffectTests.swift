@@ -69,7 +69,7 @@ final class MagazineFoldEffectTests: XCTestCase {
             XCTAssertEqual(MagazinePaginator.turnInset(size), 32)
             XCTAssertEqual(MagazinePaginator.foldViewport(size).height, size.height - 64)
         }
-        XCTAssertEqual(MagazinePaginator.pageWidth(1600), 1240)
+        XCTAssertEqual(MagazinePaginator.pageWidth(1600), 1280)
         XCTAssertEqual(MagazinePaginator.pageWidth(900), 804)
     }
 
@@ -117,27 +117,27 @@ final class MagazineFoldEffectTests: XCTestCase {
         defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
         defer { defaults.removePersistentDomain(forName: domain) }
         let feed = UUID()
-        let entries = (0..<30).map { EntryListItem(id: "e\($0)", feedID: feed, title: "Title \($0)", sourceTitle: "Feed") }
+        let entries = (0..<100).map { EntryListItem(id: "e\($0)", feedID: feed, title: "Title \($0)", sourceTitle: "Feed") }
         let memory = TimelinePresentationMemory()
         memory.magazineIsOpen = true
         func root(_ key: TimelineKeyRequest?) -> some View {
-            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 800),
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1450, height: 1000),
                 showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
-                memory: memory, onHighlight: { _ in }, onOpen: { _ in }, onNeedMore: {},
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in }, onNeedMore: {},
                 tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
         }
         let input = MagazineLifecycleInput()
         let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input, content: root)
-            .frame(width: 1000, height: 800))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 800),
+            .frame(width: 1450, height: 1000))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1450, height: 1000),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFront(nil)
         defer { window.close() }
         let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
-            size: MagazinePaginator.foldViewport(CGSize(width: 1000, height: 800)), showsImages: false)
-        for _ in 0..<5 {
+            size: MagazinePaginator.foldViewport(CGSize(width: 1450, height: 1000)), showsImages: false)
+        for _ in 0..<15 {
             try await Task.sleep(for: .milliseconds(30))
             host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
         }
@@ -412,7 +412,7 @@ extension MagazineFoldEffectTests {
         let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
             MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 800),
                 showsImages: false, isBrowsing: input.browsing, hasMore: false, selectedID: nil, keyboardRequest: key,
-                memory: memory, onHighlight: { _ in }, onOpen: { _ in }, onNeedMore: {},
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in }, onNeedMore: {},
                 tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
         })
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
@@ -440,7 +440,7 @@ extension MagazineFoldEffectTests {
         let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
             MagazineBrowserView(entries: [], folders: [:], availableSize: CGSize(width: 1000, height: 800),
                 showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
-                memory: memory, onHighlight: { highlighted = $0 }, onOpen: { _ in XCTFail("封面不能直接打开文章") },
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { highlighted = $0 }, onOpen: { _ in XCTFail("封面不能直接打开文章") },
                 onNeedMore: {}, coverTitle: "空订阅", onClearSelection: { cleared += 1 },
                 tile: { entry, _, _ in Text(entry.title) })
         })
@@ -473,6 +473,139 @@ extension MagazineFoldEffectTests {
 }
 
 extension MagazineFoldEffectTests {
+    private func scrubContent(_ index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("第 \(index) 页").font(.title)
+            ForEach(0..<12) { row in
+                HStack {
+                    Text("文章 \(index)-\(row)").font(.headline)
+                    Text("连续翻页性能回归：正文和页码必须属于同一页面，反向拖动复用纹理。")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white)
+    }
+
+    func testScrubBurstOnlyPreparesLatestExplicitPagePair() async throws {
+        let surface = MagazineTurnSurface(content: scrubContent(0), pageID: "0")
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = surface; window.orderFront(nil)
+        defer { surface.cancelTurn(notify: false); window.close() }
+        surface.layoutSubtreeIfNeeded()
+        let session = UUID()
+        var completed: UUID?
+        let start = CACurrentMediaTime()
+        for index in 1...100 {
+            let request = MagazinePageTurnRequest(targetPageID: "\(index)", forward: true,
+                sourcePageID: "\(index - 1)", scrubSessionID: session, progress: 0.35)
+            surface.update(content: scrubContent(index), pageID: "\(index)", request: request,
+                reduceMotion: false, isActive: true, background: .white,
+                source: scrubContent(index - 1), onComplete: { completed = $0; _ = $1 })
+        }
+        let inputMS = (CACurrentMediaTime() - start) * 1000
+        XCTAssertEqual(surface.snapshotCount, 0, "输入回调不能同步截图")
+        for _ in 0..<50 where surface.preparedTargetPageID != "100" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(surface.preparedSourcePageID, "99", "快速跳页不能把上一目标页误当源页")
+        XCTAssertEqual(surface.preparedTargetPageID, "100")
+        XCTAssertEqual(surface.snapshotCount, 2, "被跳过的 99 个请求不能抓图或补播")
+        XCTAssertEqual(surface.rendererCount, 1)
+        XCTAssertEqual(surface.displayedProgress, 0.35, accuracy: 0.0001)
+        XCTAssertNil(completed, "拖动期间不能提交阅读锚点")
+        print("TOC burst: 100 inputs=\(inputMS)ms, snapshots=\(surface.snapshotCount), renderers=\(surface.rendererCount)")
+    }
+
+    func testScrubReusesNeighbourSnapshotsAndRendererThenSettlesLatestPosition() async throws {
+        let surface = MagazineTurnSurface(content: scrubContent(0), pageID: "0")
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = surface; window.orderFront(nil)
+        defer { surface.cancelTurn(notify: false); window.close() }
+        surface.layoutSubtreeIfNeeded()
+        let session = UUID()
+        var completions: [(UUID, Bool)] = []
+        func update(_ request: MagazinePageTurnRequest, source: Int, target: Int, fades: Bool = false) {
+            surface.update(content: scrubContent(target), pageID: "\(target)", request: request,
+                reduceMotion: false, isActive: true, background: .white, fades: fades,
+                source: scrubContent(source), onComplete: { completions.append(($0, $1)) })
+        }
+        let start = CACurrentMediaTime()
+        for target in 1...3 {
+            let request = MagazinePageTurnRequest(targetPageID: "\(target)", forward: true,
+                sourcePageID: "\(target - 1)", scrubSessionID: session, progress: 0.7)
+            update(request, source: target - 1, target: target)
+            for _ in 0..<50 where surface.preparedTargetPageID != "\(target)" {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(surface.preparedSourcePageID, "\(target - 1)")
+        }
+        XCTAssertEqual(surface.snapshotCount, 4, "相邻页面只截图一次")
+        XCTAssertEqual(surface.rendererCount, 1, "跨页不得重建 MTKView")
+        var reverse = MagazinePageTurnRequest(targetPageID: "1", forward: false,
+            sourcePageID: "2", scrubSessionID: session, progress: 0.2)
+        update(reverse, source: 2, target: 1)
+        for _ in 0..<50 where surface.preparedTargetPageID != "1" { try await Task.sleep(for: .milliseconds(10)) }
+        for step in 0..<100 {
+            reverse.progress = Double(step) / 100
+            update(reverse, source: 2, target: 1)
+        }
+        XCTAssertEqual(surface.snapshotCount, 4)
+        reverse.settleFrom = reverse.progress
+        reverse.progress = nil
+        reverse.settleDuration = 0.18
+        update(reverse, source: 2, target: 1)
+        for _ in 0..<50 where completions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(completions.count, 1)
+        XCTAssertEqual(completions.first?.0, reverse.id)
+        XCTAssertEqual(completions.first?.1, true)
+        XCTAssertFalse(surface.isAnimating)
+        XCTAssertEqual(surface.cachedScrubPageCount, 0)
+        XCTAssertEqual(surface.snapshotCount, 4)
+        print("TOC sequential + reverse + settle=\((CACurrentMediaTime() - start) * 1000)ms, snapshots=4, renderers=1")
+    }
+
+    func testScrubCancellationDropsPendingFramesAndBoundedCache() async throws {
+        let surface = MagazineTurnSurface(content: scrubContent(0), pageID: "0")
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 500),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = surface; window.orderFront(nil)
+        defer { surface.cancelTurn(notify: false); window.close() }
+        surface.layoutSubtreeIfNeeded()
+        let session = UUID()
+        var completions: [(UUID, Bool)] = []
+        for target in stride(from: 10, through: 60, by: 10) {
+            let request = MagazinePageTurnRequest(targetPageID: "\(target)", forward: true,
+                sourcePageID: "\(target - 1)", scrubSessionID: session, progress: 0.8)
+            surface.update(content: scrubContent(target), pageID: "\(target)", request: request,
+                reduceMotion: false, isActive: true, background: .white, fades: true,
+                source: scrubContent(target - 1), onComplete: { completions.append(($0, $1)) })
+            for _ in 0..<50 where surface.preparedTargetPageID != "\(target)" { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(surface.preparedSourcePageID, "\(target - 1)")
+            XCTAssertLessThanOrEqual(surface.cachedScrubPageCount, 4)
+        }
+        let captures = surface.snapshotCount
+        let cancelled = MagazinePageTurnRequest(targetPageID: "80", forward: true,
+            sourcePageID: "79", scrubSessionID: session, progress: 0.4)
+        surface.update(content: scrubContent(80), pageID: "80", request: cancelled,
+            reduceMotion: false, isActive: true, background: .white, fades: true,
+            source: scrubContent(79), onComplete: { completions.append(($0, $1)) })
+        surface.setFrameSize(CGSize(width: 800, height: 500))
+        surface.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertFalse(surface.isAnimating)
+        XCTAssertEqual(surface.cachedScrubPageCount, 0)
+        XCTAssertEqual(surface.snapshotCount, captures, "尺寸变化必须丢弃尚未准备的页面")
+        XCTAssertEqual(completions.count, 1)
+        XCTAssertEqual(completions.first?.0, cancelled.id)
+        XCTAssertEqual(completions.first?.1, false)
+    }
+
     func testReleaseCurveRetainsVelocityAndStopsAtTheDestination() {
         let step = 0.00001
         for slope in [-1.0, 0, 0.5, 1, 2, 3] {

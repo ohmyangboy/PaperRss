@@ -79,12 +79,12 @@ public actor FreshRSSAccountProvider: AccountProvider {
             await onProgress?(AccountRefreshProgress())
 
             // 3. 拉取文章与阅读/星标状态，并执行字段级状态调和
-            let reachedBoundary = try await syncArticlesAndStates()
+            let reachedBoundary = try await syncArticlesAndStates(reconcileHistory: reason == .manual || reason == .userInitiated)
 
             // 4. 同步完成后若有未结 outbox 再次推进
             _ = try await outboxProcessor.processOutbox()
 
-            await markSyncCompleted(timestamp: Date().timeIntervalSince1970, advanceFetchTimestamp: reachedBoundary)
+            await markSyncCompleted(timestamp: Date().timeIntervalSince1970, advanceFetchTimestamp: reachedBoundary, fetchTimestamp: now)
             await onProgress?(nil)
             return RefreshResult(status: .success)
         } catch {
@@ -552,7 +552,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
     // MARK: - Articles & States Sync
 
     @discardableResult
-    public func syncArticlesAndStates() async throws -> Bool {
+    public func syncArticlesAndStates(reconcileHistory: Bool = false) async throws -> Bool {
         // 1. 检查是否为初次同步，并获取上次成功拉取时间戳
         let (isInitialSync, lastArticleFetchAt): (Bool, TimeInterval?) = try database.read { db in
             let syncState = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db)
@@ -562,23 +562,19 @@ public actor FreshRSSAccountProvider: AccountProvider {
         }
 
         // 2. 拉取远端未读与星标 ID 集合（支持 continuation 翻页，显式标记完整性）
-        var remoteUnreadSet: ReaderItemIDSet? = nil
-        var remoteStarredSet: ReaderItemIDSet? = nil
+        let remoteUnreadSet: ReaderItemIDSet? = try await apiClient.fetchAllUnreadItemIDs()
+        let remoteStarredSet: ReaderItemIDSet? = try await apiClient.fetchAllStarredItemIDs()
 
-        do {
-            let unreadResult = try await apiClient.fetchAllUnreadItemIDs()
-            remoteUnreadSet = unreadResult
-        } catch {
-            remoteUnreadSet = nil
-            if isInitialSync { throw error }
-        }
-
-        do {
-            let starredResult = try await apiClient.fetchAllStarredItemIDs()
-            remoteStarredSet = starredResult
-        } catch {
-            remoteStarredSet = nil
-            if isInitialSync { throw error }
+        // 手动刷新核对完整历史 ID，修复旧版本遗漏的普通已读文章；正文只补差集。
+        var historyIDs = Set<String>()
+        if reconcileHistory {
+            let remoteIDs = try await apiClient.fetchRefreshStreamItemIDs(initialSync: false, sinceTimestamp: nil)
+            let localIDs = try database.read { db in
+                try String.fetchAll(db, sql: "SELECT external_id FROM items WHERE account_id = ?", arguments: [self.accountID])
+            }
+            let localKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: Set(localIDs))
+            // 历史核对只补不存在的身份，避免把已按保留策略清理的正文全部重新下载。
+            historyIDs = Set(remoteIDs.filter { !localKeys.contains(ReaderItemIDCodec.canonicalComparisonKey(for: $0)) })
         }
 
         // 展示进度时先读取轻量 ID 快照；不用下载正文来猜测总量。
@@ -600,6 +596,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
             }
             plannedDownloadKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: streamIDs)
                 .union(specialKeys.subtracting(completeKeys))
+                .union(ReaderItemIDCodec.buildCanonicalKeySet(from: historyIDs).subtracting(completeKeys))
                 .union(isInitialSync ? [] : ReaderItemIDCodec.buildCanonicalKeySet(from: Set(repairIDs)))
             await onProgress?(AccountRefreshProgress(completed: 0, total: plannedDownloadKeys.count))
         }
@@ -660,7 +657,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
         var availableKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: Set(completeExternalIDs))
         availableKeys.formUnion(streamItems.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
         var missingRemoteIDs: [String] = []
-        let specialIDs = (remoteUnreadSet?.ids ?? []).union(remoteStarredSet?.ids ?? [])
+        let specialIDs = (remoteUnreadSet?.ids ?? []).union(remoteStarredSet?.ids ?? []).union(historyIDs)
         for rawID in specialIDs.sorted() {
             if availableKeys.insert(ReaderItemIDCodec.canonicalComparisonKey(for: rawID)).inserted {
                 missingRemoteIDs.append(rawID)
@@ -767,22 +764,13 @@ public actor FreshRSSAccountProvider: AccountProvider {
                 let articleURL = item.alternate?.first?.href?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let articleTitle = item.title ?? ""
 
-                if let existingItem = try ItemRecord.filter(Column("account_id") == self.accountID && Column("external_id") == rawRemoteID).fetchOne(db) {
+                // 使用索引匹配远端身份及历史十进制／Tag URI 格式，避免每批扫描整个账号。
+                let canonicalKey = ReaderItemIDCodec.canonicalComparisonKey(for: rawRemoteID)
+                let identityCandidates = Set([rawRemoteID, canonicalKey, ReaderItemIDCodec.formatTagID(fromDecimal: canonicalKey)].compactMap { $0 })
+                if let existingItem = try ItemRecord.filter(
+                    Column("account_id") == self.accountID && identityCandidates.contains(Column("external_id"))
+                ).fetchOne(db) {
                     internalItemID = existingItem.id
-                } else if let articleURL, !articleURL.isEmpty,
-                          var existingByURL = try ItemRecord.fetchOne(db, sql: """
-                              SELECT i.* FROM items i
-                              JOIN articles a ON a.item_id = i.id
-                              WHERE i.account_id = ? AND i.feed_id = ? AND a.url = ?
-                              ORDER BY i.created_at DESC
-                              LIMIT 1;
-                              """, arguments: [self.accountID, targetFeedID, articleURL]) {
-                    // 同一个订阅源下已存在相同文章 URL（如退订重加后服务端分配了新 entry ID）
-                    // 重新绑定 external_id，复用原有 item，杜绝重复插入
-                    existingByURL.externalID = rawRemoteID
-                    existingByURL.updatedAt = item.updated ?? now
-                    try existingByURL.save(db)
-                    internalItemID = existingByURL.id
                 } else {
                     let newID = "\(self.accountID)::\(rawRemoteID)"
                     let newItem = ItemRecord(
@@ -994,13 +982,13 @@ public actor FreshRSSAccountProvider: AccountProvider {
         }
     }
 
-    private func markSyncCompleted(timestamp: Double, advanceFetchTimestamp: Bool = true) async {
+    private func markSyncCompleted(timestamp: Double, advanceFetchTimestamp: Bool = true, fetchTimestamp: Double) async {
         try? database.write { db in
             if var state = try AccountSyncStateRecord.filter(Column("account_id") == self.accountID).fetchOne(db) {
                 state.initialSyncCompleted = true
                 state.lastSyncCompletedAt = timestamp
                 if advanceFetchTimestamp {
-                    state.lastArticleFetchAt = timestamp
+                    state.lastArticleFetchAt = fetchTimestamp
                 }
                 state.consecutiveFailureCount = 0
                 state.lastError = nil

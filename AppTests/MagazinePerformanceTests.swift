@@ -5,7 +5,129 @@ import PaperRssCore
 @testable import PaperRssDesktop
 
 @MainActor
+private final class OpeningThumbnailProbe {
+    var requests: [ArticleThumbnailRequest] = []
+}
+
+@MainActor
 final class MagazinePerformanceTests: XCTestCase {
+    func testClosedBookPreloadsDecodedImagesWithoutImageViews() async throws {
+        let memory = TimelinePresentationMemory()
+        let probe = OpeningThumbnailProbe()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MagazinePreload-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let context = try XCTUnwrap(CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8,
+            bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+        let requested = expectation(description: "封面等待时开始下载")
+        let store = ArticleThumbnailStore(directory: directory, loader: { request in
+            await MainActor.run {
+                XCTAssertFalse(memory.magazineIsOpen)
+                probe.requests.append(request)
+                requested.fulfill()
+            }
+            return data
+        })
+        let entry = EntryListItem(id: "opening", feedID: UUID(), title: "开页预加载", sourceTitle: "测试",
+            previewImageURL: URL(string: "https://example.org/opening.png"))
+        let view = MagazineBrowserView(entries: [entry], folders: [:], availableSize: CGSize(width: 1000, height: 720),
+            showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: nil,
+            memory: memory, thumbnailStore: store, onHighlight: { _ in }, onOpen: { _ in }, onNeedMore: {},
+            tile: { _, _, _ in Color.clear })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 720),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: view)
+        window.orderFrontRegardless()
+        defer { window.contentView = nil; window.close() }
+        await fulfillment(of: [requested], timeout: 5)
+        let request = try XCTUnwrap(probe.requests.first)
+        for _ in 0..<100 where store.cachedImage(for: request) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(store.cachedImage(for: request), "下载结果已解码，开页可同步命中")
+        _ = try await store.image(for: request)
+        XCTAssertEqual(probe.requests.count, 1, "实际展示复用缓存，不重复请求")
+    }
+
+    func testOpeningPreloadIsLimitedToFirstPageAndRejectsOldScopeOrDisabledImages() throws {
+        let scope = UUID(), feed = UUID()
+        let entries = (0..<30).map { index in
+            EntryListItem(id: "preload-\(index)", feedID: feed, title: "首屏图片 \(index)",
+                sourceTitle: "预加载测试", previewImageURL: URL(string: "https://example.org/\(index).jpg"))
+        }
+        let cache = MagazineEditionCache()
+        let input = MagazineEditionCache.Input(entries: entries, folders: [:], arrangement: .balanced,
+            capacity: 12, locale: "zh-Hans", viewport: CGSize(width: 1000, height: 720), scopeID: scope)
+        cache.update(input)
+        XCTAssertGreaterThan(cache.pages.count, 1)
+        let requests = cache.openingImageRequests(scopeID: scope, scale: 2)
+        XCTAssertFalse(requests.isEmpty)
+        XCTAssertEqual(requests.count, Set(requests).count)
+        let firstPageURLs = Set(try XCTUnwrap(cache.pages.first).entries.compactMap(\.previewImageURL))
+        XCTAssertTrue(Set(requests.map(\.url)).isSubset(of: firstPageURLs))
+        XCTAssertLessThan(requests.count, entries.count)
+        XCTAssertTrue(cache.openingImageRequests(scopeID: UUID(), scale: 2).isEmpty,
+            "订阅切换但新版式尚未发布时，不预取旧订阅图片")
+        var disabled = input
+        disabled.showsImages = false
+        cache.update(disabled)
+        XCTAssertTrue(cache.openingImageRequests(scopeID: scope, scale: 2).isEmpty)
+    }
+
+    func testOpeningThumbnailUsesDisplaySizeAndOmitsTextOnlyStories() throws {
+        let entry = EntryListItem(id: "image", feedID: UUID(), title: "图片", sourceTitle: "测试",
+            previewImageURL: URL(string: "https://example.org/image.jpg"))
+        var style = MagazineStoryStyle(imageHeight: 180, contentInset: 20)
+        XCTAssertEqual(try XCTUnwrap(style.thumbnailRequest(for: entry, width: 350, scale: 2)).pixelSize, 640)
+        XCTAssertEqual(try XCTUnwrap(style.thumbnailRequest(for: entry, width: 700, scale: 2)).pixelSize, 1280)
+        style.imageBesideText = true
+        XCTAssertEqual(try XCTUnwrap(style.thumbnailRequest(for: entry, width: 700, scale: 2)).pixelSize, 640)
+        style.imageAspectRatio = 2
+        XCTAssertEqual(try XCTUnwrap(style.thumbnailRequest(for: entry, width: 700, scale: 2)).pixelSize, 640,
+            "旁图宽度受文字栏比例约束，原图比例不应放大预取尺寸")
+        style.sideImageWidth = 360
+        XCTAssertEqual(try XCTUnwrap(style.thumbnailRequest(for: entry, width: 700, scale: 2)).pixelSize, 1280)
+        style.imageHeight = 0
+        XCTAssertNil(style.thumbnailRequest(for: entry, width: 700, scale: 2))
+    }
+
+    func testRailFrameInputCoalescesAndFlushesReleaseWithoutOldCallbacks() async throws {
+        let input = MagazineRailFrameInput()
+        var positions: [Double] = []
+        for value in 0..<100 { input.submit(Double(value)) { positions.append($0) } }
+        XCTAssertTrue(positions.isEmpty)
+        for _ in 0..<50 where positions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(positions, [99])
+        input.submit(150) { positions.append($0) }
+        input.flush()
+        input.submit(200) { positions.append($0) }
+        input.cancel()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(positions, [99, 150])
+    }
+
+    func testRailTickCountIsBoundedWhilePositionStillAddressesEveryPage() {
+        for count in [1, 2, 30, 100, 10_000] {
+            let indices = MagazineRailScrub.tickIndices(count: count, width: 280)
+            XCTAssertLessThanOrEqual(indices.count, 40)
+            XCTAssertEqual(indices.first, 0)
+            XCTAssertEqual(indices.last, count - 1)
+            XCTAssertEqual(indices, Array(Set(indices)).sorted())
+            for index in 0..<count {
+                let normalized = count > 1 ? Double(index) / Double(count - 1) : 0
+                XCTAssertEqual(MagazineRailScrub.nearestIndex(normalized: normalized, count: count), index)
+            }
+            for current in [0, count / 2, count - 1] {
+                let selected = MagazineRailScrub.tickIndices(count: count, width: 280, currentIndex: current)
+                XCTAssertTrue(selected.contains(current), "合并刻度后当前页仍须可以被选中和朗读")
+                XCTAssertLessThanOrEqual(selected.count, 40)
+                XCTAssertEqual(selected, Array(Set(selected)).sorted())
+            }
+        }
+    }
+
     func testScrollOffsetsOnSamePageDoNotPublishRepeatedChanges() {
         let memory = TimelinePresentationMemory()
         var notifications = 0
@@ -52,6 +174,36 @@ final class MagazinePerformanceTests: XCTestCase {
     func testRailIsRotatedReaderTickWithoutCurrentPageWidthExpansion() {
         XCTAssertEqual(MagazinePageRail.tickWidth, 3)
         XCTAssertEqual(MagazinePageRail.tickHeight, 8)
+    }
+
+    func testRailScrubMapsWholeLoadedRangeAndClampsEdges() {
+        XCTAssertEqual(MagazineRailScrub.normalizedPosition(locationX: -20, width: 280), 0)
+        XCTAssertEqual(MagazineRailScrub.normalizedPosition(locationX: 400, width: 280), 1)
+        XCTAssertEqual(MagazineRailScrub.pagePosition(normalized: 0.5, count: 1), 0)
+        XCTAssertEqual(MagazineRailScrub.nearestIndex(position: 0, count: 1), 0)
+        XCTAssertEqual(MagazineRailScrub.pagePosition(normalized: 0.5, count: 31), 15)
+        XCTAssertEqual(MagazineRailScrub.nearestIndex(position: 14.6, count: 31), 15)
+        XCTAssertEqual(MagazineRailScrub.nearestIndex(position: -4, count: 31), 0)
+        XCTAssertEqual(MagazineRailScrub.nearestIndex(position: 50, count: 31), 30)
+    }
+
+    func testRailScrubPairReusesAdjacentPagesInBothDirections() {
+        let forward = MagazineRailScrub.pair(position: 4.25, count: 20, forward: true)
+        XCTAssertEqual(forward, .init(sourceIndex: 4, targetIndex: 5, progress: 0.25, forward: true))
+        let backward = MagazineRailScrub.pair(position: 4.25, count: 20, forward: false)
+        XCTAssertEqual(backward, .init(sourceIndex: 5, targetIndex: 4, progress: 0.75, forward: false))
+        XCTAssertEqual(MagazineRailScrub.pair(position: 4, count: 20, forward: false),
+                       .init(sourceIndex: 4, targetIndex: 3, progress: 0, forward: false))
+        let last = MagazineRailScrub.pair(position: 19, count: 20, forward: true)
+        XCTAssertEqual(last?.targetIndex, 19)
+        XCTAssertEqual(last?.progress, 1)
+        let first = MagazineRailScrub.pair(position: 0, count: 20, forward: false)
+        XCTAssertEqual(first?.targetIndex, 0)
+        XCTAssertEqual(first?.progress, 1)
+        if let forward {
+            XCTAssertEqual(MagazineRailScrub.progress(position: 4.75, in: forward), 0.75)
+            XCTAssertEqual(MagazineRailScrub.progress(position: 3.9, in: forward), nil)
+        }
     }
 
     func testRailPreviewAccommodatesMultilineTitlesAndCapsLongPages() {
@@ -202,6 +354,7 @@ extension MagazinePerformanceTests {
             capacity: 12, locale: "zh", viewport: CGSize(width: 1000, height: 700), showsImages: false)
         cache.update(input)
         let before = cache.pages
+        before.forEach { cache.markDisplayed($0.id) }
         let layout = cache.layouts
         let read = original.map { EntryListItem(id: $0.id, feedID: feed, title: $0.title, sourceTitle: $0.sourceTitle, isRead: true) }
         input = .init(entries: read + [EntryListItem(id: "later", feedID: feed, title: "后来", sourceTitle: "来源")],
@@ -214,93 +367,55 @@ extension MagazinePerformanceTests {
 }
 
 extension MagazinePerformanceTests {
-    func testShortTextEditionDoesNotReserveAnEmptyFeatureColumn() {
-        let entries = (0..<12).map { EntryListItem(id: "brief-\($0)", feedID: UUID(),
-            title: "一条短讯", sourceTitle: "来源") }
-        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .chronological,
-            size: CGSize(width: 1180, height: 850), showsImages: false)
+    func testShortTextEditionCrossesFormerTwelveArticleBoundary() {
+        let entries = editorialEntries(40)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1250), showsImages: false, hasMore: true)
+        XCTAssertGreaterThan(pages[0].consumedCount, 12)
         XCTAssertTrue(pages[0].placements.allSatisfy { $0.style.role == .gallery })
-        let right = pages[0].placements.first { $0.frame.minX > MagazinePaginator.contentWidth(1180) / 2 }
-        XCTAssertEqual(pages[0].placements[0].frame.minY, right?.frame.minY)
-        XCTAssertLessThan(pages[0].placements[0].frame.width, MagazinePaginator.contentWidth(1180) / 2)
-        XCTAssertLessThan(pages[0].placements[1].frame.minY - pages[0].placements[0].style.contentInset * 2,
-            120, "扣除明确的交互内边距后，纯短讯仍不能预留主稿空白")
+        XCTAssertEqual(Set(pages[0].placements.map { $0.frame.minX }).count, 4)
+        XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
     }
 
-    func testSupportingStoriesUseSpaceForSummariesAndLargerImages() {
-        let entries = (0..<8).map { EntryListItem(id: "support-\($0)", feedID: UUID(),
-            title: "一篇简短标题", summaryPreview: String(repeating: "描述文字可以展开阅读。", count: 12),
-            sourceTitle: "周刊", previewImageURL: URL(string: "https://example.org/image.jpg")) }
-        for size in [CGSize(width: 1180, height: 1000),
-                     MagazinePaginator.foldViewport(CGSize(width: 926, height: 716))] {
-            let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .chronological,
-                size: size, showsImages: true)[0]
-            for placement in page.placements[1...3] {
-                XCTAssertEqual(placement.style.role, .supporting)
-                XCTAssertGreaterThanOrEqual(placement.style.summaryLines, 2)
-                XCTAssertGreaterThan(placement.style.imageHeight, 76)
-            }
-            XCTAssertEqual(page.placements[2].frame.minY - page.placements[1].frame.maxY, 16, accuracy: 0.01)
-            XCTAssertGreaterThanOrEqual(page.placements.count, 6, "矮窗口也应保留两侧画廊")
-        }
+    func testNormalImageStoriesKeepSummaryAndImageBudget() {
+        let entries = Array(editorialEntries(21, images: true).dropFirst())
+        let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1100), showsImages: true)[0]
+        XCTAssertEqual(page.template, .imageLead)
+        XCTAssertEqual(page.placements.first?.style.titleSize, 34)
+        XCTAssertTrue(page.placements.dropFirst().contains { $0.style.role == .supporting && $0.style.imageHeight >= 72 })
+        XCTAssertTrue(page.placements.dropFirst().contains { $0.style.role == .gallery && $0.style.imageHeight > 0 })
     }
 
-    func testEditorialFeatureKeepsThreeBriefsTogetherAndGalleryBelow() {
-        let feed = UUID()
-        let entries = (0..<12).map { index in
-            EntryListItem(id: "editorial-\(index)", feedID: feed,
-                title: "从一篇主稿开始阅读，再顺着三条短讯进入文章列表",
-                summaryPreview: "让标题、图片和留白建立清晰的阅读顺序。", sourceTitle: "设计周刊",
-                previewImageURL: URL(string: "https://example.org/image.jpg"))
-        }
-        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .chronological,
-            size: CGSize(width: 1180, height: 850), showsImages: true)
-        let placements = pages[0].placements
-        XCTAssertGreaterThan(placements.count, 4)
-        XCTAssertEqual(placements[0].style.role, .lead)
-        XCTAssertEqual(placements[1...3].map(\.style.role), [.supporting, .supporting, .supporting])
-        XCTAssertEqual(placements[3].frame.maxY, placements[0].frame.maxY, accuracy: 0.01)
-        XCTAssertGreaterThan(placements[4].frame.minY, placements[0].frame.maxY)
-        XCTAssertEqual(placements[4].style.role, .gallery)
-        XCTAssertGreaterThanOrEqual(placements.count, 6)
-        let rightGallery = placements.dropFirst(4).first { $0.frame.minX > MagazinePaginator.contentWidth(1180) / 2 }
-        XCTAssertEqual(placements[4].frame.minY, rightGallery?.frame.minY)
-        XCTAssertLessThan(placements[4].frame.width, MagazinePaginator.contentWidth(1180) / 2)
-        XCTAssertGreaterThan(rightGallery?.frame.minX ?? 0, placements[4].frame.maxX)
-        for page in pages {
-            for placement in page.placements {
-                let entry = page.page.entries.first { $0.id == placement.entryID }!
-                XCTAssertLessThanOrEqual(placement.style.height(for: entry, width: placement.frame.width),
-                    placement.frame.height + 0.01, "可见文本不能从固定格子底部截断")
-            }
-        }
-        XCTAssertEqual(pages.flatMap { $0.page.entries.map(\.id) }, entries.map(\.id))
+    func testTextLeadContinuesWithNaturalHeightStoriesBelow() {
+        let first = EntryListItem(id: "lead", feedID: UUID(), title: String(repeating: "中英文长标题 SwiftUI ", count: 4),
+            summaryPreview: String(repeating: "保留真实摘要与文字层级。", count: 10), sourceTitle: "来源")
+        let entries = [first] + editorialEntries(20, images: true)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1100), showsImages: true)
+        XCTAssertEqual(pages[0].template, .textLead)
+        XCTAssertEqual(pages[0].readingOrder.first, "lead")
+        let lead = pages[0].placements[0]
+        let secondary = pages[0].placements.dropFirst().prefix { $0.style.role == .supporting }
+        XCTAssertEqual(lead.frame.minX, 0)
+        XCTAssertFalse(secondary.isEmpty)
+        XCTAssertTrue(secondary.allSatisfy { $0.frame.minX > lead.frame.maxX })
+        XCTAssertTrue(pages[0].placements.contains { $0.style.role == .gallery && $0.frame.minY > lead.frame.minY })
+        assertEditorialGeometry(pages)
     }
 }
 
 extension MagazinePerformanceTests {
-    func testMixedGalleryStaysOnItsOwnPaperAndFitsOneToThreeStories() {
-        let entries = (0..<30).map { index in
-            EntryListItem(id: "mixed-\(index)", feedID: UUID(), title: "混合排版的文章标题",
-                summaryPreview: String(repeating: "有图片与没有图片的文章使用各自合适的空间。", count: index % 3 + 1),
-                sourceTitle: "杂志", previewImageURL: index % 2 == 0 ? URL(string: "https://example.com/p.jpg") : nil)
-        }
-        let size = CGSize(width: 1240, height: 1000)
-        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .chronological, size: size, showsImages: true)
-        let middle = MagazinePaginator.contentWidth(size.width) / 2
-        XCTAssertEqual(pages.flatMap { $0.page.entries.map(\.id) }, entries.map(\.id))
-        for page in pages {
-            let cards = page.placements.filter { $0.style.role == .gallery }
-            for card in cards {
-                XCTAssertTrue(card.frame.maxX < middle || card.frame.minX > middle, "卡片不能跨过书脊")
-                XCTAssertLessThanOrEqual(card.frame.maxY, page.height + 0.01)
-            }
-            for left in [true, false] {
-                let column = cards.filter { ($0.frame.midX < middle) == left }
-                XCTAssertLessThanOrEqual(column.count, 3)
-                for pair in zip(column, column.dropFirst()) {
-                    XCTAssertFalse(pair.0.frame.intersects(pair.1.frame))
-                }
+    func testMixedModulesStayWithinLeafAndPreserveReadingOrder() {
+        let entries = editorialEntries(43, images: true)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1000), showsImages: true)
+        XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
+        assertEditorialGeometry(pages)
+        for page in pages where page.form == .spread {
+            let middle = page.contentWidth / 2
+            for placement in page.placements {
+                XCTAssertTrue(placement.frame.maxX < middle || placement.frame.minX > middle)
             }
         }
     }
@@ -321,61 +436,34 @@ extension MagazinePerformanceTests {
 }
 
 extension MagazinePerformanceTests {
-    func testFullEditionUsesOneLeadAndFourCompactGalleryStories() {
-        let feed = UUID()
-        let entries = (0..<24).map { index in
-            EntryListItem(id: "dense-\(index)", feedID: feed, title: "正常长度的周刊文章标题",
-                summaryPreview: "图片和文字互相搭配，保留适度的阅读间距。", sourceTitle: "周刊",
-                previewImageURL: index % 3 == 0 ? nil : URL(string: "https://example.com/photo.jpg"))
+    func testCompositionIsDeterministicAcrossWindowsAndImagePolicies() {
+        let entries = editorialEntries(65, images: true)
+        for size in [CGSize(width: 400, height: 400), CGSize(width: 900, height: 900), CGSize(width: 1450, height: 1100)] {
+            for images in [false, true] {
+                let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced, size: size, showsImages: images)
+                let again = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced, size: size, showsImages: images)
+                XCTAssertEqual(pages, again)
+                XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
+                XCTAssertTrue(pages.allSatisfy { $0.consumedCount > 0 })
+                if !images { XCTAssertTrue(pages.flatMap(\.placements).allSatisfy { $0.style.imageHeight == 0 }) }
+                assertEditorialGeometry(pages)
+            }
         }
-        let size = CGSize(width: 1240, height: 1000)
-        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced, size: size, showsImages: true)
-        let first = pages[0]
-        let gallery = first.placements.filter { $0.style.role == .gallery }
-        XCTAssertEqual(gallery.count, 4)
-        XCTAssertEqual(first.placements.filter { $0.style.role == .lead }.count, 1)
-        XCTAssertTrue(gallery.contains { $0.style.imageHeight > 0 && !$0.style.imageBesideText })
-        XCTAssertTrue(gallery.allSatisfy {
-            $0.style.imageHeight <= 120 || $0.frame.width > MagazinePaginator.contentWidth(size.width) / 4
-        })
-        XCTAssertTrue(gallery.contains { $0.frame.width < MagazinePaginator.contentWidth(size.width) / 4 })
-        for left in [true, false] {
-            XCTAssertTrue((1...3).contains(gallery.filter { ($0.frame.midX < MagazinePaginator.contentWidth(size.width) / 2) == left }.count))
-        }
-        XCTAssertEqual(pages.flatMap { $0.page.entries.map(\.id) }.sorted(), entries.map(\.id).sorted())
-        let again = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced, size: size, showsImages: true)
-        XCTAssertEqual(first.placements.map(\.frame), again[0].placements.map(\.frame))
     }
 }
 
 
 extension MagazinePerformanceTests {
-    func testGalleryFillsAllocatedAreaEvenWithoutSummary() {
-        let feed = UUID()
-        for count in [5, 7, 8, 9] {
-            let entries = (0..<count).map { index in
-                EntryListItem(id: "fill-\(index)", feedID: feed, title: "画廊文章",
-                    summaryPreview: index % 2 == 0 ? "一段摘要" : "", sourceTitle: "周刊",
-                    previewImageURL: URL(string: "https://example.com/photo.jpg"))
-            }
-            let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .chronological,
-                size: CGSize(width: 1240, height: 1000), showsImages: true)
-            for page in pages {
-                let cards = page.placements.filter { $0.style.role == .gallery }
-                guard page.placements.contains(where: { $0.style.role == .lead }) else { continue }
-                for card in cards {
-                    XCTAssertEqual(card.style.allocatedHeight, card.frame.height)
-                }
-                for isLeft in [true, false] {
-                    let side = cards.filter { ($0.frame.midX < MagazinePaginator.contentWidth(1240) / 2) == isLeft }
-                    guard !side.isEmpty else { continue }
-                    XCTAssertEqual(side.map(\.frame.maxY).max()!, page.height, accuracy: 0.01)
-                    if side.count == 1 {
-                        XCTAssertEqual(side[0].frame.width, (MagazinePaginator.contentWidth(1240) - MagazinePaginator.gutter) / 2)
-                    }
-                }
-            }
+    func testBriefHeightDoesNotGrowWithViewport() {
+        let entries = editorialEntries(30)
+        var heights: [CGFloat] = []
+        for h: CGFloat in [850, 1000, 1400] {
+            let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: CGSize(width: 1450, height: h), showsImages: false, hasMore: true)
+            heights.append(pages[0].placements[0].frame.height)
+            assertEditorialGeometry(pages)
         }
+        XCTAssertEqual(Set(heights).count, 1)
     }
 }
 
@@ -393,7 +481,6 @@ extension MagazinePerformanceTests {
             XCTAssertEqual(page.placements.count, 3)
             for card in page.placements {
                 let entry = entries.first { $0.id == card.entryID }!
-                XCTAssertNil(card.style.allocatedHeight)
                 XCTAssertEqual(card.frame.height, card.style.height(for: entry, width: card.frame.width), accuracy: 0.01)
                 XCTAssertLessThan(card.frame.height, 200)
             }
@@ -432,5 +519,372 @@ extension MagazinePerformanceTests {
         XCTAssertNil(surface.down)
         surface.input = input(active: true)
         XCTAssertNotNil(surface.handle(up), "返回杂志后不能延续设置页上的点击")
+    }
+
+    func testRailPreviewUsesCustomFloatingScrollViewRatherThanNativeScrollIndicators() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let railSource = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/MagazinePageRail.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(railSource.contains("PaperFloatingScrollView"), "预览溢出滚动必须使用系统统一的自定义细条滚动容器")
+        XCTAssertFalse(railSource.contains(".scrollIndicators(.automatic)"), "不得使用系统默认原生粗滚动条")
+
+        let scrollbarSource = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/PaperFloatingScrollbarView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(scrollbarSource.contains("struct PaperFloatingScrollView"), "必须提供通用的 PaperFloatingScrollView 容器")
+    }
+
+    func testMagazineScrollWheelTurnsPages() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let surface = MagazineInputRegion.Surface(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        window.contentView = surface
+        defer { surface.stop(); window.close() }
+
+        var turnDirections: [Int] = []
+        let input = MagazineInputRegion(active: true, articleFrames: [], onArticleDown: { _ in },
+            onTurn: { turnDirections.append($0) }, onClear: {}, onEdge: { _ in }, onSwipe: { _, _, _, _ in })
+        surface.input = input
+
+        guard let cgDown = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -2, wheel2: 0, wheel3: 0) else {
+            XCTFail("无法创建 CGEvent")
+            return
+        }
+        cgDown.timestamp = 1_000_000_000
+        cgDown.location = window.convertPoint(toScreen: NSPoint(x: 450, y: 350))
+        let eventDown = try XCTUnwrap(NSEvent(cgEvent: cgDown))
+
+        let handledDown = surface.handle(eventDown)
+        XCTAssertNil(handledDown, "向下滚动应被消费并触发翻页")
+        XCTAssertEqual(turnDirections, [1], "向下滚动滚轮应翻到下一页")
+
+        guard let cgUp = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 2, wheel2: 0, wheel3: 0) else {
+            XCTFail("无法创建 CGEvent")
+            return
+        }
+        cgUp.timestamp = 1_500_000_000
+        cgUp.location = window.convertPoint(toScreen: NSPoint(x: 450, y: 350))
+        let eventUp = try XCTUnwrap(NSEvent(cgEvent: cgUp))
+
+        let handledUp = surface.handle(eventUp)
+        XCTAssertNil(handledUp, "向上滚动应被消费并触发翻页")
+        XCTAssertEqual(turnDirections, [1, -1], "向上滚动滚轮应翻到上一页")
+    }
+
+    func testMagazineSoundPlaysOnlyOnBookOpenAndNotOnSubsequentPageTurns() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let browserSource = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/MagazineBrowserView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(browserSource.contains("if pageSoundEnabled { MagazinePageSound.play() }"), "开书合页到开页时必须触发音效")
+        XCTAssertTrue(browserSource.contains("playsSound: false"), "开书之后的翻页切换页面必须保持静音 (playsSound: false)")
+    }
+}
+
+extension MagazinePerformanceTests {
+    private func editorialEntries(_ count: Int, images: Bool = false) -> [EntryListItem] {
+        let feed = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        return (0..<count).map { index in
+            EntryListItem(id: "edition-\(index)", feedID: feed, title: "第 \(index) 篇文章的标题",
+                summaryPreview: images ? "保留来源摘要，图文一起决定文章的自然高度。" : "", sourceTitle: "测试订阅",
+                previewImageURL: images ? URL(string: "https://example.com/\(index).png") : nil)
+        }
+    }
+    private func assertEditorialGeometry(_ pages: [MagazinePageLayout], file: StaticString = #filePath, line: UInt = #line) {
+        for page in pages {
+            XCTAssertEqual(page.readingOrder, page.page.entries.map(\.id), file: file, line: line)
+            for (index, placement) in page.placements.enumerated() {
+                let entry = page.page.entries.first { $0.id == placement.entryID }!
+                XCTAssertEqual(placement.frame.height, placement.style.height(for: entry, width: placement.frame.width), accuracy: 0.01, file: file, line: line)
+                XCTAssertLessThanOrEqual(placement.frame.maxY, page.height + 0.01, file: file, line: line)
+                XCTAssertLessThanOrEqual(placement.frame.maxX, page.contentWidth + 0.01, file: file, line: line)
+                for other in page.placements.dropFirst(index + 1) {
+                    XCTAssertFalse(placement.frame.intersects(other.frame), file: file, line: line)
+                }
+            }
+        }
+    }
+    func testEndingRequiresKnownEndAndUsesNaturalSingleLeaf() {
+        for count in [1, 2, 3] {
+            let entries = editorialEntries(count, images: count == 2)
+            let final = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: CGSize(width: 1450, height: 1200), showsImages: true)
+            XCTAssertEqual(final.count, 1)
+            XCTAssertEqual(final[0].template, .ending)
+            XCTAssertEqual(final[0].form, .single)
+            XCTAssertLessThanOrEqual(final[0].paperWidth, 720)
+            XCTAssertTrue(final[0].isEnd)
+            XCTAssertEqual(final[0].height, final[0].placements.map(\.frame.maxY).max())
+            let loading = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: CGSize(width: 1450, height: 1200), showsImages: true, hasMore: true)
+            XCTAssertFalse(loading.last!.isEnd)
+            XCTAssertNotEqual(loading.last!.template, .ending)
+        }
+    }
+    func testUnseenTailRepacksButDisplayedPrefixKeepsGeometry() {
+        let cache = MagazineEditionCache()
+        var input = MagazineEditionCache.Input(entries: editorialEntries(31), folders: [:], arrangement: .balanced,
+            capacity: 12, locale: "zh", viewport: CGSize(width: 1450, height: 900), showsImages: false, hasMore: true)
+        cache.update(input)
+        let first = cache.pages[0]
+        cache.markDisplayed(first.id)
+        let original = cache.layouts[first.id]
+        input = .init(entries: editorialEntries(45), folders: [:], arrangement: .balanced, capacity: 12, locale: "zh",
+            viewport: input.viewport, showsImages: false, hasMore: false)
+        cache.update(input)
+        XCTAssertEqual(cache.layouts[first.id]?.placements, original?.placements)
+        XCTAssertEqual(cache.pages.flatMap(\.entries).map(\.id), input.entries.map(\.id))
+        XCTAssertTrue(cache.layouts[cache.pages.last!.id]!.isEnd)
+        let rebuilt = MagazinePaginator.pages(entries: Array(input.entries.dropFirst(first.entries.count)), folders: [:],
+            arrangement: .balanced, size: input.viewport!, showsImages: false)
+        XCTAssertEqual(cache.pages.dropFirst().map { $0.entries.map(\.id) }, rebuilt.map { $0.readingOrder })
+    }
+    func testLargeTextAndLowWindowUseUnrestrictedFlow() {
+        let entry = EntryListItem(id: "long", feedID: UUID(), title: String(repeating: "标题 👩‍💻 https://example.com/long ", count: 80),
+            summaryPreview: "全文入口保持不变。", sourceTitle: String(repeating: "超长来源", count: 20))
+        for (size, scale) in [(CGSize(width: 500, height: 900), CGFloat(1)),
+                              (CGSize(width: 1450, height: 500), CGFloat(1)),
+                              (CGSize(width: 1450, height: 1000), CGFloat(1.5))] {
+            let pages = MagazinePaginator.pages(entries: [entry], folders: [:], arrangement: .balanced,
+                size: size, showsImages: false, textScale: scale)
+            XCTAssertEqual(pages[0].form, .flow)
+            XCTAssertEqual(pages[0].placements[0].style.titleLines, 10000)
+            assertEditorialGeometry(pages)
+        }
+    }
+    func testMeasurementCacheSeparatesTypographyAndReusesReadChanges() {
+        let cache = MagazineMeasurementCache()
+        var entry = editorialEntries(1)[0]
+        let style = MagazineStoryStyle()
+        let first = cache.height(entry, style: style, width: 400)
+        entry.isRead = true; entry.isStarred = true
+        XCTAssertEqual(cache.height(entry, style: style, width: 400), first)
+        XCTAssertEqual(cache.hitCount, 1)
+        var large = style; large.textScale = 1.5
+        XCTAssertGreaterThan(cache.height(entry, style: large, width: 400), first)
+        _ = cache.height(entry, style: style, width: 220)
+        XCTAssertEqual(cache.count, 3)
+    }
+    func testCancelledCompositionCannotPublishStaleScope() async {
+        let cache = MagazineEditionCache()
+        let large = MagazineEditionCache.Input(entries: editorialEntries(1000), folders: [:], arrangement: .balanced,
+            capacity: 12, locale: "zh", viewport: CGSize(width: 1450, height: 900))
+        let task = Task { await cache.updateAsync(large) }
+        await Task.yield()
+        task.cancel()
+        cache.update(.init(entries: [], folders: [:], arrangement: .balanced, capacity: 12, locale: "zh", scopeID: UUID()))
+        await task.value
+        XCTAssertTrue(cache.pages.isEmpty)
+    }
+}
+
+extension MagazinePerformanceTests {
+    func testNativeTextFitsMeasuredModuleBudget() {
+        let store = ArticleThumbnailStore()
+        let texts = ["短讯", String(repeating: "中英文混排 SwiftUI 👩‍💻 ", count: 8),
+                     "https://example.com/" + String(repeating: "verylongunbrokenurl", count: 12)]
+        for width: CGFloat in [220, 480, 656] {
+            for title in texts {
+                let entry = EntryListItem(id: title, feedID: UUID(), title: title,
+                    summaryPreview: "来源摘要必须跟随标题，保留正常行距。", sourceTitle: "来源与日期")
+                for role in [MagazineStoryStyle.Role.lead, .supporting, .list] {
+                    let style = MagazineStoryStyle(role: role, titleSize: role == .lead ? 34 : (role == .list ? 19 : 24))
+                    let host = NSHostingView(rootView: MagazineStoryView(entry: entry, style: style, width: width, selected: false, store: store))
+                    let nativeHeight = host.fittingSize.height
+                    XCTAssertLessThanOrEqual(nativeHeight, style.height(for: entry, width: width) + 1,
+                        "实际 SwiftUI 文字高度不能超出测量预算，宽度 \(width)，角色 \(role)")
+                }
+            }
+        }
+    }
+}
+
+extension MagazinePerformanceTests {
+    func testCompleteTextSpreadUsesAlignedRowsWithNaturalStoryHeights() {
+        let entries = editorialEntries(20)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1000), showsImages: false)
+        XCTAssertEqual(pages.count, 1)
+        XCTAssertEqual(pages[0].form, .spread)
+        XCTAssertEqual(pages[0].consumedCount, 20)
+        let lanes = Dictionary(grouping: pages[0].placements, by: { $0.frame.minX })
+        XCTAssertEqual(lanes.count, 4)
+        let counts = lanes.values.map(\.count)
+        XCTAssertLessThanOrEqual((counts.max() ?? 0) - (counts.min() ?? 0), 1)
+        XCTAssertTrue(pages[0].placements.allSatisfy { $0.style.role == .gallery })
+        let rows = Dictionary(grouping: pages[0].placements, by: { $0.frame.minY })
+        XCTAssertTrue(rows.values.allSatisfy { $0.count == 4 }, "纯短讯每行四篇，共用起点，不各自向下漂移")
+        for placement in pages[0].placements {
+            let entry = entries.first { $0.id == placement.entryID }!
+            XCTAssertEqual(placement.frame.height, placement.style.height(for: entry, width: placement.frame.width))
+        }
+        assertEditorialGeometry(pages)
+    }
+
+    func testImageLeadCreatesHierarchyWithAlignedSmallerImages() {
+        let entries = Array(editorialEntries(37, images: true).dropFirst())
+        let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1200), showsImages: true, hasMore: true)[0]
+        let lead = page.placements[0]
+        let supporting = page.placements.filter { $0.style.role == .supporting }
+        let panels = page.placements.filter { $0.style.role == .gallery }
+        XCTAssertEqual(lead.style.role, .lead)
+        XCTAssertGreaterThan(lead.style.imageHeight, 180)
+        XCTAssertFalse(supporting.isEmpty)
+        XCTAssertTrue(supporting.allSatisfy { $0.frame.minX > lead.frame.maxX })
+        XCTAssertFalse(panels.isEmpty)
+        XCTAssertGreaterThan(Set(page.placements.map { $0.frame.width }).count, 1)
+        XCTAssertTrue(panels.allSatisfy { $0.style.imageHeight < lead.style.imageHeight }, "同类短图文保持一致尺度，主图仍最突出")
+        XCTAssertEqual(page.readingOrder, Array(entries.prefix(page.consumedCount)).map(\.id))
+        assertEditorialGeometry([page])
+    }
+}
+
+extension MagazinePerformanceTests {
+    func testVariedBriefsPreferFourColumnsOverTwoFullWidthLists() {
+        let titles = ["设计一份可以自然延伸的阅读版面", "SwiftUI 图文混排：保持文章顺序，给文字合适的空间",
+                      "没有配图的推文也能紧凑排列", "Short notes deserve a natural reading rhythm"]
+        let entries = (0..<40).map { index in
+            EntryListItem(id: "varied-\(index)", feedID: UUID(), title: titles[index % titles.count], sourceTitle: "纯文字短讯")
+        }
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1100), showsImages: false, hasMore: true)
+        let first = pages[0]
+        XCTAssertEqual(Set(first.placements.map { $0.frame.minX }).count, 4)
+        XCTAssertTrue(first.placements.allSatisfy { $0.frame.width < first.contentWidth / 3 })
+        XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
+        assertEditorialGeometry(pages)
+    }
+
+    func testAlternatingLongAndShortStoriesKeepAlignedGroupsAndVisibleImages() {
+        let feed = UUID()
+        let entries = (0..<40).map { index in
+            EntryListItem(id: "rhythm-\(index)", feedID: feed,
+                title: index.isMultiple(of: 5) ? "从文字到图像：观察日常生活中的设计细节" : "第 \(index) 条编辑短讯",
+                summaryPreview: index.isMultiple(of: 5) ? String(repeating: "图片与正文保持关联，以适当行距呈现真实内容。", count: 5) : "简短的内容摘要。",
+                sourceTitle: "设计观察", previewImageURL: index.isMultiple(of: 5) ? URL(string: "https://example.com/\(index).jpg") : nil)
+        }
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1100), showsImages: true, hasMore: true)
+        XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
+        assertEditorialGeometry(pages)
+        for page in pages {
+            let middle = page.contentWidth / 2
+            for placement in page.placements where placement.style.role == .gallery && placement.style.imageHeight > 0 {
+                let isLeft = placement.frame.midX < middle
+                let opposite = page.placements.filter { other in
+                    let otherIsLeft = other.frame.midX < middle
+                    let sameTop = abs(other.frame.minY - placement.frame.minY) < 1
+                    return otherIsLeft != isLeft && sameTop
+                }
+                XCTAssertFalse(opposite.isEmpty, "图片所在分区应与对面的短讯组共享起点")
+            }
+        }
+    }
+
+    func testEditorialGroupsDoNotCollapseTitlesToFitOneMoreStory() {
+        let entries = editorialEntries(36, images: true)
+        for height: CGFloat in [850, 1000, 1200] {
+            let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: CGSize(width: 1450, height: height), showsImages: true, hasMore: true)
+            for placement in pages.flatMap(\.placements) where placement.style.role == .gallery {
+                XCTAssertGreaterThanOrEqual(placement.style.titleLines, 3)
+                XCTAssertEqual(placement.style.contentInset, 0, "所有稿件共用栏边，不叠加卡片内边距")
+            }
+            assertEditorialGeometry(pages)
+        }
+    }
+}
+
+
+extension MagazinePerformanceTests {
+    func testFeatureSpreadKeepsMainStoryEntirelyOnLeftLeafAndVariesStably() {
+        let entries = (0..<35).map { index in
+            EntryListItem(id: "feature-\(index)", feedID: UUID(), title: "城市与建筑：第 \(index) 份深度观察",
+                summaryPreview: String(repeating: "图像、文字和生活空间共同构成这一期的专题。", count: 12),
+                sourceTitle: "专题", previewImageURL: URL(string: "https://example.com/\(index).jpg"))
+        }
+        let size = CGSize(width: 1450, height: 1200)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: size, showsImages: true, hasMore: true)
+        XCTAssertEqual(pages.first?.template, .feature)
+        XCTAssertEqual(pages, MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: size, showsImages: true, hasMore: true))
+        for (index, page) in pages.enumerated() where page.template == .feature {
+            let lead = page.placements[0]
+            XCTAssertEqual(lead.frame.height, page.height, accuracy: 1)
+            XCTAssertGreaterThan(lead.style.imageHeight, page.height * 0.5)
+            XCTAssertLessThan(lead.frame.maxX, page.contentWidth / 2)
+            XCTAssertTrue(page.placements.dropFirst().allSatisfy { $0.frame.minX > page.contentWidth / 2 })
+            if index > 0 { XCTAssertNotEqual(pages[index - 1].template, .feature) }
+        }
+        XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
+        assertEditorialGeometry(pages)
+    }
+
+    func testFeatureRequiresImageAndEnoughCompanionContent() {
+        let first = EntryListItem(id: "starred-main", feedID: UUID(), title: "一篇值得仔细阅读的专题", sourceTitle: "专题",
+            isStarred: true, previewImageURL: URL(string: "https://example.com/main.jpg"))
+        let entries = [first] + editorialEntries(30, images: true)
+        let size = CGSize(width: 1450, height: 1100)
+        XCTAssertEqual(MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: size, showsImages: true, hasMore: true)[0].template, .feature)
+        XCTAssertFalse(MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: size, showsImages: false).contains { $0.template == .feature })
+        XCTAssertFalse(MagazinePaginator.pages(entries: Array(entries.prefix(3)), folders: [:], arrangement: .balanced,
+            size: size, showsImages: true, hasMore: true).contains { $0.template == .feature })
+    }
+
+    func testImageFramesUseUniformGalleryRatioAndTextMatchedSideHeight() {
+        let entries = Array(editorialEntries(40, images: true).dropFirst())
+        let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1200), showsImages: true, hasMore: true)[0]
+        for p in page.placements where p.style.imageHeight > 0 {
+            if p.style.imageBesideText {
+                let entry = entries.first { $0.id == p.entryID }!
+                XCTAssertEqual(p.style.imageHeight, ceil(p.style.textHeight(for: entry, width: p.frame.width)), accuracy: 1)
+                XCTAssertLessThanOrEqual(p.style.imageWidth(in: p.frame.width), p.frame.width * 0.32)
+                if p.style.role == .supporting { XCTAssertGreaterThan(p.style.imageWidth(in: p.frame.width), 140) }
+            } else if p.style.role == .gallery {
+                XCTAssertEqual(p.style.imageWidth(in: p.frame.width) / p.style.imageHeight, 1.85, accuracy: 0.01)
+            }
+        }
+    }
+
+    func testSideImageAndSelectionKeepNativeContentWithinMeasuredBudget() {
+        let entry = EntryListItem(id: "native-side", feedID: UUID(), title: "长标题与旁图共同参与宽度测量，不侵入旁边的图像区域",
+            summaryPreview: "图像和文字共享自然高度，悬停与选中底色不挤动正文。", sourceTitle: "测试")
+        let style = MagazineStoryStyle(role: .supporting, titleSize: 19, titleLines: 3,
+            imageHeight: 112, imageBesideText: true)
+        let store = ArticleThumbnailStore()
+        let idle = NSHostingView(rootView: MagazineStoryView(entry: entry, style: style, width: 588, selected: false, store: store))
+        let selected = NSHostingView(rootView: MagazineStoryView(entry: entry, style: style, width: 588, selected: true, store: store))
+        XCTAssertEqual(idle.fittingSize, selected.fittingSize)
+        XCTAssertLessThanOrEqual(idle.fittingSize.height, style.height(for: entry, width: 588))
+    }
+}
+
+
+extension MagazinePerformanceTests {
+    func testLongSideStoryImageGrowsWithTextWithoutTakingMoreWidth() {
+        let short = EntryListItem(id: "short-side", feedID: UUID(), title: "短标题", sourceTitle: "来源")
+        let long = EntryListItem(id: "long-side", feedID: UUID(), title: String(repeating: "you see these numbers. we are in the numbers business. ", count: 4),
+            summaryPreview: "图片高度必须匹配正文，不能在长段落旁边只留下一张矮图。", sourceTitle: "来源")
+        let base = MagazineStoryStyle(role: .supporting, titleSize: 19, titleLines: 3, imageHeight: 112, imageBesideText: true)
+        let a = base.matchingSideImage(to: short, width: 588)
+        let b = base.matchingSideImage(to: long, width: 588)
+        XCTAssertEqual(a.imageWidth(in: 588), b.imageWidth(in: 588))
+        XCTAssertGreaterThan(b.imageHeight, a.imageHeight + 40)
+        XCTAssertEqual(b.imageHeight, ceil(b.textHeight(for: long, width: 588)))
+        XCTAssertEqual(b, b.matchingSideImage(to: long, width: 588), "重复排版不改变宽高")
     }
 }

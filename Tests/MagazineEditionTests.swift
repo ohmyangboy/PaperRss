@@ -29,12 +29,12 @@ final class MagazineEditionTests: XCTestCase {
         let pages = MagazineEdition.pages(entries: original, arrangement: .chronological)
         XCTAssertEqual(pages.flatMap(\.entries).map(\.id), original.map(\.id))
     }
-    func testBalancedClustersWithinStablePageBoundariesOnly() {
+    func testBalancedKeepsInputOrderWithoutSourceClustering() {
         let original = entries(18)
         let before = MagazineEdition.pages(entries: Array(original.prefix(12)), arrangement: .balanced)
         let after = MagazineEdition.pages(entries: original, arrangement: .balanced)
         XCTAssertEqual(before, Array(after.prefix(2)))
-        XCTAssertEqual(before[0].entries.map(\.id), ["article-0", "article-2", "article-4", "article-1", "article-3", "article-5"])
+        XCTAssertEqual(before[0].entries.map(\.id), Array(original.prefix(6)).map(\.id))
     }
     func testSourceAndFolderGroupingUsesAccountIdentityNotDisplayNames() {
         let data = [
@@ -48,7 +48,8 @@ final class MagazineEditionTests: XCTestCase {
     }
     func testImageOffAndTextOnlyNeverReserveAFeatureSlot() {
         let page = MagazineEdition.pages(entries: entries(6), arrangement: .balanced)[0]
-        XCTAssertEqual(page.featuredID(showsImages: true), "article-1")
+        XCTAssertNil(page.featuredID(showsImages: true))
+        XCTAssertEqual(MagazinePage(id: "image", title: "", entries: Array(page.entries.dropFirst())).featuredID(showsImages: true), "article-1")
         XCTAssertNil(page.featuredID(showsImages: false))
         let text = MagazineEdition.pages(entries: entries(6).filter { $0.previewImageURL == nil }, arrangement: .balanced)[0]
         XCTAssertNil(text.featuredID(showsImages: true))

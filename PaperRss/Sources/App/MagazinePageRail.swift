@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
@@ -8,6 +9,103 @@ private struct MagazineRailAnchors: PreferenceKey {
     static let defaultValue: [String: Anchor<CGRect>] = [:]
     static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// 将整条 TOC 轨道映射到已经加载的页面。它只负责几何，不持有浏览器状态，
+/// 这样拖动的边界、最近页和当前页面对可以在无窗口测试中独立验证。
+struct MagazineRailScrub {
+    struct Pair: Equatable, Sendable {
+        let sourceIndex: Int
+        let targetIndex: Int
+        let progress: Double
+        let forward: Bool
+    }
+
+    static func normalizedPosition(locationX: CGFloat, width: CGFloat) -> Double {
+        guard width > 0, locationX.isFinite else { return 0 }
+        return min(1, max(0, Double(locationX / width)))
+    }
+
+    static func tickIndices(count: Int, width: CGFloat, currentIndex: Int? = nil) -> [Int] {
+        guard count > 0 else { return [] }
+        let slots = min(count, max(2, Int(max(0, width) / 7)))
+        guard slots > 1 else { return [0] }
+        var indices = (0..<slots).map { Int((Double($0) * Double(count - 1) / Double(slots - 1)).rounded()) }
+        if let currentIndex {
+            let current = min(count - 1, max(0, currentIndex))
+            var slot = Int((Double(current) * Double(slots - 1) / Double(count - 1)).rounded())
+            if slots > 2, current > 0, current < count - 1 { slot = min(slots - 2, max(1, slot)) }
+            indices[slot] = current
+        }
+        return indices
+    }
+
+    static func pagePosition(normalized: Double, count: Int) -> Double {
+        guard count > 1 else { return 0 }
+        return min(Double(count - 1), max(0, normalized.isFinite ? normalized : 0) * Double(count - 1))
+    }
+
+    static func nearestIndex(position: Double, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        let clamped = min(Double(count - 1), max(0, position.isFinite ? position : 0))
+        return min(count - 1, max(0, Int(clamped.rounded())))
+    }
+
+    static func nearestIndex(normalized: Double, count: Int) -> Int {
+        nearestIndex(position: pagePosition(normalized: normalized, count: count), count: count)
+    }
+
+    /// 返回当前拖动位置对应的一对页面。正向拖动使用 [floor, ceil]，
+    /// 反向拖动使用同一页对的反向面，因此在相邻页面之间可以立即倒放。
+    static func pair(position: Double, count: Int, forward: Bool) -> Pair? {
+        guard count > 1 else { return nil }
+        let p = min(Double(count - 1), max(0, position.isFinite ? position : 0))
+        if forward {
+            let source = min(count - 2, max(0, Int(floor(p))))
+            return Pair(sourceIndex: source, targetIndex: source + 1,
+                        progress: min(1, max(0, p - Double(source))), forward: true)
+        }
+        // 在整数页位置从当前页开始倒放；只有落在两页之间时才取上界。
+        // 这样从第 N 页反向拖动的首帧不会先创建 N+1 -> N 的无效页面对。
+        let source = min(count - 1, max(1, Int(ceil(p))))
+        return Pair(sourceIndex: source, targetIndex: source - 1,
+                    progress: min(1, max(0, Double(source) - p)), forward: false)
+    }
+
+    static func progress(position: Double, in pair: Pair) -> Double? {
+        let low = Double(min(pair.sourceIndex, pair.targetIndex))
+        let high = Double(max(pair.sourceIndex, pair.targetIndex))
+        let p = position.isFinite ? position : low
+        guard p >= low, p <= high else { return nil }
+        let value = pair.forward ? p - Double(pair.sourceIndex) : Double(pair.sourceIndex) - p
+        return min(1, max(0, value))
+    }
+}
+
+/// 鼠标事件只覆盖最新坐标；每个显示帧最多发布一次浏览器状态。
+@MainActor
+final class MagazineRailFrameInput: NSObject, ObservableObject {
+    private var clock: CADisplayLink?
+    private var pending: (Double, (Double) -> Void)?
+    func submit(_ position: Double, action: @escaping (Double) -> Void) {
+        pending = (position, action)
+        guard clock == nil else { return }
+        guard let screen = NSScreen.main else { flush(); return }
+        let clock = screen.displayLink(target: self, selector: #selector(tick(_:)))
+        clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        self.clock = clock
+        clock.add(to: .main, forMode: .common)
+    }
+    @objc private func tick(_ clock: CADisplayLink) { flush() }
+    func flush() {
+        let latest = pending
+        cancel()
+        if let latest { latest.1(latest.0) }
+    }
+    func cancel() {
+        clock?.invalidate(); clock = nil
+        pending = nil
     }
 }
 
@@ -20,6 +118,10 @@ struct MagazinePageRail: View {
     let availableWidth: CGFloat
     let availableHeight: CGFloat
     let onSelect: (Int) -> Void
+    let onScrubStart: () -> Void
+    let onScrubChanged: (Double) -> Void
+    let onScrubEnded: () -> Void
+    let onScrubCancelled: () -> Void
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
@@ -27,7 +129,34 @@ struct MagazinePageRail: View {
     @State private var hoverPosition: CGFloat?
     @State private var hoveredID: String?
     @State private var dismissTask: Task<Void, Never>?
+    @State private var scrubbing = false
+    @StateObject private var scrubInput = MagazineRailFrameInput()
+    @GestureState private var dragIsActive = false
     @FocusState private var focusedID: String?
+
+    init(
+        pages: [MagazinePage],
+        currentIndex: Int,
+        isTurning: Bool,
+        availableWidth: CGFloat,
+        availableHeight: CGFloat,
+        onSelect: @escaping (Int) -> Void,
+        onScrubStart: @escaping () -> Void = {},
+        onScrubChanged: @escaping (Double) -> Void = { _ in },
+        onScrubEnded: @escaping () -> Void = {},
+        onScrubCancelled: @escaping () -> Void = {}
+    ) {
+        self.pages = pages
+        self.currentIndex = currentIndex
+        self.isTurning = isTurning
+        self.availableWidth = availableWidth
+        self.availableHeight = availableHeight
+        self.onSelect = onSelect
+        self.onScrubStart = onScrubStart
+        self.onScrubChanged = onScrubChanged
+        self.onScrubEnded = onScrubEnded
+        self.onScrubCancelled = onScrubCancelled
+    }
 
     static let tickWidth: CGFloat = 3
     static let tickHeight: CGFloat = 8
@@ -35,6 +164,10 @@ struct MagazinePageRail: View {
         min(280, max(14, availableWidth * 0.45), max(14, CGFloat(pages.count) * 14))
     }
     private var previewMaxHeight: CGFloat { min(400, max(96, availableHeight - 100)) }
+    private var tickIndices: [Int] {
+        MagazineRailScrub.tickIndices(count: pages.count, width: railWidth, currentIndex: currentIndex)
+    }
+    private var tickSlotWidth: CGFloat { railWidth / CGFloat(max(1, tickIndices.count)) }
 
     // 连续距离让相邻刻度依次抬起；只缩放刻度，不改变命中区域或布局。
     static func waveHeight(distance: CGFloat) -> CGFloat {
@@ -60,18 +193,10 @@ struct MagazinePageRail: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    pageTicks(at: nil)
-                }
-                .scrollIndicators(.never)
-                .frame(width: railWidth, height: 28)
-                .onChange(of: currentIndex, initial: true) { _, index in
-                    if pages.indices.contains(index) { proxy.scrollTo(pages[index].id, anchor: .center) }
-                }
-            }
-        }
+        HStack(spacing: 0) { pageTicks(at: nil) }
+            .frame(width: railWidth, height: 28)
+            .contentShape(Rectangle())
+            .highPriorityGesture(scrubGesture(width: railWidth))
         .buttonStyle(.plain)
         .foregroundStyle(Color(paperHex: palette.inkHex))
         .padding(.horizontal, 10).padding(.vertical, 4)
@@ -79,7 +204,7 @@ struct MagazinePageRail: View {
         .frame(maxWidth: .infinity)
         .overlayPreferenceValue(MagazineRailAnchors.self) { anchors in
             GeometryReader { geometry in
-                if let id = hoveredID ?? focusedID, let anchor = anchors[id],
+                if !scrubbing, let id = hoveredID ?? focusedID, let anchor = anchors[id],
                    let page = pages.first(where: { $0.id == id }) {
                     let width = min(340, max(1, geometry.size.width - 32))
                     let center = min(geometry.size.width - width / 2 - 8,
@@ -93,26 +218,50 @@ struct MagazinePageRail: View {
         .onChange(of: focusedID) { _, id in dismissTask?.cancel(); hoveredID = id }
         .onChange(of: currentIndex) { _, _ in dismissTask?.cancel(); hoveredID = nil; focusedID = nil }
         .onChange(of: isTurning) { _, turning in if turning { hoveredID = nil; focusedID = nil } }
-        .onDisappear { dismissTask?.cancel() }
+        .onDisappear {
+            dismissTask?.cancel()
+            scrubInput.cancel()
+            if scrubbing { scrubbing = false; onScrubCancelled() }
+        }
+        .onChange(of: dragIsActive) { _, active in
+            if !active, scrubbing {
+                scrubInput.cancel()
+                scrubbing = false
+                onScrubCancelled()
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if scrubbing {
+                Text("\(currentIndex + 1) / \(max(1, pages.count))")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color(paperHex: palette.inkHex))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(.regularMaterial, in: Capsule())
+                    .offset(y: -25)
+                    .allowsHitTesting(false)
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("magazine.pageRail")
     }
 
     @ViewBuilder
     private func pageTicks(at date: Date?) -> some View {
+        let indices = tickIndices
+        let selected = indices.min { abs($0 - currentIndex) < abs($1 - currentIndex) }
         LazyHStack(spacing: 0) {
-            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+            ForEach(Array(indices.enumerated()), id: \.element) { slot, index in
+                let page = pages[index]
                 Button { select(index) } label: {
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color(paperHex: palette.inkHex).opacity(index == currentIndex ? 0.88 : 0.22))
+                        .fill(Color(paperHex: palette.inkHex).opacity(index == selected ? 0.88 : 0.22))
                         .frame(width: Self.tickWidth, height: Self.tickHeight)
-                        .scaleEffect(x: 1, y: tickHeight(index: index, date: date) / Self.tickHeight)
-                        .frame(width: 14, height: 28)
+                        .scaleEffect(x: 1, y: tickHeight(index: index, slot: slot, selected: index == selected, date: date) / Self.tickHeight)
+                        .frame(width: tickSlotWidth, height: 28)
                         .contentShape(Rectangle())
                 }
                 .id(page.id)
                 .anchorPreference(key: MagazineRailAnchors.self, value: .bounds) { [page.id: $0] }
-                .disabled(isTurning)
                 .focused($focusedID, equals: page.id)
                 .onHover { inside in hover(inside, id: page.id) }
                 .accessibilityLabel("\(I18N.localized("页面")) \(index + 1) / \(pages.count)")
@@ -127,11 +276,11 @@ struct MagazinePageRail: View {
             case .ended: hoverPosition = nil
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoverPosition)
+        .animation(reduceMotion || scrubbing ? nil : .easeOut(duration: 0.12), value: hoverPosition)
     }
 
-    private func tickHeight(index: Int, date: Date?) -> CGFloat {
-        var height = index == currentIndex ? 12 : Self.tickHeight
+    private func tickHeight(index: Int, slot: Int, selected: Bool, date: Date?) -> CGFloat {
+        var height = selected ? 12 : Self.tickHeight
         if audioWaveEnabled {
             height = max(height, Self.audioWaveHeight(
                 index: index,
@@ -143,18 +292,17 @@ struct MagazinePageRail: View {
         }
         if let hoverPosition {
             height = max(height, reduceMotion ? Self.tickHeight : Self.waveHeight(
-                distance: (hoverPosition - (CGFloat(index) * 14 + 7)) / 14
+                distance: (hoverPosition - (CGFloat(slot) * tickSlotWidth + tickSlotWidth / 2)) / max(1, tickSlotWidth)
             ))
         }
         return height
     }
 
     private func preview(_ page: MagazinePage, width: CGFloat, height: CGFloat) -> some View {
-        // 显式高度独立于导航条，长标题可完整换行，超出可用空间时滚动。
-        ScrollView {
+        // 显式高度独立于导航条，长标题可完整换行，超出可用空间时滚动并展示浮动细条。
+        PaperFloatingScrollView {
             previewTitles(page).padding(.vertical, 12).padding(.horizontal, 14)
         }
-        .scrollIndicators(.automatic)
         .frame(width: width, height: height)
         .background {
             RoundedRectangle(cornerRadius: 12)
@@ -193,10 +341,35 @@ struct MagazinePageRail: View {
 
     private func hover(_ inside: Bool, id: String) {
         dismissTask?.cancel()
+        guard !scrubbing else { return }
         if inside { hoveredID = id; return }
         dismissTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(140)) } catch { return }
             if hoveredID == id { hoveredID = nil }
         }
+    }
+
+    private func scrubGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+            .updating($dragIsActive) { _, active, _ in active = true }
+            .onChanged { value in
+                if !scrubbing {
+                    scrubbing = true
+                    dismissTask?.cancel()
+                    hoveredID = nil
+                    focusedID = nil
+                    onScrubStart()
+                }
+                scrubInput.submit(MagazineRailScrub.normalizedPosition(locationX: value.location.x, width: width),
+                    action: onScrubChanged)
+            }
+            .onEnded { value in
+                guard scrubbing else { return }
+                scrubInput.submit(MagazineRailScrub.normalizedPosition(locationX: value.location.x, width: width),
+                    action: onScrubChanged)
+                scrubInput.flush()
+                scrubbing = false
+                onScrubEnded()
+            }
     }
 }

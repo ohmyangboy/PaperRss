@@ -31,9 +31,15 @@ struct MagazinePageTurnRequest: Equatable, Sendable {
     let id = UUID()
     let targetPageID: String
     let forward: Bool
+    /// 明确页面对的源身份，使 TOC 反向跨过边界时可以复用上一对的源宿主。
+    var sourcePageID: String? = nil
+    var scrubSessionID: UUID? = nil
+    var settleFrom: Double? = nil
     var progress: Double? = nil
     var commit = true
     var releaseVelocity: Double? = nil
+    /// TOC 吸附使用短收尾，普通点击/手势仍沿用页面预设时长。
+    var settleDuration: Double? = nil
     let variation = MagazineTurnVariation.random()
 }
 
@@ -42,8 +48,8 @@ struct MagazineTurnVariation: Equatable, Sendable {
     let corner: Float
     let duration: Double
     static let presets: [Self] = [
-        .init(corner: -0.8, duration: 0.28), .init(corner: 0.65, duration: 0.30),
-        .init(corner: -0.35, duration: 0.26), .init(corner: 1, duration: 0.29)
+        .init(corner: -0.8, duration: 0.34), .init(corner: 0.65, duration: 0.36),
+        .init(corner: -0.35, duration: 0.32), .init(corner: 1, duration: 0.35)
     ]
     static func random() -> Self { presets.randomElement()! }
 }
@@ -70,17 +76,17 @@ struct MagazineTurnGeometry: Sendable {
             width: left ? mid : image.width - mid, height: image.height))
     }
     static func eased(_ value: Double) -> Double {
-        // 0.23, 1.0, 0.32, 1.0 贝塞尔：先反解时间，再求进度。
+        // 0.28, 0.12, 0.22, 1.0 贝塞尔：柔和缓入，自然呼吸感展开与平稳合页。
         let x = min(1, max(0, value))
         if x == 0 || x == 1 { return x }
         var low = 0.0, high = 1.0
         for _ in 0..<14 {
             let t = (low + high) / 2
-            let bx = 3 * (1-t) * (1-t) * t * 0.23 + 3 * (1-t) * t * t * 0.32 + t*t*t
+            let bx = 3 * (1-t) * (1-t) * t * 0.28 + 3 * (1-t) * t * t * 0.22 + t*t*t
             if bx < x { low = t } else { high = t }
         }
         let t = (low + high) / 2
-        return 3 * (1-t) * (1-t) * t + 3 * (1-t) * t*t + t*t*t
+        return 3 * (1-t) * (1-t) * t * 0.12 + 3 * (1-t) * t * t * 1.00 + t*t*t
     }
 }
 
@@ -101,23 +107,39 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     let view: MTKView
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private let before: MTLTexture
-    private let after: MTLTexture
-    private let forward: Bool
+    private var before: MTLTexture
+    private var after: MTLTexture
+    private var forward: Bool
     private let insetFraction: Float
-    private let corner: Float
+    private var corner: Float
     private(set) var frameCount = 0
     private var requestedProgress = 0.0
     private var drewFrame = false
 
-    init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
-        guard let device = Self.device, let pipeline = Self.pipeline,
-              let queue = device.makeCommandQueue() else { return nil }
+    static func texture(_ image: CGImage) -> MTLTexture? {
+        guard let device else { return nil }
         let loader = MTKTextureLoader(device: device)
         let options: [MTKTextureLoader.Option: Any] = [.SRGB: false, .origin: MTKTextureLoader.Origin.topLeft]
-        guard let old = try? loader.newTexture(cgImage: before, options: options),
-              let new = try? loader.newTexture(cgImage: after, options: options) else { return nil }
-        self.before = old; self.after = new; self.queue = queue; self.pipeline = pipeline; self.forward = forward
+        if let texture = try? loader.newTexture(cgImage: image, options: options) { return texture }
+        // ImageRenderer 会将纯文字页面压成灰度图，MTKTextureLoader 不支持
+        // 部分灰度/浮点格式。统一成 RGBA，避免文字页静默退化为淡入淡出。
+        guard let context = CGContext(data: nil, width: image.width, height: image.height,
+            bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let rgba = context.makeImage() else { return nil }
+        return try? loader.newTexture(cgImage: rgba, options: options)
+    }
+
+    convenience init?(before: CGImage, after: CGImage, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
+        guard let old = Self.texture(before), let new = Self.texture(after) else { return nil }
+        self.init(before: old, after: new, size: size, forward: forward, verticalInset: verticalInset, corner: corner)
+    }
+
+    init?(before: MTLTexture, after: MTLTexture, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0) {
+        guard let device = Self.device, let pipeline = Self.pipeline,
+              let queue = device.makeCommandQueue() else { return nil }
+        self.before = before; self.after = after; self.queue = queue; self.pipeline = pipeline; self.forward = forward
         self.corner = min(1, max(-1, corner))
         self.insetFraction = Float(min(0.4, max(0, verticalInset / max(1, size.height))))
         view = MTKView(frame: CGRect(origin: .zero, size: size), device: device)
@@ -129,6 +151,11 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         view.drawableSize = CGSize(width: before.width, height: before.height)
         super.init()
         view.delegate = self
+    }
+
+    func setPages(before: MTLTexture, after: MTLTexture, forward: Bool, corner: Float) {
+        self.before = before; self.after = after; self.forward = forward
+        self.corner = min(1, max(-1, corner))
     }
 
     @discardableResult func draw(progress: Double) -> Bool {
@@ -199,7 +226,7 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         float projectedEdge = direction * c / (1.0 - depth);
         bool onLeaf = abs(projectedEdge) > 0.0001
             && x * projectedEdge >= 0.0 && abs(x) <= abs(projectedEdge);
-        float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 38.0) * sine * 0.12 : 0.0;
+        float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 32.0) * sine * 0.05 : 0.0;
         if (!onLeaf) return float4(base.rgb * (1.0 - hingeShadow), 1);
         // t=0 为中轴，t=1 为外边缘；正面采旧页，背面采目标页另一半。
         float localX = x * direction;
@@ -214,8 +241,8 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         float edge = pow(t, 1.35), motion = sine * sine;
         // 文字保持清晰，立体感由真实投影和随角度变化的光照承担。
         float3 color = front ? old.sample(s, source).rgb : next.sample(s, source).rgb;
-        float faceShade = 1.0 - motion * (0.06 + 0.12 * edge);
-        float outerHighlight = smoothstep(0.94, 1.0, t) * sine * 0.12;
+        float faceShade = 1.0 - motion * (0.025 + 0.045 * edge);
+        float outerHighlight = smoothstep(0.90, 1.0, t) * sine * 0.035;
         color = color * faceShade + outerHighlight;
         return float4(color, 1);
     }
@@ -232,13 +259,14 @@ struct MagazinePageTurnView<Content: View>: NSViewRepresentable {
     var playsSound = false
     var fades = false
     let content: Content
+    var source: Content? = nil
     let onComplete: @MainActor (UUID, Bool) -> Void
     func makeNSView(context: Context) -> MagazineTurnSurface<Content> {
         MagazineTurnSurface(content: content, pageID: pageID)
     }
     func updateNSView(_ view: MagazineTurnSurface<Content>, context: Context) {
         view.update(content: content, pageID: pageID, request: request,
-            reduceMotion: reduceMotion, isActive: isActive, background: background, verticalInset: verticalInset, playsSound: playsSound, fades: fades, onComplete: onComplete)
+            reduceMotion: reduceMotion, isActive: isActive, background: background, verticalInset: verticalInset, playsSound: playsSound, fades: fades, source: source, onComplete: onComplete)
     }
     static func dismantleNSView(_ view: MagazineTurnSurface<Content>, coordinator: ()) {
         view.cancelTurn(notify: false)
@@ -281,10 +309,34 @@ final class MagazineTurnSurface<Content: View>: NSView {
     private var progress = 0.0
     private var reduceMotion = false
     private var playsSound = false
+    private struct ScrubUpdate {
+        let request: MagazinePageTurnRequest
+        let content: Content
+        let source: Content
+        let verticalInset: CGFloat
+        let fades: Bool
+    }
+    private struct ScrubPage {
+        let id: String
+        let content: Content
+        let image: CGImage
+        let texture: MTLTexture?
+    }
+    private var scrubSessionID: UUID?
+    private var pendingScrub: ScrubUpdate?
+    private var scrubPages: [ScrubPage] = []
+    private var scrubTarget: Content?
+    private var scrubFront: CALayer?
+    private var pendingProgress: Double?
+    private(set) var rendererCount = 0
+    private(set) var preparedSourcePageID: String?
+    private(set) var preparedTargetPageID: String?
+    var cachedScrubPageCount: Int { scrubPages.count }
+    var displayedProgress: Double { progress }
     private(set) var phase: Phase?
     private(set) var snapshotCount = 0
     private(set) var renderedFrames = 0
-    var isAnimating: Bool { currentRequest != nil }
+    var isAnimating: Bool { currentRequest != nil || pendingScrub != nil }
 
     init(content: Content, pageID: String) {
         self.host = NSHostingView(rootView: content)
@@ -309,11 +361,24 @@ final class MagazineTurnSurface<Content: View>: NSView {
     }
     func update(content: Content, pageID: String, request: MagazinePageTurnRequest?,
                 reduceMotion: Bool, isActive: Bool, background: NSColor, verticalInset: CGFloat = 0, playsSound: Bool = false, fades: Bool = false,
-                onComplete: @escaping @MainActor (UUID, Bool) -> Void) {
+                source: Content? = nil, onComplete: @escaping @MainActor (UUID, Bool) -> Void) {
         completion = onComplete
         self.reduceMotion = reduceMotion
         self.playsSound = playsSound
         layer?.backgroundColor = background.cgColor
+        if isActive, !reduceMotion, window != nil, let request,
+           let sessionID = request.scrubSessionID, let source {
+            if scrubSessionID != sessionID {
+                cancelTurn(notify: false)
+                scrubSessionID = sessionID
+            }
+            // 输入只替换一个槽位。截图、上传和绘制都由显示时钟消费最新请求。
+            pendingScrub = ScrubUpdate(request: request, content: content, source: source,
+                verticalInset: verticalInset, fades: fades)
+            startClock()
+            return
+        }
+        if scrubSessionID != nil { cancelTurn(notify: false) }
         if pageID == self.pageID {
             if currentRequest == nil {
                 host.rootView = content
@@ -326,23 +391,41 @@ final class MagazineTurnSurface<Content: View>: NSView {
             if phase != .preparing { advance(request) }
             return
         }
-        cancelTurn()
+        // TOC 快速拖动会在相邻页面边界切换页面对。通常宿主已经是上一对的
+        // 目标页；反向越过边界时则优先恢复请求明确的源宿主，避免把后一页
+        // 错当成新折页的源页。两种路径都抑制旧请求回调。
+        let previousSourceContent = sourceContent
+        let previousSourcePageID = sourcePageID
+        let reusePreviousSource = currentRequest != nil
+            && request?.sourcePageID != nil
+            && request?.sourcePageID == previousSourcePageID
+            && previousSourceContent != nil
+        if currentRequest != nil {
+            sourceContent = nil
+            sourcePageID = nil
+            cancelTurn(notify: false)
+            if reusePreviousSource, let previousSourceContent, let previousSourcePageID {
+                host.rootView = previousSourceContent
+                self.pageID = previousSourcePageID
+                host.layoutSubtreeIfNeeded()
+            }
+        } else {
+            cancelTurn()
+        }
         let shouldTurn = isActive && request?.targetPageID == pageID && window != nil
         let before = shouldTurn ? snapshot(background: background) : nil
         if shouldTurn, before != nil {
             sourceContent = host.rootView
             sourcePageID = self.pageID
         }
-        self.pageID = pageID
-        host.rootView = content
         guard let request, shouldTurn, let before else {
+            self.pageID = pageID
+            host.rootView = content
             if let request { completeLater(request.id, committed: true) }
             return
         }
-        currentRequest = request
-        phase = .preparing
-        progress = 0
         let size = bounds.size
+        // 1. 立即挂上 cover 遮盖旧页面，彻底屏蔽底层新页面排版或重绘引起的瞬间穿透闪烁
         let cover = MagazineSnapshotCover(frame: bounds)
         cover.wantsLayer = true
         cover.layer?.contents = before
@@ -350,34 +433,39 @@ final class MagazineTurnSurface<Content: View>: NSView {
         cover.layer?.backgroundColor = background.cgColor
         addSubview(cover)
         self.cover = cover
-        preparation = Task { @MainActor [weak self] in
-            await Task.yield()
-            guard let self, !Task.isCancelled, self.currentRequest?.id == request.id else { return }
-            self.host.layoutSubtreeIfNeeded()
-            self.host.displayIfNeeded()
-            guard self.bounds.size == size, let after = self.snapshot(background: background) else {
-                self.finish(committed: self.currentRequest?.commit ?? true); return
-            }
-            if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner) {
-                self.metal = renderer
-                self.cover?.addSubview(renderer.view)
-                if !renderer.draw(progress: 0) { renderer.view.removeFromSuperview(); self.metal = nil }
-            }
-            self.phase = .interacting
-            if let latest = self.currentRequest { self.advance(latest) }
+
+        // 2. 在 cover 的完全遮挡下更新 host 内容并抓取目标页快照
+        self.pageID = pageID
+        host.rootView = content
+        self.host.layoutSubtreeIfNeeded()
+        guard self.bounds.size == size, let after = self.snapshot(background: background) else {
+            self.finish(committed: request.commit); return
         }
+
+        // 3. 构建并挂载 Metal 渲染器，首帧准备就绪后启动翻页
+        currentRequest = request
+        phase = .preparing
+        progress = 0
+        if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner) {
+            self.metal = renderer
+            self.cover?.addSubview(renderer.view)
+            if !renderer.draw(progress: 0) { renderer.view.removeFromSuperview(); self.metal = nil }
+        }
+        self.phase = .interacting
+        if let latest = self.currentRequest { self.advance(latest) }
     }
     private func advance(_ request: MagazinePageTurnRequest) {
         if let position = request.progress {
-            displayClock?.invalidate(); displayClock = nil
             phase = .interacting
-            draw(position)
+            pendingProgress = position
+            startClock()
         } else if phase != .completing {
             phase = .completing
             if request.commit && playsSound { MagazinePageSound.play() }
             let start = progress
             let end = request.commit ? 1.0 : 0.0
-            animationDuration = reduceMotion ? 0.12 : max(0.12, (metal == nil ? 0.20 : request.variation.duration) * abs(end - start))
+            animationDuration = reduceMotion ? 0.12 : (request.settleDuration
+                ?? max(0.12, (metal == nil ? 0.20 : request.variation.duration) * abs(end - start)))
             if let velocity = request.releaseVelocity {
                 animationDuration = reduceMotion ? 0.12 : min(0.42, max(0.22, abs(end - start) * 0.48))
                 // 三次曲线保留松手速度，终点速度为零；限制切线避免越界。
@@ -387,13 +475,31 @@ final class MagazineTurnSurface<Content: View>: NSView {
             animationStart = CACurrentMediaTime()
             animationFrom = start
             animationTo = end
-            let target = MagazineDisplayLinkTarget { [weak self] link in self?.tick(link) }
-            let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
-            displayClock = clock
-            clock.add(to: .main, forMode: .common)
+            pendingProgress = nil
+            startClock()
         }
     }
+    private func startClock() {
+        guard displayClock == nil else { return }
+        let target = MagazineDisplayLinkTarget { [weak self] link in self?.tick(link) }
+        let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
+        clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        displayClock = clock
+        clock.add(to: .main, forMode: .common)
+    }
     private func tick(_ link: CADisplayLink) {
+        if let update = pendingScrub {
+            pendingScrub = nil
+            prepareScrub(update)
+        }
+        if let position = pendingProgress {
+            pendingProgress = nil
+            draw(position)
+        }
+        if phase != .completing {
+            displayClock?.invalidate(); displayClock = nil
+            return
+        }
         guard let request = currentRequest, phase == .completing else { return }
         let time = min(1, max(0, (link.targetTimestamp - animationStart) / animationDuration))
         let eased: Double
@@ -402,6 +508,83 @@ final class MagazineTurnSurface<Content: View>: NSView {
         } else { eased = MagazineTurnGeometry.eased(time) }
         draw(animationFrom + (animationTo - animationFrom) * eased)
         if time >= 1 { finish(committed: request.commit) }
+    }
+
+    private func scrubPage(id: String, content: Content, update: ScrubUpdate) -> ScrubPage? {
+        if let index = scrubPages.firstIndex(where: { $0.id == id }) {
+            let page = scrubPages.remove(at: index)
+            scrubPages.append(page)
+            return page
+        }
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        // 快速浏览使用逻辑像素预览。直接绘制 SwiftUI 内容，避免反复挂载宿主、
+        // 触发文章的 onAppear/task 和 AppKit cacheDisplay 的整棵视图刷新。
+        let renderer = ImageRenderer(content: content)
+        renderer.proposedSize = ProposedViewSize(bounds.size)
+        renderer.scale = min(1, sqrt(1_000_000 / max(1, bounds.width * bounds.height)))
+        renderer.isOpaque = true
+        guard let image = renderer.cgImage else { return nil }
+        snapshotCount += 1
+        let page = ScrubPage(id: id, content: content, image: image,
+            texture: update.fades ? nil : MagazineMetalRenderer.texture(image))
+        scrubPages.append(page)
+        if scrubPages.count > 4 { scrubPages.removeFirst(scrubPages.count - 4) }
+        return page
+    }
+
+    private func prepareScrub(_ update: ScrubUpdate) {
+        let request = update.request
+        guard request.scrubSessionID == scrubSessionID, let sourceID = request.sourcePageID else { return }
+        if currentRequest?.id == request.id {
+            currentRequest = request
+            if request.progress == nil, phase != .completing, let latest = request.settleFrom {
+                progress = min(1, max(0, latest))
+            }
+            advance(request)
+            return
+        }
+        guard let before = scrubPage(id: sourceID, content: update.source, update: update),
+              let after = scrubPage(id: request.targetPageID, content: update.content, update: update) else {
+            host.rootView = update.content
+            pageID = request.targetPageID
+            cancelTurn(notify: false)
+            completeLater(request.id, committed: true)
+            return
+        }
+        currentRequest = request
+        sourceContent = before.content; sourcePageID = before.id
+        scrubTarget = after.content; pageID = after.id
+        preparedSourcePageID = before.id; preparedTargetPageID = after.id
+        if cover == nil {
+            let cover = MagazineSnapshotCover(frame: bounds)
+            cover.wantsLayer = true
+            addSubview(cover)
+            self.cover = cover
+            let front = CALayer()
+            front.frame = cover.bounds
+            front.contentsGravity = .resize
+            cover.layer?.addSublayer(front)
+            scrubFront = front
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        cover?.layer?.contents = after.image
+        cover?.layer?.contentsGravity = .resize
+        scrubFront?.contents = before.image
+        CATransaction.commit()
+        if let old = before.texture, let new = after.texture {
+            if let metal {
+                metal.setPages(before: old, after: new, forward: request.forward, corner: request.variation.corner)
+            } else if let renderer = MagazineMetalRenderer(before: old, after: new, size: bounds.size,
+                forward: request.forward, verticalInset: update.verticalInset, corner: request.variation.corner) {
+                metal = renderer
+                rendererCount += 1
+                cover?.addSubview(renderer.view)
+            }
+        }
+        phase = .interacting
+        progress = request.progress ?? request.settleFrom ?? 0
+        // 新页面对从手指当前角度开始，不能先绘制进度零再跳到最新位置。
+        advance(request)
     }
     private func draw(_ value: Double) {
         progress = min(1, max(0, value))
@@ -413,14 +596,19 @@ final class MagazineTurnSurface<Content: View>: NSView {
         }
         if metal == nil {
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            cover?.layer?.opacity = Float(1 - progress)
+            if let scrubFront { scrubFront.opacity = Float(1 - progress) }
+            else { cover?.layer?.opacity = Float(1 - progress) }
             CATransaction.commit()
         }
         renderedFrames += 1
     }
     func cancelTurn(notify: Bool = true) {
-        let id = currentRequest?.id
+        let id = pendingScrub?.request.id ?? currentRequest?.id
         currentRequest = nil; phase = nil
+        pendingScrub = nil; pendingProgress = nil
+        scrubSessionID = nil; scrubTarget = nil; scrubFront = nil
+        scrubPages.removeAll()
+        preparedSourcePageID = nil; preparedTargetPageID = nil
         preparation?.cancel(); preparation = nil
         displayClock?.invalidate(); displayClock = nil
         metal = nil
@@ -430,11 +618,21 @@ final class MagazineTurnSurface<Content: View>: NSView {
             host.layoutSubtreeIfNeeded()
         }
         sourceContent = nil; sourcePageID = nil
-        cover?.removeFromSuperview(); cover = nil
+        if let cover {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cover.removeFromSuperview()
+            self.cover = nil
+            CATransaction.commit()
+        }
         if notify, let id { completeLater(id, committed: false) }
     }
     private func finish(committed: Bool) {
         let id = currentRequest?.id
+        if committed, let scrubTarget {
+            host.rootView = scrubTarget
+            host.layoutSubtreeIfNeeded()
+        }
         if committed { sourceContent = nil; sourcePageID = nil }
         cancelTurn(notify: false)
         if let id { completeLater(id, committed: committed) }
@@ -445,22 +643,19 @@ final class MagazineTurnSurface<Content: View>: NSView {
     }
     private func snapshot(background: NSColor) -> CGImage? {
         guard bounds.width > 1, bounds.height > 1 else { return nil }
-        host.layoutSubtreeIfNeeded()
-        let scale = MagazineTurnGeometry.snapshotScale(size: bounds.size, displayScale: window?.backingScaleFactor ?? 1)
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
-            pixelsWide: max(2, Int(bounds.width * scale)), pixelsHigh: max(2, Int(bounds.height * scale)),
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
-        bitmap.size = bounds.size
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        guard let image = bitmap.cgImage,
-              let context = CGContext(data: nil, width: image.width, height: image.height,
-                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        context.setFillColor(background.cgColor); context.fill(rect); context.draw(image, in: rect)
+        // cacheDisplay 会同步栅格化整个 AppKit 图层树；纸张阴影在这里进入
+        // CPU 高斯卷积，足以阻塞整个窗口。普通翻页也直接绘制 SwiftUI，
+        // 保留 Retina 像素预算，不把宿主的外层图层再次截图。
+        let renderer = ImageRenderer(content: host.rootView
+            .frame(width: bounds.width, height: bounds.height)
+            .background(Color(nsColor: background)))
+        renderer.proposedSize = ProposedViewSize(bounds.size)
+        renderer.scale = MagazineTurnGeometry.snapshotScale(size: bounds.size,
+            displayScale: window?.backingScaleFactor ?? 1)
+        renderer.isOpaque = true
+        guard let image = renderer.cgImage else { return nil }
         snapshotCount += 1
-        return context.makeImage()
+        return image
     }
 }
 #endif

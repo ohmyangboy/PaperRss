@@ -75,11 +75,10 @@ struct MagazineMasonryLayout: Layout {
     }
 }
 
-/// Edition grouping is independent of scroll position, hover and animation.
-/// Rebuild only when actual article/folder/locale/layout inputs change.
+/// 已展示页冻结几何，未展示尾部可合排；内容计算在后台执行并校验版本。
 @MainActor
 final class MagazineEditionCache: ObservableObject {
-    struct Input: Equatable {
+    struct Input: Equatable, Sendable {
         let entries: [EntryListItem]
         let folders: [UUID: String]
         let arrangement: MagazineArrangement
@@ -87,58 +86,112 @@ final class MagazineEditionCache: ObservableObject {
         let locale: String
         var viewport: CGSize? = nil
         var showsImages: Bool = true
+        var hasMore = false
+        var textScale: CGFloat = 1
+        var scopeID: UUID? = nil
+        var imageRatios: [String: CGFloat] = [:]
     }
     @Published private(set) var pages: [MagazinePage] = []
     @Published private(set) var layouts: [String: MagazinePageLayout] = [:]
     private var input: Input?
     private var entryIndex: [String: Int] = [:]
+    private var displayed = Set<String>()
+    private var revision = 0
+    let measurements = MagazineMeasurementCache()
     private(set) var rebuildCount = 0
 
-    func update(_ input: Input) {
-        guard self.input != input else { return }
-        let previous = self.input
-        self.input = input
-        let next: [MagazinePage]
-        if let size = input.viewport {
-            let keepsGeometry = previous.map {
-                $0.viewport == input.viewport && $0.showsImages == input.showsImages
-                    && $0.arrangement == input.arrangement && $0.folders == input.folders && $0.locale == input.locale
-                    && $0.entries.count <= input.entries.count
-                    && zip($0.entries, input.entries).allSatisfy { old, new in
-                        old.id == new.id && old.title == new.title && old.summaryPreview == new.summaryPreview
-                            && old.sourceTitle == new.sourceTitle && old.feedID == new.feedID
-                    }
-            } ?? false
-            let retained = keepsGeometry ? pages.compactMap { layouts[$0.id] } : []
-            let start = keepsGeometry ? (previous?.entries.count ?? 0) : 0
-            let retainedIDs = Set(retained.flatMap { $0.page.entries.map(\.id) })
-            let additions = MagazinePaginator.pages(entries: input.entries.dropFirst(start).filter { !retainedIDs.contains($0.id) },
-                folders: input.folders, arrangement: input.arrangement, size: size, showsImages: input.showsImages)
-            let fresh = Dictionary(input.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let resolved = (retained + additions).map { layout in
-                MagazinePageLayout(page: MagazinePage(id: layout.page.id, title: layout.page.title,
-                    entries: layout.page.entries.compactMap { fresh[$0.id] }),
-                    placements: layout.placements, height: layout.height)
-            }
-            layouts = Dictionary(resolved.map { ($0.page.id, $0) }, uniquingKeysWith: { first, _ in first })
-            next = resolved.map(\.page)
-        } else {
-            layouts = [:]
-            next = MagazineEdition.pages(entries: input.entries, arrangement: input.arrangement,
-                                         folders: input.folders, capacity: input.capacity)
+    func markDisplayed(_ id: String) { displayed.insert(id) }
+    func environmentChanged(_ next: Input) -> Bool {
+        guard let old = input else { return true }
+        return old.viewport != next.viewport || old.textScale != next.textScale || old.locale != next.locale
+            || old.showsImages != next.showsImages || old.arrangement != next.arrangement || old.scopeID != next.scopeID
+    }
+
+    private func retained(for next: Input) -> [MagazinePageLayout] {
+        guard let old = input, old.viewport == next.viewport, old.showsImages == next.showsImages,
+              old.arrangement == next.arrangement, old.folders == next.folders, old.locale == next.locale,
+              old.textScale == next.textScale, old.scopeID == next.scopeID,
+              old.entries.count <= next.entries.count,
+              zip(old.entries, next.entries).allSatisfy({ old, new in
+                  old.id == new.id && old.title == new.title && old.summaryPreview == new.summaryPreview
+                    && old.isSummaryVisible == new.isSummaryVisible && old.sourceTitle == new.sourceTitle
+                    && old.feedID == new.feedID && old.accountID == new.accountID
+              }) else { displayed.removeAll(); return [] }
+        if old.entries.count == next.entries.count && old.hasMore == next.hasMore {
+            return pages.compactMap { layouts[$0.id] }
         }
+        guard let last = pages.lastIndex(where: { displayed.contains($0.id) }) else { return [] }
+        return pages.prefix(last + 1).compactMap { layouts[$0.id] }
+    }
+
+    private nonisolated static func calculate(_ next: Input, retained: [MagazinePageLayout],
+                                              measurements: MagazineMeasurementCache) -> [MagazinePageLayout] {
+        guard let size = next.viewport else { return [] }
+        let ids = Set(retained.flatMap(\.readingOrder))
+        return retained + MagazinePaginator.pages(entries: next.entries.filter { !ids.contains($0.id) },
+            folders: next.folders, arrangement: next.arrangement, size: size, showsImages: next.showsImages,
+            hasMore: next.hasMore, textScale: next.textScale, locale: next.locale,
+            imageRatios: next.imageRatios, measurements: measurements)
+    }
+
+    private func publish(_ next: Input, resolved: [MagazinePageLayout]) {
+        let fresh = Dictionary(next.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let updated = resolved.enumerated().map { index, original in
+            var layout = original
+            layout.page = MagazinePage(id: original.page.id, title: original.page.title,
+                entries: original.readingOrder.compactMap { fresh[$0] })
+            layout.isEnd = !next.hasMore && index == resolved.count - 1
+            return layout
+        }
+        let nextPages = next.viewport == nil
+            ? MagazineEdition.pages(entries: next.entries, arrangement: next.arrangement,
+                folders: next.folders, capacity: next.capacity)
+            : updated.map(\.page)
+        input = next
         entryIndex.removeAll(keepingCapacity: true)
-        for (index, page) in next.enumerated() {
+        for (index, page) in nextPages.enumerated() {
             for entry in page.entries { entryIndex[entry.id] = index }
         }
         rebuildCount += 1
-        if pages != next { pages = next }
+        let nextLayouts = Dictionary(updated.map { ($0.page.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if layouts != nextLayouts { layouts = nextLayouts }
+        if pages != nextPages { pages = nextPages }
     }
 
-    func pageIndex(containing anchor: String?) -> Int {
-        anchor.flatMap { entryIndex[$0] } ?? 0
+    func update(_ next: Input) {
+        revision += 1
+        guard input != next else { return }
+        let saved = retained(for: next)
+        publish(next, resolved: Self.calculate(next, retained: saved, measurements: measurements))
     }
+    func updateAsync(_ next: Input) async {
+        revision += 1
+        let token = revision
+        guard input != next else { return }
+        let saved = retained(for: next)
+        let cache = measurements
+        let job = Task.detached(priority: .userInitiated) {
+            Self.calculate(next, retained: saved, measurements: cache)
+        }
+        let resolved = await withTaskCancellationHandler(operation: { await job.value }, onCancel: { job.cancel() })
+        guard !Task.isCancelled, revision == token else { return }
+        publish(next, resolved: resolved)
+    }
+    func pageIndex(containing anchor: String?) -> Int { anchor.flatMap { entryIndex[$0] } ?? 0 }
     func contains(_ anchor: String?) -> Bool { anchor.flatMap { entryIndex[$0] } != nil }
+
+    func openingImageRequests(scopeID: UUID, scale: CGFloat) -> [ArticleThumbnailRequest] {
+        guard input?.scopeID == scopeID, input?.showsImages == true,
+              let page = pages.first, let layout = layouts[page.id] else { return [] }
+        let entries = Dictionary(page.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<ArticleThumbnailRequest>()
+        return layout.placements.compactMap { placement in
+            guard let entry = entries[placement.entryID],
+                  let request = placement.style.thumbnailRequest(for: entry, width: placement.frame.width, scale: scale),
+                  seen.insert(request).inserted else { return nil }
+            return request
+        }
+    }
 }
 
 private struct MagazinePageFrames: PreferenceKey {
@@ -158,6 +211,7 @@ struct MagazineBrowserView<Tile: View>: View {
     let selectedID: String?
     let keyboardRequest: TimelineKeyRequest?
     @ObservedObject var memory: TimelinePresentationMemory
+    let thumbnailStore: ArticleThumbnailStore
     let onHighlight: (String) -> Void
     let onOpen: (EntryListItem) -> Void
     let onNeedMore: () -> Void
@@ -172,6 +226,7 @@ struct MagazineBrowserView<Tile: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.locale) private var locale
+    @Environment(\.displayScale) private var displayScale
     @StateObject private var edition = MagazineEditionCache()
     @State private var coverAnimating = false
     @State private var autoOpenedScope: UUID?
@@ -181,6 +236,12 @@ struct MagazineBrowserView<Tile: View>: View {
     @State private var pendingPageIndex: Int?
     @State private var turnRequest: MagazinePageTurnRequest?
     @State private var turnSourceAnchor: String?
+    @State private var railScrubPosition: Double?
+    @State private var railScrubSourceAnchor: String?
+    @State private var railScrubActive = false
+    @State private var railScrubPendingIndex: Int?
+    @State private var railScrubForward: Bool?
+    @State private var railScrubSessionID: UUID?
     @GestureState private var isDraggingPage = false
     private var isTurning: Bool { turnRequest != nil }
     private var paperWidth: CGFloat { MagazinePaginator.pageWidth(availableSize.width) }
@@ -197,96 +258,44 @@ struct MagazineBrowserView<Tile: View>: View {
             of: NSColor(Color(paperHex: palette.inkHex))) ?? base)
     }
     private var contentWidth: CGFloat { MagazinePaginator.contentWidth(availableSize.width) }
+    private func foldSheetBackground(showsFold: Bool) -> some View {
+        paperBackground.overlay {
+            if showsFold {
+                LinearGradient(colors: [.clear, Color(paperHex: palette.inkHex).opacity(0.035), .clear],
+                    startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 12)
+                    .overlay { Rectangle().fill(Color(paperHex: palette.inkHex).opacity(0.035)).frame(width: 0.5) }
+            }
+        }
+    }
 
     private var arrangement: MagazineArrangement { .init(rawValue: arrangementRaw) ?? .balanced }
     private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .scroll }
     private var editionInput: MagazineEditionCache.Input {
         .init(entries: entries, folders: folders, arrangement: arrangement, capacity: 12,
               locale: locale.identifier, viewport: turning != .scroll ? MagazinePaginator.foldViewport(availableSize) : availableSize,
-              showsImages: showsImages)
+              showsImages: showsImages, hasMore: hasMore, scopeID: memory.magazineScopeID)
     }
     private var pages: [MagazinePage] { edition.pages }
+    private var openingImageRequests: [ArticleThumbnailRequest] {
+        guard isBrowsing, showsImages else { return [] }
+        return edition.openingImageRequests(scopeID: memory.magazineScopeID, scale: displayScale)
+    }
     private var pageIndex: Int {
         if let request = turnRequest, let target = pages.firstIndex(where: { $0.id == request.targetPageID }) { return target }
+        if let position = railScrubPosition {
+            return MagazineRailScrub.nearestIndex(position: position, count: pages.count)
+        }
         return edition.pageIndex(containing: memory.magazineAnchor)
+    }
+    private var railPageIndex: Int {
+        guard let position = railScrubPosition else { return pageIndex }
+        return MagazineRailScrub.nearestIndex(position: position, count: pages.count)
     }
 
     var body: some View {
         ScrollViewReader { proxy in
-            Group {
-                if turning == .scroll {
-                    ScrollView {
-                        LazyVStack(spacing: 40) {
-                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
-                                pageContent(page, index: index)
-                                    .id(page.id)
-                                    .background(GeometryReader { geometry in
-                                        Color.clear.preference(key: MagazinePageFrames.self,
-                                            value: [page.id: geometry.frame(in: .named("magazine-viewport"))])
-                                    })
-                                    .onAppear { if isBrowsing && page.id == pages.last?.id && hasMore { onNeedMore() } }
-                            }
-                        }
-                        .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .top)
-                    }
-                    .scrollIndicators(.never)
-                } else {
-                    Group {
-                        if pages.indices.contains(pageIndex) {
-                            let page = pages[pageIndex]
-                            MagazinePageTurnView(pageID: page.id, request: turnRequest,
-                                reduceMotion: reduceMotion, isActive: isBrowsing && memory.magazineIsOpen,
-                                background: stageBackground, verticalInset: turnInset, playsSound: pageSoundEnabled, fades: turning == .fade,
-                                content: pageContent(page, index: pageIndex)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                                    .background {
-                                        paperBackground
-                                            .overlay {
-                                                LinearGradient(colors: [.clear,
-                                                    Color(paperHex: palette.inkHex).opacity(0.035), .clear],
-                                                    startPoint: .leading, endPoint: .trailing)
-                                                    .frame(width: 12)
-                                                    .overlay {
-                                                        Rectangle().fill(Color(paperHex: palette.inkHex).opacity(0.035))
-                                                            .frame(width: 0.5)
-                                                    }
-                                            }
-                                    }
-                                    .overlay(Rectangle().strokeBorder(Color(paperHex: palette.inkHex).opacity(0.14), lineWidth: 0.5))
-                                    .shadow(color: .black.opacity(palette.colorScheme == .dark ? 0.16 : 0.08), radius: 10, x: 0, y: 3)
-                                    .padding(.vertical, turnInset)
-                                    .background(Color(nsColor: stageBackground))
-                                    .environment(\.paperAppearancePalette, palette)
-                                    .environment(\.colorScheme, colorScheme)
-                                    .environment(\.locale, locale)
-                                    .highPriorityGesture(pageDrag(proxy: proxy)),
-                                onComplete: { id, committed in
-                                    guard turnRequest?.id == id else { return }
-                                    if committed {
-                                        memory.magazineAnchor = pages.first(where: { $0.id == turnRequest?.targetPageID })?.entries.first?.id
-                                    } else {
-                                        memory.magazineAnchor = turnSourceAnchor
-                                    }
-                                    memory.visibleAnchor = memory.magazineAnchor
-                                    if committed && pageIndex == pages.count - 1 && !hasMore { showEndNotice() }
-                                    turnRequest = nil
-                                    turnSourceAnchor = nil
-                                })
-                        }
-                    }
-                    .frame(width: paperWidth)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .clipped()
-                    .onChange(of: isDraggingPage) { _, active in
-                        // 系统取消手势时不会调用 onEnded，但 GestureState 必定复位。
-                        guard !active, var request = turnRequest, let progress = request.progress else { return }
-                        request.commit = progress > 0.4
-                        request.progress = nil
-                        turnRequest = request
-                    }
-                }
-            }
+            magazinePages(proxy: proxy)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .mask(alignment: .trailing) {
                 Rectangle().frame(width: coverAnimating && !reduceMotion ? availableSize.width / 2 : availableSize.width)
@@ -311,39 +320,11 @@ struct MagazineBrowserView<Tile: View>: View {
                 }
             }
             .background {
-                if turning != .scroll {
-                    MagazineInputRegion(active: isBrowsing && memory.magazineIsOpen && !coverAnimating, articleFrames: articleFrames,
-                        onArticleDown: { memory.openingFrameInWindow = $0 },
-                        onTurn: { onClearSelection(); go(to: pageIndex + $0, proxy: proxy) },
-                        onClear: onClearSelection, onEdge: { if edge != $0 { edge = $0 } },
-                        onSwipe: { distance, velocity, ended, cancelled in
-                            if turnRequest == nil && !ended {
-                                go(to: pageIndex + (distance < 0 ? 1 : -1), proxy: proxy, interactive: true)
-                            }
-                            guard var request = turnRequest, request.progress != nil else { return }
-                            let sign = request.forward ? -1.0 : 1.0
-                            let progress = min(1, max(0, distance * sign / (contentWidth * 0.5)))
-                            request.progress = progress
-                            if ended {
-                                request.releaseVelocity = velocity * sign / (contentWidth * 0.5)
-                                request.commit = !cancelled && (progress > 0.4 || progress + (request.releaseVelocity ?? 0) * 0.16 > 0.45)
-                                request.progress = nil
-                            }
-                            turnRequest = request
-                        })
-                }
+                magazineInputOverlay(proxy: proxy)
             }
             .coordinateSpace(name: "magazine-viewport")
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                // 封面与展开页共用固定舞台，导航出现时不再挤动书页。
-                Color.clear.frame(height: MagazinePaginator.railHeight)
-                    .overlay(alignment: .bottom) {
-                        if memory.magazineIsOpen && !pages.isEmpty {
-                            MagazinePageRail(pages: pages, currentIndex: pageIndex,
-                                isTurning: isTurning, availableWidth: availableSize.width,
-                                availableHeight: availableSize.height, onSelect: { go(to: $0, proxy: proxy) })
-                        }
-                    }
+                pageRail(proxy: proxy)
             }
             .overlay(alignment: .bottom) {
                 if let notice {
@@ -366,13 +347,24 @@ struct MagazineBrowserView<Tile: View>: View {
                 autoOpenedScope = scope
                 openBook()
             }
+            .task(id: openingImageRequests) {
+                // 与一秒开页计时独立运行；开页时继续共用在途请求，慢图不阻塞动画。
+                // 新订阅、隐藏视图或关闭图片会取消旧订阅者，下载限流与解码沿用共享缓存。
+                let requests = openingImageRequests
+                let store = thumbnailStore
+                await withTaskGroup(of: Void.self) { group in
+                    for request in requests {
+                        group.addTask { _ = try? await store.image(for: request) }
+                    }
+                }
+            }
             .task(id: memory.magazineIsOpen) {
                 guard memory.magazineIsOpen else { coverAnimating = false; onClearSelection(); cancelTurn(); return }
                 do { try await Task.sleep(for: .milliseconds(670)) } catch { return }
                 coverAnimating = false
             }
             .onPreferenceChange(MagazinePageFrames.self) { frames in
-                guard isBrowsing, turning == .scroll, !memory.isRestoring else { return }
+                guard isBrowsing, turning == .scroll, !memory.isRestoring, !railScrubActive else { return }
                 if let page = pages.first(where: { (frames[$0.id]?.maxY ?? -1) > 24 && (frames[$0.id]?.minY ?? .infinity) < availableSize.height }) {
                     if let anchor = page.entries.first?.id { memory.magazineAnchor = anchor }
                 }
@@ -425,6 +417,134 @@ struct MagazineBrowserView<Tile: View>: View {
         .accessibilityIdentifier("magazine.browser")
     }
 
+    private func handleTurnCompletion(id: UUID, committed: Bool) {
+        guard turnRequest?.id == id else { return }
+        if let pending = railScrubPendingIndex, pages.indices.contains(pending) {
+            // TOC 松手后的吸附只提交最终最近页；中间页面不写入锚点。
+            memory.magazineAnchor = pages[pending].entries.first?.id
+            memory.visibleAnchor = memory.magazineAnchor
+            railScrubPendingIndex = nil
+            railScrubPosition = nil
+            railScrubSourceAnchor = nil
+            railScrubSessionID = nil
+        } else if committed {
+            memory.magazineAnchor = pages.first(where: { $0.id == turnRequest?.targetPageID })?.entries.first?.id
+        } else {
+            memory.magazineAnchor = turnSourceAnchor
+        }
+        memory.visibleAnchor = memory.magazineAnchor
+        if committed && pageIndex == pages.count - 1 && !hasMore { showEndNotice() }
+        turnRequest = nil
+        turnSourceAnchor = nil
+    }
+
+    @ViewBuilder
+    private func magazinePages(proxy: ScrollViewProxy) -> some View {
+        if turning == .scroll {
+            ScrollView {
+                LazyVStack(spacing: 40) {
+                    ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+                        magazineScrollPage(page: page, index: index)
+                    }
+                }
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .scrollIndicators(.never)
+        } else {
+            Group {
+                if pages.indices.contains(pageIndex) {
+                    foldPageView(page: pages[pageIndex], index: pageIndex, proxy: proxy)
+                }
+            }
+            .frame(width: paperWidth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
+            .onChange(of: isDraggingPage) { _, active in
+                // 系统取消手势时不会调用 onEnded，但 GestureState 必定复位。
+                guard !active, var request = turnRequest, let progress = request.progress else { return }
+                request.commit = progress > 0.4
+                request.progress = nil
+                turnRequest = request
+            }
+        }
+    }
+
+    private func pageRail(proxy: ScrollViewProxy) -> some View {
+        // 封面与展开页共用固定舞台，导航出现时不再挤动书页。
+        Color.clear
+            .frame(height: MagazinePaginator.railHeight)
+            .overlay(alignment: .bottom) {
+                if memory.magazineIsOpen && !pages.isEmpty {
+                    MagazinePageRail(
+                        pages: pages,
+                        currentIndex: railPageIndex,
+                        isTurning: isTurning && !railScrubActive,
+                        availableWidth: availableSize.width,
+                        availableHeight: availableSize.height,
+                        onSelect: { go(to: $0, proxy: proxy) },
+                        onScrubStart: { beginRailScrub(proxy: proxy) },
+                        onScrubChanged: { normalized in updateRailScrub(normalized, proxy: proxy) },
+                        onScrubEnded: { endRailScrub(proxy: proxy, cancelled: false) },
+                        onScrubCancelled: { endRailScrub(proxy: proxy, cancelled: true) }
+                    )
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func foldPageView(page: MagazinePage, index: Int, proxy: ScrollViewProxy) -> some View {
+        MagazinePageTurnView(pageID: page.id, request: turnRequest,
+            reduceMotion: reduceMotion, isActive: isBrowsing && memory.magazineIsOpen,
+            background: stageBackground, verticalInset: turnInset, playsSound: false,
+            fades: usesSingleSheetTransition(page),
+            content: foldContent(page: page, index: index, proxy: proxy),
+            source: turnRequest?.sourcePageID.flatMap { id in
+                pages.firstIndex(where: { $0.id == id }).map {
+                    foldContent(page: pages[$0], index: $0, proxy: proxy)
+                }
+            },
+            onComplete: { id, committed in
+                handleTurnCompletion(id: id, committed: committed)
+            })
+    }
+
+    private func usesSingleSheetTransition(_ page: MagazinePage) -> Bool {
+        if turning == .fade || edition.layouts[page.id]?.form != .spread { return true }
+        let sourceIndex = edition.pageIndex(containing: turnSourceAnchor ?? memory.magazineAnchor)
+        guard pages.indices.contains(sourceIndex) else { return false }
+        return edition.layouts[pages[sourceIndex].id]?.form != .spread
+    }
+
+    private func foldContent(page: MagazinePage, index: Int, proxy: ScrollViewProxy) -> some View {
+        let layout = edition.layouts[page.id]
+        return pageContent(page, index: index)
+                .frame(width: layout?.paperWidth ?? paperWidth, height: layout?.paperHeight, alignment: .top)
+                .background(foldSheetBackground(showsFold: layout?.form == .spread))
+                .overlay(Rectangle().strokeBorder(Color(paperHex: palette.inkHex).opacity(0.14), lineWidth: 0.5))
+                .shadow(color: .black.opacity(palette.colorScheme == .dark ? 0.16 : 0.08), radius: 10, x: 0, y: 3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.vertical, turnInset)
+                .background(Color(nsColor: stageBackground))
+                .environment(\.paperAppearancePalette, palette)
+                .environment(\.colorScheme, colorScheme)
+                .environment(\.locale, locale)
+                .highPriorityGesture(pageDrag(proxy: proxy))
+    }
+
+    private func magazineScrollPage(page: MagazinePage, index: Int) -> some View {
+        pageContent(page, index: index)
+            .id(page.id)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: MagazinePageFrames.self,
+                    value: [page.id: geometry.frame(in: .named("magazine-viewport"))])
+            })
+            .onAppear {
+                let isTail = page.id == pages.last?.id
+                if isBrowsing && isTail && hasMore { onNeedMore() }
+            }
+    }
+
     // 手势必须位于 NSHostingView 内，才能与文章 Button 正确仲裁。
     private func pageDrag(proxy: ScrollViewProxy) -> some Gesture {
         DragGesture(minimumDistance: 20)
@@ -450,14 +570,174 @@ struct MagazineBrowserView<Tile: View>: View {
             }
     }
 
+    @ViewBuilder
+    private func magazineInputOverlay(proxy: ScrollViewProxy) -> some View {
+        if turning != .scroll {
+            MagazineInputRegion(active: isBrowsing && memory.magazineIsOpen && !coverAnimating,
+                articleFrames: articleFrames,
+                onArticleDown: { memory.openingFrameInWindow = $0 },
+                onTurn: { direction in
+                    onClearSelection()
+                    go(to: pageIndex + direction, proxy: proxy)
+                },
+                onClear: onClearSelection,
+                onEdge: { direction in if edge != direction { edge = direction } },
+                onSwipe: { distance, velocity, ended, cancelled in
+                    handleMagazineSwipe(distance: distance, velocity: velocity,
+                        ended: ended, cancelled: cancelled, proxy: proxy)
+                })
+        }
+    }
+
+    private func handleMagazineSwipe(distance: CGFloat, velocity: CGFloat, ended: Bool,
+                                     cancelled: Bool, proxy: ScrollViewProxy) {
+        if turnRequest == nil && !ended {
+            go(to: pageIndex + (distance < 0 ? 1 : -1), proxy: proxy, interactive: true)
+        }
+        guard var request = turnRequest, request.progress != nil else { return }
+        let sign = request.forward ? -1.0 : 1.0
+        let progress = min(1, max(0, distance * sign / (contentWidth * 0.5)))
+        request.progress = progress
+        if ended {
+            request.releaseVelocity = velocity * sign / (contentWidth * 0.5)
+            let projected = progress + (request.releaseVelocity ?? 0) * 0.16
+            request.commit = !cancelled && (progress > 0.4 || projected > 0.45)
+            request.progress = nil
+        }
+        turnRequest = request
+    }
+
+    private func beginRailScrub(proxy: ScrollViewProxy) {
+        guard isBrowsing, memory.magazineIsOpen, !pages.isEmpty else { return }
+        // 轨道可以接管正在收尾的翻页，但起点仍以最后提交的锚点为准，
+        // 避免从半页状态开始一次不可逆的长距离拖动。
+        let committed = min(max(0, edition.pageIndex(containing: memory.magazineAnchor)), max(0, pages.count - 1))
+        cancelTurn()
+        railScrubActive = true
+        railScrubPosition = Double(committed)
+        railScrubSourceAnchor = memory.magazineAnchor ?? pages[committed].entries.first?.id
+        railScrubPendingIndex = nil
+        railScrubForward = nil
+        railScrubSessionID = UUID()
+        onClearSelection()
+    }
+
+    private func updateRailScrub(_ normalized: Double, proxy: ScrollViewProxy) {
+        guard railScrubActive, pages.count > 1 else { return }
+        let position = MagazineRailScrub.pagePosition(normalized: normalized, count: pages.count)
+        let previous = railScrubPosition ?? position
+        railScrubPosition = position
+
+        // 普通滚动模式没有翻页 surface，拖动直接定位到最近页；开启减少动态效果
+        // 时也使用同一路径，避免为仅用于透明度过渡的快照分配 Metal 资源。
+        if turning == .scroll || reduceMotion {
+            let index = MagazineRailScrub.nearestIndex(position: position, count: pages.count)
+            if pages.indices.contains(index), index != MagazineRailScrub.nearestIndex(position: previous, count: pages.count) {
+                if turning == .scroll {
+                    withAnimation(nil) { proxy.scrollTo(pages[index].id, anchor: .top) }
+                }
+            }
+            return
+        }
+
+        // 同一页对内反向拖动只反写进度，保留原请求 UUID、Metal 纹理和折页
+        // 方向；只有跨出当前区间时才创建下一对页面。
+        if let request = turnRequest,
+           let targetIndex = pages.firstIndex(where: { $0.id == request.targetPageID }),
+           request.progress != nil {
+            let sourceIndex = request.forward ? targetIndex - 1 : targetIndex + 1
+            if pages.indices.contains(sourceIndex) {
+                let existing = MagazineRailScrub.Pair(sourceIndex: sourceIndex, targetIndex: targetIndex,
+                    progress: request.progress ?? 0, forward: request.forward)
+                if let progress = MagazineRailScrub.progress(position: position, in: existing) {
+                    var retained = request
+                    retained.progress = progress
+                    turnRequest = retained
+                    return
+                }
+            }
+        }
+
+        if abs(position - previous) > 0.0001 {
+            railScrubForward = position > previous
+        }
+        let forward = railScrubForward ?? true
+        guard let pair = MagazineRailScrub.pair(position: position, count: pages.count, forward: forward),
+              pages.indices.contains(pair.targetIndex) else { return }
+
+        if var request = turnRequest,
+           request.targetPageID == pages[pair.targetIndex].id,
+           request.forward == pair.forward,
+           request.progress != nil {
+            // 同一页面对只改进度，不重新抓取快照。
+            request.progress = pair.progress
+            turnRequest = request
+        } else {
+            // 页面边界只保留最后一个请求；渲染器按明确的源页和目标页取快照，
+            // 快速跳过中间页时也不会误用上一对内容，旧请求不排队或回写锚点。
+            turnRequest = MagazinePageTurnRequest(targetPageID: pages[pair.targetIndex].id,
+                forward: pair.forward, sourcePageID: pages[pair.sourceIndex].id,
+                scrubSessionID: railScrubSessionID,
+                progress: pair.progress)
+        }
+    }
+
+    private func endRailScrub(proxy: ScrollViewProxy, cancelled: Bool) {
+        guard railScrubActive else { return }
+        let origin = min(max(0, edition.pageIndex(containing: railScrubSourceAnchor)), max(0, pages.count - 1))
+        if cancelled {
+            // 系统取消或窗口离开时直接回到提交位置，不让旧页面对继续播放。
+            cancelTurn()
+            if pages.indices.contains(origin) {
+                memory.magazineAnchor = pages[origin].entries.first?.id
+                memory.visibleAnchor = memory.magazineAnchor
+                if turning == .scroll { withAnimation(nil) { proxy.scrollTo(pages[origin].id, anchor: .top) } }
+            }
+            return
+        }
+        let finalIndex = MagazineRailScrub.nearestIndex(position: railScrubPosition ?? Double(origin), count: pages.count)
+        railScrubActive = false
+        railScrubForward = nil
+        guard pages.indices.contains(finalIndex) else { cancelTurn(); return }
+
+        guard var request = turnRequest,
+              let targetIndex = pages.firstIndex(where: { $0.id == request.targetPageID }) else {
+            memory.magazineAnchor = pages[finalIndex].entries.first?.id
+            memory.visibleAnchor = memory.magazineAnchor
+            railScrubPosition = nil
+            railScrubSourceAnchor = nil
+            railScrubSessionID = nil
+            return
+        }
+        request.commit = targetIndex == finalIndex
+        request.settleFrom = request.progress
+        request.progress = nil
+        request.releaseVelocity = nil
+        request.settleDuration = reduceMotion ? 0.12 : 0.18
+        railScrubPendingIndex = finalIndex
+        turnRequest = request
+    }
+
     private func cancelTurn() {
         if turnRequest != nil, let anchor = turnSourceAnchor { memory.magazineAnchor = anchor }
+        if railScrubActive, let anchor = railScrubSourceAnchor {
+            memory.magazineAnchor = anchor
+            memory.visibleAnchor = anchor
+        }
         turnRequest = nil
         turnSourceAnchor = nil
+        railScrubActive = false
+        railScrubPendingIndex = nil
+        railScrubPosition = nil
+        railScrubSourceAnchor = nil
+        railScrubForward = nil
+        railScrubSessionID = nil
     }
 
     private func pageContent(_ page: MagazinePage, index: Int) -> some View {
         let layout = edition.layouts[page.id]
+        let entriesByID = Dictionary(page.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let pageContentWidth = layout?.contentWidth ?? contentWidth
         return VStack(alignment: .leading, spacing: MagazinePaginator.headingSpacing) {
             HStack(alignment: .firstTextBaseline) {
                 Text(page.title).font(.system(size: 15, weight: .semibold, design: .serif))
@@ -471,28 +751,31 @@ struct MagazineBrowserView<Tile: View>: View {
                 }
             ZStack(alignment: .topLeading) {
                 if let layout {
-                    ForEach(Array(zip(page.entries, layout.placements)), id: \.0.id) { entry, placement in
-                        tile(entry, placement.frame.width, .gallery)
+                    ForEach(layout.placements, id: \.entryID) { placement in
+                        if let entry = entriesByID[placement.entryID] {
+                            tile(entry, placement.frame.width, .gallery)
                             .environment(\.magazineStoryStyle, placement.style)
                             .frame(width: placement.frame.width, height: placement.frame.height, alignment: .topLeading)
-                            .clipped()
                             .overlay(alignment: .top) {
-                                if placement.frame.minY > 0 && placement.style.role != .gallery {
+                                if placement.frame.minY > 0 {
                                     Rectangle().fill(Color(paperHex: palette.mutedHex).opacity(0.14))
                                         .frame(height: 0.5).offset(y: placement.style.role == .supporting
                                             ? -MagazinePaginator.supportSpacing / 2 : -MagazinePaginator.rowSpacing / 2)
                                 }
                             }
                             .offset(x: placement.frame.minX, y: placement.frame.minY)
+                            .id(entry.id)
+                        }
                     }
                 }
             }
-            .frame(width: contentWidth, height: layout?.height ?? 0, alignment: .topLeading)
+            .frame(width: pageContentWidth, height: layout?.height ?? 0, alignment: .topLeading)
         }
-        .frame(width: contentWidth, alignment: .topLeading)
-        .padding(.horizontal, MagazinePaginator.horizontalInset(availableSize.width))
+        .frame(width: pageContentWidth, alignment: .topLeading)
+        .padding(.horizontal, layout?.inset ?? MagazinePaginator.horizontalInset(availableSize.width))
         .padding(.vertical, MagazinePaginator.verticalInset)
         .foregroundStyle(Color(paperHex: palette.inkHex))
+        .onAppear { edition.markDisplayed(page.id) }
     }
 
     private func showEndNotice() {
@@ -600,7 +883,8 @@ struct MagazineBrowserView<Tile: View>: View {
     }
 
     private func go(to index: Int, proxy: ScrollViewProxy, interactive: Bool = false) {
-        guard isBrowsing, !isTurning, memory.magazineIsOpen else { return }
+        guard isBrowsing, memory.magazineIsOpen else { return }
+        if isTurning || railScrubActive { cancelTurn() }
         if index < 0 { memory.magazineIsOpen = false; return }
         if index >= pages.count {
             if hasMore { pendingPageIndex = index; onNeedMore() }
@@ -633,7 +917,7 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private var articleFrames: [CGRect] {
         guard pages.indices.contains(pageIndex), let layout = edition.layouts[pages[pageIndex].id] else { return [] }
-        let x = (availableSize.width - paperWidth) / 2 + MagazinePaginator.horizontalInset(availableSize.width)
+        let x = (availableSize.width - layout.paperWidth) / 2 + layout.inset
         let y = turnInset + MagazinePaginator.verticalInset + 20 + MagazinePaginator.headingSpacing
         return zip(pages[pageIndex].entries, layout.placements).map { entry, placement in
             var frame = placement.frame
@@ -771,6 +1055,10 @@ struct MagazineInputRegion: NSViewRepresentable {
         var velocity: CGFloat = 0
         var wheelEnd: Task<Void, Never>?
         var hoverEdge = 0
+        var lastWheelTurnTime: TimeInterval = -1
+        var accumulatedWheelDelta: CGFloat = 0
+        var verticalSwipeActive = false
+        var verticalSwipeDelta: CGFloat = 0
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
@@ -791,6 +1079,9 @@ struct MagazineInputRegion: NSViewRepresentable {
             consumed = false
             down = nil
             distance = 0; velocity = 0; lastWheel = 0
+            accumulatedWheelDelta = 0
+            verticalSwipeDelta = 0
+            verticalSwipeActive = false
             if hoverEdge != 0 { hoverEdge = 0; input?.onEdge(0) }
         }
         func stop() {
@@ -804,9 +1095,19 @@ struct MagazineInputRegion: NSViewRepresentable {
             consumed = false
         }
         func handle(_ event: NSEvent) -> NSEvent? {
-            guard let input, input.active, event.window === window, window?.attachedSheet == nil,
+            guard let input, input.active, event.window === window || (event.window == nil && window != nil),
+                  window?.attachedSheet == nil,
                   NSApp.modalWindow == nil else { return event }
-            let point = convert(event.locationInWindow, from: nil)
+            let point: CGPoint
+            if event.window != nil {
+                point = convert(event.locationInWindow, from: nil)
+            } else if let window {
+                let windowPoint = window.convertPoint(fromScreen: event.locationInWindow)
+                let localPoint = convert(windowPoint, from: nil)
+                point = bounds.contains(localPoint) ? localPoint : CGPoint(x: bounds.midX, y: bounds.midY)
+            } else {
+                return event
+            }
             if event.type == .mouseMoved || event.type == .mouseExited {
                 let margin = max(64, (bounds.width - MagazinePaginator.pageWidth(bounds.width)) / 2 + 20)
                 let next = bounds.contains(point) && event.type != .mouseExited
@@ -831,28 +1132,72 @@ struct MagazineInputRegion: NSViewRepresentable {
                 if point.x < paperLeft + paperWidth / 3 { input.onTurn(-1); return nil }
                 if point.x > paperLeft + paperWidth * 2 / 3 { input.onTurn(1); return nil }
                 input.onClear()
-            } else if event.type == .scrollWheel, event.hasPreciseScrollingDeltas {
-                // 手指离开即按最后速度结算；系统后续惯性事件不再触发第二页。
-                guard event.momentumPhase.isEmpty else { return consumed ? nil : event }
-                if event.phase.contains(.began) || event.timestamp - lastWheel > 0.3 {
-                    endSwipe(cancelled: true)
-                    distance = 0; velocity = 0
-                }
-                let deltaTime = max(0.008, min(0.05, event.timestamp - lastWheel))
-                lastWheel = event.timestamp
-                guard consumed || abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.3 else { return event }
-                distance += event.scrollingDeltaX
-                velocity = velocity * 0.3 + event.scrollingDeltaX / deltaTime * 0.7
-                if abs(distance) > 12 || consumed {
-                    consumed = true
-                    input.onSwipe(distance, velocity, false, false)
-                    wheelEnd?.cancel()
-                    wheelEnd = Task { @MainActor [weak self] in
-                        do { try await Task.sleep(for: .milliseconds(160)) } catch { return }
-                        self?.endSwipe()
+            } else if event.type == .scrollWheel {
+                let isPrecise = event.hasPreciseScrollingDeltas
+                let deltaX = event.scrollingDeltaX
+                let rawY = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : (event.deltaY * 10)
+                let rawX = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : (event.deltaX * 10)
+
+                if isPrecise && (consumed || abs(deltaX) > abs(rawY) * 1.3) {
+                    // 手指离开即按最后速度结算；系统后续惯性事件不再触发第二页。
+                    guard event.momentumPhase.isEmpty else { return consumed ? nil : event }
+                    if event.phase.contains(.began) || event.timestamp - lastWheel > 0.3 {
+                        endSwipe(cancelled: true)
+                        distance = 0; velocity = 0
+                    }
+                    let deltaTime = max(0.008, min(0.05, event.timestamp - lastWheel))
+                    lastWheel = event.timestamp
+                    distance += event.scrollingDeltaX
+                    velocity = velocity * 0.3 + event.scrollingDeltaX / deltaTime * 0.7
+                    if abs(distance) > 12 || consumed {
+                        consumed = true
+                        input.onSwipe(distance, velocity, false, false)
+                        wheelEnd?.cancel()
+                        wheelEnd = Task { @MainActor [weak self] in
+                            do { try await Task.sleep(for: .milliseconds(160)) } catch { return }
+                            self?.endSwipe()
+                        }
+                    }
+                    return nil
+                } else if !consumed {
+                    // 鼠标滚轮（常规/高精度）滚动切换上下页
+                    let effectiveDelta = abs(rawY) >= abs(rawX) ? rawY : rawX
+                    if isPrecise {
+                        guard event.momentumPhase.isEmpty else { return event }
+                        if event.phase.contains(.began) || event.timestamp - lastWheelTurnTime > 0.35 {
+                            verticalSwipeActive = true
+                            verticalSwipeDelta = 0
+                        }
+                        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                            verticalSwipeActive = false
+                            verticalSwipeDelta = 0
+                        }
+                        if verticalSwipeActive || !event.phase.isEmpty {
+                            verticalSwipeDelta += effectiveDelta
+                            if abs(verticalSwipeDelta) >= 24, event.timestamp - lastWheelTurnTime > 0.32 {
+                                let direction = verticalSwipeDelta < 0 ? 1 : -1
+                                lastWheelTurnTime = event.timestamp
+                                verticalSwipeActive = false
+                                verticalSwipeDelta = 0
+                                input.onTurn(direction)
+                                return nil
+                            }
+                        }
+                    } else {
+                        // 机械鼠标滚轮滚动
+                        if event.timestamp - lastWheelTurnTime > 0.35 {
+                            accumulatedWheelDelta = 0
+                        }
+                        accumulatedWheelDelta += effectiveDelta
+                        if abs(accumulatedWheelDelta) >= 1.0, event.timestamp - lastWheelTurnTime > 0.25 {
+                            let direction = accumulatedWheelDelta < 0 ? 1 : -1
+                            lastWheelTurnTime = event.timestamp
+                            accumulatedWheelDelta = 0
+                            input.onTurn(direction)
+                            return nil
+                        }
                     }
                 }
-                return nil
             }
             return event
         }

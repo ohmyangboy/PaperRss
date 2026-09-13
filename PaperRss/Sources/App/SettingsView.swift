@@ -3860,70 +3860,7 @@ private struct AddAccountSheet: View {
 }
 
 /// 设置页的滚动条叠在右侧留白上，不参与内容宽度计算。
-private struct SettingsScrollView<Content: View>: View {
-    @ViewBuilder var content: Content
-    #if os(macOS)
-    @State private var scrollbar = PaperFloatingScrollbarView()
-    #endif
-
-    var body: some View {
-        ScrollView(.vertical) {
-            content
-                #if os(macOS)
-                .background(SettingsScrollTarget(scrollbar: scrollbar))
-                #endif
-        }
-        #if os(macOS)
-        .scrollIndicators(.never, axes: .vertical)
-        .overlay(alignment: .trailing) {
-            SettingsScrollbarOverlay(scrollbar: scrollbar)
-                .frame(width: PaperFloatingScrollbarView.hitLaneWidth)
-                .accessibilityHidden(true)
-        }
-        #endif
-    }
-}
-
-#if os(macOS)
-private struct SettingsScrollbarOverlay: NSViewRepresentable {
-    let scrollbar: PaperFloatingScrollbarView
-
-    func makeNSView(context: Context) -> PaperFloatingScrollbarView { scrollbar }
-    func updateNSView(_ nsView: PaperFloatingScrollbarView, context: Context) {}
-}
-
-/// 从内容内部向上绑定所属滚动容器，避免误选供应商页的相邻列表或嵌套文本框。
-private struct SettingsScrollTarget: NSViewRepresentable {
-    let scrollbar: PaperFloatingScrollbarView
-
-    func makeNSView(context: Context) -> Probe {
-        let view = Probe()
-        view.scrollbar = scrollbar
-        return view
-    }
-
-    func updateNSView(_ nsView: Probe, context: Context) {
-        nsView.scrollbar = scrollbar
-        nsView.scheduleAttachment()
-    }
-
-    final class Probe: NSView {
-        weak var scrollbar: PaperFloatingScrollbarView?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            scheduleAttachment()
-        }
-
-        func scheduleAttachment() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let scrollView = self.enclosingScrollView else { return }
-                self.scrollbar?.attach(to: scrollView)
-            }
-        }
-    }
-}
-#endif
+private typealias SettingsScrollView = PaperFloatingScrollView
 
 /// 预览与阅读器一样按较长内容预留高度，避免悬浮时推动设置行。
 private struct TranslationReplacementPreview: View {
