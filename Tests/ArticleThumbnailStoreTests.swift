@@ -167,4 +167,18 @@ final class ArticleThumbnailStoreTests: XCTestCase {
         XCTAssertThrowsError(try ArticleThumbnailStore.decode(png(width: 1, height: 1), pixelSize: 160))
         XCTAssertThrowsError(try ArticleThumbnailStore.decode(Data("<html>Not image</html>".utf8), pixelSize: 160))
     }
+
+    func testCrossPixelSizeFallbackReusesExistingMemoryCache() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = ThumbnailLoaderProbe(data: try png())
+        let store = ArticleThumbnailStore(directory: directory, loader: { try await probe.load($0) })
+        let smallRequest = request("img", account: "acc", size: 160)
+        let largeRequest = request("img", account: "acc", size: 1280)
+
+        _ = try await store.image(for: smallRequest)
+        XCTAssertNotNil(store.cachedImage(for: smallRequest))
+        XCTAssertNil(store.cachedImage(for: largeRequest))
+        XCTAssertNotNil(store.cachedImage(for: largeRequest, allowFuzzySize: true))
+    }
 }

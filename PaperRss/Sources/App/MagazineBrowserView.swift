@@ -181,8 +181,14 @@ final class MagazineEditionCache: ObservableObject {
     func contains(_ anchor: String?) -> Bool { anchor.flatMap { entryIndex[$0] } != nil }
 
     func openingImageRequests(scopeID: UUID, scale: CGFloat) -> [ArticleThumbnailRequest] {
+        imageRequests(forPageAt: 0, scopeID: scopeID, scale: scale)
+    }
+
+    func imageRequests(forPageAt index: Int, scopeID: UUID, scale: CGFloat) -> [ArticleThumbnailRequest] {
         guard input?.scopeID == scopeID, input?.showsImages == true,
-              let page = pages.first, let layout = layouts[page.id] else { return [] }
+              pages.indices.contains(index),
+              let layout = layouts[pages[index].id] else { return [] }
+        let page = pages[index]
         let entries = Dictionary(page.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seen = Set<ArticleThumbnailRequest>()
         return layout.placements.compactMap { placement in
@@ -281,7 +287,14 @@ struct MagazineBrowserView<Tile: View>: View {
         guard isBrowsing, showsImages else { return [] }
         return edition.openingImageRequests(scopeID: memory.magazineScopeID, scale: displayScale)
     }
+    private var nextPageImageRequests: [ArticleThumbnailRequest] {
+        guard isBrowsing, showsImages, memory.magazineIsOpen else { return [] }
+        let nextIndex = pageIndex + 1
+        guard pages.indices.contains(nextIndex) else { return [] }
+        return edition.imageRequests(forPageAt: nextIndex, scopeID: memory.magazineScopeID, scale: displayScale)
+    }
     private var pageIndex: Int {
+        if !memory.magazineIsOpen { return 0 }
         if let request = turnRequest, let target = pages.firstIndex(where: { $0.id == request.targetPageID }) { return target }
         if let position = railScrubPosition {
             return MagazineRailScrub.nearestIndex(position: position, count: pages.count)
@@ -305,7 +318,9 @@ struct MagazineBrowserView<Tile: View>: View {
             .allowsHitTesting(memory.magazineIsOpen && !coverAnimating)
             .accessibilityHidden(!memory.magazineIsOpen)
             .overlay {
-                if !memory.magazineIsOpen || coverAnimating { bookCover }
+                bookCover
+                    .opacity(!memory.magazineIsOpen || coverAnimating ? 1 : 0)
+                    .allowsHitTesting(!memory.magazineIsOpen && !coverAnimating)
                 if memory.magazineIsOpen && pages.isEmpty {
                     Text(I18N.shared.localized("暂无文章", "No articles")).foregroundStyle(.secondary)
                 }
@@ -358,8 +373,25 @@ struct MagazineBrowserView<Tile: View>: View {
                     }
                 }
             }
+            .task(id: nextPageImageRequests) {
+                guard isBrowsing, showsImages, memory.magazineIsOpen else { return }
+                do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+                guard !Task.isCancelled else { return }
+                let requests = nextPageImageRequests
+                let store = thumbnailStore
+                await withTaskGroup(of: Void.self) { group in
+                    for request in requests {
+                        group.addTask(priority: .utility) {
+                            _ = try? await store.image(for: request)
+                        }
+                    }
+                }
+            }
             .task(id: memory.magazineIsOpen) {
-                guard memory.magazineIsOpen else { coverAnimating = false; onClearSelection(); cancelTurn(); return }
+                if !memory.magazineIsOpen {
+                    onClearSelection()
+                    cancelTurn()
+                }
                 do { try await Task.sleep(for: .milliseconds(670)) } catch { return }
                 coverAnimating = false
             }
@@ -551,6 +583,12 @@ struct MagazineBrowserView<Tile: View>: View {
             .updating($isDraggingPage) { _, active, _ in active = true }
             .onChanged { value in
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+                if pageIndex == 0 && value.translation.width > 0 {
+                    if value.translation.width > 36 {
+                        closeBook()
+                    }
+                    return
+                }
                 if turnRequest == nil {
                     go(to: pageIndex + (value.translation.width < 0 ? 1 : -1), proxy: proxy, interactive: true)
                 }
@@ -560,6 +598,12 @@ struct MagazineBrowserView<Tile: View>: View {
                 turnRequest = request
             }
             .onEnded { value in
+                if pageIndex == 0 && value.translation.width > 0 {
+                    if value.translation.width > 20 || value.predictedEndTranslation.width > 30 {
+                        closeBook()
+                    }
+                    return
+                }
                 guard var request = turnRequest, request.progress != nil else { return }
                 let predicted = value.predictedEndTranslation.width * (request.forward ? -1 : 1)
                 let progress = request.progress ?? 0
@@ -573,10 +617,14 @@ struct MagazineBrowserView<Tile: View>: View {
     @ViewBuilder
     private func magazineInputOverlay(proxy: ScrollViewProxy) -> some View {
         if turning != .scroll {
-            MagazineInputRegion(active: isBrowsing && memory.magazineIsOpen && !coverAnimating,
-                articleFrames: articleFrames,
+            MagazineInputRegion(active: isBrowsing && !coverAnimating,
+                articleFrames: memory.magazineIsOpen ? articleFrames : [],
                 onArticleDown: { memory.openingFrameInWindow = $0 },
                 onTurn: { direction in
+                    if !memory.magazineIsOpen {
+                        if direction > 0 { openBook() }
+                        return
+                    }
                     onClearSelection()
                     go(to: pageIndex + direction, proxy: proxy)
                 },
@@ -591,6 +639,20 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private func handleMagazineSwipe(distance: CGFloat, velocity: CGFloat, ended: Bool,
                                      cancelled: Bool, proxy: ScrollViewProxy) {
+        if !memory.magazineIsOpen {
+            if distance < 0 && !cancelled {
+                if abs(distance) > 24 || (ended && (abs(distance) > 12 || velocity < -80)) {
+                    openBook()
+                }
+            }
+            return
+        }
+        if pageIndex == 0 && distance > 0 {
+            if !cancelled && (distance > 24 || (ended && distance > 12)) {
+                closeBook()
+            }
+            return
+        }
         if turnRequest == nil && !ended {
             go(to: pageIndex + (distance < 0 ? 1 : -1), proxy: proxy, interactive: true)
         }
@@ -738,6 +800,8 @@ struct MagazineBrowserView<Tile: View>: View {
         let layout = edition.layouts[page.id]
         let entriesByID = Dictionary(page.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let pageContentWidth = layout?.contentWidth ?? contentWidth
+        let leafWidth = max(1, (pageContentWidth - MagazinePaginator.gutter) / 2)
+        let showsBackCover = layout?.form == .spread && (layout?.placements.allSatisfy { $0.frame.maxX <= leafWidth + 1 } ?? false)
         return VStack(alignment: .leading, spacing: MagazinePaginator.headingSpacing) {
             HStack(alignment: .firstTextBaseline) {
                 Text(page.title).font(.system(size: 15, weight: .semibold, design: .serif))
@@ -755,17 +819,20 @@ struct MagazineBrowserView<Tile: View>: View {
                         if let entry = entriesByID[placement.entryID] {
                             tile(entry, placement.frame.width, .gallery)
                             .environment(\.magazineStoryStyle, placement.style)
-                            .frame(width: placement.frame.width, height: placement.frame.height, alignment: .topLeading)
+                            .frame(width: placement.frame.width, height: placement.frame.height, alignment: .leading)
                             .overlay(alignment: .top) {
                                 if placement.frame.minY > 0 {
                                     Rectangle().fill(Color(paperHex: palette.mutedHex).opacity(0.14))
-                                        .frame(height: 0.5).offset(y: placement.style.role == .supporting
-                                            ? -MagazinePaginator.supportSpacing / 2 : -MagazinePaginator.rowSpacing / 2)
+                                        .frame(height: 0.5).offset(y: -MagazinePaginator.rowSpacing / 2)
                                 }
                             }
                             .offset(x: placement.frame.minX, y: placement.frame.minY)
                             .id(entry.id)
                         }
+                    }
+                    if showsBackCover {
+                        backCoverLeaf(width: leafWidth, height: layout.height)
+                            .offset(x: leafWidth + MagazinePaginator.gutter, y: 0)
                     }
                 }
             }
@@ -778,6 +845,28 @@ struct MagazineBrowserView<Tile: View>: View {
         .onAppear { edition.markDisplayed(page.id) }
     }
 
+    private func backCoverLeaf(width: CGFloat, height: CGFloat) -> some View {
+        VStack(spacing: 20) {
+            PaperBrandIcon(width: min(64, width * 0.20))
+                .opacity(0.8)
+            if !coverTitle.isEmpty {
+                Text(coverTitle)
+                    .font(.system(size: 20, weight: .medium, design: .serif))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color(paperHex: palette.inkHex).opacity(0.72))
+                    .padding(.horizontal, 24)
+            }
+            Rectangle()
+                .fill(Color(paperHex: palette.mutedHex).opacity(0.24))
+                .frame(width: 32, height: 1)
+            Text(I18N.shared.localized("本期阅读完成", "End of Edition"))
+                .font(.system(size: 13, weight: .regular, design: .serif))
+                .foregroundStyle(Color(paperHex: palette.mutedHex))
+        }
+        .frame(width: width, height: height, alignment: .center)
+        .accessibilityHidden(true)
+    }
+
     private func showEndNotice() {
         guard notice == nil else { return }
         noticeID = UUID()
@@ -788,10 +877,30 @@ struct MagazineBrowserView<Tile: View>: View {
         guard !memory.magazineIsOpen else { return }
         autoOpenedScope = memory.magazineScopeID
         onClearSelection()
+        cancelTurn()
+        if let firstID = pages.first?.entries.first?.id {
+            memory.magazineAnchor = firstID
+            memory.visibleAnchor = firstID
+        }
         coverAnimating = true
         if pageSoundEnabled { MagazinePageSound.play() }
         withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
             memory.magazineIsOpen = true
+        }
+    }
+
+    private func closeBook() {
+        guard memory.magazineIsOpen else { return }
+        onClearSelection()
+        cancelTurn()
+        if let firstID = pages.first?.entries.first?.id {
+            memory.magazineAnchor = firstID
+            memory.visibleAnchor = firstID
+        }
+        coverAnimating = true
+        if pageSoundEnabled { MagazinePageSound.play() }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
+            memory.magazineIsOpen = false
         }
     }
 
@@ -808,6 +917,15 @@ struct MagazineBrowserView<Tile: View>: View {
             .buttonStyle(.plain)
             .accessibilityLabel(coverTitle)
             .accessibilityIdentifier("magazine.cover")
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 15)
+                    .onEnded { value in
+                        guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else { return }
+                        if value.translation.width < -20 || value.predictedEndTranslation.width < -30 {
+                            openBook()
+                        }
+                    }
+            )
             .position(x: geometry.size.width / 2, y: turnInset + height / 2)
         }
     }
@@ -885,7 +1003,7 @@ struct MagazineBrowserView<Tile: View>: View {
     private func go(to index: Int, proxy: ScrollViewProxy, interactive: Bool = false) {
         guard isBrowsing, memory.magazineIsOpen else { return }
         if isTurning || railScrubActive { cancelTurn() }
-        if index < 0 { memory.magazineIsOpen = false; return }
+        if index < 0 { closeBook(); return }
         if index >= pages.count {
             if hasMore { pendingPageIndex = index; onNeedMore() }
             else { showEndNotice() }
@@ -907,6 +1025,12 @@ struct MagazineBrowserView<Tile: View>: View {
     }
 
     private func restore(proxy: ScrollViewProxy, anchor: String? = nil) {
+        guard memory.magazineIsOpen else {
+            if let firstID = pages.first?.entries.first?.id {
+                memory.magazineAnchor = firstID
+            }
+            return
+        }
         let anchor = anchor ?? memory.magazineAnchor
         let index = edition.pageIndex(containing: anchor)
         guard pages.indices.contains(index) else { return }
@@ -947,15 +1071,11 @@ struct MagazineBrowserView<Tile: View>: View {
             }
             if let target = MagazineSpatialNavigation.neighbor(of: current, in: layout.placements, key: request.keyCode) {
                 onHighlight(target.entryID)
-            } else if request.keyCode == 123 || request.keyCode == 124 {
+            } else if request.keyCode == 123 || request.keyCode == 124 || request.keyCode == 125 {
                 let index = pageIndex + (request.keyCode == 123 ? -1 : 1)
                 if index < 0 { onFocusSidebar(); return }
                 if pages.indices.contains(index), let next = edition.layouts[pages[index].id] {
-                    let edge = next.placements.filter { request.keyCode == 123
-                        ? $0.frame.midX >= contentWidth / 2 : $0.frame.midX < contentWidth / 2 }
-                    let target = (edge.isEmpty ? next.placements : edge).min {
-                        abs($0.frame.midY - current.frame.midY) < abs($1.frame.midY - current.frame.midY)
-                    }
+                    let target = request.keyCode == 123 ? next.placements.last : next.placements.first
                     if let target { onHighlight(target.entryID) }
                 }
                 go(to: index, proxy: proxy)
@@ -1003,28 +1123,130 @@ private struct MagazineCoverLeaf<Front: View, Back: View>: View, @MainActor Anim
     }
 }
 
-/// 方向优先，再按投影重叠和距离选择相邻文章。
+/// 遵循从左到右、从上到下的阅读与空间规则选择相邻文章。
 enum MagazineSpatialNavigation {
     static func neighbor(of current: MagazinePlacement, in placements: [MagazinePlacement], key: UInt16) -> MagazinePlacement? {
-        let horizontal = key == 123 || key == 124
-        let sign: CGFloat = key == 123 || key == 126 ? -1 : 1
+        guard let currentIndex = placements.firstIndex(where: { $0.entryID == current.entryID }) else { return nil }
         let origin = current.frame
-        return placements.filter { item in
-            guard item.entryID != current.entryID else { return false }
-            let delta = horizontal ? item.frame.midX - origin.midX : item.frame.midY - origin.midY
-            let crossOverlap = horizontal
-                ? min(origin.maxY, item.frame.maxY) - max(origin.minY, item.frame.minY)
-                : min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
-            return delta * sign > 1 && (horizontal || crossOverlap > 0)
-        }.min { a, b in
-            func score(_ rect: CGRect) -> CGFloat {
-                let primary = abs(horizontal ? rect.midX - origin.midX : rect.midY - origin.midY)
-                let cross = abs(horizontal ? rect.midY - origin.midY : rect.midX - origin.midX)
-                let overlap = horizontal ? min(origin.maxY, rect.maxY) - max(origin.minY, rect.minY)
-                    : min(origin.maxX, rect.maxX) - max(origin.minX, rect.minX)
-                return primary + cross * 2 + (overlap <= 0 ? 10000 : 0)
+
+        switch key {
+        case 124: // Right Arrow
+            // 1. 同一水平带/同行右侧卡片（Y 轴有投影重叠）
+            let rightItems = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                let deltaX = item.frame.midX - origin.midX
+                let overlapY = min(origin.maxY, item.frame.maxY) - max(origin.minY, item.frame.minY)
+                return deltaX > 1 && overlapY > 0
             }
-            return score(a.frame) < score(b.frame)
+            if !rightItems.isEmpty {
+                // 遵循从左到右、从上到下：右侧有多项时，优先选最上方的（minY 最小），同高选最靠左的（minX 最小）
+                return rightItems.min { a, b in
+                    if abs(a.frame.minY - b.frame.minY) > 8 {
+                        return a.frame.minY < b.frame.minY
+                    }
+                    return a.frame.minX < b.frame.minX
+                }
+            }
+            // 2. 右侧无同带卡片时换行推进（Wrap）：沿阅读流查找下一篇
+            if currentIndex + 1 < placements.count {
+                return placements[currentIndex + 1]
+            }
+            return nil
+
+        case 123: // Left Arrow
+            // 1. 同一水平带/同行左侧卡片（Y 轴有投影重叠）
+            let leftItems = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                let deltaX = origin.midX - item.frame.midX
+                let overlapY = min(origin.maxY, item.frame.maxY) - max(origin.minY, item.frame.minY)
+                return deltaX > 1 && overlapY > 0
+            }
+            if !leftItems.isEmpty {
+                // 左侧有多项时，优先选 X 离当前最近的；若相当则选垂直更对齐的
+                return leftItems.min { a, b in
+                    let distA = origin.minX - a.frame.maxX
+                    let distB = origin.minX - b.frame.maxX
+                    if abs(distA - distB) > 8 {
+                        return distA < distB
+                    }
+                    return abs(a.frame.midY - origin.midY) < abs(b.frame.midY - origin.midY)
+                }
+            }
+            // 2. 左侧无同带卡片时换行回退（Wrap Back）：沿阅读流查找上一篇
+            if currentIndex > 0 {
+                return placements[currentIndex - 1]
+            }
+            return nil
+
+        case 125: // Down Arrow
+            // 1. 优先寻找正下方有 X 投影重叠的卡片
+            let strictlyBelow = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                let deltaY = item.frame.midY - origin.midY
+                let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
+                return deltaY > 1 && overlapX > 0 && item.frame.minY >= origin.minY + 4
+            }
+            if !strictlyBelow.isEmpty {
+                // 离当前最近的下方行；同行内遵循从左到右（minX 最小）
+                return strictlyBelow.min { a, b in
+                    if abs(a.frame.minY - b.frame.minY) > 8 {
+                        return a.frame.minY < b.frame.minY
+                    }
+                    return a.frame.minX < b.frame.minX
+                }
+            }
+            // 2. 无 X 投影重叠时放宽约束：查找所有在当前项下方的卡片，绝不卡死
+            let anyBelow = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                return item.frame.minY >= origin.maxY - 8 && item.frame.midY > origin.midY + 1
+            }
+            if !anyBelow.isEmpty {
+                return anyBelow.min { a, b in
+                    if abs(a.frame.minY - b.frame.minY) > 8 {
+                        return a.frame.minY < b.frame.minY
+                    }
+                    return a.frame.minX < b.frame.minX
+                }
+            }
+            // 3. 若下方已无卡片，但阅读流后方仍有条目，顺延推进；否则返回 nil 允许翻页
+            if currentIndex + 1 < placements.count {
+                return placements[currentIndex + 1]
+            }
+            return nil
+
+        case 126: // Up Arrow
+            // 1. 优先寻找正上方有 X 投影重叠的卡片
+            let strictlyAbove = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                let deltaY = origin.midY - item.frame.midY
+                let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
+                return deltaY > 1 && overlapX > 0 && item.frame.maxY <= origin.maxY - 4
+            }
+            if !strictlyAbove.isEmpty {
+                return strictlyAbove.min { a, b in
+                    if abs(a.frame.maxY - b.frame.maxY) > 8 {
+                        return a.frame.maxY > b.frame.maxY
+                    }
+                    return a.frame.minX < b.frame.minX
+                }
+            }
+            // 2. 放宽约束：查找所有在当前项上方的卡片
+            let anyAbove = placements.filter { item in
+                guard item.entryID != current.entryID else { return false }
+                return item.frame.maxY <= origin.minY + 8 && item.frame.midY < origin.midY - 1
+            }
+            if !anyAbove.isEmpty {
+                return anyAbove.min { a, b in
+                    if abs(a.frame.maxY - b.frame.maxY) > 8 {
+                        return a.frame.maxY > b.frame.maxY
+                    }
+                    return a.frame.minX < b.frame.minX
+                }
+            }
+            return nil
+
+        default:
+            return nil
         }
     }
 }

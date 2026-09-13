@@ -415,9 +415,16 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private weak var visualTitleWidthConstraint: NSLayoutConstraint?
         private weak var unreadFilterButton: NSButton?
         private weak var markAllReadButton: NSButton?
+        private var markAllReadPopover: NSPopover?
         nonisolated(unsafe) private var eventMonitor: Any?
         nonisolated(unsafe) private var mouseDownMonitor: Any?
         nonisolated(unsafe) private var fullScreenChromeTimer: DispatchSourceTimer?
+        nonisolated(unsafe) private var swipeReturnTracking = false
+        nonisolated(unsafe) private var swipeReturnDistance: CGFloat = 0
+        nonisolated(unsafe) private var swipeReturnDirectionLocked = false
+        nonisolated(unsafe) private var swipeReturnIsVertical = false
+        nonisolated(unsafe) private var swipeReturnTotalDeltaX: CGFloat = 0
+        nonisolated(unsafe) private var swipeReturnTotalDeltaY: CGFloat = 0
         private(set) var activeColumnIndex: Int = 1
         var didInitializeFocus = false
         init(
@@ -478,13 +485,141 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             ))
         }
 
+        @MainActor
+        func currentReaderWebView() -> WKWebView? {
+            guard let splitVC = splitViewController, splitVC.splitViewItems.count >= 3 else { return nil }
+            let detailView = splitVC.splitViewItems[2].viewController.view
+            func findWKWebView(in view: NSView) -> WKWebView? {
+                if let webView = view as? WKWebView { return webView }
+                for subview in view.subviews {
+                    if let found = findWKWebView(in: subview) { return found }
+                }
+                return nil
+            }
+            return findWKWebView(in: detailView)
+        }
+
+        @MainActor
+        private func notifySwipeGestureEnded() {
+            guard let webView = currentReaderWebView() else { return }
+            webView.evaluateJavaScript("window.paperRssTOCRail?.finishSwipe?.()", completionHandler: nil)
+        }
+
+        @MainActor
+        private func notifySwipeGestureCancelled() {
+            guard let webView = currentReaderWebView() else { return }
+            webView.evaluateJavaScript("window.paperRssTOCRail?.resetSwipe?.(true)", completionHandler: nil)
+        }
+
         private func setupLocalKeyMonitor() {
             guard eventMonitor == nil else { return }
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .swipe, .otherMouseUp, .scrollWheel]) { [weak self] event in
                 guard let self = self, self.isReaderActive,
                       event.window === self.splitViewController?.view.window else { return event }
 
+                // 系统三指轻扫手势：在阅读界面向右轻扫返回上一级（杂志排版）
+                if event.type == .swipe {
+                    if event.deltaX > 0 {
+                        let handled = MainActor.assumeIsolated { () -> Bool in
+                            guard self.activeColumnIndex == 2 && self.actions.showsTimelineReturn else { return false }
+                            self.actions.onReturnToTimeline()
+                            return true
+                        }
+                        if handled { return nil }
+                    }
+                    return event
+                }
+
+                // 鼠标后退侧键 (buttonNumber == 3)：如同浏览器返回上一级
+                if event.type == .otherMouseUp {
+                    if event.buttonNumber == 3 {
+                        let handled = MainActor.assumeIsolated { () -> Bool in
+                            guard self.activeColumnIndex == 2 && self.actions.showsTimelineReturn else { return false }
+                            self.actions.onReturnToTimeline()
+                            return true
+                        }
+                        if handled { return nil }
+                    }
+                    return event
+                }
+
+                // 触控板两指平滑右滑手势（如同浏览器两指右滑返回）：
+                // 永远放行滚动事件给 WebKit，让左侧返回箭头 100% 同步跟手平移；
+                // 仅在手指物理离开触控板 (event.phase.contains(.ended)) 瞬间，松手即刻返回！
+                if event.type == .scrollWheel {
+                    let canSwipeReturn = MainActor.assumeIsolated { () -> Bool in
+                        self.actions.showsTimelineReturn
+                    }
+
+                    if canSwipeReturn && event.hasPreciseScrollingDeltas {
+                        let phase = event.phase
+
+                        if phase.contains(.began) {
+                            self.swipeReturnTracking = true
+                            self.swipeReturnDistance = 0
+                            self.swipeReturnDirectionLocked = false
+                            self.swipeReturnIsVertical = false
+                            self.swipeReturnTotalDeltaX = 0
+                            self.swipeReturnTotalDeltaY = 0
+                        } else if self.swipeReturnTracking {
+                            if phase.contains(.changed) {
+                                let dx = event.scrollingDeltaX
+                                let dy = event.scrollingDeltaY
+                                self.swipeReturnTotalDeltaX += dx
+                                self.swipeReturnTotalDeltaY += dy
+
+                                if !self.swipeReturnDirectionLocked {
+                                    let absX = abs(self.swipeReturnTotalDeltaX)
+                                    let absY = abs(self.swipeReturnTotalDeltaY)
+                                    if absX >= 6 || absY >= 6 {
+                                        self.swipeReturnDirectionLocked = true
+                                        if absY >= absX * 0.8 {
+                                            self.swipeReturnIsVertical = true
+                                            self.swipeReturnTracking = false
+                                        }
+                                    }
+                                } else if !self.swipeReturnIsVertical {
+                                    let step = dx
+                                    self.swipeReturnDistance = max(0, self.swipeReturnDistance + step)
+                                }
+                            } else if phase.contains(.ended) {
+                                // 手指物理脱离触控板：松手瞬间立即结算返回！
+                                let shouldReturn = self.swipeReturnDirectionLocked && !self.swipeReturnIsVertical && self.swipeReturnDistance >= 54
+                                self.swipeReturnTracking = false
+                                self.swipeReturnDistance = 0
+
+                                MainActor.assumeIsolated {
+                                    if shouldReturn {
+                                        self.actions.onReturnToTimeline()
+                                        self.notifySwipeGestureCancelled()
+                                    } else {
+                                        self.notifySwipeGestureCancelled()
+                                    }
+                                }
+                            } else if phase.contains(.cancelled) {
+                                self.swipeReturnTracking = false
+                                self.swipeReturnDistance = 0
+                                MainActor.assumeIsolated {
+                                    self.notifySwipeGestureCancelled()
+                                }
+                            }
+                        }
+                    }
+
+                    return event
+                }
+
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+                // 浏览器标准快捷键：Cmd + [ (keyCode 33) 或 Cmd + LeftArrow (keyCode 123) 返回上一级
+                if flags.contains(.command) && (event.keyCode == 33 || event.keyCode == 123) {
+                    let handled = MainActor.assumeIsolated { () -> Bool in
+                        guard self.activeColumnIndex == 2 && self.actions.showsTimelineReturn else { return false }
+                        self.actions.onReturnToTimeline()
+                        return true
+                    }
+                    if handled { return nil }
+                }
 
 
                 // ESC 键 (keyCode 53)：处于禅模式时按下 ESC 键退出禅模式
@@ -1636,9 +1771,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         // 原生工具栏会二次缩放 SF Symbol；固定绘制边界，与阅读胶囊的视觉尺寸一致。
         private func listToolbarImage(_ image: NSImage?) -> NSImage? {
             guard let image else { return nil }
-            let symbol = image.withSymbolConfiguration(.init(
+            let sizeConfig = NSImage.SymbolConfiguration(
                 pointSize: ReaderCapsuleToolbar.symbolPointSize, weight: .medium
-            )) ?? image
+            )
+            let config = image.symbolConfiguration.applying(sizeConfig)
+            let symbol = image.withSymbolConfiguration(config) ?? image
             let side: CGFloat = 18
             let size = symbol.size
             let factor = side / max(1, max(size.width, size.height))
@@ -1703,7 +1840,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             syncTimelineToolbarStructure()
             if let button = unreadFilterButton {
                 let title = I18N.localized(actions.unreadOnly ? "显示全部" : "仅显示未读")
-                button.image = NSImage(systemSymbolName: actions.unreadOnly
+                let baseImage = NSImage(systemSymbolName: actions.unreadOnly
                     ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle",
                     accessibilityDescription: title)
                 button.toolTip = title
@@ -1713,10 +1850,15 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let tint = actions.unreadOnly
                     ? NSColor(Color(paperHex: chromePalette.accentHex)) : chromeInkColor
                 button.contentTintColor = tint
-                // 原生工具栏会覆盖模板图像的着色，显式保留主题色。
-                let symbolColors = actions.unreadOnly ? [chromeBackgroundColor, tint] : [tint]
-                button.image = button.image?.withSymbolConfiguration(.init(paletteColors: symbolColors))
-                button.image?.isTemplate = false
+                if actions.unreadOnly {
+                    // 原生工具栏会覆盖模板图像的着色，显式保留主题色。
+                    let symbolColors = [chromeBackgroundColor, tint]
+                    button.image = baseImage?.withSymbolConfiguration(.init(paletteColors: symbolColors))
+                    button.image?.isTemplate = false
+                } else {
+                    button.image = baseImage
+                    button.image?.isTemplate = true
+                }
                 button.image = listToolbarImage(button.image)
             }
             if let button = markAllReadButton {
@@ -2049,7 +2191,70 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         @objc private func doImport() { actions.onImport() }
         @objc private func doExport() { actions.onExport() }
         @objc private func doToggleUnreadFilter() { actions.onToggleUnreadFilter() }
-        @objc private func doMarkAllRead() { actions.onMarkAllRead() }
+        @objc private func doMarkAllRead() {
+            guard let button = markAllReadButton, button.window != nil else {
+                actions.onMarkAllRead()
+                return
+            }
+            if let popover = markAllReadPopover, popover.isShown {
+                popover.close()
+                return
+            }
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+
+            let contentView = MarkAllReadConfirmationPopoverView(
+                onConfirm: { [weak self, weak popover] in
+                    popover?.close()
+                    self?.actions.onMarkAllRead()
+                },
+                onCancel: { [weak popover] in
+                    popover?.close()
+                }
+            )
+
+            let controller = NSHostingController(rootView: contentView)
+            let fittingSize = controller.view.fittingSize
+            controller.preferredContentSize = fittingSize
+            popover.contentSize = fittingSize
+            popover.contentViewController = controller
+            self.markAllReadPopover = popover
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        }
+    }
+
+    struct MarkAllReadConfirmationPopoverView: View {
+        let onConfirm: () -> Void
+        let onCancel: () -> Void
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 6) {
+                    Image(systemName: "envelope.open")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(I18N.localized("标记所有文章已读？", englishFallback: "Mark all articles as read?"))
+                        .font(.headline)
+                }
+
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button(I18N.localized("取消", englishFallback: "Cancel")) {
+                        onCancel()
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button(I18N.localized("全部已读", englishFallback: "Mark All as Read")) {
+                        onConfirm()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(12)
+            .fixedSize()
+        }
     }
 
 // MARK: - 自定义工具栏项标识

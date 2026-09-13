@@ -3237,7 +3237,21 @@ enum PaperReaderBridge {
                 width: 42px; height: 44px; display: grid; place-items: center;
                 border: 0; border-radius: 0; padding: 0; background: transparent;
                 color: var(--paper-muted); opacity: 0; cursor: pointer;
-                transition: opacity .28s cubic-bezier(.16, 1, .3, 1);
+                transition: opacity .28s cubic-bezier(.16, 1, .3, 1), transform .24s cubic-bezier(.16, 1, .3, 1);
+                will-change: transform, opacity;
+              }
+              #paper-rss-magazine-return svg {
+                transform: scale(1);
+                transition: transform .18s cubic-bezier(.16, 1, .3, 1);
+              }
+              #paper-rss-magazine-return.is-swiping {
+                transition: none;
+              }
+              #paper-rss-magazine-return.is-ready {
+                color: var(--paper-ink);
+              }
+              #paper-rss-magazine-return.is-ready svg {
+                transform: scale(1.2);
               }
               #paper-rss-magazine-return:hover, #paper-rss-magazine-return:focus-visible { color: var(--paper-ink); }
               @media (prefers-reduced-motion: reduce) { #paper-rss-magazine-return { transition: none; } }
@@ -3477,17 +3491,76 @@ enum PaperReaderBridge {
           };
           // 返回入口与章节条使用同一边距、墨色及显隐节奏，短文章也可使用。
           let returnButton = null, returnTimer = null, returnNear = false;
+          let swipeDistance = 0, swipeActive = false, swipeDirectionLocked = false, isVerticalScroll = false;
+          let wheelEndTimer = null;
+          let touchDragStartX = null, touchDragStartY = null, touchDragActive = false;
+          const SWIPE_THRESHOLD = 54;
+          const DIRECTION_LOCK_THRESHOLD = 6;
+
+          const resetSwipe = (cancelled = false) => {
+            if (wheelEndTimer !== null) {
+              window.clearTimeout(wheelEndTimer);
+              wheelEndTimer = null;
+            }
+            if (returnButton) {
+              returnButton.classList.remove("is-swiping", "is-ready");
+              returnButton.style.transform = "";
+              if (cancelled || !returnNear) {
+                if (returnTimer !== null) window.clearTimeout(returnTimer);
+                returnTimer = window.setTimeout(() => {
+                  if (returnButton && !returnNear && !atEnd() && !returnButton.matches(":focus")) {
+                    returnButton.style.opacity = "0";
+                  }
+                }, 1000);
+              }
+            }
+            swipeDistance = 0;
+            swipeActive = false;
+            swipeDirectionLocked = false;
+            isVerticalScroll = false;
+            touchDragActive = false;
+            touchDragStartX = null;
+            touchDragStartY = null;
+          };
+
+          const finishSwipe = () => {
+            if (wheelEndTimer !== null) {
+              window.clearTimeout(wheelEndTimer);
+              wheelEndTimer = null;
+            }
+            const shouldReturn = swipeActive && swipeDistance >= SWIPE_THRESHOLD;
+            resetSwipe(!shouldReturn);
+            if (shouldReturn && window.paperRssReaderInteractive) {
+              window.webkit?.messageHandlers?.paperRssFocusList?.postMessage({});
+            }
+          };
+
+          const isInsideScrollableChild = target => {
+            let el = target;
+            while (el && el !== document.body && el !== document.documentElement) {
+              try {
+                const overflowX = window.getComputedStyle ? window.getComputedStyle(el).overflowX : el.style?.overflowX;
+                if ((overflowX === "auto" || overflowX === "scroll") && el.scrollWidth > el.clientWidth) {
+                  if (el.scrollLeft > 0) return true;
+                }
+              } catch (_) {}
+              el = el.parentElement;
+            }
+            return false;
+          };
+
           const atEnd = () => currentScrollTop() + viewportHeight() >= documentHeight() - 4;
-          const wakeReturn = () => {
+          const wakeReturn = (delay = 1400) => {
             if (!returnButton) return;
             returnButton.style.opacity = "1";
             if (returnTimer !== null) window.clearTimeout(returnTimer);
             returnTimer = window.setTimeout(() => {
               if (returnButton && !returnNear && !atEnd() && !returnButton.matches(":focus")) returnButton.style.opacity = "0";
-            }, 1400);
+            }, delay);
           };
           state.syncReturn = () => {
             if (!window.paperRssMagazineReturnEnabled) {
+              resetSwipe(true);
               returnButton?.remove(); returnButton = null;
               if (returnTimer !== null) window.clearTimeout(returnTimer);
               return;
@@ -3505,6 +3578,7 @@ enum PaperReaderBridge {
             });
             returnButton.addEventListener("focus", wakeReturn);
             root.appendChild(returnButton);
+            wakeReturn(2000);
             if (atEnd()) wakeReturn();
           };
           const onScroll = () => {
@@ -3524,7 +3598,30 @@ enum PaperReaderBridge {
             syncScrollbarGeometry();
             refresh();
           };
-          const onWheel = () => {
+          state.setSwipeProgress = (dist, isReady) => {
+            const distance = Number(dist) || 0;
+            if (!returnButton) return;
+            if (distance > 0) {
+              returnButton.style.opacity = "1";
+              returnButton.classList.add("is-swiping");
+              const offset = Math.min(distance * 0.45, 48);
+              returnButton.style.transform = "translate3d(" + offset + "px, -50%, 0)";
+              returnButton.classList.toggle("is-ready", Boolean(isReady));
+            } else {
+              returnButton.classList.remove("is-swiping", "is-ready");
+              returnButton.style.transform = "";
+              if (!returnNear) {
+                if (returnTimer !== null) window.clearTimeout(returnTimer);
+                returnTimer = window.setTimeout(() => {
+                  if (returnButton && !returnNear && !atEnd() && !returnButton.matches(":focus")) {
+                    returnButton.style.opacity = "0";
+                  }
+                }, 800);
+              }
+            }
+          };
+
+          const onWheel = event => {
             wakeReturn();
             if (state.rail) {
               wakeRail(1400);
@@ -3541,12 +3638,99 @@ enum PaperReaderBridge {
                 scheduleScrollbarFadeOut(800);
               }
             }
+
+            if (window.paperRssMagazineReturnEnabled && window.paperRssReaderInteractive && returnButton) {
+              if (isInsideScrollableChild(event?.target)) {
+                resetSwipe(true);
+              } else {
+                const deltaX = Number(event?.deltaX || 0);
+                const deltaY = Number(event?.deltaY || 0);
+                const stepRight = -deltaX;
+                if (!swipeDirectionLocked) {
+                  const absX = Math.abs(deltaX);
+                  const absY = Math.abs(deltaY);
+                  if (absX >= DIRECTION_LOCK_THRESHOLD || absY >= DIRECTION_LOCK_THRESHOLD) {
+                    swipeDirectionLocked = true;
+                    if (absY >= absX * 0.8) {
+                      isVerticalScroll = true;
+                    } else if (stepRight > 0) {
+                      swipeActive = true;
+                    }
+                  }
+                }
+
+                if (swipeActive && !isVerticalScroll) {
+                  swipeDistance = Math.max(0, swipeDistance + stepRight);
+                  returnButton.style.opacity = "1";
+                  returnButton.classList.add("is-swiping");
+                  const offset = Math.min(swipeDistance * 0.45, 48);
+                  returnButton.style.transform = `translate3d(${offset}px, -50%, 0)`;
+                  returnButton.classList.toggle("is-ready", swipeDistance >= SWIPE_THRESHOLD);
+
+                  // 触控板滑动中：严禁使用自动定时器返回！手指停顿不准跳走，严格等待手指物理松开
+                  if (wheelEndTimer !== null) {
+                    window.clearTimeout(wheelEndTimer);
+                    wheelEndTimer = null;
+                  }
+                } else if (isVerticalScroll) {
+                  if (wheelEndTimer !== null) window.clearTimeout(wheelEndTimer);
+                  wheelEndTimer = window.setTimeout(() => resetSwipe(true), 90);
+                }
+              }
+            }
+          };
+          const onMouseBack = event => {
+            if (!window.paperRssMagazineReturnEnabled || !window.paperRssReaderInteractive) return;
+            if (event?.button === 3) {
+              event.preventDefault();
+              event.stopPropagation();
+              window.webkit?.messageHandlers?.paperRssFocusList?.postMessage({});
+            }
+          };
+          const onPointerDown = event => {
+            if (!window.paperRssMagazineReturnEnabled || !window.paperRssReaderInteractive) return;
+            const clientX = Number(event?.clientX);
+            const clientY = Number(event?.clientY);
+            if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+            if (clientX <= 48 || (event.target && event.target.closest && event.target.closest("#paper-rss-magazine-return"))) {
+              touchDragStartX = clientX;
+              touchDragStartY = clientY;
+              touchDragActive = true;
+            }
+          };
+          const onPointerUp = () => {
+            if (!touchDragActive) return;
+            finishSwipe();
           };
           const onPointerMove = event => {
             const clientX = Number(event?.clientX);
             if (!Number.isFinite(clientX)) return;
             returnNear = clientX <= 64;
             if (returnNear) wakeReturn();
+
+            if (touchDragActive && touchDragStartX !== null) {
+              const clientY = Number(event?.clientY);
+              const dx = clientX - touchDragStartX;
+              const dy = Number.isFinite(clientY) ? Math.abs(clientY - (touchDragStartY || 0)) : 0;
+              if (dx > 0 && dx > dy * 0.8) {
+                swipeActive = true;
+                swipeDistance = dx;
+                if (returnButton) {
+                  returnButton.style.opacity = "1";
+                  returnButton.classList.add("is-swiping");
+                  const offset = Math.min(swipeDistance * 0.45, 48);
+                  returnButton.style.transform = `translate3d(${offset}px, -50%, 0)`;
+                  returnButton.classList.toggle("is-ready", swipeDistance >= SWIPE_THRESHOLD);
+                }
+              } else if (dx <= 0) {
+                if (returnButton) {
+                  returnButton.style.transform = "";
+                  returnButton.classList.remove("is-ready");
+                }
+                swipeDistance = 0;
+              }
+            }
+
             const windowWidth = Number(window.innerWidth || document.documentElement.clientWidth || 0);
             if (state.rail) {
               const nearEdge = windowWidth > 0 && clientX >= windowWidth - 64;
@@ -3593,7 +3777,10 @@ enum PaperReaderBridge {
           };
           state.refresh = refresh;
           state.syncScrollbarGeometry = syncScrollbarGeometry;
+          state.finishSwipe = finishSwipe;
+          state.resetSwipe = (cancelled) => resetSwipe(cancelled);
           state.destroy = () => {
+            resetSwipe(true);
             returnButton?.remove();
             if (returnTimer !== null) window.clearTimeout(returnTimer);
             if (state.hideTimer !== null) window.clearTimeout(state.hideTimer);
@@ -3604,6 +3791,11 @@ enum PaperReaderBridge {
             document.removeEventListener("scroll", onScroll, { capture: true });
             document.removeEventListener("keydown", onKeyDown, { capture: true });
             document.removeEventListener("pointermove", onPointerMove);
+            document.removeEventListener("pointerdown", onPointerDown);
+            document.removeEventListener("pointerup", onPointerUp);
+            document.removeEventListener("pointercancel", onPointerUp);
+            document.removeEventListener("auxclick", onMouseBack, { capture: true });
+            document.removeEventListener("mouseup", onMouseBack, { capture: true });
             window.removeEventListener("resize", onResize);
             window.removeEventListener("wheel", onWheel, { capture: true });
             clearRail();
@@ -3618,6 +3810,11 @@ enum PaperReaderBridge {
           document.addEventListener("scroll", onScroll, { passive: true, capture: true });
           document.addEventListener("keydown", onKeyDown, { capture: true });
           document.addEventListener("pointermove", onPointerMove, { passive: true });
+          document.addEventListener("pointerdown", onPointerDown, { passive: true });
+          document.addEventListener("pointerup", onPointerUp, { passive: true });
+          document.addEventListener("pointercancel", onPointerUp, { passive: true });
+          document.addEventListener("auxclick", onMouseBack, { capture: true });
+          document.addEventListener("mouseup", onMouseBack, { capture: true });
           window.addEventListener("resize", onResize, { passive: true });
           window.addEventListener("wheel", onWheel, { passive: true, capture: true });
           if (typeof MutationObserver !== "undefined") {

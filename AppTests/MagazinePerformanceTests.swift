@@ -67,13 +67,18 @@ final class MagazinePerformanceTests: XCTestCase {
         XCTAssertEqual(requests.count, Set(requests).count)
         let firstPageURLs = Set(try XCTUnwrap(cache.pages.first).entries.compactMap(\.previewImageURL))
         XCTAssertTrue(Set(requests.map(\.url)).isSubset(of: firstPageURLs))
-        XCTAssertLessThan(requests.count, entries.count)
         XCTAssertTrue(cache.openingImageRequests(scopeID: UUID(), scale: 2).isEmpty,
             "订阅切换但新版式尚未发布时，不预取旧订阅图片")
+        let nextRequests = cache.imageRequests(forPageAt: 1, scopeID: scope, scale: 2)
+        XCTAssertFalse(nextRequests.isEmpty)
+        let secondPageURLs = Set(cache.pages[1].entries.compactMap(\.previewImageURL))
+        XCTAssertTrue(Set(nextRequests.map(\.url)).isSubset(of: secondPageURLs))
+        XCTAssertTrue(cache.imageRequests(forPageAt: 999, scopeID: scope, scale: 2).isEmpty)
         var disabled = input
         disabled.showsImages = false
         cache.update(disabled)
         XCTAssertTrue(cache.openingImageRequests(scopeID: scope, scale: 2).isEmpty)
+        XCTAssertTrue(cache.imageRequests(forPageAt: 1, scopeID: scope, scale: 2).isEmpty)
     }
 
     func testOpeningThumbnailUsesDisplaySizeAndOmitsTextOnlyStories() throws {
@@ -427,11 +432,51 @@ extension MagazinePerformanceTests {
             MagazinePlacement(entryID: "right-mid", frame: CGRect(x: 340, y: 120, width: 300, height: 100), style: .init()),
             MagazinePlacement(entryID: "bottom", frame: CGRect(x: 0, y: 400, width: 300, height: 150), style: .init())
         ]
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 124)?.entryID, "right-mid")
+        // 遵循从左到右、从上到下：向右移动遇到多篇候选优先选择最上方的 right-top（非中间稿）
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 124)?.entryID, "right-top")
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 125)?.entryID, "bottom")
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 126)?.entryID, "right-top")
         XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 123))
-        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 124))
+        // 行末向右换行推进到下一篇 bottom；全页末尾向右才返回 nil 进行翻页
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 124)?.entryID, "bottom")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 124))
+        // 行首向左换行回退到上一篇 right-mid
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 123)?.entryID, "right-mid")
+    }
+
+    func testMagazineSpatialNavigationFollowsLeftToRightTopToBottomRule() {
+        // 标准 2x2 网格测试
+        let grid = [
+            MagazinePlacement(entryID: "card-1", frame: CGRect(x: 0, y: 0, width: 200, height: 100), style: .init()),
+            MagazinePlacement(entryID: "card-2", frame: CGRect(x: 220, y: 0, width: 200, height: 100), style: .init()),
+            MagazinePlacement(entryID: "card-3", frame: CGRect(x: 0, y: 120, width: 200, height: 100), style: .init()),
+            MagazinePlacement(entryID: "card-4", frame: CGRect(x: 220, y: 120, width: 200, height: 100), style: .init())
+        ]
+        // 向右移动：1 -> 2 -> 3 (换行) -> 4 -> nil (翻页)
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[0], in: grid, key: 124)?.entryID, "card-2")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 124)?.entryID, "card-3")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 124)?.entryID, "card-4")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[3], in: grid, key: 124))
+
+        // 向左移动：4 -> 3 -> 2 (换行回退) -> 1 -> nil (翻页/侧栏)
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[3], in: grid, key: 123)?.entryID, "card-3")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 123)?.entryID, "card-2")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 123)?.entryID, "card-1")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[0], in: grid, key: 123))
+
+        // 垂直移动：1 -> 3, 2 -> 4, 3 -> 1, 4 -> 2
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[0], in: grid, key: 125)?.entryID, "card-3")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 125)?.entryID, "card-4")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 126)?.entryID, "card-1")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[3], in: grid, key: 126)?.entryID, "card-2")
+
+        // 宽卡片下方有两列：按下键遵循从左到右优先选中左侧卡片
+        let wideTop = [
+            MagazinePlacement(entryID: "banner", frame: CGRect(x: 0, y: 0, width: 440, height: 120), style: .init()),
+            MagazinePlacement(entryID: "sub-left", frame: CGRect(x: 0, y: 140, width: 200, height: 100), style: .init()),
+            MagazinePlacement(entryID: "sub-right", frame: CGRect(x: 220, y: 140, width: 200, height: 100), style: .init())
+        ]
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: wideTop[0], in: wideTop, key: 125)?.entryID, "sub-left")
     }
 }
 
@@ -613,17 +658,30 @@ extension MagazinePerformanceTests {
             }
         }
     }
-    func testEndingRequiresKnownEndAndUsesNaturalSingleLeaf() {
+    func testEndingRequiresKnownEndAndPreservesSpreadLayout() {
         for count in [1, 2, 3] {
             let entries = editorialEntries(count, images: count == 2)
+            // 宽屏对开模式：保持双页布局，文章排在左叶，右叶预留给封底底图
             let final = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
                 size: CGSize(width: 1450, height: 1200), showsImages: true)
             XCTAssertEqual(final.count, 1)
             XCTAssertEqual(final[0].template, .ending)
-            XCTAssertEqual(final[0].form, .single)
-            XCTAssertLessThanOrEqual(final[0].paperWidth, 720)
+            XCTAssertEqual(final[0].form, .spread, "宽屏对开模式下最后一页必须保留双页布局，不得退化为单页")
+            XCTAssertGreaterThan(final[0].paperWidth, 1000)
             XCTAssertTrue(final[0].isEnd)
-            XCTAssertEqual(final[0].height, final[0].placements.map(\.frame.maxY).max())
+            let leafWidth = (final[0].contentWidth - MagazinePaginator.gutter) / 2
+            XCTAssertTrue(final[0].placements.allSatisfy { $0.frame.maxX <= leafWidth + 1 }, "不足双页的文章全部排在左叶")
+            let expectedHeight = max(1, 1200 - MagazinePaginator.railHeight - MagazinePaginator.headingHeight)
+            XCTAssertEqual(final[0].height, expectedHeight, "最后一页必须保持正常的杂志页面高度，不得截断")
+
+            // 单页视口模式：正常保持单页布局
+            let singleFinal = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: CGSize(width: 800, height: 1000), showsImages: true)
+            XCTAssertEqual(singleFinal.count, 1)
+            XCTAssertEqual(singleFinal[0].form, .single)
+            let expectedSingleHeight = max(1, 1000 - MagazinePaginator.railHeight - MagazinePaginator.headingHeight)
+            XCTAssertEqual(singleFinal[0].height, expectedSingleHeight, "单页模式下最后一页也必须保持正常的杂志页面高度")
+
             let loading = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
                 size: CGSize(width: 1450, height: 1200), showsImages: true, hasMore: true)
             XCTAssertFalse(loading.last!.isEnd)
@@ -844,6 +902,35 @@ extension MagazinePerformanceTests {
             size: size, showsImages: true, hasMore: true).contains { $0.template == .feature })
     }
 
+    func testFeatureSpreadActivatesOnMacBookViewportSizes() {
+        let first = EntryListItem(id: "macbook-starred", feedID: UUID(), title: "MacBook 适配专题报道", sourceTitle: "深度",
+            isStarred: true, previewImageURL: URL(string: "https://example.com/macbook.jpg"))
+        let entries = [first] + editorialEntries(20, images: true)
+
+        let macBookSizes = [
+            CGSize(width: 1200, height: 750),
+            CGSize(width: 1100, height: 680),
+            CGSize(width: 1000, height: 720)
+        ]
+
+        for size in macBookSizes {
+            let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+                size: size, showsImages: true, hasMore: true)
+            guard let firstPage = pages.first else {
+                XCTFail("MacBook 尺寸下必须能够生成页面: \(size)")
+                continue
+            }
+            XCTAssertEqual(firstPage.template, .feature, "在 MacBook 视口 \(size) 下应当成功激活 .feature 整叶大图排版")
+            XCTAssertEqual(firstPage.form, .spread, "版心宽度满足要求时必须维持双页对开模式")
+            let lead = firstPage.placements[0]
+            XCTAssertEqual(lead.entryID, first.id)
+            XCTAssertGreaterThanOrEqual(lead.style.imageHeight, firstPage.height * 0.48)
+            XCTAssertLessThan(lead.frame.maxX, firstPage.contentWidth / 2)
+            XCTAssertTrue(firstPage.placements.dropFirst().allSatisfy { $0.frame.minX > firstPage.contentWidth / 2 })
+            assertEditorialGeometry(pages)
+        }
+    }
+
     func testImageFramesUseUniformGalleryRatioAndTextMatchedSideHeight() {
         let entries = Array(editorialEntries(40, images: true).dropFirst())
         let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
@@ -886,5 +973,29 @@ extension MagazinePerformanceTests {
         XCTAssertGreaterThan(b.imageHeight, a.imageHeight + 40)
         XCTAssertEqual(b.imageHeight, ceil(b.textHeight(for: long, width: 588)))
         XCTAssertEqual(b, b.matchingSideImage(to: long, width: 588), "重复排版不改变宽高")
+    }
+
+    func testSideStoryMetadataAlignsToImageBottomAndHarmoniousSpacing() {
+        let entry = EntryListItem(id: "numbers-business", feedID: UUID(),
+            title: "you see these numbers. we've got the biggest numbers. we're in the numbers business. make the numbers go bigger. it's that easy. for us.",
+            summaryPreview: "you see these numbers. we've got the biggest numbers. we're in the...",
+            sourceTitle: "Twitter @dax")
+        let baseStyle = MagazineStoryStyle(role: .supporting, titleSize: 19, titleLines: 4,
+            imageHeight: 112, imageBesideText: true)
+        let matched = baseStyle.matchingSideImage(to: entry, width: 588)
+        let store = ArticleThumbnailStore()
+        let view = MagazineStoryView(entry: entry, style: matched, width: 588, selected: false, store: store)
+        let host = NSHostingView(rootView: view)
+        let size = host.fittingSize
+        XCTAssertEqual(size.height, matched.imageHeight, accuracy: 2.0,
+            "图文并排时整块卡片高度必须与图片高度精确对齐，底端来源时间与图片下端对齐")
+
+        // 当图片高度大于紧凑文字时，文字卡片必须拉伸至与图片高度一致
+        var tallImageStyle = baseStyle
+        tallImageStyle.imageHeight = 220
+        let tallView = MagazineStoryView(entry: entry, style: tallImageStyle, width: 588, selected: false, store: store)
+        let tallHost = NSHostingView(rootView: tallView)
+        XCTAssertEqual(tallHost.fittingSize.height, 220, accuracy: 2.0,
+            "当图片比文字高时，来源时间应推到图片下端并保持整体等高")
     }
 }

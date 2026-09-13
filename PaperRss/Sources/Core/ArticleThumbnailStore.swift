@@ -30,7 +30,7 @@ public enum ArticleThumbnailError: Error, Sendable {
 
 private final class ThumbnailMemoryCache: @unchecked Sendable {
     let values = NSCache<NSString, ArticleThumbnail>()
-    init(limit: Int) { values.totalCostLimit = limit; values.countLimit = 256 }
+    init(limit: Int, countLimit: Int = 1024) { values.totalCostLimit = limit; values.countLimit = countLimit }
 }
 
 /// Bounded FIFO gate. Cancelled queued requests are removed, not promoted into
@@ -120,7 +120,7 @@ public actor ArticleThumbnailStore {
     private var flights: [ArticleThumbnailRequest: Flight] = [:]
     private var failures: [ArticleThumbnailRequest: Date] = [:]
 
-    public init(directory: URL? = nil, memoryLimit: Int = 64 * 1024 * 1024,
+    public init(directory: URL? = nil, memoryLimit: Int = 256 * 1024 * 1024,
                 diskLimit: Int = 256 * 1024 * 1024, maximumConcurrent: Int = 4,
                 loader: Loader? = nil) {
         memory = ThumbnailMemoryCache(limit: max(1, memoryLimit))
@@ -131,8 +131,23 @@ public actor ArticleThumbnailStore {
         self.loader = loader ?? Self.download
     }
 
-    public nonisolated func cachedImage(for request: ArticleThumbnailRequest) -> ArticleThumbnail? {
-        memory.values.object(forKey: request.cacheKey as NSString)
+    public nonisolated func cachedImage(for request: ArticleThumbnailRequest, allowFuzzySize: Bool = false) -> ArticleThumbnail? {
+        if let exact = memory.values.object(forKey: request.cacheKey as NSString) {
+            return exact
+        }
+        guard allowFuzzySize else { return nil }
+        let fallbackSizes: [Int] = switch request.pixelSize {
+        case 1280: [640, 160]
+        case 640: [1280, 160]
+        default: [640, 1280]
+        }
+        for size in fallbackSizes {
+            let key = "\(request.accountID.utf8.count):\(request.accountID)\(size):\(request.url.absoluteString)".stableDigest
+            if let match = memory.values.object(forKey: key as NSString) {
+                return match
+            }
+        }
+        return nil
     }
 
     public func image(for request: ArticleThumbnailRequest) async throws -> ArticleThumbnail {
@@ -149,25 +164,26 @@ public actor ArticleThumbnailStore {
         } else {
             let gate = self.gate, disk = self.disk, loader = self.loader
             let task = Task.detached(priority: .utility) { () throws -> ArticleThumbnail in
-                try await gate.acquire()
-                do {
-                    try Task.checkCancellation()
-                    let result: ArticleThumbnail
-                    if let data = await disk.read(request.cacheKey), let decoded = try? Self.decode(data, pixelSize: request.pixelSize) {
-                        result = decoded
-                    } else {
+                try Task.checkCancellation()
+                let result: ArticleThumbnail
+                if let data = await disk.read(request.cacheKey), let decoded = try? Self.decode(data, pixelSize: request.pixelSize) {
+                    result = decoded
+                } else {
+                    try await gate.acquire()
+                    do {
+                        try Task.checkCancellation()
                         let data = try await loader(request)
                         try Task.checkCancellation()
                         result = try Self.decode(data, pixelSize: request.pixelSize)
                         if let encoded = Self.jpeg(result.image) { await disk.write(encoded, key: request.cacheKey) }
+                        await gate.release()
+                    } catch {
+                        await gate.release()
+                        throw error
                     }
-                    try Task.checkCancellation()
-                    await gate.release()
-                    return result
-                } catch {
-                    await gate.release()
-                    throw error
                 }
+                try Task.checkCancellation()
+                return result
             }
             flight = Flight(id: UUID(), task: task, subscribers: [subscriber])
             flights[request] = flight

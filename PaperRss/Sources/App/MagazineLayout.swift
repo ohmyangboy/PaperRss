@@ -22,6 +22,7 @@ struct MagazineStoryStyle: Hashable, Sendable {
     var sideImageWidth: CGFloat?
     var stacksImage: Bool { !imageBesideText }
     var textSpacing: CGFloat { (role == .lead ? 10 : 6) * textScale }
+    var metadataSpacing: CGFloat { (role == .lead ? 14 : 10) * textScale }
     var imageSpacing: CGFloat { 16 }
     var metadataSize: CGFloat { 13 * textScale }
     var titleLineSpacing: CGFloat { 2 * textScale }
@@ -165,7 +166,7 @@ enum MagazinePaginator {
     static func horizontalInset(_ width: CGFloat) -> CGFloat { min(width < 620 ? 20 : 32, (pageWidth(width) - 1) / 2) }
     static func contentWidth(_ width: CGFloat) -> CGFloat { max(1, pageWidth(width) - horizontalInset(width) * 2) }
     static func needsFlow(_ size: CGSize, textScale: CGFloat = 1) -> Bool {
-        pageWidth(size.width) < 620 || size.height - railHeight < 600 || textScale >= 1.5
+        pageWidth(size.width) < 620 || size.height - railHeight < 460 || textScale >= 1.5
     }
 
     private struct Row {
@@ -189,7 +190,7 @@ enum MagazinePaginator {
         let width = contentWidth(size.width)
         let height = max(1, size.height - railHeight - headingHeight)
         let flow = needsFlow(size, textScale: textScale)
-        let spread = !flow && paper >= 1040
+        let spread = !flow && paper >= 860
         let leafWidth = spread ? (width - gutter) / 2 : width
         let groups = MagazineEdition.groups(entries: entries, arrangement: arrangement, folders: folders)
         var output: [MagazinePageLayout] = []
@@ -258,13 +259,13 @@ enum MagazinePaginator {
         /// 整叶主稿仅扩大图像，不拉伸文字；右叶仍连续装入正常图文。
         func featureSpread(_ items: ArraySlice<EntryListItem>) -> Path? {
             guard let first = items.first, showsImages, first.previewImageURL != nil,
-                  items.count >= 5, height >= 680 else { return nil }
+                  items.count >= 5, height >= 460 else { return nil }
             var style = normal(first, width: leafWidth, lead: true)
             guard style.imageHeight > 0, style.titleFits(first, width: leafWidth) else { return nil }
             style.imageHeight = 0
             let textHeight = measure(first, style, leafWidth)
             let imageHeight = floor(height - textHeight - style.imageSpacing)
-            guard imageHeight >= max(340, height * 0.50) else { return nil }
+            guard imageHeight >= max(220, height * 0.48) else { return nil }
             style.imageHeight = imageHeight
             let leadHeight = measure(first, style, leafWidth)
             var placements: [MagazinePlacement] = [.init(entryID: first.id,
@@ -279,7 +280,7 @@ enum MagazinePaginator {
                 y += h + supportSpacing
             }
             // 右叶内容过少时恢复主稿加画廊，不让单幅图片换来半页空白。
-            guard placements.count >= 4, y - supportSpacing >= height * 0.62 else { return nil }
+            guard placements.count >= 4, y - supportSpacing >= height * 0.56 else { return nil }
             return Path(placements: placements, height: leadHeight)
         }
         func panel(_ entry: EntryListItem, width: CGFloat, wide: Bool, compactImage: Bool = false) -> MagazineStoryStyle {
@@ -548,8 +549,22 @@ enum MagazinePaginator {
                     let endingPaper = min(paper, 720)
                     let ending = pack(remaining, width: endingPaper - inset * 2, limit: height, lead: false, compact: false)
                     if ending.placements.count == remaining.count {
-                        placements = ending.placements; chosenHeight = ending.height
-                        chosenPaper = endingPaper; form = .single; chosenTemplate = .ending
+                        if spread {
+                            let left = pack(remaining, width: leafWidth, limit: height, lead: false, compact: false)
+                            if left.placements.count == remaining.count {
+                                placements = left.placements
+                                chosenHeight = height
+                                chosenPaper = paper
+                                form = .spread
+                                chosenTemplate = .ending
+                            }
+                        } else {
+                            placements = ending.placements
+                            chosenHeight = height
+                            chosenPaper = endingPaper
+                            form = .single
+                            chosenTemplate = .ending
+                        }
                     }
                 }
                 if placements.isEmpty && !flow {
@@ -636,38 +651,53 @@ struct MagazineStoryView: View {
 
     @ViewBuilder private var illustration: some View {
         if style.imageHeight > 0 {
+            let activeImage = image ?? request.flatMap({ store.cachedImage(for: $0, allowFuzzySize: true) })
             Group {
-                if let image = image ?? request.flatMap({ store.cachedImage(for: $0) }), !failed {
-                    Image(decorative: image.image, scale: 1).resizable().scaledToFill()
+                if let displayImage = activeImage, !failed {
+                    Image(decorative: displayImage.image, scale: 1).resizable().scaledToFill()
+                        .transition(.opacity)
                 } else {
                     Color(paperHex: palette.mutedHex).opacity(0.045)
+                        .transition(.opacity)
                 }
             }
             .frame(width: imageWidth, height: style.imageHeight)
             .clipped()
             .accessibilityHidden(true)
+            .animation(.easeOut(duration: 0.15), value: activeImage != nil)
         }
     }
 
+    private var metadataView: some View {
+        HStack(spacing: 6) {
+            if !entry.isRead { Circle().fill(Color(paperHex: palette.accentHex)).frame(width: 4, height: 4) }
+            Text(entry.sourceTitle).lineLimit(1)
+            if entry.isStarred { Image(systemName: "star.fill") }
+            Spacer(minLength: 4)
+            if let date = entry.publishedAt { Text(date, format: .dateTime.month().day()) }
+        }
+        .font(.system(size: style.metadataSize)).foregroundStyle(Color(paperHex: palette.mutedHex))
+    }
+
     private var storyText: some View {
-        VStack(alignment: .leading, spacing: style.textSpacing) {
-            Text(entry.title)
-                .font(Font(MagazineStoryStyle.titleFont(style.titleSize * style.textScale)))
-                .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
-                .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
-            if entry.isSummaryVisible && style.summaryLines > 0 {
-                Text(entry.summaryPreview).font(.system(size: style.summarySize * style.textScale))
-                    .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
-                    .foregroundStyle(Color(paperHex: palette.mutedHex))
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: style.textSpacing) {
+                Text(entry.title)
+                    .font(Font(MagazineStoryStyle.titleFont(style.titleSize * style.textScale)))
+                    .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
+                    .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
+                if entry.isSummaryVisible && style.summaryLines > 0 {
+                    Text(entry.summaryPreview).font(.system(size: style.summarySize * style.textScale))
+                        .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
+                        .foregroundStyle(Color(paperHex: palette.mutedHex))
+                }
             }
-            HStack(spacing: 6) {
-                if !entry.isRead { Circle().fill(Color(paperHex: palette.accentHex)).frame(width: 4, height: 4) }
-                Text(entry.sourceTitle).lineLimit(1)
-                if entry.isStarred { Image(systemName: "star.fill") }
-                Spacer(minLength: 4)
-                if let date = entry.publishedAt { Text(date, format: .dateTime.month().day()) }
+            if !style.stacksImage && style.imageHeight > 0 {
+                Spacer(minLength: style.metadataSpacing)
+            } else {
+                Spacer(minLength: 0).frame(height: style.metadataSpacing)
             }
-            .font(.system(size: style.metadataSize)).foregroundStyle(Color(paperHex: palette.mutedHex))
+            metadataView
         }
     }
 
@@ -678,7 +708,9 @@ struct MagazineStoryView: View {
             } else {
                 HStack(alignment: .top, spacing: style.imageSpacing) {
                     illustration
-                    storyText.frame(maxWidth: .infinity, alignment: .leading)
+                    storyText
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minHeight: style.imageHeight, alignment: .topLeading)
                 }
             }
         }
@@ -699,13 +731,23 @@ struct MagazineStoryView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .task(id: request) {
-            image = nil; failed = false
-            guard let request else { return }
+            failed = false
+            guard let request else { image = nil; return }
+            if let cached = store.cachedImage(for: request, allowFuzzySize: true) {
+                image = cached
+            }
             do {
                 let loaded = try await store.image(for: request)
                 try Task.checkCancellation()
-                image = loaded
-            } catch { if !Task.isCancelled { failed = true } }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    image = loaded
+                }
+            } catch {
+                if !Task.isCancelled {
+                    image = nil
+                    failed = true
+                }
+            }
         }
     }
 }

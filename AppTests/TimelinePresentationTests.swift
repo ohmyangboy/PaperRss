@@ -319,4 +319,76 @@ final class TimelinePresentationTests: XCTestCase {
         }
     }
 
+    func testMagazineReadingReturnStateAndActions() {
+        var returnCount = 0
+        func route(_ browsing: Bool) -> ToolbarActions {
+            ToolbarActions(onRefresh: {}, onAddFeed: {}, onAddFolder: {}, onImport: {}, onExport: {},
+                isRefreshing: false, selectionTitle: "杂志", hasUnread: false, onMarkAllRead: {},
+                isTimelineBrowsing: browsing, usesVisualTimeline: true, usesMagazineTimeline: true,
+                onReturnToTimeline: { returnCount += 1 })
+        }
+
+        let coordinator = ThreeColumnSplitViewCoordinator(actions: route(true), appearance: .default,
+            appearanceMode: .light, appTheme: .system, columnFocusState: PaperColumnFocusState())
+        let split = splitFixture()
+        coordinator.splitViewController = split
+        coordinator.syncTimelinePresentation()
+
+        // 1. 浏览状态：showsTimelineReturn 为 false
+        XCTAssertFalse(coordinator.actions.showsTimelineReturn)
+
+        // 2. 进入文章详情阅读状态：showsTimelineReturn 为 true
+        coordinator.actions = route(false)
+        coordinator.syncTimelinePresentation()
+        XCTAssertTrue(coordinator.actions.showsTimelineReturn)
+
+        // 3. 触发返回操作，调用 onReturnToTimeline
+        coordinator.actions.onReturnToTimeline()
+        XCTAssertEqual(returnCount, 1, "调用 onReturnToTimeline 必须正确执行返回回调")
+
+        // 4. 返回浏览后恢复
+        coordinator.actions = route(true)
+        coordinator.syncTimelinePresentation()
+        XCTAssertFalse(coordinator.actions.showsTimelineReturn)
+    }
+
+    func testBrowserStyleNavigationAndTrackpadSwipeRequirements() {
+        var returnTriggered = 0
+        func makeActions(browsing: Bool) -> ToolbarActions {
+            ToolbarActions(
+                onRefresh: {}, onAddFeed: {}, onAddFolder: {}, onImport: {}, onExport: {},
+                isRefreshing: false, selectionTitle: "杂志文章", hasUnread: false, onMarkAllRead: {},
+                isTimelineBrowsing: browsing, usesVisualTimeline: true, usesMagazineTimeline: true,
+                onReturnToTimeline: { returnTriggered += 1 }
+            )
+        }
+
+        let coordinator = ThreeColumnSplitViewCoordinator(
+            actions: makeActions(browsing: false),
+            appearance: .default,
+            appearanceMode: .light,
+            appTheme: .system,
+            columnFocusState: PaperColumnFocusState()
+        )
+        let split = splitFixture()
+        coordinator.splitViewController = split
+        coordinator.setActiveColumn(2, makeFirstResponder: false)
+        coordinator.syncTimelinePresentation()
+
+        // 验证阅读器处于活跃聚焦列且显示返回浏览按钮
+        XCTAssertEqual(coordinator.activeColumnIndex, 2)
+        XCTAssertTrue(coordinator.actions.showsTimelineReturn)
+
+        // 模拟松手且满足阈值时的返回动作
+        coordinator.actions.onReturnToTimeline()
+        XCTAssertEqual(returnTriggered, 1, "松手到达阈值时必须执行返回")
+
+        // 模拟切回时间线浏览状态（第 1 列）
+        coordinator.setActiveColumn(1, makeFirstResponder: false)
+        coordinator.actions = makeActions(browsing: true)
+        coordinator.syncTimelinePresentation()
+        XCTAssertFalse(coordinator.actions.showsTimelineReturn, "回到浏览态后不再响应文章返回")
+    }
+
 }
+

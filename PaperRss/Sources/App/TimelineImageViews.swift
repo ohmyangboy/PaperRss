@@ -68,12 +68,16 @@ struct ArticleThumbnailView: View {
     var body: some View {
         Group {
             if failedRequest != request {
+                let activeImage = (loadedRequest == request ? loaded : nil)
+                    ?? store.cachedImage(for: request, allowFuzzySize: true)
                 Group {
-                    if let image = (loadedRequest == request ? loaded : nil) ?? store.cachedImage(for: request) {
+                    if let image = activeImage {
                         Image(decorative: image.image, scale: 1)
                             .resizable().aspectRatio(contentMode: .fill)
+                            .transition(.opacity)
                     } else {
                         Color(paperHex: palette.mutedHex).opacity(0.07)
+                            .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,15 +85,22 @@ struct ArticleThumbnailView: View {
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .accessibilityHidden(true)
+                .animation(.easeOut(duration: 0.15), value: activeImage != nil)
             }
         }
         .task(id: request) {
             failedRequest = nil
+            if let cached = store.cachedImage(for: request, allowFuzzySize: true) {
+                loadedRequest = request
+                loaded = cached
+            }
             do {
                 let image = try await store.image(for: request)
                 try Task.checkCancellation()
-                loadedRequest = request
-                loaded = image
+                withAnimation(.easeOut(duration: 0.15)) {
+                    loadedRequest = request
+                    loaded = image
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 loaded = nil

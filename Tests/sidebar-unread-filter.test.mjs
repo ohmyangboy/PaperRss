@@ -287,3 +287,21 @@ test('列表工具栏图标与阅读工具栏共用字号', async () => {
   assert.match(chrome, /button.image = listToolbarImage\(button.image\)/);
   assert.match(reader, /font\(\.system\(size: Self.symbolPointSize, weight: \.medium\)\)/);
 });
+
+test('未读过滤按钮在未激活时保持模板图像以自适应深色背景；全部已读具有原地 Popover 二次确认', async () => {
+  const chrome = await readFile(new URL('../PaperRss/Sources/App/ThreeColumnSplitView.swift', import.meta.url), 'utf8');
+  const strings = await readFile(new URL('../PaperRss/Resources/Localization/Localizable.xcstrings', import.meta.url), 'utf8');
+
+  // 1. 未读过滤按钮未激活时保持 template，避免在深色背景下被硬编码为纯黑像素
+  assert.match(chrome, /button\.image\?\.isTemplate = true/);
+  assert.match(chrome, /image\.symbolConfiguration\.applying\(sizeConfig\)/);
+
+  // 2. 全部已读按钮具有原地 Popover 二次确认，非阻断式 Alert
+  assert.match(chrome, /markAllReadPopover/);
+  assert.match(chrome, /MarkAllReadConfirmationPopoverView/);
+  assert.match(chrome, /popover\.show\(relativeTo: button\.bounds, of: button, preferredEdge: \.maxY\)/);
+
+  // 3. 本地化词条完备
+  assert.match(strings, /"标记所有文章已读？"/);
+  assert.match(chrome, /标记所有文章已读？/);
+});

@@ -1874,6 +1874,26 @@
         }
       }
     },
+    "全部标为已读？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark All as Read?"
+          }
+        }
+      }
+    },
+    "标记所有文章已读？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark all articles as read?"
+          }
+        }
+      }
+    },
     "关于" : {
       "localizations" : {
         "en" : {
@@ -4391,6 +4411,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete the selected %lld feeds and all their articles? This can’t be undone."
+          }
+        }
+      }
+    },
+    "确定要将当前列表中的所有文章标记为已读吗？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Are you sure you want to mark all articles in the current list as read?"
+          }
+        }
+      }
+    },
+    "确定要将“%@”中的所有文章标记为已读吗？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Are you sure you want to mark all articles in “%@” as read?"
           }
         }
       }

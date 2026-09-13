@@ -1084,3 +1084,106 @@ test('TOC 音浪与 hover 局部峰值互不破坏，离开 hover 后恢复音�
   buttons[1].dispatchEvent({ type: 'mouseleave', relatedTarget: null });
   assert.deepEqual(lines.map((line) => line.style.transform), ['scaleX(2.125)', 'scaleX(2.125)', 'scaleX(2.125)']);
 });
+
+test('杂志阅读界面支持触控板手势右滑返回与反向撤销，纵向阅读滚动不误触', () => {
+  const f = makeFixture();
+  let returned = 0;
+  f.window.paperRssMagazineReturnEnabled = true;
+  f.window.paperRssReaderInteractive = true;
+  f.window.webkit = { messageHandlers: { paperRssFocusList: { postMessage() { returned++; } } } };
+  runRail(f);
+  const back = f.document.getElementById('paper-rss-magazine-return');
+  assert.ok(back);
+
+  // 1. 纵向阅读滚动：deltaY 主导，锁定垂直滚动，不触发右滑返回
+  f.window.dispatchEvent({ type: 'wheel', deltaX: -10, deltaY: 60 });
+  assert.equal(back.classList.contains('is-swiping'), false, '纵向滚动不进入右滑状态');
+  f.window.advanceTime(150);
+  assert.equal(returned, 0, '纵向滚动不触发返回');
+
+  // 2. 触控板两指右滑手势（deltaX < 0 且主导）：累加位移拉出指示器并达到就绪态，松手触发返回
+  f.window.dispatchEvent({ type: 'wheel', deltaX: -30, deltaY: 0 });
+  assert.equal(back.classList.contains('is-swiping'), true, '横向右滑进入 is-swiping');
+  assert.equal(back.style.opacity, '1');
+  assert.equal(back.classList.contains('is-ready'), false, '未达阈值前不进入 is-ready');
+
+  // 继续右滑，超过 54px 阈值
+  f.window.dispatchEvent({ type: 'wheel', deltaX: -30, deltaY: 0 });
+  assert.equal(back.classList.contains('is-ready'), true, '超过阈值进入 is-ready 就绪态');
+  assert.match(back.style.transform, /translate3d\(\d+(\.\d+)?px,\s*-50%,\s*0\)/);
+
+  // 停顿不自动返回：未松手时即使时间推移也不自动触发
+  f.window.advanceTime(200);
+  assert.equal(returned, 0, '未松手停顿绝不自动提前返回');
+
+  // 松手（原生 phase.ended 触发 finishSwipe 瞬间返回）
+  f.window.paperRssTOCRail.finishSwipe();
+  assert.equal(returned, 1, '松手完成返回');
+  assert.equal(back.classList.contains('is-swiping'), false);
+  assert.equal(back.classList.contains('is-ready'), false);
+  assert.equal(back.style.transform, '');
+
+  // 3. 反向滑回撤销：右滑未达阈值或向左滑回，不触发返回
+  f.window.dispatchEvent({ type: 'wheel', deltaX: -20, deltaY: 0 });
+  assert.equal(back.classList.contains('is-swiping'), true);
+  // 向左滑回
+  f.window.dispatchEvent({ type: 'wheel', deltaX: 30, deltaY: 0 });
+  assert.equal(back.classList.contains('is-ready'), false);
+  f.window.paperRssTOCRail.finishSwipe();
+  assert.equal(returned, 1, '未达阈值反向滑回不触发二次返回');
+
+  // 4. 左边缘指针拖拽：从边缘向右拖动触发返回
+  f.document.dispatchEvent({ type: 'pointerdown', clientX: 20, clientY: 400 });
+  f.document.dispatchEvent({ type: 'pointermove', clientX: 90, clientY: 400 });
+  assert.equal(back.classList.contains('is-ready'), true, '边缘右拖超过阈值进入就绪');
+  f.document.dispatchEvent({ type: 'pointerup' });
+  assert.equal(returned, 2, '边缘拖拽释放触发返回');
+
+  f.window.paperRssTOCRail.destroy();
+});
+
+test('杂志阅读界面支持鼠标后退侧键（button 3），就像浏览器行为一样', () => {
+  const f = makeFixture();
+  let returned = 0;
+  f.window.paperRssMagazineReturnEnabled = true;
+  f.window.paperRssReaderInteractive = true;
+  f.window.webkit = { messageHandlers: { paperRssFocusList: { postMessage() { returned++; } } } };
+  runRail(f);
+
+  let defaultPrevented = false;
+  let propagationStopped = false;
+  const backEvent = {
+    type: 'auxclick',
+    button: 3,
+    preventDefault() { defaultPrevented = true; },
+    stopPropagation() { propagationStopped = true; }
+  };
+
+  // 1. auxclick 事件 button === 3 触发返回
+  f.document.dispatchEvent(backEvent);
+  assert.equal(returned, 1, 'auxclick button 3 触发返回');
+  assert.equal(defaultPrevented, true);
+  assert.equal(propagationStopped, true);
+
+  // 2. mouseup 事件 button === 3 同样触发返回
+  f.document.dispatchEvent({
+    type: 'mouseup',
+    button: 3,
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  assert.equal(returned, 2, 'mouseup button 3 同样触发返回');
+
+  // 3. 其他按键（如中键 button 1，右键 button 2）不触发
+  f.document.dispatchEvent({ type: 'auxclick', button: 1 });
+  f.document.dispatchEvent({ type: 'mouseup', button: 2 });
+  assert.equal(returned, 2, '非后退侧键不触发返回');
+
+  // 4. paperRssMagazineReturnEnabled 为 false 时不触发
+  f.window.paperRssMagazineReturnEnabled = false;
+  f.document.dispatchEvent({ type: 'auxclick', button: 3 });
+  assert.equal(returned, 2, '未启用杂志返回时不响应鼠标侧键');
+
+  f.window.paperRssTOCRail.destroy();
+});
+

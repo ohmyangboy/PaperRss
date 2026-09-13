@@ -470,6 +470,36 @@ extension MagazineFoldEffectTests {
         XCTAssertTrue(memory.magazineIsOpen, "新的来源应在一秒后自动展开")
         XCTAssertNil(highlighted)
     }
+
+    func testCoverOpensAndBackwardTurnTriggersClosingAction() async throws {
+        let memory = TimelinePresentationMemory()
+        let input = MagazineLifecycleInput()
+        var cleared = 0
+        let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
+            MagazineBrowserView(entries: [], folders: [:], availableSize: CGSize(width: 1000, height: 800),
+                showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in },
+                onNeedMore: {}, coverTitle: "测试订阅", onClearSelection: { cleared += 1 },
+                tile: { entry, _, _ in Text(entry.title) })
+        })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(memory.magazineIsOpen)
+
+        // 开页
+        input.key = .init(keyCode: 36)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertTrue(memory.magazineIsOpen, "封面成功开页展开")
+
+        // 第一页反向翻页（PageUp 触发 go(to: -1) 执行合页动作）
+        input.key = .init(keyCode: 116)
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(memory.magazineIsOpen, "反方向合页动作成功合上封面")
+        XCTAssertGreaterThan(cleared, 0, "合页时清理选中态")
+    }
 }
 
 extension MagazineFoldEffectTests {
@@ -617,4 +647,32 @@ extension MagazineFoldEffectTests {
             XCTAssertEqual(finalVelocity, 0, accuracy: 0.001)
         }
     }
+
+    func testSpreadEndingValidationDoesNotTruncateRemainingItems() {
+        let feed = UUID()
+        let items = (0..<4).map { i in
+            EntryListItem(id: "item-\(i)", feedID: feed,
+                          title: "Headline Number \(i) with relatively lengthy text to test heights",
+                          summaryPreview: "Summary preview text that takes some space on the magazine page for item \(i)",
+                          sourceTitle: "Daily Source",
+                          publishedAt: Date())
+        }
+        // 大视口 spread 模式且 hasMore = false（模拟“今天”面板）
+        let layouts = MagazinePaginator.pages(
+            entries: items,
+            folders: [:],
+            arrangement: .balanced,
+            size: CGSize(width: 1280, height: 800),
+            showsImages: true,
+            hasMore: false
+        )
+        // 4 篇稿件不能出现由于 ending 单叶容量不足而把剩余篇目截断到第二页却把第一页标为 ending 的情况
+        if layouts.count == 1 {
+            XCTAssertEqual(layouts[0].placements.count, 4)
+        } else {
+            // 如果分成了两页，第一页绝不应被错误标记为 .ending 且右叶留空
+            XCTAssertNotEqual(layouts[0].template, .ending)
+        }
+    }
 }
+
