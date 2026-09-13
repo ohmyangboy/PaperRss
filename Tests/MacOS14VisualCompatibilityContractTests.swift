@@ -18,6 +18,10 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
         XCTAssertTrue(source.contains("applyLiquidGlassWindowChrome"))
         XCTAssertTrue(source.contains("applyLegacyPaperNavbarChrome"))
         XCTAssertTrue(source.contains("syncMainWindowTitlebarBackground"))
+        XCTAssertFalse(
+            source.contains("hideVisualEffects"),
+            "顶部导航必须保留 AppKit 原生 NSVisualEffectView 材质；隐去后滚动内容会直接穿透，nav 模糊消失"
+        )
         XCTAssertTrue(source.contains("firstDescendant(of: container, className: \"NSTitlebarBackgroundView\")?.isHidden = true"))
         XCTAssertTrue(source.contains("window.toolbar?.isVisible = true"))
         XCTAssertEqual(

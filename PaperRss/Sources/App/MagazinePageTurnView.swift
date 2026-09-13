@@ -216,7 +216,6 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         float x = (uv.x - 0.5) * 2.0;
         float angle = p * M_PI_F, c = cos(angle), sine = sin(angle);
         bool stationary = x * direction < 0;
-        float4 base = stationary ? old.sample(s, uv) : next.sample(s, uv);
         // 透视除法随页上位置变化；外缘向观察者抬起，书脊固定。
         // 边距缩小时同步降低透视深度，保留真实投影并避免页边超出舞台。
         float maxDepth = inset > 0.0 ? min(0.16, inset * 1.7) : 0.16;
@@ -226,6 +225,16 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         float projectedEdge = direction * c / (1.0 - depth);
         bool onLeaf = abs(projectedEdge) > 0.0001
             && x * projectedEdge >= 0.0 && abs(x) <= abs(projectedEdge);
+        // 翻动页抬起前，外缘先只露出目标页的空白纸面；抬起过半后再淡入正文，
+        // 避免纸面外缘出现一条被裁切的下一篇文章正文。纸面色取自目标页右缘留白。
+        // 纸页之外的舞台条带仍直接采样目标页，保持既有留白行为。
+        float coverage = clamp(abs(projectedEdge), 0.0, 1.0);
+        float reveal = p < 0.5 ? (1.0 - smoothstep(0.55, 0.92, coverage)) : 1.0;
+        float4 nextColor = next.sample(s, uv);
+        bool onPaper = paperY >= 0.0 && paperY <= 1.0;
+        float4 paper = next.sample(s, float2(0.985, 0.5));
+        float4 under = onPaper ? mix(paper, nextColor, reveal) : nextColor;
+        float4 base = stationary ? old.sample(s, uv) : under;
         float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 32.0) * sine * 0.05 : 0.0;
         if (!onLeaf) return float4(base.rgb * (1.0 - hingeShadow), 1);
         // t=0 为中轴，t=1 为外边缘；正面采旧页，背面采目标页另一半。
@@ -277,6 +286,15 @@ struct MagazinePageTurnView<Content: View>: NSViewRepresentable {
 private final class MagazineSnapshotCover: NSView {
     // 快照只负责绘制；鼠标释放仍交给原 NSHostingView 的手势识别器。
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        // 分数尺寸下宿主与快照都可能差 1 个物理像素；裁掉越界内容，
+        // 不让渲染器或旧快照在纸面外留下细线。
+        clipsToBounds = true
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
 }
 
 /// 显示时钟只持有弱捕获闭包；结束或离窗时立即停止刷新。
@@ -291,6 +309,9 @@ private final class MagazineDisplayLinkTarget: NSObject {
 final class MagazineTurnSurface<Content: View>: NSView {
     enum Phase { case preparing, interacting, completing }
     private let host: NSHostingView<Content>
+    /// 宿主之下的实底：宿主或 Metal 图层在分数尺寸下少画 1px 时，
+    /// 露出的永远是舞台底色而不是图层默认黑色。
+    private let backgroundView = NSView()
     private var pageID: String
     private var currentRequest: MagazinePageTurnRequest?
     private var preparation: Task<Void, Never>?
@@ -309,6 +330,7 @@ final class MagazineTurnSurface<Content: View>: NSView {
     private var progress = 0.0
     private var reduceMotion = false
     private var playsSound = false
+    private var stageBackground: NSColor = .windowBackgroundColor
     private struct ScrubUpdate {
         let request: MagazinePageTurnRequest
         let content: Content
@@ -344,7 +366,11 @@ final class MagazineTurnSurface<Content: View>: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         host.sizingOptions = []
+        host.wantsLayer = true
         host.autoresizingMask = [.width, .height]
+        backgroundView.wantsLayer = true
+        backgroundView.autoresizingMask = [.width, .height]
+        addSubview(backgroundView)
         addSubview(host)
     }
     required init?(coder: NSCoder) { nil }
@@ -352,6 +378,9 @@ final class MagazineTurnSurface<Content: View>: NSView {
     override func layout() {
         super.layout()
         if lastSize != bounds.size { lastSize = bounds.size; cancelTurn() }
+        // 分数尺寸下 SwiftUI 内容与宿主层可能差 1 个物理像素；
+        // 宿主之下的实底永远补上这 1px，避免露出不透明图层的黑色。
+        backgroundView.frame = bounds
         host.frame = bounds
     }
     override func viewDidMoveToWindow() {
@@ -365,7 +394,10 @@ final class MagazineTurnSurface<Content: View>: NSView {
         completion = onComplete
         self.reduceMotion = reduceMotion
         self.playsSound = playsSound
+        self.stageBackground = background
         layer?.backgroundColor = background.cgColor
+        backgroundView.layer?.backgroundColor = background.cgColor
+        host.layer?.backgroundColor = background.cgColor
         if isActive, !reduceMotion, window != nil, let request,
            let sessionID = request.scrubSessionID, let source {
             if scrubSessionID != sessionID {
@@ -382,6 +414,8 @@ final class MagazineTurnSurface<Content: View>: NSView {
         if pageID == self.pageID {
             if currentRequest == nil {
                 host.rootView = content
+                // 防御：任何遗留的快照/渲染器都要清掉，避免在纸面边缘留下细线。
+                if cover != nil || metal != nil { cancelTurn(notify: false) }
                 // 宿主在手势期间被重新挂载时已是目标页，不能留下未完成的请求。
                 if isActive, let request { completeLater(request.id, committed: request.commit) }
                 return
@@ -448,11 +482,18 @@ final class MagazineTurnSurface<Content: View>: NSView {
         progress = 0
         if !reduceMotion && !fades, let renderer = MagazineMetalRenderer(before: before, after: after, size: size, forward: request.forward, verticalInset: verticalInset, corner: request.variation.corner) {
             self.metal = renderer
+            configure(renderer: renderer)
             self.cover?.addSubview(renderer.view)
             if !renderer.draw(progress: 0) { renderer.view.removeFromSuperview(); self.metal = nil }
         }
         self.phase = .interacting
         if let latest = self.currentRequest { self.advance(latest) }
+    }
+    /// Metal 图层默认以不透明黑兜底；分数尺寸或重挂载时边缘绝不能露黑。
+    private func configure(renderer: MagazineMetalRenderer) {
+        renderer.view.autoresizingMask = [.width, .height]
+        renderer.view.frame = cover?.bounds ?? bounds
+        renderer.view.layer?.backgroundColor = stageBackground.cgColor
     }
     private func advance(_ request: MagazinePageTurnRequest) {
         if let position = request.progress {
@@ -578,6 +619,7 @@ final class MagazineTurnSurface<Content: View>: NSView {
                 forward: request.forward, verticalInset: update.verticalInset, corner: request.variation.corner) {
                 metal = renderer
                 rendererCount += 1
+                configure(renderer: renderer)
                 cover?.addSubview(renderer.view)
             }
         }

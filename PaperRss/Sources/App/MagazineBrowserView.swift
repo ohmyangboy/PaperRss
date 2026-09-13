@@ -125,13 +125,14 @@ final class MagazineEditionCache: ObservableObject {
     }
 
     private nonisolated static func calculate(_ next: Input, retained: [MagazinePageLayout],
-                                              measurements: MagazineMeasurementCache) -> [MagazinePageLayout] {
+                                              measurements: MagazineMeasurementCache,
+                                              cancelsWithTask: Bool) -> [MagazinePageLayout] {
         guard let size = next.viewport else { return [] }
         let ids = Set(retained.flatMap(\.readingOrder))
         return retained + MagazinePaginator.pages(entries: next.entries.filter { !ids.contains($0.id) },
             folders: next.folders, arrangement: next.arrangement, size: size, showsImages: next.showsImages,
             hasMore: next.hasMore, textScale: next.textScale, locale: next.locale,
-            imageRatios: next.imageRatios, measurements: measurements)
+            imageRatios: next.imageRatios, measurements: measurements, cancelsWithTask: cancelsWithTask)
     }
 
     private func publish(_ next: Input, resolved: [MagazinePageLayout]) {
@@ -162,7 +163,9 @@ final class MagazineEditionCache: ObservableObject {
         revision += 1
         guard input != next else { return }
         let saved = retained(for: next)
-        publish(next, resolved: Self.calculate(next, retained: saved, measurements: measurements))
+        // 主线程同步编排：宿主任务是否取消与本输入无关，不能被误判为空页。
+        publish(next, resolved: Self.calculate(next, retained: saved, measurements: measurements,
+            cancelsWithTask: false))
     }
     func updateAsync(_ next: Input) async {
         revision += 1
@@ -171,7 +174,7 @@ final class MagazineEditionCache: ObservableObject {
         let saved = retained(for: next)
         let cache = measurements
         let job = Task.detached(priority: .userInitiated) {
-            Self.calculate(next, retained: saved, measurements: cache)
+            Self.calculate(next, retained: saved, measurements: cache, cancelsWithTask: true)
         }
         let resolved = await withTaskCancellationHandler(operation: { await job.value }, onCancel: { job.cancel() })
         guard !Task.isCancelled, revision == token else { return }
@@ -283,6 +286,10 @@ struct MagazineBrowserView<Tile: View>: View {
               showsImages: showsImages, hasMore: hasMore, scopeID: memory.magazineScopeID)
     }
     private var pages: [MagazinePage] { edition.pages }
+    /// 空杂志不自动开页；内容排出版面后 id 变化会重新计时，避免在“暂无文章”时开出一本空书。
+    private var autoOpenID: String {
+        "\(memory.magazineScopeID.uuidString)|\(isBrowsing)|\(pages.isEmpty ? "0" : "1")"
+    }
     private var openingImageRequests: [ArticleThumbnailRequest] {
         guard isBrowsing, showsImages else { return [] }
         return edition.openingImageRequests(scopeID: memory.magazineScopeID, scale: displayScale)
@@ -318,15 +325,17 @@ struct MagazineBrowserView<Tile: View>: View {
             .allowsHitTesting(memory.magazineIsOpen && !coverAnimating)
             .accessibilityHidden(!memory.magazineIsOpen)
             .overlay {
-                bookCover
-                    .opacity(!memory.magazineIsOpen || coverAnimating ? 1 : 0)
-                    .allowsHitTesting(!memory.magazineIsOpen && !coverAnimating)
-                if memory.magazineIsOpen && pages.isEmpty {
+                if pages.isEmpty {
+                    // 没有文章时不展示可翻开的书；默认给出与列表一致的空态。
                     Text(I18N.shared.localized("暂无文章", "No articles")).foregroundStyle(.secondary)
+                } else {
+                    bookCover
+                        .opacity(!memory.magazineIsOpen || coverAnimating ? 1 : 0)
+                        .allowsHitTesting(!memory.magazineIsOpen && !coverAnimating)
                 }
             }
             .overlay {
-                if memory.magazineIsOpen && turning != .scroll && !coverAnimating {
+                if memory.magazineIsOpen && !pages.isEmpty && turning != .scroll && !coverAnimating {
                     HStack {
                         edgeButton(-1, proxy: proxy)
                         Spacer(minLength: 0)
@@ -353,12 +362,15 @@ struct MagazineBrowserView<Tile: View>: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 withAnimation(.easeOut(duration: 0.18)) { notice = nil }
             }
-            .task(id: memory.magazineScopeID.uuidString + String(isBrowsing)) {
+            .task(id: autoOpenID) {
                 guard isBrowsing, autoOpenedScope != memory.magazineScopeID else { return }
                 let scope = memory.magazineScopeID
                 guard !memory.magazineIsOpen else { autoOpenedScope = scope; return }
+                // 暂无文章时保持封面/空态不翻开；排版完成后 autoOpenID 变化会再走一轮。
+                guard !pages.isEmpty else { return }
                 do { try await Task.sleep(for: .milliseconds(1000)) } catch { return }
-                guard !Task.isCancelled, scope == memory.magazineScopeID, autoOpenedScope != scope else { return }
+                guard !Task.isCancelled, scope == memory.magazineScopeID,
+                      autoOpenedScope != scope, !pages.isEmpty else { return }
                 autoOpenedScope = scope
                 openBook()
             }
@@ -874,7 +886,8 @@ struct MagazineBrowserView<Tile: View>: View {
     }
 
     private func openBook() {
-        guard !memory.magazineIsOpen else { return }
+        // 没有可展示的版面时绝不翻开：保持封面/“暂无文章”，避免空书。
+        guard !memory.magazineIsOpen, !pages.isEmpty else { return }
         autoOpenedScope = memory.magazineScopeID
         onClearSelection()
         cancelTurn()

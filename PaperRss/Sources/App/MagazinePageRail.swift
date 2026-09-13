@@ -27,6 +27,13 @@ struct MagazineRailScrub {
         return min(1, max(0, Double(locationX / width)))
     }
 
+    /// 指针下方最近的刻度槽。拖动高亮与波浪峰值共用它，同一帧只允许一个高亮刻度。
+    static func slot(position: CGFloat, slotWidth: CGFloat, slots: Int) -> Int {
+        guard slots > 0, slotWidth > 0, position.isFinite else { return 0 }
+        let slot = Int(((position - slotWidth / 2) / slotWidth).rounded())
+        return min(slots - 1, max(0, slot))
+    }
+
     static func tickIndices(count: Int, width: CGFloat, currentIndex: Int? = nil) -> [Int] {
         guard count > 0 else { return [] }
         let slots = min(count, max(2, Int(max(0, width) / 7)))
@@ -168,6 +175,8 @@ struct MagazinePageRail: View {
         MagazineRailScrub.tickIndices(count: pages.count, width: railWidth, currentIndex: currentIndex)
     }
     private var tickSlotWidth: CGFloat { railWidth / CGFloat(max(1, tickIndices.count)) }
+    // 未激活刻度与拖动进度提示共用同一档弱对比，随主题的墨水色变化。
+    private var inactiveTickColor: Color { Color(paperHex: palette.inkHex).opacity(0.22) }
 
     // 连续距离让相邻刻度依次抬起；只缩放刻度，不改变命中区域或布局。
     static func waveHeight(distance: CGFloat) -> CGFloat {
@@ -230,13 +239,11 @@ struct MagazinePageRail: View {
                 onScrubCancelled()
             }
         }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: .top) {
             if scrubbing {
                 Text("\(currentIndex + 1) / \(max(1, pages.count))")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color(paperHex: palette.inkHex))
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(inactiveTickColor)
                     .offset(y: -25)
                     .allowsHitTesting(false)
             }
@@ -249,14 +256,19 @@ struct MagazinePageRail: View {
     private func pageTicks(at date: Date?) -> some View {
         let indices = tickIndices
         let selected = indices.min { abs($0 - currentIndex) < abs($1 - currentIndex) }
+        // 拖动时高亮与波浪峰值共用指针槽位，避免当前页刻度与波浪各亮一处。
+        let scrubSlot = scrubbing ? hoverPosition.map {
+            MagazineRailScrub.slot(position: $0, slotWidth: tickSlotWidth, slots: indices.count)
+        } : nil
         LazyHStack(spacing: 0) {
             ForEach(Array(indices.enumerated()), id: \.element) { slot, index in
                 let page = pages[index]
+                let highlighted = scrubSlot.map { $0 == slot } ?? (index == selected)
                 Button { select(index) } label: {
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color(paperHex: palette.inkHex).opacity(index == selected ? 0.88 : 0.22))
+                        .fill(highlighted ? Color(paperHex: palette.inkHex).opacity(0.88) : inactiveTickColor)
                         .frame(width: Self.tickWidth, height: Self.tickHeight)
-                        .scaleEffect(x: 1, y: tickHeight(index: index, slot: slot, selected: index == selected, date: date) / Self.tickHeight)
+                        .scaleEffect(x: 1, y: tickHeight(index: index, slot: slot, selected: highlighted, date: date) / Self.tickHeight)
                         .frame(width: tickSlotWidth, height: 28)
                         .contentShape(Rectangle())
                 }
@@ -273,7 +285,8 @@ struct MagazinePageRail: View {
         .onContinuousHover { phase in
             switch phase {
             case .active(let point): hoverPosition = point.x
-            case .ended: hoverPosition = nil
+            // 拖动中指针移出轨道时手势仍在继续，波浪位置不能被悬停结束清空。
+            case .ended: if !scrubbing { hoverPosition = nil }
             }
         }
         .animation(reduceMotion || scrubbing ? nil : .easeOut(duration: 0.12), value: hoverPosition)
@@ -360,11 +373,14 @@ struct MagazinePageRail: View {
                     focusedID = nil
                     onScrubStart()
                 }
+                // 按住拖动时系统不再派发悬停移动事件，波浪必须直接读取手势坐标。
+                hoverPosition = value.location.x
                 scrubInput.submit(MagazineRailScrub.normalizedPosition(locationX: value.location.x, width: width),
                     action: onScrubChanged)
             }
             .onEnded { value in
                 guard scrubbing else { return }
+                hoverPosition = value.location.x
                 scrubInput.submit(MagazineRailScrub.normalizedPosition(locationX: value.location.x, width: width),
                     action: onScrubChanged)
                 scrubInput.flush()

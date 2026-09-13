@@ -289,6 +289,21 @@ struct TimelineArticleTile: View {
 }
 
 #if os(macOS)
+/// 标记处于 Beta 阶段的功能，供弹出菜单标题等处复用。
+struct BetaBadge: View {
+    var body: some View {
+        Text("BETA")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.4)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.accentColor.opacity(0.15), in: Capsule())
+            .overlay { Capsule().strokeBorder(Color.accentColor.opacity(0.35)) }
+            .accessibilityLabel(I18N.localized("Beta 功能", englishFallback: "Beta feature"))
+    }
+}
+
 struct TimelineViewControls: View {
     let style: TimelineViewStyle
     let showsImages: Bool
@@ -311,7 +326,10 @@ struct TimelineViewControls: View {
             .accessibilityIdentifier("timeline.viewSwitcher")
             .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(I18N.localized("文章视图")).font(.headline)
+                    HStack(spacing: 6) {
+                        Text(I18N.localized("文章视图")).font(.headline)
+                        BetaBadge()
+                    }
                     HStack(spacing: 8) {
                         ForEach(TimelineViewStyle.allCases, id: \.rawValue) { option in
                             Button {
@@ -331,8 +349,11 @@ struct TimelineViewControls: View {
                                         style == option ? Color.accentColor.opacity(0.6) : .clear)
                                 }
                                 .contentShape(RoundedRectangle(cornerRadius: 8))
+                                .opacity(option.isAvailable ? 1 : 0.35)
                             }
                             .buttonStyle(.plain)
+                            .disabled(!option.isAvailable)
+                            .help(option.isAvailable ? option.title : I18N.localized("该视图暂不可用"))
                             .accessibilityLabel(option.title)
                             .accessibilityAddTraits(style == option ? [.isSelected] : [])
                             .accessibilityIdentifier("timeline.style.\(option.rawValue)")

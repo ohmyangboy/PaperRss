@@ -490,7 +490,9 @@ struct RootView: View {
     }
 
     private var timelineStyle: TimelineViewStyle {
-        TimelineViewStyle(rawValue: timelineStyleRaw) ?? .list
+        // 卡片模式暂时停用：历史设置若停留在卡片视图，回退到列表，避免出现无匹配选项的选中态。
+        guard let style = TimelineViewStyle(rawValue: timelineStyleRaw), style.isAvailable else { return .list }
+        return style
     }
 
     private var timelineShowsImages: Bool {
@@ -2930,57 +2932,78 @@ private struct EntryListView: View {
 }
 
 #if os(macOS)
+/// 观察文章列表 NSScrollView 的垂直偏移，用于驱动顶部导航的模糊层。
+///
+/// SwiftUI 重建宿主视图时，一次性查找滚动视图可能发生在 NSTableView 尚未创建的时刻，
+/// 之后便永远失效（顶部导航模糊消失）。这里改为：
+/// 1. 优先在当前 NSHostingView 内由 NSTableView 反查 enclosingScrollView，不依赖
+///    `.background` 与 List 的兄弟顺序，也不会误选相邻栏目的滚动视图；
+/// 2. 首次查找失败时按短间隔重试，确保列表滚动一定被观察到。
 private struct ScrollOffsetObserver: NSViewRepresentable {
     let onOffsetChange: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        // 延迟搜索：视图挂载后才能遍历视图树
-        DispatchQueue.main.async {
-            guard let scrollView = Self.findScrollView(from: view) else { return }
-            let clipView = scrollView.contentView
-            clipView.postsBoundsChangedNotifications = true
-            NotificationCenter.default.addObserver(
-                context.coordinator,
-                selector: #selector(Coordinator.boundsChanged(_:)),
-                name: NSView.boundsDidChangeNotification,
-                object: clipView
-            )
-            context.coordinator.clipView = clipView
-            context.coordinator.onOffsetChange = onOffsetChange
-            context.coordinator.checkOffset(clipView)
-        }
+        context.coordinator.onOffsetChange = onOffsetChange
+        context.coordinator.scheduleAttachment(for: view)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onOffsetChange = onOffsetChange
-        // 如果已绑定 clipView，同步检查一次
         if let clipView = context.coordinator.clipView {
             context.coordinator.checkOffset(clipView)
+        } else {
+            context.coordinator.scheduleAttachment(for: nsView)
         }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.unbind()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onOffsetChange: onOffsetChange)
     }
 
-    /// 从给定视图出发，向上遍历父视图链，在每一层检查其所有子视图中是否包含 NSScrollView。
-    /// .background 插入的视图与 List 的 NSScrollView 是同一个父容器的兄弟节点。
-    private static func findScrollView(from view: NSView) -> NSScrollView? {
+    /// 优先使用当前 SwiftUI 宿主视图中的 NSTableView 反查滚动容器，失败时回退到
+    /// 兄弟节点遍历（卡片/杂志模式的 ScrollView 没有 NSTableView）。
+    static func findScrollView(from view: NSView) -> NSScrollView? {
+        var ancestor: NSView? = view
+        while let candidate = ancestor {
+            if String(describing: type(of: candidate)).contains("HostingView") {
+                if let table = findTableView(in: candidate),
+                   let scrollView = table.enclosingScrollView {
+                    return scrollView
+                }
+                break
+            }
+            ancestor = candidate.superview
+        }
+
         var current: NSView? = view
         while let parent = current?.superview {
-            // 在兄弟节点中搜索
             for sibling in parent.subviews where sibling !== current {
                 if let sv = findScrollViewInSubtree(sibling) {
                     return sv
                 }
             }
-            // 父节点本身是 NSScrollView
             if let sv = parent as? NSScrollView {
                 return sv
             }
             current = parent
+        }
+        return nil
+    }
+
+    /// 递归查找视图树中的 NSTableView / NSOutlineView（严格排除 WKWebView 子树）。
+    private static func findTableView(in view: NSView) -> NSTableView? {
+        let className = String(describing: type(of: view))
+        if className.contains("WKWebView") || className.contains("WebView") { return nil }
+        if let outline = view as? NSOutlineView { return outline }
+        if let table = view as? NSTableView { return table }
+        for child in view.subviews {
+            if let found = findTableView(in: child) { return found }
         }
         return nil
     }
@@ -2994,12 +3017,65 @@ private struct ScrollOffsetObserver: NSViewRepresentable {
     }
 
     @MainActor
-    class Coordinator: NSObject {
+    final class Coordinator: NSObject {
         var onOffsetChange: (CGFloat) -> Void
-        weak var clipView: NSClipView?
+        private(set) weak var clipView: NSClipView?
+        private var attachmentToken = 0
+        private var isAttemptingAttachment = false
+        private let maximumAttachmentAttempts = 24
 
         init(onOffsetChange: @escaping (CGFloat) -> Void) {
             self.onOffsetChange = onOffsetChange
+        }
+
+        func scheduleAttachment(for view: NSView) {
+            guard clipView == nil, !isAttemptingAttachment else { return }
+            isAttemptingAttachment = true
+            attachmentToken += 1
+            attemptAttachment(for: view, token: attachmentToken, remaining: maximumAttachmentAttempts)
+        }
+
+        private func attemptAttachment(for view: NSView, token: Int, remaining: Int) {
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, self.attachmentToken == token, self.clipView == nil else { return }
+                if let scrollView = ScrollOffsetObserver.findScrollView(from: view) {
+                    self.isAttemptingAttachment = false
+                    self.bind(to: scrollView.contentView)
+                    return
+                }
+                guard remaining > 0 else {
+                    self.isAttemptingAttachment = false
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak view] in
+                    guard let self, let view else { return }
+                    self.attemptAttachment(for: view, token: token, remaining: remaining - 1)
+                }
+            }
+        }
+
+        private func bind(to clipView: NSClipView) {
+            unbind()
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(boundsChanged(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+            self.clipView = clipView
+            checkOffset(clipView)
+        }
+
+        func unbind() {
+            if let clipView {
+                NotificationCenter.default.removeObserver(
+                    self,
+                    name: NSView.boundsDidChangeNotification,
+                    object: clipView
+                )
+            }
+            clipView = nil
         }
 
         @objc func boundsChanged(_ notification: Notification) {
@@ -3143,19 +3219,32 @@ private struct EntryRow: View {
                 .padding(.top, 6)
                 .accessibilityLabel(I18N.shared.localized(entry.isRead ? "已读" : "未读"))
             VStack(alignment: .leading, spacing: 5) {
-                // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）
-                Text(entry.title)
-                    .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
-                    .tracking(0.1)
-                    .foregroundStyle(primaryForegroundColor)
-                    .lineLimit(entry.isSummaryVisible ? 2 : 4)
+                // 标题/描述区：配图与文字同处一行，不侵占下方的元信息行
+                HStack(alignment: .top, spacing: 9) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）
+                        Text(entry.title)
+                            .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
+                            .tracking(0.1)
+                            .foregroundStyle(primaryForegroundColor)
+                            .lineLimit(entry.isSummaryVisible ? 2 : 4)
 
-                // Desc 独占整行（仅在非冗余时渲染）
-                if entry.isSummaryVisible {
-                    Text(entry.summaryPreview)
-                        .font(.subheadline)
-                        .foregroundStyle(secondaryForegroundColor)
-                        .lineLimit(2)
+                        // Desc 独占整行（仅在非冗余时渲染）
+                        if entry.isSummaryVisible {
+                            Text(entry.summaryPreview)
+                                .font(.subheadline)
+                                .foregroundStyle(secondaryForegroundColor)
+                                .lineLimit(2)
+                        }
+                    }
+                    // 占满剩余宽度，把配图推到最右侧（配图默认靠右，不随文字长度左移）
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if showsImages, let thumbnailStore, let url = entry.previewImageURL {
+                        ArticleThumbnailView(request: .init(accountID: entry.accountID, url: url, pixelSize: Int(68 * displayScale)),
+                            store: thumbnailStore, width: 68, height: 54)
+                            .padding(.top, 2)
+                    }
                 }
 
                 // 最下行：左侧为 [icon、name] 与 [source]，右侧为 [日期]
@@ -3194,11 +3283,6 @@ private struct EntryRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(secondaryForegroundColor)
-            }
-            if showsImages, let thumbnailStore, let url = entry.previewImageURL {
-                ArticleThumbnailView(request: .init(accountID: entry.accountID, url: url, pixelSize: Int(68 * displayScale)),
-                    store: thumbnailStore, width: 68, height: 54)
-                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 6)

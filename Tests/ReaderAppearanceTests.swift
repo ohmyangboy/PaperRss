@@ -297,6 +297,24 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertFalse(actionBar.contains("保存设置"))
     }
 
+    func testEntryListTopBarBlurTracksScrollOffsetResiliently() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let rootView = try String(
+            contentsOf: root.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),
+            encoding: .utf8
+        )
+
+        // 顶部导航模糊必须继续由滚动偏移驱动，并在 NSTableView 延迟创建时仍能绑定。
+        XCTAssertTrue(rootView.contains("PaperTopBarBlur("))
+        XCTAssertTrue(rootView.contains("opacity: isScrolled ? 1 : 0"))
+        XCTAssertTrue(rootView.contains("ScrollOffsetObserver"))
+        XCTAssertTrue(rootView.contains("maximumAttachmentAttempts"))
+        XCTAssertTrue(rootView.contains("table.enclosingScrollView"))
+        XCTAssertTrue(rootView.contains("static func dismantleNSView"))
+    }
+
     private func restore(_ value: Any?, key: String, defaults: UserDefaults) {
         if let value {
             defaults.set(value, forKey: key)

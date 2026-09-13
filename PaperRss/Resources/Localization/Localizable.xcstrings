@@ -163,6 +163,40 @@
         }
       }
     },
+    "Beta 功能": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beta feature"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beta 功能"
+          }
+        }
+      }
+    },
+    "该视图暂不可用": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This view is currently unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该视图暂不可用"
+          }
+        }
+      }
+    },
     "返回浏览": {
       "extractionState": "manual",
       "localizations": {

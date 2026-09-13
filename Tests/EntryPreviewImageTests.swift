@@ -142,6 +142,55 @@ final class EntryPreviewImageTests: XCTestCase {
         }
         XCTAssertEqual(TimelineViewStyle.allCases.map(\.rawValue), ["list", "magazine", "cards"])
     }
+
+    func testCardModeIsTemporarilyDisabledButCodeAndEntryRemain() throws {
+        // 1. 卡片模式当前不可选：枚举用例与卡片代码保留，只关闭可用性开关。
+        XCTAssertFalse(TimelineViewStyle.cards.isAvailable)
+        XCTAssertTrue(TimelineViewStyle.list.isAvailable)
+        XCTAssertTrue(TimelineViewStyle.magazine.isAvailable)
+        XCTAssertFalse(TimelineViewStyle.isCardModeEnabled)
+        XCTAssertEqual(TimelineViewStyle.allCases.map(\.rawValue), ["list", "magazine", "cards"])
+
+        // 2. 视图切换弹窗仍渲染全部样式，但把不可用样式置灰并禁止点击。
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let controlsSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/TimelineImageViews.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(controlsSource.contains("ForEach(TimelineViewStyle.allCases"))
+        XCTAssertTrue(controlsSource.contains(".disabled(!option.isAvailable)"))
+        XCTAssertTrue(controlsSource.contains(".opacity(option.isAvailable ? 1 : 0.35)"))
+
+        // 3. 历史设置停留在卡片视图时回退到列表，避免出现无匹配选项的选中态。
+        let rootSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(rootSource.contains("guard let style = TimelineViewStyle(rawValue: timelineStyleRaw), style.isAvailable else { return .list }"))
+    }
+
+    func testArticleViewsHeaderCarriesBetaBadge() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let controlsSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/TimelineImageViews.swift"),
+            encoding: .utf8
+        )
+        let strings = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Resources/Localization/Localizable.xcstrings"),
+            encoding: .utf8
+        )
+
+        // 弹窗标题旁必须有 Beta 标徽，向用户说明文章视图属于 Beta 功能。
+        XCTAssertTrue(controlsSource.contains("struct BetaBadge: View"))
+        XCTAssertTrue(controlsSource.contains("Text(I18N.localized(\"文章视图\")).font(.headline)"))
+        XCTAssertTrue(controlsSource.contains("BetaBadge()"))
+        XCTAssertTrue(strings.contains("\"Beta 功能\""))
+        XCTAssertTrue(strings.contains("\"文章视图\""))
+    }
     func testLargeOriginalCoverUsesSuppliedSameAssetResize() throws {
         let original = "https://cdn.tw93.fun/uPic/27342.JPG"
         let sized = "https://cdn.tw93.fun/cdn-cgi/image/width=2000,quality=80,format=auto,fit=scale-down/uPic/27342.JPG"

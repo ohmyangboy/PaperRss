@@ -147,6 +147,14 @@ public enum TimelineViewStyle: String, CaseIterable, Sendable {
         case .cards: I18N.localized("卡片")
         }
     }
+
+    /// 卡片模式暂时停用：入口保留但置灰不可选，代码与枚举用例保留，待后续优化后再放开。
+    public static let isCardModeEnabled = false
+
+    /// 该视图样式当前是否可被用户选中。
+    public var isAvailable: Bool {
+        self != .cards || Self.isCardModeEnabled
+    }
 }
 
 public enum TimelineImagePreference: String, Sendable {

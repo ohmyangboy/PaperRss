@@ -21,12 +21,17 @@ struct MagazineStoryStyle: Hashable, Sendable {
     var imageAspectRatio: CGFloat = 1.5
     var sideImageWidth: CGFloat?
     var stacksImage: Bool { !imageBesideText }
-    var textSpacing: CGFloat { (role == .lead ? 10 : 6) * textScale }
-    var metadataSpacing: CGFloat { (role == .lead ? 14 : 10) * textScale }
-    var imageSpacing: CGFloat { 16 }
-    var metadataSize: CGFloat { 13 * textScale }
-    var titleLineSpacing: CGFloat { 2 * textScale }
-    var summaryLineSpacing: CGFloat { 4 * textScale }
+    /// 全局内容缩放：字体、行距与来源信息整体略收 5%，为更大的页边距留出呼吸感。
+    /// 图片仍按栏宽与既定比例铺满，图文结构与对齐规则不变。
+    static let contentScale: CGFloat = 0.95
+    var titleFontSize: CGFloat { titleSize * textScale * Self.contentScale }
+    var summaryFontSize: CGFloat { summarySize * textScale * Self.contentScale }
+    var textSpacing: CGFloat { (role == .lead ? 10 : 6) * textScale * Self.contentScale }
+    var metadataSpacing: CGFloat { (role == .lead ? 14 : 10) * textScale * Self.contentScale }
+    var imageSpacing: CGFloat { 16 * Self.contentScale }
+    var metadataSize: CGFloat { 13 * textScale * Self.contentScale }
+    var titleLineSpacing: CGFloat { 2 * textScale * Self.contentScale }
+    var summaryLineSpacing: CGFloat { 4 * textScale * Self.contentScale }
     func contentWidth(_ width: CGFloat) -> CGFloat { max(1, width - contentInset * 2) }
     func imageWidth(in width: CGFloat) -> CGFloat {
         stacksImage ? contentWidth(width) : (sideImageWidth ?? min(contentWidth(width) * 0.32, imageHeight * imageAspectRatio))
@@ -54,16 +59,16 @@ struct MagazineStoryStyle: Hashable, Sendable {
         return min(ceil(rect.height) + 3, line * CGFloat(lines) + spacing * CGFloat(max(0, lines - 1)) + 3)
     }
     func titleFits(_ entry: EntryListItem, width: CGFloat) -> Bool {
-        let font = Self.titleFont(titleSize * textScale)
+        let font = Self.titleFont(titleFontSize)
         return measured(entry.title, width: contentWidth(width), font: font, lines: 10000, spacing: titleLineSpacing)
             <= measured(entry.title, width: contentWidth(width), font: font, lines: titleLines, spacing: titleLineSpacing) + 1
     }
     func textHeight(for entry: EntryListItem, width: CGFloat) -> CGFloat {
         let textWidth = contentWidth(width) - (imageBesideText && imageHeight > 0 ? imageWidth(in: width) + imageSpacing : 0)
-        let title = measured(entry.title, width: textWidth, font: Self.titleFont(titleSize * textScale),
+        let title = measured(entry.title, width: textWidth, font: Self.titleFont(titleFontSize),
                              lines: titleLines, spacing: titleLineSpacing)
         let summary = entry.isSummaryVisible ? measured(entry.summaryPreview, width: textWidth,
-            font: .systemFont(ofSize: summarySize * textScale), lines: summaryLines, spacing: summaryLineSpacing) : 0
+            font: .systemFont(ofSize: summaryFontSize), lines: summaryLines, spacing: summaryLineSpacing) : 0
         let metadata = ceil(metadataSize * 1.5)
         // 保留少量原生文本取整余量，不把剩余页面高度分摊给文字。
         return title + (summary > 0 ? textSpacing + summary : 0) + textSpacing + metadata + 8
@@ -150,8 +155,9 @@ final class MagazineMeasurementCache: @unchecked Sendable {
 /// 固定栅格、连续队列和自然高度；候选窗口不构成人为分页边界。
 enum MagazinePaginator {
     static let gutter: CGFloat = 40
-    static let verticalInset: CGFloat = 28
-    static let headingSpacing: CGFloat = 28
+    /// 上下页边一致；较上一版放宽，给纸面留出呼吸感（标题行 + 间距 + 上下内边距）。
+    static let verticalInset: CGFloat = 20
+    static let headingSpacing: CGFloat = 16
     static let rowSpacing: CGFloat = 24
     static let pairSpacing: CGFloat = 24
     static let supportSpacing: CGFloat = 24
@@ -163,10 +169,39 @@ enum MagazinePaginator {
         CGSize(width: size.width, height: size.height - turnInset(size) * 2)
     }
     static func pageWidth(_ width: CGFloat) -> CGFloat { min(1280, max(1, width - (width < 620 ? 40 : 96))) }
-    static func horizontalInset(_ width: CGFloat) -> CGFloat { min(width < 620 ? 20 : 32, (pageWidth(width) - 1) / 2) }
+    static func horizontalInset(_ width: CGFloat) -> CGFloat { min(width < 620 ? 24 : 40, (pageWidth(width) - 1) / 2) }
     static func contentWidth(_ width: CGFloat) -> CGFloat { max(1, pageWidth(width) - horizontalInset(width) * 2) }
     static func needsFlow(_ size: CGSize, textScale: CGFloat = 1) -> Bool {
         pageWidth(size.width) < 620 || size.height - railHeight < 460 || textScale >= 1.5
+    }
+
+    /// 内容已排完但叶底仍有余量时，让该叶最后一张竖排图按高度增长填平页脚。
+    /// 只改图高与占位高度：缩略图按宽度预取，不需要重新下载；图片按 cover 裁切不拉伸。
+    static func flushLeafTails(_ placements: [MagazinePlacement], leafWidth: CGFloat, gutter: CGFloat,
+                               height: CGFloat, spread: Bool) -> [MagazinePlacement] {
+        guard height > 0, !placements.isEmpty else { return placements }
+        let columns: [ClosedRange<CGFloat>] = spread
+            ? [0...leafWidth, (leafWidth + gutter)...(leafWidth * 2 + gutter)]
+            : [0...max(leafWidth, placements.map(\.frame.maxX).max() ?? leafWidth)]
+        var result = placements
+        for column in columns {
+            let indices = result.indices.filter { column.contains(result[$0].frame.minX) }
+            guard let target = indices.max(by: { result[$0].frame.maxY < result[$1].frame.maxY }) else { continue }
+            let placement = result[target]
+            let extra = height - placement.frame.maxY
+            guard extra >= 32, placement.style.stacksImage, placement.style.imageHeight > 0,
+                  placement.style.imageHeight < leafWidth else { continue }
+            // 叶底只处理独占的一张；并列双稿与组内稿件不拉伸。
+            guard indices.allSatisfy({ $0 == target || result[$0].frame.maxY <= placement.frame.minY + 1 }) else { continue }
+            let cap = floor(min(extra, 200, leafWidth - placement.style.imageHeight))
+            guard cap >= 24 else { continue }
+            var style = placement.style
+            style.imageHeight += cap
+            let frame = CGRect(x: placement.frame.minX, y: placement.frame.minY,
+                               width: placement.frame.width, height: placement.frame.height + cap)
+            result[target] = MagazinePlacement(entryID: placement.entryID, frame: frame, style: style)
+        }
+        return result
     }
 
     private struct Row {
@@ -178,13 +213,16 @@ enum MagazinePaginator {
         var placements: [MagazinePlacement] = []
         var height: CGFloat = 0
         var void: CGFloat = 0
-        var requiresImageNeighbor = false
     }
 
+    /// `cancelsWithTask` 仅由后台异步编排显式开启。同步调用默认不响应取消：
+    /// 视图更新可能落在已取消的宿主任务上下文里，若把取消当输入，就会
+    /// 把有文章的版面算成空页，用户会看到“暂无文章”。
     static func pages(entries: [EntryListItem], folders: [UUID: String], arrangement: MagazineArrangement,
                       size: CGSize, showsImages: Bool, hasMore: Bool = false, textScale: CGFloat = 1,
                       locale: String = "", imageRatios: [String: CGFloat] = [:],
-                      measurements: MagazineMeasurementCache = MagazineMeasurementCache()) -> [MagazinePageLayout] {
+                      measurements: MagazineMeasurementCache = MagazineMeasurementCache(),
+                      cancelsWithTask: Bool = false) -> [MagazinePageLayout] {
         let paper = pageWidth(size.width)
         let inset = horizontalInset(size.width)
         let width = contentWidth(size.width)
@@ -271,7 +309,7 @@ enum MagazinePaginator {
             var placements: [MagazinePlacement] = [.init(entryID: first.id,
                 frame: CGRect(x: 0, y: 0, width: leafWidth, height: leadHeight), style: style)]
             var y: CGFloat = 0
-            for entry in items.dropFirst().prefix(8) {
+            for entry in items.dropFirst() {
                 guard let side = supporting(entry, width: leafWidth, limit: .greatestFiniteMagnitude) else { break }
                 let h = measure(entry, side, leafWidth)
                 guard y + h <= height else { break }
@@ -297,15 +335,16 @@ enum MagazinePaginator {
             }
             return style.matchingSideImage(to: entry, width: width)
         }
-        /// 每个横向分区由左右两组连续稿件组成；组内只允许整栏、并列或短讯组。
-        /// 比较整组的空洞与图文层级，不再逐张投入最低的瀑布列。
+        /// 每叶独立向下推进：下一组连续稿件放进剩余空间更大的那一叶，以填满页面为先，
+        /// 不再要求左右两组共享横向起点。叶内仍保留整栏、并列、双行短讯与短讯纵组的组合词汇。
         func editorialSpread(_ slice: ArraySlice<EntryListItem>, usesLead: Bool) -> Path {
             let items = Array(slice)
             guard !items.isEmpty else { return Path() }
             let laneWidth = (leafWidth - pairSpacing) / 2
             var placed: [MagazinePlacement] = []
             var cursor = 0
-            var bandTop: CGFloat = 0
+            var leftY: CGFloat = 0
+            var rightY: CGFloat = 0
 
             func moved(_ path: Path, x: CGFloat, y: CGFloat) -> [MagazinePlacement] {
                 path.placements.map {
@@ -329,13 +368,23 @@ enum MagazinePaginator {
                     }
                     style = style.matchingSideImage(to: items[index], width: width)
                     let h = measure(items[index], style, width)
-                    guard h <= limit else { return nil }
+                    guard h > limit else {
+                        return .init(entryID: items[index].id,
+                            frame: CGRect(x: 0, y: 0, width: width, height: h), style: style)
+                    }
+                    // 页尾收口：竖排图按剩余高度收缩，尽量保留标题与摘要预算。
+                    guard !compact, !style.imageBesideText, style.imageHeight > 0,
+                          let fit = fitted(items[index], style: style, width: width,
+                                           limit: limit, minimumTitleLines: 2, mayHideImage: false) else { return nil }
+                    let fittedHeight = measure(items[index], fit, width)
+                    guard fittedHeight <= limit else { return nil }
                     return .init(entryID: items[index].id,
-                        frame: CGRect(x: 0, y: 0, width: width, height: h), style: style)
+                        frame: CGRect(x: 0, y: 0, width: width, height: fittedHeight), style: fit)
                 }
                 if let full = story(index, width: leafWidth, wide: true) {
-                    // 短讯独占整叶会产生过长行宽；长文与图片更适合整栏。
-                    let cost: CGFloat = hasImage(entry) || entry.summaryPreview.count >= 96 ? 0 : leafWidth * 50
+                    // 很短的纯文字短讯独占整栏会产生过长行宽；内容吃紧时也不为此删稿。
+                    let brief = !hasImage(entry) && entry.summaryPreview.count < 40 && entry.title.count < 30
+                    let cost: CGFloat = brief ? leafWidth * 22 : 0
                     options.append(Path(placements: [full], height: full.frame.height, void: cost))
                 }
                 if index + 1 < items.count, laneWidth >= 220,
@@ -388,7 +437,7 @@ enum MagazinePaginator {
                         y += h + rowSpacing
                         if group.count >= 2 {
                             options.append(Path(placements: group, height: y - rowSpacing,
-                                void: leafWidth * 70, requiresImageNeighbor: true))
+                                void: leafWidth * 70))
                         }
                     }
                 }
@@ -409,15 +458,17 @@ enum MagazinePaginator {
                 placed.append(.init(entryID: items[0].id,
                     frame: CGRect(x: 0, y: 0, width: leafWidth, height: leadHeight), style: leadStyle))
                 cursor = 1
+                leftY = leadHeight + sectionSpacing
 
                 var rail: [MagazinePlacement] = []
                 var railHeight: CGFloat = 0
+                // 侧重稿最多四条；只受页面高度限制，不再按主稿高度提前截断。
                 while cursor < items.count && rail.count < 4 {
                     let y = rail.isEmpty ? 0 : railHeight + supportSpacing
-                    // 使用正常文字预算；不为了塞第四条而删掉图片、压缩标题。
+                    // 使用正常文字预算；不为了塞下一条而删掉图片、压缩标题。
                     guard let style = supporting(items[cursor], width: leafWidth, limit: .greatestFiniteMagnitude) else { break }
                     let h = measure(items[cursor], style, leafWidth)
-                    guard y + h <= min(height, leadHeight + 40) else { break }
+                    guard y + h <= height else { break }
                     rail.append(.init(entryID: items[cursor].id,
                         frame: CGRect(x: leafWidth + gutter, y: y, width: leafWidth, height: h), style: style))
                     railHeight = y + h
@@ -433,43 +484,74 @@ enum MagazinePaginator {
                     railHeight = rail.last?.frame.maxY ?? railHeight
                 }
                 placed += rail
-                bandTop = max(leadHeight, railHeight) + sectionSpacing
+                rightY = railHeight + sectionSpacing
             }
 
-            while cursor < items.count && !Task.isCancelled {
-                let available = height - bandTop
-                guard available >= 64 else { break }
-                var candidates: [(path: Path, score: CGFloat)] = []
-                func compose(compact: Bool) {
-                    for left in block(at: cursor, limit: available, compact: compact) {
-                        let next = cursor + left.placements.count
-                        let rights = block(at: next, limit: available, compact: compact)
-                        for right in rights {
-                            if left.requiresImageNeighbor && !right.placements.contains(where: { $0.style.imageHeight > 0 }) { continue }
-                            if right.requiresImageNeighbor && !left.placements.contains(where: { $0.style.imageHeight > 0 }) { continue }
-                            let h = max(left.height, right.height)
-                            let imbalance = abs(left.height - right.height)
-                            let holes = left.void + right.void + imbalance * leafWidth
-                            let count = left.placements.count + right.placements.count
-                            // 全组面积、两叶底线和内容尺度共同决定组合；篇数只有小权重。
-                            let narrowCount = (left.placements + right.placements).filter { $0.frame.width < leafWidth - 1 }.count
-                            let score = holes / (width * max(1, h)) * 240 - CGFloat(count) * 4 - CGFloat(narrowCount) * 5
-                            candidates.append((Path(placements: left.placements + moved(right, x: leafWidth + gutter, y: 0),
-                                height: h, void: holes), score))
-                        }
-                        if !left.requiresImageNeighbor && (next == items.count || rights.isEmpty) {
-                            candidates.append((left, 140 + left.void / (leafWidth * max(1, left.height))))
+            /// 单叶候选：整栏／并列／短讯组，末尾附侧重稿收口，允许该叶本轮轮空。
+            func leafOptions(at index: Int, room: CGFloat, compact: Bool) -> [Path] {
+                guard index < items.count, room >= 64 else { return [Path()] }
+                var options = block(at: index, limit: room, compact: compact)
+                if options.isEmpty, let tail = tailStory(at: index, room: room) {
+                    options.append(tail)
+                }
+                options.append(Path())
+                return options
+            }
+            /// 页尾空间不足时，把下一篇压成侧重稿（摘要→旁图→文字列表）收口。
+            func tailStory(at index: Int, room: CGFloat) -> Path? {
+                guard index < items.count, room >= 64,
+                      let style = supporting(items[index], width: leafWidth, limit: room) else { return nil }
+                let h = measure(items[index], style, leafWidth)
+                guard h <= room else { return nil }
+                return Path(placements: [.init(entryID: items[index].id,
+                    frame: CGRect(x: 0, y: 0, width: leafWidth, height: h), style: style)], height: h, void: 0)
+            }
+            /// 组内空洞、篇数与占用高度共同决定；越接近填满的组越优先。
+            /// `heightWeight` 在内容吃紧时变大，让大图与整栏稿收口，而不是把短讯堆在页首。
+            func leafScore(_ path: Path, room: CGFloat, compact: Bool, heightWeight: CGFloat) -> CGFloat {
+                guard !path.placements.isEmpty else {
+                    // 轮空意味着浪费该叶空间，只有在没有更好选择时才接受。
+                    return room / max(1, height) * 40
+                }
+                let count = path.placements.count
+                let narrow = path.placements.filter { $0.frame.width < leafWidth - 1 }.count
+                var score = path.void / (leafWidth * max(1, path.height)) * 200
+                score -= CGFloat(count) * 4 + CGFloat(narrow) * 5
+                // 占用高度越高越接近填满；内容吃紧时权重大，避免把短讯堆在页首。
+                score -= path.height / max(1, room) * heightWeight
+                if compact { score += 8 }
+                return score
+            }
+
+            while cursor < items.count && !(cancelsWithTask && Task.isCancelled) {
+                let leftRoom = height - leftY
+                let rightRoom = height - rightY
+                guard max(leftRoom, rightRoom) >= 64 else { break }
+                // 剩余内容按四栏短讯估算能占满多少；估不满时优先大版面块。
+                let lanes = laneWidth >= 220 ? 4.0 : 2.0
+                let projectedRows = (Double(items.count - cursor) + lanes - 1) / lanes
+                let tight = projectedRows * 90 > Double(max(leftRoom, rightRoom))
+                let heightWeight: CGFloat = tight ? 30 : 160
+                var chosen: (left: Path, right: Path, score: CGFloat)?
+                for compact in [false, true] {
+                    for left in leafOptions(at: cursor, room: leftRoom, compact: compact) {
+                        for right in leafOptions(at: cursor + left.placements.count, room: rightRoom, compact: compact) {
+                            if left.placements.isEmpty && right.placements.isEmpty { continue }
+                            let score = leafScore(left, room: leftRoom, compact: compact, heightWeight: heightWeight)
+                                + leafScore(right, room: rightRoom, compact: compact, heightWeight: heightWeight)
+                            if chosen == nil || score < chosen!.score {
+                                chosen = (left, right, score)
+                            }
                         }
                     }
                 }
-                compose(compact: false)
-                if candidates.allSatisfy({ $0.score >= 140 }) { compose(compact: true) }
-                guard let best = candidates.enumerated().min(by: {
-                    $0.element.score == $1.element.score ? $0.offset < $1.offset : $0.element.score < $1.element.score
-                })?.element.path else { break }
-                placed += moved(best, x: 0, y: bandTop)
-                cursor += best.placements.count
-                bandTop += best.height + sectionSpacing
+                guard let chosen else { break }
+                // 左右两叶各自从自己的游标向下推进，短的一叶继续接稿而不是留下空洞。
+                placed += moved(chosen.left, x: 0, y: leftY)
+                placed += moved(chosen.right, x: leafWidth + gutter, y: rightY)
+                if !chosen.left.placements.isEmpty { leftY += chosen.left.height + sectionSpacing }
+                if !chosen.right.placements.isEmpty { rightY += chosen.right.height + sectionSpacing }
+                cursor += chosen.left.placements.count + chosen.right.placements.count
             }
             let bottom = placed.map(\.frame.maxY).max() ?? 0
             return Path(placements: placed, height: bottom)
@@ -485,7 +567,7 @@ enum MagazinePaginator {
             let items = Array(items)
             var result = Path()
             var cursor = 0
-            while cursor < items.count && !Task.isCancelled {
+            while cursor < items.count && !(cancelsWithTask && Task.isCancelled) {
                 let count = min(12, items.count - cursor)
                 var states: [Int: Path] = [0: result]
                 for offset in 0..<count {
@@ -531,7 +613,7 @@ enum MagazinePaginator {
         for (groupIndex, group) in groups.enumerated() {
             var cursor = 0
             while cursor < group.entries.count {
-                if Task.isCancelled { return [] }
+                if cancelsWithTask && Task.isCancelled { return [] }
                 let remaining = group.entries[cursor...]
                 let first = remaining.first!
                 let firstHasImage = showsImages && first.previewImageURL != nil
@@ -620,6 +702,11 @@ enum MagazinePaginator {
                     }
                     placements = path.placements; chosenHeight = path.height
                 }
+                // 内容排完后叶底仍有余量时，让末张竖排图增高收口，避免页脚大面积空白。
+                if !flow && chosenTemplate != .ending && !placements.isEmpty {
+                    placements = flushLeafTails(placements, leafWidth: leafWidth, gutter: gutter,
+                                                height: chosenHeight, spread: spread)
+                }
                 let accepted = Array(remaining.prefix(placements.count))
                 let page = MagazinePage(id: group.id + ":" + first.id, title: group.title, entries: accepted)
                 output.append(.init(page: page, placements: placements, height: chosenHeight, template: chosenTemplate,
@@ -683,11 +770,11 @@ struct MagazineStoryView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: style.textSpacing) {
                 Text(entry.title)
-                    .font(Font(MagazineStoryStyle.titleFont(style.titleSize * style.textScale)))
+                    .font(Font(MagazineStoryStyle.titleFont(style.titleFontSize)))
                     .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
                     .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
                 if entry.isSummaryVisible && style.summaryLines > 0 {
-                    Text(entry.summaryPreview).font(.system(size: style.summarySize * style.textScale))
+                    Text(entry.summaryPreview).font(.system(size: style.summaryFontSize))
                         .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
                         .foregroundStyle(Color(paperHex: palette.mutedHex))
                 }

@@ -1506,22 +1506,11 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         }
 
         /// Tahoe 及后续系统由 AppKit 为工具栏控件提供 Liquid Glass。
-        /// 保持纸张延伸到标题栏，并只移除旧式整栏模糊层，避免双重材质。
+        /// 保留标题栏/工具栏的原生材质（NSVisualEffectView）：它是顶部导航
+        /// 唯一能随滚动内容实时模糊的原生来源；隐去后内容会直接穿透，nav 失去毛玻璃观感。
         private func applyLiquidGlassWindowChrome(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
-
-            // 全屏阶段 AppKit 会把 toolbar 迁移到 NSToolbarFullScreenWindow；
-            // 此时不再递归隐藏主窗口的材质视图，避免连同迁移中的工具栏宿主
-            // 一起设为 hidden/alpha=0。
-            guard !window.styleMask.contains(.fullScreen) else { return }
-
-            // 主窗口：仅隐去标题栏/工具栏容器中的 NSVisualEffectView，保留 contentView (应用内容)
-            if let themeFrame = window.contentView?.superview {
-                for subview in themeFrame.subviews where subview !== window.contentView {
-                    hideVisualEffects(in: subview)
-                }
-            }
         }
 
         /// macOS 14–25 没有逐控件 Liquid Glass。顶部 navbar 不使用系统整栏
@@ -1674,17 +1663,6 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 }
             }
             return nil
-        }
-
-        private func hideVisualEffects(in view: NSView) {
-            if let effectView = view as? NSVisualEffectView {
-                effectView.isHidden = true
-                effectView.state = .inactive
-                effectView.alphaValue = 0
-            }
-            for subview in view.subviews {
-                hideVisualEffects(in: subview)
-            }
         }
 
         /// 同步刷新按钮的可用状态和图标
@@ -2229,17 +2207,12 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         let onCancel: () -> Void
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 6) {
-                    Image(systemName: "envelope.open")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(I18N.localized("标记所有文章已读？", englishFallback: "Mark all articles as read?"))
-                        .font(.headline)
-                }
+            VStack(spacing: 12) {
+                Text(I18N.localized("标记所有文章已读？", englishFallback: "Mark all articles as read?"))
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
 
                 HStack(spacing: 8) {
-                    Spacer()
                     Button(I18N.localized("取消", englishFallback: "Cancel")) {
                         onCancel()
                     }

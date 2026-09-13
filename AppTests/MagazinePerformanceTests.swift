@@ -230,6 +230,25 @@ final class MagazinePerformanceTests: XCTestCase {
         XCTAssertEqual(MagazinePageRail.waveHeight(distance: 10), MagazinePageRail.tickHeight)
     }
 
+    func testRailScrubHighlightSlotMatchesWavePeakAndClampsEdges() {
+        // 拖动时高亮与波浪共用指针槽位：高亮刻度必须就是波浪最高的那一个，不能各亮一处。
+        let slotWidth: CGFloat = 8
+        let slots = 10
+        for position in stride(from: CGFloat(-12), through: 84, by: 1.3) {
+            let slot = MagazineRailScrub.slot(position: position, slotWidth: slotWidth, slots: slots)
+            let heights = (0..<slots).map {
+                MagazinePageRail.waveHeight(distance: (position - (CGFloat($0) * slotWidth + slotWidth / 2)) / slotWidth)
+            }
+            XCTAssertEqual(heights[slot], heights.max() ?? 0, accuracy: 0.0001,
+                "位置 \(position) 的高亮必须落在波浪峰值刻度")
+        }
+        XCTAssertEqual(MagazineRailScrub.slot(position: -100, slotWidth: slotWidth, slots: slots), 0)
+        XCTAssertEqual(MagazineRailScrub.slot(position: 1000, slotWidth: slotWidth, slots: slots), slots - 1)
+        XCTAssertEqual(MagazineRailScrub.slot(position: .nan, slotWidth: slotWidth, slots: slots), 0)
+        XCTAssertEqual(MagazineRailScrub.slot(position: 10, slotWidth: 0, slots: slots), 0)
+        XCTAssertEqual(MagazineRailScrub.slot(position: 10, slotWidth: slotWidth, slots: 0), 0)
+    }
+
     func testAudioWaveHeightFollowsSystemVolumeAndKeepsZeroVolumeQuiet() {
         XCTAssertEqual(MagazinePageRail.audioWaveHeight(index: 0, volume: 0, time: 0, reduceMotion: false),
                        MagazinePageRail.tickHeight)
@@ -743,6 +762,19 @@ extension MagazinePerformanceTests {
         await task.value
         XCTAssertTrue(cache.pages.isEmpty)
     }
+
+    func testSynchronousCompositionIgnoresAmbientTaskCancellation() async {
+        let cache = MagazineEditionCache()
+        let input = MagazineEditionCache.Input(entries: editorialEntries(40), folders: [:], arrangement: .balanced,
+            capacity: 12, locale: "zh", viewport: CGSize(width: 1450, height: 1000), showsImages: false)
+        // 同步 update 可能被子视图事务落在已取消的宿主任务里；此时仍必须产出
+        // 有文章的版面，否则会误显示“暂无文章”，直到下一次输入变化才恢复。
+        let cancelled = Task { cache.update(input) }
+        cancelled.cancel()
+        await cancelled.value
+        XCTAssertFalse(cache.pages.isEmpty, "同步排版不得被宿主任务的取消状态误伤")
+        XCTAssertEqual(cache.pages.flatMap { $0.entries.map(\.id) }, input.entries.map(\.id))
+    }
 }
 
 extension MagazinePerformanceTests {
@@ -768,19 +800,28 @@ extension MagazinePerformanceTests {
 
 extension MagazinePerformanceTests {
     func testCompleteTextSpreadUsesAlignedRowsWithNaturalStoryHeights() {
+        // 已知末页会收成左叶 + 封底；这里保留还可加载更多内容的前提，验证正常跨叶编排。
         let entries = editorialEntries(20)
         let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
-            size: CGSize(width: 1450, height: 1000), showsImages: false)
+            size: CGSize(width: 1450, height: 1000), showsImages: false, hasMore: true)
         XCTAssertEqual(pages.count, 1)
         XCTAssertEqual(pages[0].form, .spread)
         XCTAssertEqual(pages[0].consumedCount, 20)
         let lanes = Dictionary(grouping: pages[0].placements, by: { $0.frame.minX })
-        XCTAssertEqual(lanes.count, 4)
-        let counts = lanes.values.map(\.count)
-        XCTAssertLessThanOrEqual((counts.max() ?? 0) - (counts.min() ?? 0), 1)
+        XCTAssertEqual(lanes.count, 4, "每叶两小栏")
         XCTAssertTrue(pages[0].placements.allSatisfy { $0.style.role == .gallery })
-        let rows = Dictionary(grouping: pages[0].placements, by: { $0.frame.minY })
-        XCTAssertTrue(rows.values.allSatisfy { $0.count == 4 }, "纯短讯每行四篇，共用起点，不各自向下漂移")
+        XCTAssertTrue(pages[0].placements.allSatisfy { $0.frame.width < pages[0].contentWidth / 3 })
+        // 两叶各自连续续排，高度接近；不再要求跨叶逐行共享起点。
+        let leaf = (pages[0].contentWidth - MagazinePaginator.gutter) / 2
+        func leafBottom(_ x: CGFloat) -> CGFloat {
+            pages[0].placements.filter { $0.frame.minX >= x && $0.frame.minX < x + leaf }
+                .map(\.frame.maxY).max() ?? 0
+        }
+        let leftBottom = leafBottom(0)
+        let rightBottom = leafBottom(leaf + MagazinePaginator.gutter)
+        XCTAssertGreaterThan(leftBottom, 0)
+        XCTAssertGreaterThan(rightBottom, 0)
+        XCTAssertLessThan(abs(leftBottom - rightBottom), pages[0].height * 0.35, "两叶高度接近，不偏科")
         for placement in pages[0].placements {
             let entry = entries.first { $0.id == placement.entryID }!
             XCTAssertEqual(placement.frame.height, placement.style.height(for: entry, width: placement.frame.width))
@@ -823,7 +864,7 @@ extension MagazinePerformanceTests {
         assertEditorialGeometry(pages)
     }
 
-    func testAlternatingLongAndShortStoriesKeepAlignedGroupsAndVisibleImages() {
+    func testAlternatingLongAndShortStoriesFillLeavesWithVisibleImages() {
         let feed = UUID()
         let entries = (0..<40).map { index in
             EntryListItem(id: "rhythm-\(index)", feedID: feed,
@@ -836,17 +877,61 @@ extension MagazinePerformanceTests {
         XCTAssertEqual(pages.flatMap(\.readingOrder), entries.map(\.id))
         assertEditorialGeometry(pages)
         for page in pages {
-            let middle = page.contentWidth / 2
-            for placement in page.placements where placement.style.role == .gallery && placement.style.imageHeight > 0 {
-                let isLeft = placement.frame.midX < middle
-                let opposite = page.placements.filter { other in
-                    let otherIsLeft = other.frame.midX < middle
-                    let sameTop = abs(other.frame.minY - placement.frame.minY) < 1
-                    return otherIsLeft != isLeft && sameTop
-                }
-                XCTAssertFalse(opposite.isEmpty, "图片所在分区应与对面的短讯组共享起点")
-            }
+            // 图片必须始终可见；每叶不再要求跨叶共享起点，但都要尽量填满页面。
+            let images = page.placements.filter { $0.style.imageHeight > 0 }
+            XCTAssertFalse(images.isEmpty, "含图稿件的页面必须保留图片")
+            let bottom = page.placements.map(\.frame.maxY).max() ?? 0
+            XCTAssertGreaterThan(bottom, page.height * 0.75, "内容吃紧时也要把页面填满，而不是在页首堆完后留白")
         }
+    }
+
+    func testLeftLeafContinuesBelowLeadInsteadOfLeavingHalfPageBlank() {
+        // 图三 05 页场景：无图文字稿与整栏大图稿相邻时，矮的一叶必须继续接稿。
+        let feed = UUID()
+        var entries: [EntryListItem] = [
+            EntryListItem(id: "lead-text", feedID: feed, title: "体验碎周报第 272 期（2026.3.16）",
+                summaryPreview: String(repeating: "系统的知识来源于对碎片的整理和思考。", count: 4), sourceTitle: "龙爪槐守望者"),
+            EntryListItem(id: "panel", feedID: feed, title: "体验碎周报第283期(2026.6.15)",
+                summaryPreview: String(repeating: "系统的知识来源于对碎片的整理和思考。", count: 3),
+                sourceTitle: "龙爪槐守望者", previewImageURL: URL(string: "https://example.com/panel.png"))
+        ]
+        for index in 2..<30 {
+            entries.append(EntryListItem(id: "brief-\(index)", feedID: feed,
+                title: "体验碎周报第 \(240 + index) 期（2026.4.\(index)）",
+                summaryPreview: "系统的知识来源于对碎片的整理和思考。", sourceTitle: "龙爪槐守望者"))
+        }
+        let page = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: CGSize(width: 1450, height: 1250), showsImages: true, hasMore: true)[0]
+        let leaf = (page.contentWidth - MagazinePaginator.gutter) / 2
+        func bottom(_ x: CGFloat) -> CGFloat {
+            page.placements.filter { $0.frame.minX >= x && $0.frame.minX < x + leaf }
+                .map(\.frame.maxY).max() ?? 0
+        }
+        XCTAssertGreaterThan(bottom(0), page.height * 0.8, "矮的一叶要继续向下接稿，而不是留半页空洞")
+        XCTAssertGreaterThan(bottom(leaf + MagazinePaginator.gutter), page.height * 0.8)
+        assertEditorialGeometry([page])
+    }
+
+    func testLeafTailGrowthFillsPageBottomAndSkipsRowSiblings() {
+        var style = MagazineStoryStyle(role: .gallery, titleSize: 22, titleLines: 3, summaryLines: 3, summarySize: 14)
+        style.imageHeight = 200
+        let lone = MagazinePlacement(entryID: "lone", frame: CGRect(x: 0, y: 0, width: 400, height: 300), style: style)
+        let flushed = MagazinePaginator.flushLeafTails([lone], leafWidth: 400, gutter: 40, height: 700, spread: true)
+        XCTAssertEqual(flushed.count, 1)
+        XCTAssertGreaterThan(flushed[0].style.imageHeight, 200, "末张竖排图应增高填满叶底")
+        XCTAssertLessThanOrEqual(flushed[0].style.imageHeight, 400, "增长以方形为上限，不拉伸成竖图")
+        XCTAssertEqual(flushed[0].frame.maxY, 500, accuracy: 0.01)
+        XCTAssertEqual(flushed[0].frame.height, 300 + (flushed[0].style.imageHeight - 200), accuracy: 0.01)
+
+        // 并列双稿共享行高，不能只拉长其中一张。
+        let left = MagazinePlacement(entryID: "left", frame: CGRect(x: 0, y: 0, width: 180, height: 300), style: style)
+        let right = MagazinePlacement(entryID: "right", frame: CGRect(x: 220, y: 0, width: 180, height: 260), style: style)
+        let unchanged = MagazinePaginator.flushLeafTails([left, right], leafWidth: 400, gutter: 40, height: 700, spread: true)
+        XCTAssertEqual(unchanged.map(\.style.imageHeight), [200, 200])
+
+        // 小余量不触发拉伸，避免无意义的裁切。
+        let tiny = MagazinePlacement(entryID: "tiny", frame: CGRect(x: 0, y: 0, width: 400, height: 690), style: style)
+        XCTAssertEqual(MagazinePaginator.flushLeafTails([tiny], leafWidth: 400, gutter: 40, height: 700, spread: true).map(\.style.imageHeight), [200])
     }
 
     func testEditorialGroupsDoNotCollapseTitlesToFitOneMoreStory() {

@@ -15,6 +15,15 @@ private struct MagazineLifecycleDriver<Content: View>: View {
     let content: (TimelineKeyRequest?) -> Content
     var body: some View { content(input.key) }
 }
+@MainActor
+private final class MagazineEntriesInput: ObservableObject {
+    @Published var entries: [EntryListItem] = []
+}
+private struct MagazineEntriesDriver<Content: View>: View {
+    @ObservedObject var input: MagazineEntriesInput
+    let content: ([EntryListItem]) -> Content
+    var body: some View { content(input.entries) }
+}
 
 @MainActor
 final class MagazineFoldEffectTests: XCTestCase {
@@ -84,6 +93,25 @@ final class MagazineFoldEffectTests: XCTestCase {
         XCTAssertFalse(surface.isAnimating)
         surface.cancelTurn()
         XCTAssertFalse(surface.isAnimating)
+    }
+
+    func testTurnSurfaceKeepsNonBlackStageBackingBehindHostedPage() throws {
+        let surface = MagazineTurnSurface(content: Text("Page 1"), pageID: "page-1")
+        let stage = NSColor(srgbRed: 0.95, green: 0.94, blue: 0.93, alpha: 1)
+        surface.update(content: Text("Page 1"), pageID: "page-1", request: nil,
+            reduceMotion: false, isActive: false, background: stage, onComplete: { _, _ in })
+        // 分数尺寸：宿主层可能少画 1px，露出的必须是舞台底色而不是图层默认黑色。
+        surface.frame = CGRect(x: 0, y: 0, width: 900.5, height: 640.5)
+        surface.layoutSubtreeIfNeeded()
+        let host = try XCTUnwrap(surface.subviews.first { String(describing: type(of: $0)).contains("NSHostingView") })
+        let backing = try XCTUnwrap(surface.subviews.first { $0 !== host }, "宿主之下必须有实底来补 1px 取整缝")
+        XCTAssertEqual(backing.frame, surface.bounds)
+        XCTAssertNotEqual(try XCTUnwrap(host.layer?.backgroundColor), NSColor.black.cgColor)
+        let hostRGB = try XCTUnwrap(NSColor(cgColor: try XCTUnwrap(host.layer?.backgroundColor))?.usingColorSpace(.deviceRGB))
+        let stageRGB = try XCTUnwrap(stage.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(hostRGB.redComponent, stageRGB.redComponent, accuracy: 0.01)
+        XCTAssertEqual(hostRGB.greenComponent, stageRGB.greenComponent, accuracy: 0.01)
+        XCTAssertEqual(hostRGB.blueComponent, stageRGB.blueComponent, accuracy: 0.01)
     }
 
     func testNoWindowFallsBackAndReleasesNavigationLock() async {
@@ -270,6 +298,68 @@ final class MagazineFoldEffectTests: XCTestCase {
         }
     }
 
+    /// 翻动页抬起初期，外缘只应露出目标页空白纸面；过半后正文淡入，且任何进度都不出现黑色缝隙。
+    func testFoldRevealsDestinationPaperBeforeContentWithoutEdgeSeams() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let width = 400, height = 240
+        func image(content: NSColor, paper: NSColor?) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(content.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            if let paper {
+                context.setFillColor(paper.cgColor)
+                context.fill(CGRect(x: CGFloat(width) * 0.98, y: 0, width: CGFloat(width) * 0.02, height: CGFloat(height)))
+            }
+            return try XCTUnwrap(context.makeImage())
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget]; descriptor.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        func frame(_ renderer: MagazineMetalRenderer, _ p: Double) throws -> [UInt8] {
+            let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+            XCTAssertTrue(renderer.encode(progress: p, target: target, buffer: buffer))
+            buffer.commit(); buffer.waitUntilCompleted()
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            target.getBytes(&bytes, bytesPerRow: width * 4,
+                from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+            return bytes
+        }
+        func luma(_ bytes: [UInt8], _ x: Int, _ y: Int) -> Int {
+            let o = (y * width + x) * 4
+            return (Int(bytes[o]) + Int(bytes[o + 1]) + Int(bytes[o + 2])) / 3
+        }
+
+        // 正文深色、右侧仅 2% 留白：抬起初期外缘条带应被纸面覆盖，而不是露出被裁的正文。
+        let contrast = try XCTUnwrap(MagazineMetalRenderer(
+            before: try image(content: .black, paper: nil),
+            after: try image(content: .black, paper: .white),
+            size: CGSize(width: width, height: height), forward: true))
+        let sampleX = Int(Double(width) * 0.95)
+        let early = try frame(contrast, 0.24)
+        XCTAssertGreaterThan(luma(early, sampleX, height / 2), 180, "抬起初期外缘应只露出空白纸面")
+        let late = try frame(contrast, 0.45)
+        XCTAssertLessThan(luma(late, sampleX, height / 2), 90, "抬起过半后目标页正文应已显示")
+
+        // 亮色页面在任意进度都不应在舞台边缘出现黑色缝隙。
+        let white = try image(content: .white, paper: nil)
+        let light = try XCTUnwrap(MagazineMetalRenderer(before: white, after: white,
+            size: CGSize(width: width, height: height), forward: true))
+        for p in [0.05, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95] {
+            let bytes = try frame(light, p)
+            for x in [0, 1, width - 2, width - 1] {
+                XCTAssertGreaterThan(luma(bytes, x, 6), 120, "边缘不得出现黑色缝隙 p=\(p) x=\(x)")
+                XCTAssertGreaterThan(luma(bytes, x, height - 7), 120, "边缘不得出现黑色缝隙 p=\(p) x=\(x)")
+            }
+            for y in [0, 1, height - 2, height - 1] {
+                XCTAssertGreaterThan(luma(bytes, width / 2, y), 120, "边缘不得出现黑色缝隙 p=\(p) y=\(y)")
+            }
+        }
+    }
+
     func testRaisedPageFitsInsideStageAndActuallyUsesVerticalClearance() throws {
         let width = 320, height = 200
         let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
@@ -437,8 +527,9 @@ extension MagazineFoldEffectTests {
         let input = MagazineLifecycleInput()
         var highlighted: String?
         var cleared = 0
+        let entries = coverEntries()
         let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
-            MagazineBrowserView(entries: [], folders: [:], availableSize: CGSize(width: 1000, height: 800),
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 800),
                 showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
                 memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { highlighted = $0 }, onOpen: { _ in XCTFail("封面不能直接打开文章") },
                 onNeedMore: {}, coverTitle: "空订阅", onClearSelection: { cleared += 1 },
@@ -475,8 +566,9 @@ extension MagazineFoldEffectTests {
         let memory = TimelinePresentationMemory()
         let input = MagazineLifecycleInput()
         var cleared = 0
+        let entries = coverEntries()
         let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
-            MagazineBrowserView(entries: [], folders: [:], availableSize: CGSize(width: 1000, height: 800),
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 800),
                 showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
                 memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in },
                 onNeedMore: {}, coverTitle: "测试订阅", onClearSelection: { cleared += 1 },
@@ -499,6 +591,40 @@ extension MagazineFoldEffectTests {
         try await Task.sleep(for: .milliseconds(800))
         XCTAssertFalse(memory.magazineIsOpen, "反方向合页动作成功合上封面")
         XCTAssertGreaterThan(cleared, 0, "合页时清理选中态")
+    }
+
+    /// 封面行为测试统一使用可排版的短文章；空订阅不能再开出一本空书。
+    private func coverEntries(_ count: Int = 6) -> [EntryListItem] {
+        (0..<count).map { index in
+            EntryListItem(id: "cover-\(index)", feedID: UUID(), title: "短文章 \(index)", sourceTitle: "来源")
+        }
+    }
+
+    func testEmptyMagazineStaysClosedUntilArticlesArrive() async throws {
+        let memory = TimelinePresentationMemory()
+        let input = MagazineEntriesInput()
+        let host = NSHostingView(rootView: MagazineEntriesDriver(input: input) { entries in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 800),
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: nil,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in },
+                onNeedMore: {}, coverTitle: "空订阅", onClearSelection: {},
+                tile: { entry, _, _ in Text(entry.title) })
+        })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderFront(nil)
+        defer { window.close() }
+
+        // 没有文章：计时器走完也不翻开，默认保持空态。
+        try await Task.sleep(for: .milliseconds(1300))
+        XCTAssertFalse(memory.magazineIsOpen, "没有文章时不得自动翻开空书")
+
+        // 文章到达后才按封面停留一拍自动展开。
+        input.entries = coverEntries()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(memory.magazineIsOpen, "内容到达后仍需保持封面计时")
+        try await Task.sleep(for: .milliseconds(1100))
+        XCTAssertTrue(memory.magazineIsOpen, "有文章后应按一拍封面节奏自动展开")
     }
 }
 
@@ -674,5 +800,80 @@ extension MagazineFoldEffectTests {
             XCTAssertNotEqual(layouts[0].template, .ending)
         }
     }
+
+    func testDiagnoseEdgeLine() async throws {
+        let stageColor = NSColor(srgbRed: 0.9529, green: 0.9529, blue: 0.9529, alpha: 1)
+        let entries = coverEntries(8)
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineLifecycleInput()
+
+        let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1000, height: 700),
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in },
+                onNeedMore: {}, coverTitle: "测试", onClearSelection: {},
+                tile: { entry, _, _ in Text(entry.title) })
+        })
+
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        // Wait for magazine to lay out
+        try await Task.sleep(for: .milliseconds(300))
+        host.layoutSubtreeIfNeeded()
+
+        // Find MagazineTurnSurface in subviews
+        func findSurface(_ view: NSView) -> NSView? {
+            if String(describing: type(of: view)).contains("MagazineTurnSurface") { return view }
+            for sub in view.subviews {
+                if let found = findSurface(sub) { return found }
+            }
+            return nil
+        }
+        let surface = try XCTUnwrap(findSurface(host))
+        print("Surface frame in window: \(surface.convert(surface.bounds, to: nil))")
+
+        func printEdgePixels(label: String) {
+            guard let windowImage = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .nominalResolution]) else { return }
+            guard let data = windowImage.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return }
+            let bpr = windowImage.bytesPerRow
+            let bpp = windowImage.bitsPerPixel / 8
+            print("=== \(label) (image size: \(windowImage.width)x\(windowImage.height)) ===")
+            // In AppKit, window coordinates: y=0 is bottom, but CGImage y=0 is top!
+            // Surface frame in window: (48.0, 52.0, 904.0, 648.0)
+            // Surface top in window: 52 + 648 = 700 (window height is 700)
+            // So in CGImage (y from top): surface y goes from 0 to 648!
+            // Surface right edge is at x = 48 + 904 = 952.
+            // If scale is 2, coordinates double. Let scale = windowImage.width / window.frame.width.
+            let scale = windowImage.width / Int(window.frame.width)
+            let edgeX = 952 * scale
+            for testY in [10, 25, 40, 50, 100, 300, 600, 630, 645] {
+                let imgY = testY * scale
+                var row = String(format: "y=%3d: ", testY)
+                for x in (edgeX - 3)...(edgeX + 3) {
+                    let offset = imgY * bpr + x * bpp
+                    let r = Double(bytes[offset + 2]) / 255.0
+                    row += String(format: "x=%d:%.2f ", x, r)
+                }
+                print(row)
+            }
+        }
+
+        printEdgePixels(label: "Before Turn (Static)")
+
+        // Trigger turn request via PageDown (keyCode 121)
+        input.key = .init(keyCode: 121)
+        try await Task.sleep(for: .milliseconds(120))
+        printEdgePixels(label: "During Turn (Animating)")
+    }
 }
+
+
+
+
 
