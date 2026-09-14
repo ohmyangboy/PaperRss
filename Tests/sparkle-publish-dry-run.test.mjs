@@ -376,6 +376,9 @@ process.exit(9);
   assert.match(commands[4], /release upload v2\.0\.0.*PaperRss-v2\.0\.0\.zip.*PaperRss-v2\.0\.0\.dmg/);
   assert.match(commands[5], /release edit v2\.0\.0.*--draft=false/);
   assert.match(commands.slice(6).join('\n'), /contents\/website\/appcast\/stable\.xml/);
+  assert.match(commands.slice(6).join('\n'),
+    /api --method PUT repos\/example\/PaperRss\/contents\/website\/appcast\/beta\.xml/,
+    'stable 发布必须同步刷新 beta feed（Beta 通道包含正式版）');
 
   const caskPut = commands.findIndex((command) => /PUT.*contents\/Casks\/paperrss.rb/.test(command));
   const appcastPut = commands.findIndex((command) => /PUT.*contents\/website\/appcast/.test(command));

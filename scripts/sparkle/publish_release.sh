@@ -257,6 +257,23 @@ PAPERRSS_APPCAST_CONFIRM="PUBLISH $APPCAST_TARGET" \
     --path "$APPCAST_REMOTE_PATH" --channel "$CHANNEL" --appcast "$APPCAST_PATH" \
     --asset-root "$MANIFEST_DIR" --public-key "$PUBLIC_KEY"
 
+# Beta 通道包含正式版更新：发布稳定版时同步刷新 beta feed，
+# 否则 Beta 用户会停在旧版本，收不到正式版更新。
+if [[ "$CHANNEL" == "stable" ]]; then
+  BETA_REMOTE_PATH="${APPCAST_REMOTE_PATH%/*}/beta.xml"
+  BETA_WORK=$(mktemp -d "${TMPDIR:-/tmp}/paperrss-beta-appcast.XXXXXX")
+  "$DRY_RUN" --channel beta --tag "$TAG" --manifest "$MANIFEST" \
+    --output-dir "$BETA_WORK/generated" --public-key "$PUBLIC_KEY" >/dev/null
+  BETA_TARGET="$APPCAST_REPO:$APPCAST_BRANCH:$BETA_REMOTE_PATH"
+  PAPERRSS_APPCAST_AUTHORIZED=YES \
+  PAPERRSS_APPCAST_CONFIRM="PUBLISH $BETA_TARGET" \
+    node "$APPCAST_TOOL" --execute --repo "$APPCAST_REPO" --branch "$APPCAST_BRANCH" \
+      --path "$BETA_REMOTE_PATH" --channel beta --appcast "$BETA_WORK/generated/beta.xml" \
+      --asset-root "$MANIFEST_DIR" --public-key "$PUBLIC_KEY"
+  rm -rf "$BETA_WORK"
+  echo "[PASS] beta feed 已同步正式版 ${TAG}（Beta 通道包含稳定版更新）"
+fi
+
 if [[ "$CHANNEL" == "stable" ]]; then
   node "$HOMEBREW_TOOL" --execute --manifest "$MANIFEST" --tag "$TAG" --repo "$REPO" || {
     echo "错误: Release/appcast 已发布，Homebrew 同步失败。保留 manifest，使用帮助中的单独重试命令。" >&2

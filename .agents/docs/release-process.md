@@ -6,6 +6,7 @@
 
 - **版本规范**：严格遵守 SemVer 版本规范（`vX.Y.Z-beta.N`）。
 - **全链路闭环**：发布需涵盖测试（按 [分级验证矩阵](verification-matrix.md) 通过全量校验）、宿主构建、产物归档、ChangeLog 记录、官网和 README 状态同步、Tag/Release 打标发布、线上分发及更新源验证闭环。
+- **更新通道**：Stable 与 Beta 两个 appcast 分别服务稳定通道与「Beta 通道（包含正式版）」；发布稳定版时必须同时刷新 `website/appcast/stable.xml` 与 `website/appcast/beta.xml`，否则 Beta 通道用户收不到正式版更新（`publish_release.sh` 已固化该行为）。
 
 ## Release 交互门禁（适用于 Beta 与稳定版）
 
