@@ -578,7 +578,7 @@ body {
  * ============================================================================== */
 .stage-section {
   position: relative;
-  height: 300vh;
+  height: 400vh;
   margin-bottom: 2rem;
 }
 
@@ -652,6 +652,19 @@ body {
   z-index: 3;
   transform-origin: center top;
   transform: translate3d(0, 230%, 0);
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.stage-card-4 {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 4;
+  transform-origin: center top;
+  transform: translate3d(0, 345%, 0);
   will-change: transform;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
@@ -1438,7 +1451,8 @@ body {
   .stage-card-2,
   .stage-card-overlay,
   .stage-card-top,
-  .stage-card-3 {
+  .stage-card-3,
+  .stage-card-4 {
     position: static !important;
     top: auto !important;
     left: auto !important;

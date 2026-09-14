@@ -25,12 +25,12 @@
     const heroContent = document.querySelector('.hero-content') || document.querySelector('.hero');
     const stageSection = document.getElementById('stage-showcase');
 
-    const baseCard = stageSection ? (stageSection.querySelector('.stage-card-base') || stageSection.querySelector('.stage-card-1')) : null;
-    const midCard = stageSection ? (stageSection.querySelector('.stage-card-mid') || stageSection.querySelector('.stage-card-2')) : null;
-    const overlayCard = stageSection ? (stageSection.querySelector('.stage-card-overlay') || stageSection.querySelector('.stage-card-top') || stageSection.querySelector('.stage-card-3')) : null;
+    const baseCard = stageSection ? stageSection.querySelector('.stage-card-base') || stageSection.querySelector('.stage-card-1') : null;
+    const stackCards = stageSection
+      ? Array.from(stageSection.querySelectorAll('.stage-card')).filter((card) => card !== baseCard)
+      : [];
 
     const baseScrim = baseCard ? baseCard.querySelector('.stage-card-scrim') : null;
-    const midScrim = midCard ? midCard.querySelector('.stage-card-scrim') : null;
 
     let stageTop = 0;
     let stageHeight = 0;
@@ -109,64 +109,50 @@
         heroContent.style.opacity = hOpacity;
       }
 
-      // --- 2. Stage Showcase Parallax (3-Card Stacking Overlap) ---
-      if (baseCard && midCard && overlayCard) {
-        // Phase 1: Card 1 -> Card 2 transition (Card 2 glides 115% -> 0%, Card 3 glides 230% -> 115%)
-        const p1Start = 0.03;
-        const p1End = 0.46;
-        let p1 = 0;
-        if (currentStageProgress > p1Start) {
-          p1 = Math.min(1, (currentStageProgress - p1Start) / (p1End - p1Start));
+      // --- 2. Stage Showcase Parallax (N-Card Stacking Overlap) ---
+      if (baseCard && stackCards.length) {
+        const phaseCount = stackCards.length;
+        const leadIn = 0.03;
+        const leadOut = 0.97;
+        const phaseSpan = (leadOut - leadIn) / phaseCount;
+
+        // One eased progress value per transition: card N glides over card N-1
+        const eases = [];
+        for (let i = 0; i < phaseCount; i += 1) {
+          const phaseStart = leadIn + i * phaseSpan;
+          const phaseEnd = phaseStart + phaseSpan * 0.85;
+          let p = 0;
+          if (currentStageProgress > phaseStart) {
+            p = Math.min(1, (currentStageProgress - phaseStart) / (phaseEnd - phaseStart));
+          }
+          eases.push(easeInOutQuart(p));
         }
 
-        // Phase 2: Card 2 -> Card 3 transition (Card 3 glides 115% -> 0%)
-        const p2Start = 0.54;
-        const p2End = 0.97;
-        let p2 = 0;
-        if (currentStageProgress > p2Start) {
-          p2 = Math.min(1, (currentStageProgress - p2Start) / (p2End - p2Start));
-        }
-
-        const m1 = easeInOutQuart(p1);
-        const m2 = easeInOutQuart(p2);
-
-        // Card 1: subtle scale + scrim blur during Phase 1
-        const scale1 = (1 - 0.04 * m1).toFixed(4);
-        baseCard.style.transform = `translate3d(0, 0, 0) scale(${scale1})`;
+        // Base card: subtle scale + scrim blur while the first stacked card glides over it
+        const baseEase = eases[0];
+        const baseScale = (1 - 0.04 * baseEase).toFixed(4);
+        baseCard.style.transform = `translate3d(0, 0, 0) scale(${baseScale})`;
         if (baseScrim) {
-          baseScrim.style.opacity = m1.toFixed(3);
+          baseScrim.style.opacity = baseEase.toFixed(3);
         }
 
-        // Card 2: Starts at 115% and glides to 0% in Phase 1; then scales in Phase 2
-        const scale2 = (1 - 0.04 * m2).toFixed(4);
-        const translateY2 = ((1 - m1) * 115).toFixed(2);
-        midCard.style.transform = `translate3d(0, ${translateY2}%, 0) scale(${scale2})`;
-        if (midScrim) {
-          midScrim.style.opacity = m2.toFixed(3);
-        }
+        // Stacked cards: each starts 115% lower than the card above and rises 115% per phase
+        stackCards.forEach((card, index) => {
+          let remaining = 0;
+          for (let j = 0; j <= index; j += 1) {
+            remaining += 1 - eases[j];
+          }
+          const translateY = (remaining * 115).toFixed(2);
 
-        // Card 3: Starts at 230%, glides to 115% in Phase 1, and glides from 115% to 0% in Phase 2
-        const translateY3 = (((1 - m1) + (1 - m2)) * 115).toFixed(2);
-        overlayCard.style.transform = `translate3d(0, ${translateY3}%, 0)`;
-      } else if (baseCard && overlayCard) {
-        const animStart = 0.05;
-        const animEnd = 0.85;
+          const coverEase = eases[index + 1];
+          const scale = coverEase === undefined ? 1 : 1 - 0.04 * coverEase;
+          card.style.transform = `translate3d(0, ${translateY}%, 0) scale(${scale.toFixed(4)})`;
 
-        let p = 0;
-        if (currentStageProgress > animStart) {
-          p = Math.min(1, (currentStageProgress - animStart) / (animEnd - animStart));
-        }
-
-        const motionEase = easeInOutQuart(p);
-        const scale = (1 - 0.04 * motionEase).toFixed(4);
-        baseCard.style.transform = `translate3d(0, 0, 0) scale(${scale})`;
-
-        if (baseScrim) {
-          baseScrim.style.opacity = motionEase.toFixed(3);
-        }
-
-        const translateY = ((1 - motionEase) * 115).toFixed(2);
-        overlayCard.style.transform = `translate3d(0, ${translateY}%, 0)`;
+          const scrim = card.querySelector('.stage-card-scrim');
+          if (scrim && coverEase !== undefined) {
+            scrim.style.opacity = coverEase.toFixed(3);
+          }
+        });
       }
 
       if (
@@ -190,15 +176,13 @@
           baseCard.style.transform = '';
           baseCard.style.filter = '';
         }
-        if (midCard) {
-          midCard.style.transform = '';
-          midCard.style.filter = '';
-        }
-        if (overlayCard) {
-          overlayCard.style.transform = '';
-        }
+        stackCards.forEach((card) => {
+          card.style.transform = '';
+          card.style.filter = '';
+          const scrim = card.querySelector('.stage-card-scrim');
+          if (scrim) scrim.style.opacity = '';
+        });
         if (baseScrim) baseScrim.style.opacity = '';
-        if (midScrim) midScrim.style.opacity = '';
         return;
       }
 

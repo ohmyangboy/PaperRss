@@ -54,6 +54,8 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ![PaperRss main window](assets/screenshots/paper-rss-main-en.png)
 
+![PaperRss weekly digest view](assets/screenshots/paper-rss-magazine.png)
+
 ![PaperRss reading view](assets/screenshots/paper-rss-second-en.png)
 
 ![PaperRss full-screen reading](assets/screenshots/full-screen.png)
