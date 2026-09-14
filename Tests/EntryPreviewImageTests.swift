@@ -134,7 +134,7 @@ final class EntryPreviewImageTests: XCTestCase {
     }
 
     func testImagePreferencePreservesExistingListNetworking() {
-        XCTAssertFalse(TimelineImagePreference.automatic.showsImages(in: .list))
+        XCTAssertTrue(TimelineImagePreference.automatic.showsImages(in: .list))
         XCTAssertTrue(TimelineImagePreference.automatic.showsImages(in: .magazine))
         for style in TimelineViewStyle.allCases {
             XCTAssertFalse(TimelineImagePreference.disabled.showsImages(in: style))

@@ -202,7 +202,7 @@ struct RootView: View {
     @State private var showsExporter = false
     @State private var isZenMode = false
     @AppStorage("timeline_view_style") private var timelineStyleRaw = TimelineViewStyle.list.rawValue
-    @AppStorage("timeline_image_preference") private var timelineImagePreferenceRaw = TimelineImagePreference.automatic.rawValue
+    @AppStorage("timeline_image_preference") private var timelineImagePreferenceRaw = TimelineImagePreference.enabled.rawValue
     @State private var isTimelineBrowsing = false
     @State private var timelineKeyRequest: TimelineKeyRequest?
     @StateObject private var timelineMemory = TimelinePresentationMemory()
@@ -496,7 +496,7 @@ struct RootView: View {
     }
 
     private var timelineShowsImages: Bool {
-        (TimelineImagePreference(rawValue: timelineImagePreferenceRaw) ?? .automatic).showsImages(in: timelineStyle)
+        (TimelineImagePreference(rawValue: timelineImagePreferenceRaw) ?? .enabled).showsImages(in: timelineStyle)
     }
 
     #if os(macOS)

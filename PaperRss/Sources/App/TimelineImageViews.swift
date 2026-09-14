@@ -311,8 +311,8 @@ struct TimelineViewControls: View {
     let onToggleImages: (Bool) -> Void
     @State private var showsPopover = false
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
-    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
-    @AppStorage("magazine_page_sound") private var pageSoundEnabled = false
+    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.fold.rawValue
+    @AppStorage("magazine_page_sound") private var pageSoundEnabled = true
     @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
     @ObservedObject private var audioMonitor = SystemOutputVolumeMonitor.shared
 

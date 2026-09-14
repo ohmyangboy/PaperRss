@@ -161,7 +161,7 @@ public enum TimelineImagePreference: String, Sendable {
     case automatic, enabled, disabled
     public func showsImages(in style: TimelineViewStyle) -> Bool {
         switch self {
-        case .automatic: style != .list
+        case .automatic: true
         case .enabled: true
         case .disabled: false
         }

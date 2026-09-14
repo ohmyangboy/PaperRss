@@ -229,8 +229,8 @@ struct MagazineBrowserView<Tile: View>: View {
     var onClearSelection: () -> Void = {}
     let tile: (EntryListItem, CGFloat, TimelineTileLayout) -> Tile
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
-    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.scroll.rawValue
-    @AppStorage("magazine_page_sound") private var pageSoundEnabled = false
+    @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.fold.rawValue
+    @AppStorage("magazine_page_sound") private var pageSoundEnabled = true
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -279,7 +279,7 @@ struct MagazineBrowserView<Tile: View>: View {
     }
 
     private var arrangement: MagazineArrangement { .init(rawValue: arrangementRaw) ?? .balanced }
-    private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .scroll }
+    private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .fold }
     private var editionInput: MagazineEditionCache.Input {
         .init(entries: entries, folders: folders, arrangement: arrangement, capacity: 12,
               locale: locale.identifier, viewport: turning != .scroll ? MagazinePaginator.foldViewport(availableSize) : availableSize,
@@ -419,6 +419,7 @@ struct MagazineBrowserView<Tile: View>: View {
                 edition.update(new)
                 if let pending = pendingPageIndex, pages.indices.contains(pending) {
                     pendingPageIndex = nil
+                    withAnimation(.easeOut(duration: 0.15)) { notice = nil }
                     go(to: pending, proxy: proxy)
                 } else if old.arrangement != new.arrangement || old.viewport != new.viewport
                             || old.locale != new.locale || !hadAnchor || !edition.contains(memory.magazineAnchor) {
@@ -477,7 +478,10 @@ struct MagazineBrowserView<Tile: View>: View {
             memory.magazineAnchor = turnSourceAnchor
         }
         memory.visibleAnchor = memory.magazineAnchor
-        if committed && pageIndex == pages.count - 1 && !hasMore { showEndNotice() }
+        if committed && pageIndex == pages.count - 1 {
+            if hasMore { showLoadMoreNotice() }
+            else { showEndNotice() }
+        }
         turnRequest = nil
         turnSourceAnchor = nil
     }
@@ -885,6 +889,17 @@ struct MagazineBrowserView<Tile: View>: View {
         withAnimation(.easeOut(duration: 0.15)) { notice = I18N.shared.localized("已经是最后一页", "You’ve reached the last page") }
     }
 
+    private func showLoadMoreNotice() {
+        guard notice == nil else { return }
+        noticeID = UUID()
+        withAnimation(.easeOut(duration: 0.15)) { notice = I18N.shared.localized("继续翻页加载更多", "Turn page to load more") }
+    }
+
+    private func showLoadingNotice() {
+        noticeID = UUID()
+        withAnimation(.easeOut(duration: 0.15)) { notice = I18N.shared.localized("正在加载更多文章…", "Loading more…") }
+    }
+
     private func openBook() {
         // 没有可展示的版面时绝不翻开：保持封面/“暂无文章”，避免空书。
         guard !memory.magazineIsOpen, !pages.isEmpty else { return }
@@ -1018,8 +1033,13 @@ struct MagazineBrowserView<Tile: View>: View {
         if isTurning || railScrubActive { cancelTurn() }
         if index < 0 { closeBook(); return }
         if index >= pages.count {
-            if hasMore { pendingPageIndex = index; onNeedMore() }
-            else { showEndNotice() }
+            if hasMore {
+                pendingPageIndex = index
+                showLoadingNotice()
+                onNeedMore()
+            } else {
+                showEndNotice()
+            }
             return
         }
         guard let anchor = pages[index].entries.first?.id else { return }
@@ -1033,7 +1053,10 @@ struct MagazineBrowserView<Tile: View>: View {
             memory.visibleAnchor = anchor
             memory.magazineAnchor = anchor
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(pages[index].id, anchor: .top) }
-            if index == pages.count - 1 && !hasMore { showEndNotice() }
+            if index == pages.count - 1 {
+                if hasMore { showLoadMoreNotice() }
+                else { showEndNotice() }
+            }
         }
     }
 
