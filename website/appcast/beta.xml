@@ -6,10 +6,10 @@
     <description>PaperRss beta updates</description>
     <item>
       <title>PaperRss 1.4.0</title>
-      <sparkle:version>31</sparkle:version>
+      <sparkle:version>32</sparkle:version>
       <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.4.0/PaperRss-v1.4.0.zip" length="13278134" type="application/octet-stream" sparkle:edSignature="m9zzgNM9GCcgzbHCbvWG7jDdFUsdnfOGMYpwQYNspSlkBbnLph25jbybYaG0BaTK812ecGL2T5dHOnDfyg+oBw==" paperrss:sha256="46d7d5fe65157f58bb720748df03263ae5f5d5b9c49ee687e8fb6b7e1ca744fc" sparkle:minimumSystemVersion="14.0" />
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.4.0/PaperRss-v1.4.0.zip" length="13279740" type="application/octet-stream" sparkle:edSignature="u65UznzeGnmO81BwbNI0yKwGaoPEMWke3BMCdKe104r1ji8aWL3z1GfdQwH4wJhobyqHyJSFCEkPUB2syK5qDw==" paperrss:sha256="da7d42c3873841ee24df01983363ab2667dd8b57130d31fdeb35b5cf66504f9a" sparkle:minimumSystemVersion="14.0" />
     </item>
   </channel>
 </rss>
