@@ -24,6 +24,17 @@ private struct MagazineEntriesDriver<Content: View>: View {
     let content: ([EntryListItem]) -> Content
     var body: some View { content(input.entries) }
 }
+@MainActor
+private final class MagazineKeyboardInput: ObservableObject {
+    @Published var key: TimelineKeyRequest?
+    @Published var selection: String?
+    @Published var sidebarFocused = false
+}
+private struct MagazineKeyboardDriver<Content: View>: View {
+    @ObservedObject var input: MagazineKeyboardInput
+    let content: (TimelineKeyRequest?, String?) -> Content
+    var body: some View { content(input.key, input.selection) }
+}
 
 @MainActor
 final class MagazineFoldEffectTests: XCTestCase {
@@ -187,6 +198,156 @@ final class MagazineFoldEffectTests: XCTestCase {
             }
             XCTAssertEqual(memory.magazineAnchor, pages[index].page.entries.first?.id)
         }
+    }
+
+    /// 第一页边缘向左先合上封面；已经在封面时再向左才离开杂志进入侧栏。
+    func testMagazineBrowserLeftAtFirstPageClosesCoverBeforeSidebar() async throws {
+        let domain = "magazine-keyboard-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let feed = UUID()
+        let entries = (0..<60).map { EntryListItem(id: "e\($0)", feedID: feed, title: "Title \($0)", sourceTitle: "Feed") }
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineKeyboardInput()
+        let host = NSHostingView(rootView: MagazineKeyboardDriver(input: input) { key, selection in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1450, height: 1000),
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: selection, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { input.selection = $0 },
+                onOpen: { _ in }, onNeedMore: {}, onFocusSidebar: { input.sidebarFocused = true },
+                onClearSelection: { input.selection = nil },
+                tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
+        }.frame(width: 1450, height: 1000))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1450, height: 1000),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<15 {
+            try await Task.sleep(for: .milliseconds(30))
+            host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+        }
+
+        input.key = TimelineKeyRequest(keyCode: 123)
+        for _ in 0..<10 { await Task.yield(); host.layoutSubtreeIfNeeded() }
+        XCTAssertNotNil(input.selection, "首次向左应先选中第一篇文章")
+        XCTAssertFalse(input.sidebarFocused)
+
+        input.key = TimelineKeyRequest(keyCode: 123)
+        for _ in 0..<10 { await Task.yield(); host.layoutSubtreeIfNeeded() }
+        XCTAssertFalse(memory.magazineIsOpen, "第一页边缘向左应合上封面")
+        XCTAssertFalse(input.sidebarFocused, "合上封面之前不应直接跳到侧栏")
+
+        input.key = TimelineKeyRequest(keyCode: 123)
+        for _ in 0..<10 { await Task.yield(); host.layoutSubtreeIfNeeded() }
+        XCTAssertTrue(input.sidebarFocused, "已在封面时再向左才进入侧栏")
+    }
+
+    /// 上下键只做纵向移动：到达页底不再换行推进或翻页。
+    func testMagazineBrowserDownAtPageBottomStaysOnPage() async throws {
+        let domain = "magazine-keyboard-down-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let feed = UUID()
+        let entries = (0..<60).map { EntryListItem(id: "e\($0)", feedID: feed, title: "Title \($0)", sourceTitle: "Feed") }
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineKeyboardInput()
+        let host = NSHostingView(rootView: MagazineKeyboardDriver(input: input) { key, selection in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1450, height: 1000),
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: selection, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { input.selection = $0 },
+                onOpen: { _ in }, onNeedMore: {}, onFocusSidebar: { input.sidebarFocused = true },
+                onClearSelection: { input.selection = nil },
+                tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
+        }.frame(width: 1450, height: 1000))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1450, height: 1000),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<15 {
+            try await Task.sleep(for: .milliseconds(30))
+            host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+        }
+        let viewport = MagazinePaginator.foldViewport(CGSize(width: 1450, height: 1000))
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: viewport, showsImages: false)
+        let firstPageIDs = Set(try XCTUnwrap(pages.first).page.entries.map(\.id))
+
+        input.key = TimelineKeyRequest(keyCode: 123)
+        for _ in 0..<10 { await Task.yield(); host.layoutSubtreeIfNeeded() }
+        for _ in 0..<40 {
+            input.key = TimelineKeyRequest(keyCode: 125)
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(memory.magazineIsOpen, "页底按下不应离开杂志")
+        XCTAssertTrue(input.selection.map(firstPageIDs.contains) ?? false,
+            "页底按下后应停在本页，不换行推进或翻页：\(input.selection ?? "nil")")
+    }
+
+    /// 从右半页向右翻到下一页后立即翻回，应回到离开的右半页卡片，而不是阅读顺序的末篇。
+    func testMagazineBrowserReturningToPreviousPageRestoresDepartureSelection() async throws {
+        let domain = "magazine-keyboard-return-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let feed = UUID()
+        let entries = (0..<60).map { EntryListItem(id: "e\($0)", feedID: feed, title: "Title \($0)", sourceTitle: "Feed") }
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineKeyboardInput()
+        let host = NSHostingView(rootView: MagazineKeyboardDriver(input: input) { key, selection in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: CGSize(width: 1450, height: 1000),
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: selection, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { input.selection = $0 },
+                onOpen: { _ in }, onNeedMore: {}, onFocusSidebar: { input.sidebarFocused = true },
+                onClearSelection: { input.selection = nil },
+                tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
+        }.frame(width: 1450, height: 1000))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1450, height: 1000),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<15 {
+            try await Task.sleep(for: .milliseconds(30))
+            host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+        }
+        func waitForTurn(anchor: String?) async throws {
+            for _ in 0..<120 {
+                if memory.magazineAnchor == anchor { return }
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            XCTFail("翻页未在预期时间内完成")
+        }
+
+        let viewport = MagazinePaginator.foldViewport(CGSize(width: 1450, height: 1000))
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: viewport, showsImages: false)
+        let firstPage = try XCTUnwrap(pages.first)
+        let secondPage = try XCTUnwrap(pages.dropFirst().first)
+        let departFrom = try XCTUnwrap(firstPage.placements.max { $0.frame.maxX < $1.frame.maxX })
+        XCTAssertGreaterThan(departFrom.frame.midX, firstPage.contentWidth / 2, "夹具必须让离开点位于右半页")
+        XCTAssertNotEqual(departFrom.entryID, firstPage.placements.last?.entryID,
+            "夹具必须让阅读顺序末篇不是离开卡片，才能覆盖本次修复")
+
+        input.selection = departFrom.entryID
+        for _ in 0..<5 { await Task.yield(); host.layoutSubtreeIfNeeded() }
+        input.key = TimelineKeyRequest(keyCode: 124)
+        try await waitForTurn(anchor: secondPage.page.entries.first?.id)
+        XCTAssertEqual(input.selection, secondPage.placements.first?.entryID, "向右翻页应落在下一页左半页首篇")
+
+        input.key = TimelineKeyRequest(keyCode: 123)
+        try await waitForTurn(anchor: firstPage.page.entries.first?.id)
+        XCTAssertEqual(input.selection, departFrom.entryID, "翻回应回到离开的右半页卡片，而不是阅读顺序末篇")
     }
 
     func testInteractiveCancellationReleasesSnapshotsAndIgnoresOldCompletion() async throws {

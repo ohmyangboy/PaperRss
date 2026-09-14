@@ -245,6 +245,8 @@ struct MagazineBrowserView<Tile: View>: View {
     @State private var pendingPageIndex: Int?
     @State private var turnRequest: MagazinePageTurnRequest?
     @State private var turnSourceAnchor: String?
+    /// 每页最后停留的卡片：从右半页翻出再翻回时恢复到原卡片，而不是阅读顺序的末篇。
+    @State private var lastSelectionByPage: [String: String] = [:]
     @State private var railScrubPosition: Double?
     @State private var railScrubSourceAnchor: String?
     @State private var railScrubActive = false
@@ -441,6 +443,7 @@ struct MagazineBrowserView<Tile: View>: View {
                 guard isBrowsing, let request else { return }
                 handle(request, proxy: proxy)
             }
+            .onChange(of: memory.magazineScopeID) { _, _ in lastSelectionByPage.removeAll() }
             .task(id: memory.restorationID) {
                 guard isBrowsing else { return }
                 do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
@@ -1090,11 +1093,12 @@ struct MagazineBrowserView<Tile: View>: View {
         if request.keyCode == 53 { onClearSelection(); return }
         guard memory.magazineIsOpen else {
             if request.keyCode == 123 { onFocusSidebar() }
-            else if [36, 49, 76, 124, 125, 121].contains(request.keyCode) { openBook() }
+            else if [36, 49, 76, 124, 121].contains(request.keyCode) { openBook() }
             return
         }
         if request.keyCode == 116 || request.keyCode == 121 {
-            go(to: pageIndex + (request.keyCode == 121 ? 1 : -1), proxy: proxy)
+            turnPage(to: pageIndex + (request.keyCode == 121 ? 1 : -1),
+                     from: currentPlacement, proxy: proxy)
             return
         }
         guard !isTurning else { return }
@@ -1107,14 +1111,10 @@ struct MagazineBrowserView<Tile: View>: View {
             }
             if let target = MagazineSpatialNavigation.neighbor(of: current, in: layout.placements, key: request.keyCode) {
                 onHighlight(target.entryID)
-            } else if request.keyCode == 123 || request.keyCode == 124 || request.keyCode == 125 {
-                let index = pageIndex + (request.keyCode == 123 ? -1 : 1)
-                if index < 0 { onFocusSidebar(); return }
-                if pages.indices.contains(index), let next = edition.layouts[pages[index].id] {
-                    let target = request.keyCode == 123 ? next.placements.last : next.placements.first
-                    if let target { onHighlight(target.entryID) }
-                }
-                go(to: index, proxy: proxy)
+            } else if request.keyCode == 123 || request.keyCode == 124 {
+                // 只有左右键在页面边缘才翻页：第一页边缘向左合上封面（再按一次才离开杂志去侧栏），
+                // 最后一页边缘向右提示读完（还有后续内容时继续加载）。上下键只在页内纵向移动，到顶/到底即停。
+                turnPage(to: pageIndex + (request.keyCode == 123 ? -1 : 1), from: current, proxy: proxy)
             }
         } else if [36, 49, 76].contains(request.keyCode), let current,
                   let entry = pages[pageIndex].entries.first(where: { $0.id == current.entryID }) {
@@ -1122,6 +1122,27 @@ struct MagazineBrowserView<Tile: View>: View {
             onOpen(entry)
         }
 
+    }
+
+    private var currentPlacement: MagazinePlacement? {
+        guard pages.indices.contains(pageIndex), let layout = edition.layouts[pages[pageIndex].id] else { return nil }
+        return layout.placements.first { $0.entryID == selectedID }
+    }
+
+    /// 翻页时记住离开页最后停留的卡片，翻回该页时优先恢复到该卡片：
+    /// 例如从右半页翻到下一页，再从下一页左半页翻回，仍落回右半页的原卡片，
+    /// 而不是阅读顺序的末篇。没有记录时向前落首篇、向后落末篇。
+    private func turnPage(to index: Int, from current: MagazinePlacement?, proxy: ScrollViewProxy) {
+        if let current, pages.indices.contains(pageIndex) {
+            lastSelectionByPage[pages[pageIndex].id] = current.entryID
+        }
+        if pages.indices.contains(index), let layout = edition.layouts[pages[index].id] {
+            let remembered = lastSelectionByPage[pages[index].id]
+                .flatMap { id in layout.placements.first { $0.entryID == id } }
+            let landing = remembered ?? (index < pageIndex ? layout.placements.last : layout.placements.first)
+            if let landing { onHighlight(landing.entryID) }
+        }
+        go(to: index, proxy: proxy)
     }
 }
 
@@ -1159,131 +1180,121 @@ private struct MagazineCoverLeaf<Front: View, Back: View>: View, @MainActor Anim
     }
 }
 
-/// 遵循从左到右、从上到下的阅读与空间规则选择相邻文章。
+/// 方向键按版面几何移动（遥控器模型）：左右只横向、上下只纵向，落在最近的一张卡片上。
+/// 横向优先同一水平带（先就近那一栏，再就近那一行），没有同带卡片时取对面整体最近的一篇；
+/// 某一方向没有卡片即到达页面边缘，由外层决定翻页或停止。
 enum MagazineSpatialNavigation {
     static func neighbor(of current: MagazinePlacement, in placements: [MagazinePlacement], key: UInt16) -> MagazinePlacement? {
-        guard let currentIndex = placements.firstIndex(where: { $0.entryID == current.entryID }) else { return nil }
         let origin = current.frame
+        let others = placements.filter { $0.entryID != current.entryID }
 
         switch key {
-        case 124: // Right Arrow
-            // 1. 同一水平带/同行右侧卡片（Y 轴有投影重叠）
-            let rightItems = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                let deltaX = item.frame.midX - origin.midX
-                let overlapY = min(origin.maxY, item.frame.maxY) - max(origin.minY, item.frame.minY)
-                return deltaX > 1 && overlapY > 0
-            }
-            if !rightItems.isEmpty {
-                // 遵循从左到右、从上到下：右侧有多项时，优先选最上方的（minY 最小），同高选最靠左的（minX 最小）
-                return rightItems.min { a, b in
-                    if abs(a.frame.minY - b.frame.minY) > 8 {
-                        return a.frame.minY < b.frame.minY
-                    }
-                    return a.frame.minX < b.frame.minX
-                }
-            }
-            // 2. 右侧无同带卡片时换行推进（Wrap）：沿阅读流查找下一篇
-            if currentIndex + 1 < placements.count {
-                return placements[currentIndex + 1]
-            }
-            return nil
-
-        case 123: // Left Arrow
-            // 1. 同一水平带/同行左侧卡片（Y 轴有投影重叠）
-            let leftItems = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                let deltaX = origin.midX - item.frame.midX
-                let overlapY = min(origin.maxY, item.frame.maxY) - max(origin.minY, item.frame.minY)
-                return deltaX > 1 && overlapY > 0
-            }
-            if !leftItems.isEmpty {
-                // 左侧有多项时，优先选 X 离当前最近的；若相当则选垂直更对齐的
-                return leftItems.min { a, b in
-                    let distA = origin.minX - a.frame.maxX
-                    let distB = origin.minX - b.frame.maxX
-                    if abs(distA - distB) > 8 {
-                        return distA < distB
-                    }
-                    return abs(a.frame.midY - origin.midY) < abs(b.frame.midY - origin.midY)
-                }
-            }
-            // 2. 左侧无同带卡片时换行回退（Wrap Back）：沿阅读流查找上一篇
-            if currentIndex > 0 {
-                return placements[currentIndex - 1]
-            }
-            return nil
-
-        case 125: // Down Arrow
-            // 1. 优先寻找正下方有 X 投影重叠的卡片
-            let strictlyBelow = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                let deltaY = item.frame.midY - origin.midY
-                let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
-                return deltaY > 1 && overlapX > 0 && item.frame.minY >= origin.minY + 4
-            }
-            if !strictlyBelow.isEmpty {
-                // 离当前最近的下方行；同行内遵循从左到右（minX 最小）
-                return strictlyBelow.min { a, b in
-                    if abs(a.frame.minY - b.frame.minY) > 8 {
-                        return a.frame.minY < b.frame.minY
-                    }
-                    return a.frame.minX < b.frame.minX
-                }
-            }
-            // 2. 无 X 投影重叠时放宽约束：查找所有在当前项下方的卡片，绝不卡死
-            let anyBelow = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                return item.frame.minY >= origin.maxY - 8 && item.frame.midY > origin.midY + 1
-            }
-            if !anyBelow.isEmpty {
-                return anyBelow.min { a, b in
-                    if abs(a.frame.minY - b.frame.minY) > 8 {
-                        return a.frame.minY < b.frame.minY
-                    }
-                    return a.frame.minX < b.frame.minX
-                }
-            }
-            // 3. 若下方已无卡片，但阅读流后方仍有条目，顺延推进；否则返回 nil 允许翻页
-            if currentIndex + 1 < placements.count {
-                return placements[currentIndex + 1]
-            }
-            return nil
-
-        case 126: // Up Arrow
-            // 1. 优先寻找正上方有 X 投影重叠的卡片
-            let strictlyAbove = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                let deltaY = origin.midY - item.frame.midY
-                let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
-                return deltaY > 1 && overlapX > 0 && item.frame.maxY <= origin.maxY - 4
-            }
-            if !strictlyAbove.isEmpty {
-                return strictlyAbove.min { a, b in
-                    if abs(a.frame.maxY - b.frame.maxY) > 8 {
-                        return a.frame.maxY > b.frame.maxY
-                    }
-                    return a.frame.minX < b.frame.minX
-                }
-            }
-            // 2. 放宽约束：查找所有在当前项上方的卡片
-            let anyAbove = placements.filter { item in
-                guard item.entryID != current.entryID else { return false }
-                return item.frame.maxY <= origin.minY + 8 && item.frame.midY < origin.midY - 1
-            }
-            if !anyAbove.isEmpty {
-                return anyAbove.min { a, b in
-                    if abs(a.frame.maxY - b.frame.maxY) > 8 {
-                        return a.frame.maxY > b.frame.maxY
-                    }
-                    return a.frame.minX < b.frame.minX
-                }
-            }
-            return nil
-
-        default:
-            return nil
+        case 124: return horizontal(origin, in: others, right: true)
+        case 123: return horizontal(origin, in: others, right: false)
+        case 125: return downward(origin, in: others)
+        case 126: return upward(origin, in: others)
+        default: return nil
         }
+    }
+
+    /// 横向遥控：只考察侧方卡片。同一水平带里先落到最近的一栏，再落到纵向最贴近的一行；
+    /// 同带没有卡片时，仍按“就近对面”落点（先比纵向间距，再比栏距）。
+    private static func horizontal(_ origin: CGRect, in placements: [MagazinePlacement], right: Bool) -> MagazinePlacement? {
+        let side = placements.filter { item in
+            right ? item.frame.minX >= origin.maxX - 1 : item.frame.maxX <= origin.minX + 1
+        }
+        guard !side.isEmpty else { return nil }
+        let sameBand = side.filter { verticalOverlap($0.frame, origin) > 0 }
+        if !sameBand.isEmpty {
+            return sameBand.min { a, b in
+                let gapA = columnGap(a.frame, origin, right: right)
+                let gapB = columnGap(b.frame, origin, right: right)
+                if abs(gapA - gapB) > 8 { return gapA < gapB }
+                let rowA = abs(a.frame.midY - origin.midY)
+                let rowB = abs(b.frame.midY - origin.midY)
+                if abs(rowA - rowB) > 8 { return rowA < rowB }
+                return a.frame.minY < b.frame.minY
+            }
+        }
+        return side.min { a, b in
+            let distanceA = verticalGap(a.frame, origin)
+            let distanceB = verticalGap(b.frame, origin)
+            if abs(distanceA - distanceB) > 8 { return distanceA < distanceB }
+            let gapA = columnGap(a.frame, origin, right: right)
+            let gapB = columnGap(b.frame, origin, right: right)
+            if abs(gapA - gapB) > 8 { return gapA < gapB }
+            return a.frame.minY < b.frame.minY
+        }
+    }
+
+    /// 纵向遥控：正下方最近的一行；同行内遵循从左到右。到底即停，不换行、不翻页。
+    private static func downward(_ origin: CGRect, in placements: [MagazinePlacement]) -> MagazinePlacement? {
+        let strictlyBelow = placements.filter { item in
+            let deltaY = item.frame.midY - origin.midY
+            let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
+            return deltaY > 1 && overlapX > 0 && item.frame.minY >= origin.minY + 4
+        }
+        if !strictlyBelow.isEmpty {
+            return strictlyBelow.min { a, b in
+                if abs(a.frame.minY - b.frame.minY) > 8 {
+                    return a.frame.minY < b.frame.minY
+                }
+                return a.frame.minX < b.frame.minX
+            }
+        }
+        let anyBelow = placements.filter { item in
+            item.frame.minY >= origin.maxY - 8 && item.frame.midY > origin.midY + 1
+        }
+        if !anyBelow.isEmpty {
+            return anyBelow.min { a, b in
+                if abs(a.frame.minY - b.frame.minY) > 8 {
+                    return a.frame.minY < b.frame.minY
+                }
+                return a.frame.minX < b.frame.minX
+            }
+        }
+        return nil
+    }
+
+    /// 纵向遥控：正上方最近的一行。到顶即停。
+    private static func upward(_ origin: CGRect, in placements: [MagazinePlacement]) -> MagazinePlacement? {
+        let strictlyAbove = placements.filter { item in
+            let deltaY = origin.midY - item.frame.midY
+            let overlapX = min(origin.maxX, item.frame.maxX) - max(origin.minX, item.frame.minX)
+            return deltaY > 1 && overlapX > 0 && item.frame.maxY <= origin.maxY - 4
+        }
+        if !strictlyAbove.isEmpty {
+            return strictlyAbove.min { a, b in
+                if abs(a.frame.maxY - b.frame.maxY) > 8 {
+                    return a.frame.maxY > b.frame.maxY
+                }
+                return a.frame.minX < b.frame.minX
+            }
+        }
+        let anyAbove = placements.filter { item in
+            item.frame.maxY <= origin.minY + 8 && item.frame.midY < origin.midY - 1
+        }
+        if !anyAbove.isEmpty {
+            return anyAbove.min { a, b in
+                if abs(a.frame.maxY - b.frame.maxY) > 8 {
+                    return a.frame.maxY > b.frame.maxY
+                }
+                return a.frame.minX < b.frame.minX
+            }
+        }
+        return nil
+    }
+
+    private static func verticalOverlap(_ rect: CGRect, _ origin: CGRect) -> CGFloat {
+        min(origin.maxY, rect.maxY) - max(origin.minY, rect.minY)
+    }
+
+    private static func verticalGap(_ rect: CGRect, _ origin: CGRect) -> CGFloat {
+        max(rect.minY - origin.maxY, origin.minY - rect.maxY, 0)
+    }
+
+    private static func columnGap(_ rect: CGRect, _ origin: CGRect, right: Bool) -> CGFloat {
+        right ? rect.minX - origin.maxX : origin.minX - rect.maxX
     }
 }
 

@@ -451,16 +451,57 @@ extension MagazinePerformanceTests {
             MagazinePlacement(entryID: "right-mid", frame: CGRect(x: 340, y: 120, width: 300, height: 100), style: .init()),
             MagazinePlacement(entryID: "bottom", frame: CGRect(x: 0, y: 400, width: 300, height: 150), style: .init())
         ]
-        // 遵循从左到右、从上到下：向右移动遇到多篇候选优先选择最上方的 right-top（非中间稿）
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 124)?.entryID, "right-top")
+        // 遥控式向右：同一水平带里选纵向最贴近的 right-mid；向左回到 lead
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 124)?.entryID, "right-mid")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[1], in: placements, key: 123)?.entryID, "lead")
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 125)?.entryID, "bottom")
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 126)?.entryID, "right-top")
+        // 右端没有卡片即页面边缘：返回 nil 交给外层翻页/提示读完，不再换行前进
         XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[0], in: placements, key: 123))
-        // 行末向右换行推进到下一篇 bottom；全页末尾向右才返回 nil 进行翻页
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 124)?.entryID, "bottom")
-        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 124))
-        // 行首向左换行回退到上一篇 right-mid
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 123)?.entryID, "right-mid")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[1], in: placements, key: 124))
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[2], in: placements, key: 124))
+        // 左端没有卡片同样交给外层：bottom 与 lead 同栏，左侧为空
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 123))
+        // 左半页底部跨带向右仍就近落到右半页最近的 right-mid
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: placements[3], in: placements, key: 124)?.entryID, "right-mid")
+    }
+
+    func testSpatialNavigationPrefersAdjacentRightColumnBeforeHigherFarColumn() {
+        let staggered = [
+            MagazinePlacement(entryID: "left", frame: CGRect(x: 0, y: 0, width: 200, height: 260), style: .init()),
+            MagazinePlacement(entryID: "near-column", frame: CGRect(x: 220, y: 60, width: 200, height: 120), style: .init()),
+            MagazinePlacement(entryID: "far-column-top", frame: CGRect(x: 440, y: 0, width: 200, height: 120), style: .init())
+        ]
+        // 从左到右优先：即使远处一栏的卡片更靠上，也应先落到相邻栏的 near-column
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: staggered[0], in: staggered, key: 124)?.entryID, "near-column")
+        // 反向左移同样就近回到 near-column
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: staggered[1], in: staggered, key: 123)?.entryID, "left")
+    }
+
+    func testSpatialNavigationCrossesToNearestRightHalfWithoutRowOverlap() {
+        let spread = [
+            MagazinePlacement(entryID: "left-low", frame: CGRect(x: 0, y: 420, width: 300, height: 320), style: .init()),
+            MagazinePlacement(entryID: "right-top", frame: CGRect(x: 340, y: 0, width: 300, height: 180), style: .init()),
+            MagazinePlacement(entryID: "right-low", frame: CGRect(x: 340, y: 200, width: 300, height: 180), style: .init())
+        ]
+        // 左半页底部同带没有右侧卡片时，仍然落到右半页就近的那篇（right-low 比 right-top 更贴近）
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: spread[0], in: spread, key: 124)?.entryID, "right-low")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: spread[2], in: spread, key: 123)?.entryID, "left-low")
+        // 右半页末尾向右返回 nil，由外层提示读完或继续加载
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: spread[2], in: spread, key: 124))
+    }
+
+    func testSpatialNavigationStopsAtPageTopAndBottomWithoutPaging() {
+        let column = [
+            MagazinePlacement(entryID: "first", frame: CGRect(x: 0, y: 0, width: 300, height: 120), style: .init()),
+            MagazinePlacement(entryID: "second", frame: CGRect(x: 0, y: 160, width: 300, height: 120), style: .init()),
+            MagazinePlacement(entryID: "last", frame: CGRect(x: 0, y: 320, width: 300, height: 120), style: .init())
+        ]
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: column[0], in: column, key: 125)?.entryID, "second")
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: column[2], in: column, key: 126)?.entryID, "second")
+        // 上下键只做纵向移动：到达页底/页顶即停，不换行到下一篇、也不翻页
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: column[2], in: column, key: 125))
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: column[0], in: column, key: 126))
     }
 
     func testMagazineSpatialNavigationFollowsLeftToRightTopToBottomRule() {
@@ -471,15 +512,15 @@ extension MagazinePerformanceTests {
             MagazinePlacement(entryID: "card-3", frame: CGRect(x: 0, y: 120, width: 200, height: 100), style: .init()),
             MagazinePlacement(entryID: "card-4", frame: CGRect(x: 220, y: 120, width: 200, height: 100), style: .init())
         ]
-        // 向右移动：1 -> 2 -> 3 (换行) -> 4 -> nil (翻页)
+        // 向右移动：只横向；右列尽头返回 nil 交给翻页
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[0], in: grid, key: 124)?.entryID, "card-2")
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 124)?.entryID, "card-3")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 124))
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 124)?.entryID, "card-4")
         XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[3], in: grid, key: 124))
 
-        // 向左移动：4 -> 3 -> 2 (换行回退) -> 1 -> nil (翻页/侧栏)
+        // 向左移动：只横向；左列尽头返回 nil 交给翻页/合上封面
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[3], in: grid, key: 123)?.entryID, "card-3")
-        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 123)?.entryID, "card-2")
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[2], in: grid, key: 123))
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: grid[1], in: grid, key: 123)?.entryID, "card-1")
         XCTAssertNil(MagazineSpatialNavigation.neighbor(of: grid[0], in: grid, key: 123))
 
@@ -496,6 +537,67 @@ extension MagazinePerformanceTests {
             MagazinePlacement(entryID: "sub-right", frame: CGRect(x: 220, y: 140, width: 200, height: 100), style: .init())
         ]
         XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: wideTop[0], in: wideTop, key: 125)?.entryID, "sub-left")
+    }
+
+    /// 还原用户截图的遥控路径：1→2→3→4→5→6→7→8→9 依次按 →、↓、↓、←、↓、↓、→、→，再从 9 按 → 翻页。
+    func testRemoteControlWalkReplaysAnnotatedSpreadPath() {
+        let walk = [
+            MagazinePlacement(entryID: "1", frame: CGRect(x: 0, y: 0, width: 900, height: 300), style: .init()),
+            MagazinePlacement(entryID: "2", frame: CGRect(x: 960, y: 10, width: 910, height: 170), style: .init()),
+            MagazinePlacement(entryID: "3", frame: CGRect(x: 960, y: 200, width: 910, height: 240), style: .init()),
+            MagazinePlacement(entryID: "4", frame: CGRect(x: 960, y: 460, width: 910, height: 240), style: .init()),
+            MagazinePlacement(entryID: "5", frame: CGRect(x: 20, y: 330, width: 780, height: 280), style: .init()),
+            MagazinePlacement(entryID: "left-extra", frame: CGRect(x: 20, y: 650, width: 490, height: 240), style: .init()),
+            MagazinePlacement(entryID: "6", frame: CGRect(x: 520, y: 640, width: 280, height: 190), style: .init()),
+            MagazinePlacement(entryID: "7", frame: CGRect(x: 520, y: 880, width: 280, height: 200), style: .init()),
+            MagazinePlacement(entryID: "8", frame: CGRect(x: 960, y: 900, width: 320, height: 300), style: .init()),
+            MagazinePlacement(entryID: "9", frame: CGRect(x: 1300, y: 900, width: 570, height: 300), style: .init())
+        ]
+        let keys: [UInt16] = [124, 125, 125, 123, 125, 125, 124, 124]
+        var current = walk[0]
+        for (index, key) in keys.enumerated() {
+            guard let next = MagazineSpatialNavigation.neighbor(of: current, in: walk, key: key) else {
+                XCTFail("第 \(index + 1) 步按键 \(key) 不应到达页边：\(current.entryID)")
+                return
+            }
+            current = next
+            XCTAssertEqual(current.entryID, "\(index + 2)", "第 \(index + 1) 步按键 \(key) 的落点不正确")
+        }
+        XCTAssertNil(MagazineSpatialNavigation.neighbor(of: current, in: walk, key: 124), "9 向右应交给外层翻到下一页")
+        // 同一行里 6 向左落到左侧邻栏，说明横向只按几何就近选择
+        XCTAssertEqual(MagazineSpatialNavigation.neighbor(of: walk[6], in: walk, key: 123)?.entryID, "left-extra")
+    }
+
+    func testKeyboardNavigationTerminatesAtPageEdgesOnRealPaginatorPages() {
+        // 遥控器式移动每一步都朝按键方向前进，有限步内必然停在页边（返回 nil），不会折返到已访问卡片。
+        let entries = editorialEntries(43, images: true)
+        let sizes = [CGSize(width: 1450, height: 1000), CGSize(width: 1250, height: 900),
+                     CGSize(width: 900, height: 900), CGSize(width: 480, height: 800)]
+        for arrangement in MagazineArrangement.allCases {
+            for size in sizes {
+                let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: arrangement,
+                    size: size, showsImages: true)
+                for (pageIndex, page) in pages.enumerated() {
+                    for start in page.placements {
+                        for key in [UInt16(123), 124, 125, 126] {
+                            var visited: Set<String> = [start.entryID]
+                            var current = start
+                            var steps = 0
+                            while let next = MagazineSpatialNavigation.neighbor(of: current, in: page.placements, key: key) {
+                                XCTAssertTrue(visited.insert(next.entryID).inserted,
+                                    "\(arrangement) \(size) 第 \(pageIndex) 页 key \(key) 折返到已访问卡片")
+                                current = next
+                                steps += 1
+                                guard steps <= page.placements.count else {
+                                    XCTFail("\(arrangement) \(size) 第 \(pageIndex) 页 key \(key) 未在有限步内到达页边")
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
