@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## v1.4.1 · Build 33 · 2026-09-14
+
+PaperRss 1.4.1 带来「文章阅读」自定义快捷键，并优化杂志模式方向键导航；所有用户可直接升级。
+
+- 文章阅读自定义快捷键（新功能）：在 macOS「键盘快捷键…」（`⌘/`）中为对照翻译、AI 摘要、上一篇/下一篇、收藏、禅模式等动作录制 VS Code 风格组合键，支持「防误触」连按两次、冲突检测与一键重置；保留 `C / V / K / J / M / F / O / Space` 默认键，新增连按 `O O` 打开原文。
+- 杂志方向键导航优化：方向键改为遥控式就近移动（左右只横向、上下只纵向），只在一侧没有卡片即到达页面边缘时才翻页；从右半页翻到下一页再翻回，会恢复到离开的那张卡片。
+- 性能与交互优化：按键识别改为绑定表精确比对，不再逐次解析字符与硬编码分支；杂志翻页与选择状态复用不变，方向键移动不会折返绕圈。
+
+---
+
+PaperRss 1.4.1 adds customizable reader shortcuts and refines magazine arrow-key navigation. All users can upgrade directly.
+
+- Customizable reader shortcuts (new): record VS Code-style key combos for bilingual toggle, AI summary, previous/next article, starring, zen mode and more in **Keyboard Shortcuts…** (`⌘/`), with double-press confirmation, conflict detection and one-click reset; defaults `C / V / K / J / M / F / O / Space` are kept, plus `O O` to open the original article.
+- Magazine arrow-key navigation: arrows now move to the geometrically nearest card (left/right move horizontally, up/down vertically) and only turn pages at the page edge; returning from the next page restores the card you left.
+- Performance & interaction polish: shortcut matching now uses an exact bindings lookup rather than per-keystroke character parsing and hard-coded branches; magazine page turning and selection state are reused, and arrow navigation never loops back.
+
 ## v1.4.0 · Build 31 · 2026-09-14
 
 PaperRss 1.4.0 正式版发布！带来全新的沉浸式杂志浏览体验、原生 Metal 拟真折纸翻页、视觉时间线视图切换，以及完善的数据库存储治理与历史文章保留策略。
