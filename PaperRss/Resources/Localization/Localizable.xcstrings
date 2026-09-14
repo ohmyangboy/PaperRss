@@ -1988,75 +1988,123 @@
         }
       }
     },
-    "再按一次 C 切换对照翻译" : {
+    "再按一次 %@ 打开原文" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press C again to toggle bilingual translation"
+            "value" : "Press %@ again to open the original in your browser"
           }
         }
       }
     },
-    "再按一次 F 切换禅模式" : {
+    "再按一次 %@ 切换收藏" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press F again to toggle Focus Mode"
+            "value" : "Press %@ again to toggle star"
           }
         }
       }
     },
-    "再按一次 M 切换收藏" : {
+    "再按一次 %@ 切换禅模式" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press M again to toggle star"
+            "value" : "Press %@ again to toggle Focus Mode"
           }
         }
       }
     },
-    "再按一次 V 查看 AI 摘要" : {
+    "再按一次 %@ 切换对照翻译" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press V again to view the AI summary"
+            "value" : "Press %@ again to toggle bilingual translation"
           }
         }
       }
     },
-    "再次按下 B 查看上一篇" : {
-      "extractionState" : "stale",
+    "再按一次 %@ 查看 AI 摘要" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press B again to open the previous article"
+            "value" : "Press %@ again to view the AI summary"
           }
         }
       }
     },
-    "再次按下 N 查看下一篇" : {
-      "extractionState" : "stale",
+    "再次按下 %@ 查看上一篇" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press N again to open the next article"
+            "value" : "Press %@ again to open the previous article"
           }
         }
       }
     },
-    "再次按下空格切换下一篇" : {
-      "extractionState" : "stale",
+    "再次按下 %@ 查看下一篇" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Press Space again to open the next article"
+            "value" : "Press %@ again to open the next article"
+          }
+        }
+      }
+    },
+    "再次按下 %@，切换下一篇。未读 %lld 篇" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Press %@ again for the next article. %lld unread"
+          }
+        }
+      }
+    },
+    "当前文章没有原文链接" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This article has no original link"
+          }
+        }
+      }
+    },
+    "该组合是系统快捷键「%@」，无法绑定" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This combination is reserved by the system shortcut “%@”"
+          }
+        }
+      }
+    },
+    "已被「%@」使用，点此前往修改" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Already used by “%@”; click to edit it"
           }
         }
       }

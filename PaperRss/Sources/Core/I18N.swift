@@ -131,10 +131,17 @@ public final class I18N: ObservableObject {
         "DeepSeek OpenAI 兼容接口": "DeepSeek OpenAI-Compatible Endpoint",
         "模型列表（%lld 个，%lld 个已启用）": "Models (%lld total, %lld enabled)",
         "用于翻译、总结和解读文章": "For translation, summarization, and article analysis",
-        "再按一次 C 切换对照翻译": "Press C again to toggle bilingual translation",
-        "再按一次 V 查看 AI 摘要": "Press V again to view the AI summary",
-        "再按一次 M 切换收藏": "Press M again to toggle star",
-        "再按一次 F 切换禅模式": "Press F again to toggle Focus Mode",
+        "再按一次 %@ 切换对照翻译": "Press %@ again to toggle bilingual translation",
+        "再按一次 %@ 查看 AI 摘要": "Press %@ again to view the AI summary",
+        "再按一次 %@ 切换收藏": "Press %@ again to toggle star",
+        "再按一次 %@ 切换禅模式": "Press %@ again to toggle Focus Mode",
+        "再按一次 %@ 打开原文": "Press %@ again to open the original in your browser",
+        "再次按下 %@ 查看上一篇": "Press %@ again to open the previous article",
+        "再次按下 %@ 查看下一篇": "Press %@ again to open the next article",
+        "再次按下 %@，切换下一篇。未读 %lld 篇": "Press %@ again for the next article. %lld unread",
+        "当前文章没有原文链接": "This article has no original link",
+        "该组合是系统快捷键「%@」，无法绑定": "This combination is reserved by the system shortcut “%@”",
+        "已被「%@」使用，点此前往修改": "Already used by “%@”; click to edit it",
         "重新获取此订阅": "Reload Feed"
     ]
 }

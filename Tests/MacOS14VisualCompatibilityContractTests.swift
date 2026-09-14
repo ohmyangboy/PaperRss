@@ -58,8 +58,8 @@ final class MacOS14VisualCompatibilityContractTests: XCTestCase {
         XCTAssertEqual(I18N.localized("我的 Mac", language: .en), "My Mac")
         XCTAssertEqual(I18N.localized("我的 Mac (本地账号)", language: .en), "My Mac (Local Account)")
         XCTAssertEqual(I18N.localized("本机", language: .en), "Local")
-        XCTAssertEqual(I18N.localized("再按一次 C 切换对照翻译", language: .en),
-                       "Press C again to toggle bilingual translation")
+        XCTAssertEqual(I18N.localized("再按一次 %@ 切换对照翻译", language: .en),
+                       "Press %@ again to toggle bilingual translation")
 
         let settings = try sourceText("PaperRss/Sources/App/SettingsView.swift")
         XCTAssertTrue(settings.contains("localizedBuiltInProviderName"))

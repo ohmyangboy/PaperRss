@@ -936,7 +936,7 @@ struct ArticleReaderView: View {
             }
         case .toggleStar:
             store.toggleStar(currentEntry)
-        case .previousArticle, .nextArticle, .toggleFullScreen:
+        case .previousArticle, .nextArticle, .toggleFullScreen, .openOriginal, .scrollDown:
             break
         }
     }
@@ -4569,13 +4569,58 @@ enum PaperReaderBridge {
     static let readerShortcutScript = WKUserScript(
         source: """
         (() => {
-          const actions = {
-            c: "toggleBilingual",
-            v: "showSummary",
-            k: "previousArticle",
-            j: "nextArticle",
-            m: "toggleStar",
-            f: "toggleFullScreen"
+          const defaultBindings = {
+            toggleBilingual: { base: "KeyC", command: false, option: false, control: false, shift: false },
+            showSummary: { base: "KeyV", command: false, option: false, control: false, shift: false },
+            previousArticle: { base: "KeyK", command: false, option: false, control: false, shift: false },
+            nextArticle: { base: "KeyJ", command: false, option: false, control: false, shift: false },
+            toggleStar: { base: "KeyM", command: false, option: false, control: false, shift: false },
+            toggleFullScreen: { base: "KeyF", command: false, option: false, control: false, shift: false },
+            openOriginal: { base: "KeyO", command: false, option: false, control: false, shift: false }
+          };
+
+          const currentBindings = () => {
+            const injected = window.paperRssShortcutBindings;
+            return injected && typeof injected === "object" ? injected : defaultBindings;
+          };
+
+          const matchesCombo = (binding, combo) => Boolean(binding) &&
+            binding.base === combo.base &&
+            Boolean(binding.command) === combo.command &&
+            Boolean(binding.option) === combo.option &&
+            Boolean(binding.control) === combo.control &&
+            Boolean(binding.shift) === combo.shift;
+
+          const eventCode = event => {
+            const code = String(event.code || "");
+            if (code) return code;
+            const key = String(event.key || "");
+            if (key === " ") return "Space";
+            if (key.length === 1) {
+              if (/[a-z]/i.test(key)) return "Key" + key.toUpperCase();
+              if (/[0-9]/.test(key)) return "Digit" + key;
+              return key;
+            }
+            return key;
+          };
+
+          const eventCombo = event => ({
+            base: eventCode(event),
+            command: event.metaKey,
+            option: event.altKey,
+            control: event.ctrlKey,
+            shift: event.shiftKey
+          });
+
+          const actionFor = event => {
+            const combo = eventCombo(event);
+            if (!combo.base) return null;
+            const bindings = currentBindings();
+            for (const action of Object.keys(bindings)) {
+              if (action === "scrollDown") continue;
+              if (matchesCombo(bindings[action], combo)) return action;
+            }
+            return null;
           };
 
           const isEditable = element => {
@@ -4590,9 +4635,8 @@ enum PaperReaderBridge {
 
           window.addEventListener("keydown", event => {
             if (event.defaultPrevented || event.isComposing || event.repeat) return;
-            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
 
-            const action = actions[String(event.key || "").toLowerCase()];
+            const action = actionFor(event);
             if (!action) return;
             if (window.paperRssReaderInteractive === false &&
                 !(window.paperRssReaderNavigationEnabled === true &&
@@ -4619,17 +4663,43 @@ enum PaperReaderBridge {
     static let spacebarScript = WKUserScript(
         source: """
         (() => {
+          const defaultScrollBinding = { base: "Space", command: false, option: false, control: false, shift: false };
+
+          const scrollBinding = () => {
+            const injected = window.paperRssShortcutBindings;
+            return (injected && injected.scrollDown) || defaultScrollBinding;
+          };
+
+          const eventCode = event => {
+            const code = String(event.code || "");
+            if (code) return code;
+            const key = String(event.key || "");
+            if (key === " ") return "Space";
+            if (key.length === 1) {
+              if (/[a-z]/i.test(key)) return "Key" + key.toUpperCase();
+              if (/[0-9]/.test(key)) return "Digit" + key;
+              return key;
+            }
+            return key;
+          };
+
+          const isScrollKey = event => {
+            const binding = scrollBinding();
+            return binding.base === eventCode(event) &&
+              Boolean(binding.command) === event.metaKey &&
+              Boolean(binding.option) === event.altKey &&
+              Boolean(binding.control) === event.ctrlKey &&
+              Boolean(binding.shift) === event.shiftKey;
+          };
+
           window.addEventListener("keydown", event => {
-            if (event.key === " " || event.keyCode === 32) {
+            if (isScrollKey(event)) {
               const active = document.activeElement;
               if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
                 return;
               }
-              if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-                return;
-              }
 
-              // 关键：首位阻止默认行为，杜绝 WebKit 原生 Space 键连续冲量撞底引发的橡皮筋拉扯
+              // 关键：首位阻止默认行为，杜绝 WebKit 原生连续冲量撞底引发的橡皮筋拉扯
               event.preventDefault();
               event.stopPropagation();
 
@@ -5408,6 +5478,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.loadIfNeeded(into: webView)
         context.coordinator.synchronizeInteractivity(in: webView)
+        context.coordinator.synchronizeShortcutBindings(in: webView)
         context.coordinator.synchronizeAudioWave(in: webView, level: outputVolume.level)
         context.coordinator.synchronizeReaderAppearance(in: webView)
         webView.evaluateJavaScript("document.documentElement.style.setProperty('--paper-font-size', '\(fontSize)px')")
@@ -5495,6 +5566,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var mathScriptsEnabled = false
         weak var webView: WKWebView?
         private var audioSubscription: AnyCancellable?
+        private var renderedShortcutBindingsJSON: String?
+        nonisolated(unsafe) private var shortcutBindingsObserver: (any NSObjectProtocol)?
 
         init(parent: ArticleHTMLView) {
             self.parent = parent
@@ -5504,6 +5577,37 @@ private struct ArticleHTMLView: NSViewRepresentable {
                     guard let self, self.parent.showsAudioWave, let webView = self.webView else { return }
                     self.synchronizeAudioWave(in: webView, level: self.parent.outputVolume.level)
                 }
+            }
+            shortcutBindingsObserver = NotificationCenter.default.addObserver(
+                forName: ReaderShortcutSettings.didChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let webView = self.webView else { return }
+                    self.synchronizeShortcutBindings(in: webView, force: true)
+                }
+            }
+        }
+
+        deinit {
+            if let shortcutBindingsObserver {
+                NotificationCenter.default.removeObserver(shortcutBindingsObserver)
+            }
+        }
+
+        /// 把当前键位表注入页面全局；文档换页后全局会丢失，因此文档就绪时强制重注入。
+        func synchronizeShortcutBindings(in webView: WKWebView, force: Bool = false) {
+            let json = ReaderShortcutSettings.shared.javaScriptPayloadJSON
+            guard force || renderedShortcutBindingsJSON != json else { return }
+            renderedShortcutBindingsJSON = json
+            Task { @MainActor in
+                _ = try? await webView.callAsyncJavaScript(
+                    "window.paperRssShortcutBindings = JSON.parse(bindingsJSON);",
+                    arguments: ["bindingsJSON": json],
+                    in: nil,
+                    contentWorld: .defaultClient
+                )
             }
         }
 
@@ -6081,6 +6185,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
                 self.synchronizeAudioWave(in: webView, level: self.parent.outputVolume.level, force: true)
+                self.synchronizeShortcutBindings(in: webView, force: true)
                 self.synchronizeTranslations(in: webView)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)

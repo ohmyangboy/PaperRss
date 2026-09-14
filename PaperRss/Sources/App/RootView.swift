@@ -737,19 +737,21 @@ struct RootView: View {
             retainingIDs: retainedEntryListIDs.union([selectedEntryID])
         ) {
             let unreadCount = max(1, store.unreadCount(scope: currentTimelineScope))
-            let prompt: String = {
-                if I18N.shared.isEnglish {
-                    return "Press Space again for next article. \(unreadCount) unread"
-                } else {
-                    return "再次按下空格，切换下一篇。未读 \(unreadCount) 篇"
-                }
-            }()
+            let prompt = I18N.shared.localizedFormat(
+                "再次按下 %@，切换下一篇。未读 %lld 篇",
+                readerShortcutKeyLabel(.scrollDown),
+                Int64(unreadCount)
+            )
 
-            guard confirmNavigation(
-                .spaceNextArticle,
-                entryID: selectedEntryID,
-                prompt: prompt
-            ) else { return }
+            if requiresShortcutConfirmation(.scrollDown) {
+                guard confirmNavigation(
+                    .spaceNextArticle,
+                    entryID: selectedEntryID,
+                    prompt: prompt
+                ) else { return }
+            } else {
+                cancelNavigationConfirmation(dismissToast: true)
+            }
 
             let nextID = nextItem.id
             self.selectedEntryID = nextID
@@ -789,16 +791,19 @@ struct RootView: View {
         let prompt: String
         let boundaryMessage: String
         let adjacentDir: AdjacentTimelineDirection
+        let action: ReaderShortcutAction
 
         switch direction {
         case .previous:
+            action = .previousArticle
             confirmationKey = .previousArticle
-            prompt = I18N.shared.localized("再次按下 K 查看上一篇")
+            prompt = I18N.shared.localizedFormat("再次按下 %@ 查看上一篇", readerShortcutKeyLabel(action))
             boundaryMessage = I18N.shared.localized("已经是列表第一篇")
             adjacentDir = .previous
         case .next:
+            action = .nextArticle
             confirmationKey = .nextArticle
-            prompt = I18N.shared.localized("再次按下 J 查看下一篇")
+            prompt = I18N.shared.localizedFormat("再次按下 %@ 查看下一篇", readerShortcutKeyLabel(action))
             boundaryMessage = I18N.shared.localized("列表已经阅读完毕")
             adjacentDir = .next
         }
@@ -814,7 +819,11 @@ struct RootView: View {
             return
         }
 
-        guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
+        if requiresShortcutConfirmation(action) {
+            guard confirmNavigation(confirmationKey, entryID: selectedEntryID, prompt: prompt) else { return }
+        } else {
+            cancelNavigationConfirmation(dismissToast: true)
+        }
         let nextID = adjacentItem.id
         self.selectedEntryID = nextID
         if currentTimelineScope == .unread || effectiveUnreadOnly {
@@ -825,6 +834,45 @@ struct RootView: View {
         self.autoScrollTrigger = UUID()
     }
 
+    private func readerShortcutBinding(_ action: ReaderShortcutAction) -> ReaderShortcutBinding {
+        ReaderShortcutSettings.shared.bindings[action]
+    }
+
+    private func readerShortcutKeyLabel(_ action: ReaderShortcutAction) -> String {
+        readerShortcutBinding(action).combo.displayString
+    }
+
+    private func requiresShortcutConfirmation(_ action: ReaderShortcutAction) -> Bool {
+        readerShortcutBinding(action).requiresConfirmation
+    }
+
+    private func confirmationKey(for action: ReaderShortcutAction) -> ReaderNavigationConfirmation.Key {
+        switch action {
+        case .toggleBilingual: return .toggleBilingual
+        case .showSummary: return .showSummary
+        case .toggleStar: return .toggleStar
+        case .toggleFullScreen: return .toggleFullScreen
+        case .openOriginal: return .openOriginal
+        case .previousArticle: return .previousArticle
+        case .nextArticle: return .nextArticle
+        case .scrollDown: return .spaceNextArticle
+        }
+    }
+
+    /// 返回 true 表示动作可以立即执行；false 表示本次按键已用于弹出「再按一次」提示。
+    private func confirmReaderAction(
+        _ action: ReaderShortcutAction,
+        entryID: String,
+        promptFormat: String
+    ) -> Bool {
+        guard requiresShortcutConfirmation(action) else {
+            cancelNavigationConfirmation(dismissToast: true)
+            return true
+        }
+        let prompt = I18N.shared.localizedFormat(promptFormat, readerShortcutKeyLabel(action))
+        return confirmNavigation(confirmationKey(for: action), entryID: entryID, prompt: prompt)
+    }
+
     private func dispatchReaderShortcut(_ action: ReaderShortcutAction) {
         guard let entryID = selectedEntryID else { return }
         switch action {
@@ -833,23 +881,32 @@ struct RootView: View {
         case .nextArticle:
             requestAdjacentArticle(.next)
         case .toggleBilingual:
-            let prompt = I18N.shared.localized("再按一次 C 切换对照翻译")
-            guard confirmNavigation(.toggleBilingual, entryID: entryID, prompt: prompt) else { return }
+            guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 切换对照翻译") else { return }
             readerShortcutInvocation = ReaderShortcutInvocation(action: action)
         case .showSummary:
-            let prompt = I18N.shared.localized("再按一次 V 查看 AI 摘要")
-            guard confirmNavigation(.showSummary, entryID: entryID, prompt: prompt) else { return }
+            guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 查看 AI 摘要") else { return }
             readerShortcutInvocation = ReaderShortcutInvocation(action: action)
         case .toggleStar:
-            let prompt = I18N.shared.localized("再按一次 M 切换收藏")
-            guard confirmNavigation(.toggleStar, entryID: entryID, prompt: prompt) else { return }
+            guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 切换收藏") else { return }
             readerShortcutInvocation = ReaderShortcutInvocation(action: action)
         case .toggleFullScreen:
-            let prompt = I18N.shared.localized("再按一次 F 切换禅模式")
-            guard confirmNavigation(.toggleFullScreen, entryID: entryID, prompt: prompt) else { return }
+            guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 切换禅模式") else { return }
             withAnimation {
                 isZenMode.toggle()
             }
+        case .openOriginal:
+            guard let url = selectedEntry?.url else {
+                cancelNavigationConfirmation(dismissToast: true)
+                showToast(
+                    I18N.shared.localized("当前文章没有原文链接"),
+                    icon: "exclamationmark.triangle.fill"
+                )
+                return
+            }
+            guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 打开原文") else { return }
+            AppInfo.openURL(url)
+        case .scrollDown:
+            focusAndScrollArticle()
         }
     }
 

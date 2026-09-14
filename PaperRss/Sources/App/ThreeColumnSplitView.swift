@@ -656,7 +656,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 if MainActor.assumeIsolated({ self.consumeTimelineKey(event, flags: flags) }) {
                     return nil
                 }
-                if MainActor.assumeIsolated({ self.consumeReaderShortcut(event, flags: flags) }) {
+                if MainActor.assumeIsolated({ self.consumeReaderShortcut(event) }) {
                     return nil
                 }
                 
@@ -699,8 +699,10 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                     return event
                 }
 
-                // Space 键 (keyCode 49), 且没有任何 modifier 键 (Cmd / Option / Ctrl / Shift)
-                guard event.keyCode == 49, flags.isEmpty, !event.isARepeat else {
+                // 向下阅读键（默认 Space，可自定义）：由绑定表决定，不再硬编码键码。
+                guard let scrollCombo = ReaderShortcutCombo(event: event),
+                      ReaderShortcutSettings.shared.bindings[.scrollDown].combo == scrollCombo,
+                      !event.isARepeat else {
                     return event
                 }
                 guard let window = event.window ?? NSApp.keyWindow,
@@ -1200,10 +1202,7 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             if abs(trailing.constant - nextTrailing) > 0.5 { trailing.constant = nextTrailing }
         }
 
-        private func consumeReaderShortcut(
-            _ event: NSEvent,
-            flags: NSEvent.ModifierFlags
-        ) -> Bool {
+        private func consumeReaderShortcut(_ event: NSEvent) -> Bool {
             guard actions.showsReaderCapsule,
                   let splitVC = splitViewController,
                   let mainWindow = splitVC.view.window,
@@ -1214,15 +1213,18 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 return false
             }
 
-            let disallowedModifiers: NSEvent.ModifierFlags = [
-                .command, .option, .control, .shift, .function
-            ]
-            let action = ReaderShortcutPolicy.action(
-                for: event.charactersIgnoringModifiers,
-                hasDisallowedModifiers: !flags.intersection(disallowedModifiers).isEmpty,
-                isRepeat: event.isARepeat
-            )
-            guard let action else { return false }
+            // 组合键与绑定表精确比对；scrollDown 由下方专用分支处理，
+            // 保留「列表/正文焦点不同时滚动还是切篇」的既有语义。
+            guard !event.isARepeat,
+                  let combo = ReaderShortcutCombo(event: event),
+                  let action = ReaderShortcutPolicy.action(
+                      for: combo,
+                      bindings: ReaderShortcutSettings.shared.bindings
+                  ),
+                  action != .scrollDown,
+                  !ReaderShortcutReservedCatalog.shared.isReserved(combo) else {
+                return false
+            }
 
             // WebKit owns its editable descendants, selections and transient
             // selection assistant UI. Its injected key handler performs the

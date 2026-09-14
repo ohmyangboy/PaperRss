@@ -22,6 +22,9 @@ struct KeyboardShortcutHelpCommands: Commands {
 }
 
 struct KeyboardShortcutHelpView: View {
+    @ObservedObject private var settings = ReaderShortcutSettings.shared
+    @State private var editingAction: ReaderShortcutAction?
+
     private struct Shortcut: Identifiable {
         let id: String
         let keys: [String]
@@ -35,21 +38,8 @@ struct KeyboardShortcutHelpView: View {
         let shortcuts: [Shortcut]
     }
 
-    private var sections: [Section] {
+    private var fixedSections: [Section] {
         [
-            Section(
-                id: "reader",
-                title: localized("文章阅读", "Article Reading"),
-                shortcuts: [
-                    shortcut("reader-translate", ["C", "C"], "切换对照翻译", "在当前文章中再次按 C 确认切换。"),
-                    shortcut("reader-summary", ["V", "V"], "查看 AI 摘要", "在当前文章中再次按 V 确认，优先显示已有摘要；没有缓存时开始生成。"),
-                    shortcut("reader-previous", ["K", "K"], "查看上一篇", "在当前列表中再次按 K 确认，不循环。"),
-                    shortcut("reader-next", ["J", "J"], "查看下一篇", "在当前列表中再次按 J 确认，不循环。"),
-                    shortcut("reader-star", ["M", "M"], "切换收藏", "在当前文章中再次按 M 确认收藏或取消收藏。"),
-                    shortcut("reader-fullscreen", ["F", "F"], "切换禅模式", "在当前文章中再次按 F 确认进入或退出沉浸禅模式。"),
-                    shortcut("reader-space", ["Space"], "向下阅读", "滚动正文；到达底部后再次按空格切换下一篇。")
-                ]
-            ),
             Section(
                 id: "navigation",
                 title: localized("栏目导航", "Column Navigation"),
@@ -73,30 +63,13 @@ struct KeyboardShortcutHelpView: View {
     }
 
     var body: some View {
-        ScrollView {
+        PaperFloatingScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                readerSection
 
-                ForEach(sections) { section in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(section.title)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-
-                        VStack(spacing: 0) {
-                            ForEach(Array(section.shortcuts.enumerated()), id: \.element.id) { index, shortcut in
-                                shortcutRow(shortcut)
-                                if index < section.shortcuts.count - 1 {
-                                    Divider().padding(.leading, 18)
-                                }
-                            }
-                        }
-                        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(.primary.opacity(0.08), lineWidth: 1)
-                        }
-                    }
+                ForEach(fixedSections) { section in
+                    fixedSectionView(section)
                 }
             }
             .padding(28)
@@ -111,12 +84,176 @@ struct KeyboardShortcutHelpView: View {
                 .font(.title2.weight(.semibold))
 
             Text(localized(
-                "C、V、B、N、M 等裸键只在文章 Feed 阅读界面有效。输入文字、选择正文或打开 AI 交互弹层时不会触发；⌘C 与 ⌘V 始终保留系统复制、粘贴行为。",
-                "Bare keys such as C, V, B, N, and M work only while reading an article feed. They are disabled while typing, selecting text, or using an AI popover. ⌘C and ⌘V always keep the system Copy and Paste behavior."
+                "文章阅读的按键组合可逐行自定义；输入文字、选择正文或打开 AI 交互弹层时不会触发。栏目导航与全局快捷键保持系统设置，冲突的组合会被拒绝，⌘C 与 ⌘V 始终保留系统复制、粘贴行为。",
+                "Article-reading shortcuts are customizable per row. They stay disabled while typing, selecting text, or using an AI popover. Column navigation and global shortcuts keep their system defaults, conflicting combinations are rejected, and ⌘C / ⌘V always keep the system Copy and Paste behavior."
             ))
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - 文章阅读（可自定义）
+
+    private var readerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(localized("文章阅读", "Article Reading"))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                Button(localized("全部恢复默认", "Restore All Defaults")) {
+                    settings.resetAll()
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(settings.bindings.isDefault ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.accentColor))
+                .disabled(settings.bindings.isDefault)
+                .help(localized("把文章阅读的快捷键恢复为默认值", "Restore article-reading shortcuts to their defaults"))
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(ReaderShortcutAction.allCases.enumerated()), id: \.element) { index, action in
+                    readerShortcutRow(action)
+                    if index < ReaderShortcutAction.allCases.count - 1 {
+                        Divider().padding(.leading, 18)
+                    }
+                }
+            }
+            .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.primary.opacity(0.08), lineWidth: 1)
+            }
+
+            Text(localized(
+                "点击右侧编辑按钮后直接按下新的组合键（如 ⌥J、⇧⌘↑）；键帽右侧的 ×2 表示需要连按两次。系统与栏目导航占用的组合会提示不可用。",
+                "Use the edit button on the right, then press a new combination (such as ⌥J or ⇧⌘↑). A small ×2 beside the keys marks shortcuts that need two consecutive presses. Combinations reserved by the system or column navigation are rejected with a notice."
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func readerShortcutRow(_ action: ReaderShortcutAction) -> some View {
+        let binding = settings.bindings[action]
+        return HStack(alignment: .bottom, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ReaderShortcutPresentation.title(for: action))
+                    .font(.body.weight(.medium))
+                Text(ReaderShortcutPresentation.detail(for: action))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            // 快捷键区整体贴文字底部对齐，并尽量靠右；编辑入口无底色。
+            HStack(alignment: .center, spacing: 10) {
+                keycapGroups(for: binding)
+
+                // 固定在键帽右侧的小字倍率标记；保留槽位让各行键帽左侧对齐。
+                Text(binding.requiresConfirmation ? "×2" : "")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 18, alignment: .leading)
+                    .accessibilityHidden(!binding.requiresConfirmation)
+
+                shortcutEditButton(for: action)
+            }
+            .padding(.trailing, 2)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+
+    private func shortcutEditButton(for action: ReaderShortcutAction) -> some View {
+        Button {
+            editingAction = action
+        } label: {
+            Image(systemName: "pencil")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help(localized("编辑这个动作的快捷键", "Edit this action’s shortcut"))
+        .accessibilityLabel(Text(String(
+            format: localized("自定义「%@」快捷键", "Customize the “%@” shortcut"),
+            ReaderShortcutPresentation.title(for: action)
+        )))
+        .popover(isPresented: editorBinding(action), arrowEdge: .trailing) {
+            ReaderShortcutEditorView(action: action) { revealed in
+                DispatchQueue.main.async {
+                    editingAction = revealed
+                }
+            }
+        }
+    }
+
+    private func keycapGroups(for binding: ReaderShortcutBinding) -> some View {
+        HStack(spacing: 8) {
+            keycapRow(binding.combo.displayCaps)
+            if binding.requiresConfirmation {
+                keycapRow(binding.combo.displayCaps)
+            }
+        }
+    }
+
+    private func keycapRow(_ caps: [String]) -> some View {
+        HStack(spacing: 5) {
+            ForEach(Array(caps.enumerated()), id: \.offset) { _, key in
+                Text(key)
+                    .font(.system(.body, design: .rounded, weight: .semibold))
+                    .frame(minWidth: key.count > 1 ? 44 : 26, minHeight: 26)
+                    .padding(.horizontal, key.count > 1 ? 4 : 0)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(.primary.opacity(0.12), lineWidth: 1)
+                    }
+            }
+        }
+    }
+
+    private func editorBinding(_ action: ReaderShortcutAction) -> Binding<Bool> {
+        Binding(
+            get: { editingAction == action },
+            set: { isPresented in
+                if !isPresented, editingAction == action {
+                    editingAction = nil
+                }
+            }
+        )
+    }
+
+    // MARK: - 固定分组
+
+    private func fixedSectionView(_ section: Section) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(section.title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            VStack(spacing: 0) {
+                ForEach(Array(section.shortcuts.enumerated()), id: \.element.id) { index, shortcut in
+                    shortcutRow(shortcut)
+                    if index < section.shortcuts.count - 1 {
+                        Divider().padding(.leading, 18)
+                    }
+                }
+            }
+            .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.primary.opacity(0.08), lineWidth: 1)
+            }
         }
     }
 
@@ -173,12 +310,6 @@ struct KeyboardShortcutHelpView: View {
 
     private func englishTitleForShortcut(_ id: String) -> String {
         switch id {
-        case "reader-translate": "Toggle Bilingual Translation"
-        case "reader-summary": "Show AI Summary"
-        case "reader-previous": "Previous Article"
-        case "reader-next": "Next Article"
-        case "reader-star": "Toggle Star"
-        case "reader-space": "Read Down"
         case "navigation-left": "Move to the Left Column"
         case "navigation-right": "Move to the Right Column"
         case "global-refresh": "Refresh All Feeds"
@@ -192,12 +323,6 @@ struct KeyboardShortcutHelpView: View {
 
     private func englishDetailForShortcut(_ id: String) -> String {
         switch id {
-        case "reader-translate": "Turns paragraph-by-paragraph bilingual translation on or off."
-        case "reader-summary": "Shows a cached summary first, or starts generating one."
-        case "reader-previous": "Press B again to confirm within the current list; navigation does not wrap."
-        case "reader-next": "Press N again to confirm within the current list; navigation does not wrap."
-        case "reader-star": "Stars or unstars the current article."
-        case "reader-space": "Scrolls the article; at the bottom, press Space again to open the next article."
         case "navigation-left", "navigation-right": "Moves focus between feeds, the article list, and the reader."
         case "global-refresh": "Checks every feed for new articles now."
         case "global-increase": "Increases the article body text size."

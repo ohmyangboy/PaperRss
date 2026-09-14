@@ -7,6 +7,10 @@ public enum ReaderShortcutAction: String, CaseIterable, Sendable, Equatable {
     case nextArticle
     case toggleStar
     case toggleFullScreen
+    /// 在默认浏览器打开当前文章的原文链接。
+    case openOriginal
+    /// 正文向下翻页；到达底部后切换下一篇。
+    case scrollDown
 }
 
 public struct ReaderShortcutInvocation: Sendable, Equatable, Identifiable {
@@ -33,23 +37,10 @@ public enum ReaderShortcutPolicy {
     }
 
     public static func action(
-        for charactersIgnoringModifiers: String?,
-        hasDisallowedModifiers: Bool = false,
-        isRepeat: Bool = false
+        for combo: ReaderShortcutCombo,
+        bindings: ReaderShortcutBindings = .default
     ) -> ReaderShortcutAction? {
-        guard !hasDisallowedModifiers,
-              !isRepeat,
-              let key = charactersIgnoringModifiers?.lowercased(),
-              key.count == 1 else { return nil }
-        switch key {
-        case "c": return .toggleBilingual
-        case "v": return .showSummary
-        case "k": return .previousArticle
-        case "j": return .nextArticle
-        case "m": return .toggleStar
-        case "f": return .toggleFullScreen
-        default: return nil
-        }
+        bindings.action(for: combo)
     }
 
     public static func bilingualDecision(
@@ -81,6 +72,7 @@ public struct ReaderNavigationConfirmation: Sendable {
         case showSummary
         case toggleStar
         case toggleFullScreen
+        case openOriginal
     }
 
     public enum Result: Sendable, Equatable {

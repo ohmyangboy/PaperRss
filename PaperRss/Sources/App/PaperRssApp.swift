@@ -127,7 +127,7 @@ struct PaperRssApp: App {
             KeyboardShortcutHelpView()
                 .environment(\.locale, Locale(identifier: store.appLanguage.localeIdentifier))
         }
-        .defaultSize(width: 560, height: 620)
+        .defaultSize(width: 640, height: 680)
 
         #endif
     }
