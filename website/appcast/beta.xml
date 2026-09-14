@@ -5,11 +5,11 @@
     <link>https://github.com/ohmyangboy/PaperRss/releases</link>
     <description>PaperRss beta updates</description>
     <item>
-      <title>PaperRss 1.4.0-beta.1</title>
-      <sparkle:version>30</sparkle:version>
-      <sparkle:shortVersionString>1.4.0-beta.1</sparkle:shortVersionString>
+      <title>PaperRss 1.4.0</title>
+      <sparkle:version>31</sparkle:version>
+      <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.4.0-beta.1/PaperRss-v1.4.0-beta.1.zip" length="12144426" type="application/octet-stream" sparkle:edSignature="F/7Wqpy19x4uKLSmjrNY++azggOaub/sABRH6TBodQbHUtz91YUYsUMrQkPT24Okv5OE8Zql+0+rvVCs58e2BA==" paperrss:sha256="7e6c7e774a6e4f61ae615103685ef2274c913a1a24d11de562d83d9e02ed70ea" sparkle:minimumSystemVersion="14.0" />
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.4.0/PaperRss-v1.4.0.zip" length="13278134" type="application/octet-stream" sparkle:edSignature="m9zzgNM9GCcgzbHCbvWG7jDdFUsdnfOGMYpwQYNspSlkBbnLph25jbybYaG0BaTK812ecGL2T5dHOnDfyg+oBw==" paperrss:sha256="46d7d5fe65157f58bb720748df03263ae5f5d5b9c49ee687e8fb6b7e1ca744fc" sparkle:minimumSystemVersion="14.0" />
     </item>
   </channel>
 </rss>
