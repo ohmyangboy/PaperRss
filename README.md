@@ -29,7 +29,7 @@
 
 _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire/)_
 
-**📢 项目还在持续迭代中，如果使用过程可能会遇到问题，但每一次反馈都会让PaperRss变得更好，感谢理解**
+**📢 项目还在持续迭代中，使用过程可能会遇到问题，但每一次反馈都会让PaperRss变得更好，感谢理解**
 
 ## 核心亮点
 
