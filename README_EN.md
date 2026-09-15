@@ -191,3 +191,13 @@ Thank you also to everyone who has supported PaperRss with a donation.
 [![PaperRss supporters list preview](https://ohmyangboy.github.io/PaperRss/assets/sponsors-preview.png)](https://ohmyangboy.github.io/blog/posts/paperrss-sponsors/)
 
 The preview updates with each website deployment. Click for the latest complete list; image caching may delay refreshes.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=ohmyangboy%2Fpaperrss&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&legend=top-left" />
+ </picture>
+</a>
