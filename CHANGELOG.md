@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.4.2-beta.1 · Build 34 · 2026-09-15
+
+本次为 Miniflux 账号接入的实验性 Beta；建议使用自建 Miniflux 的用户升级测试，稳定通道仍为 v1.4.1。
+
+- Miniflux 账号接入（新功能）：设置 → 账号 → 添加账号新增 Miniflux 服务预设，使用 Miniflux「设置 → 集成 → Google Reader」配置的用户名与密码连接；支持订阅与分类拉取（含服务端空分类）、文章同步与双向已读/星标同步，离线修改可恢复重试。
+- 用户数据与多账号隔离：Miniflux 凭据保存在独立 Keychain 命名空间，与 FreshRSS、本地账号及各自状态队列完全隔离，可多账号并存互不影响。
+- 分类与订阅生命周期：删除分类只移除分类并保留订阅（与 Miniflux 服务端语义一致），添加订阅使用服务端返回的真实订阅标识，重复添加同一账号会被拒绝。
+- 数据库迁移 v13：扩展 accounts 表类型约束以支持 Miniflux，兼容早期 Schema 并完整保留现有账号、订阅、文章与阅读状态数据。
+
+---
+
+This Beta introduces Miniflux account support. Recommended for users running self-hosted Miniflux; the stable channel remains on v1.4.1.
+
+- Miniflux accounts (new): Add a Miniflux preset under Settings → Accounts → Add Account using the username and password configured in Miniflux “Settings → Integrations → Google Reader”; supports subscriptions and categories (including empty ones), article sync, two-way read/starred sync, and recoverable offline changes.
+- Data and multi-account isolation: Miniflux credentials are stored in a dedicated Keychain namespace and fully isolated from FreshRSS, local accounts and their state queues; accounts coexist independently.
+- Category & subscription lifecycle: Deleting a category keeps subscriptions (matching Miniflux server semantics); adding a subscription uses the server-returned feed identity, and duplicate accounts are rejected.
+- Database migration v13: Extends the `accounts` type constraint for Miniflux, compatible with early schemas while preserving existing accounts, subscriptions, articles and reading states.
+
 ## v1.4.1 · Build 33 · 2026-09-14
 
 PaperRss 1.4.1 带来「文章阅读」自定义快捷键，并优化杂志模式方向键导航；所有用户可直接升级。

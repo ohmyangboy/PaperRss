@@ -83,6 +83,8 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 **Stable v1.4.1 (Build 33)** adds customizable reader shortcuts and refines magazine arrow-key navigation with departure-position restore. Recommended for all users. See the [changelog](CHANGELOG.md).
 
+**Beta v1.4.2-beta.1 (Build 34)**: Adds Miniflux account support using the Google Reader credentials from Miniflux “Settings → Integrations” to sync subscriptions, categories, articles and two-way read/starred states alongside FreshRSS accounts. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.2-beta.1).
+
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 
 > 📝 Note: The signing issue has been resolved — all artifacts are Developer ID signed and Apple notarized, so the "cannot be verified" warning is gone for good. Release cadence will speed up from here; thanks for your patience.
