@@ -29,6 +29,8 @@
 
 _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](https://github.com/Ranchero-Software/NetNewsWire/)_
 
+**📢 项目还在持续迭代中，如果使用过程可能会遇到问题，但每一次反馈都会让PaperRss变得更好，感谢理解**
+
 ## 核心亮点
 
 - **沉浸式杂志模式与拟真折纸翻页**：全新双页排版编排（Balanced Duo），智能提取文章大图画报；基于 Metal 着色器的拟真卷曲与折纸翻页动效，搭配真实翻页音效与底部导读滑轨。
