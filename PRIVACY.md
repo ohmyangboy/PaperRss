@@ -16,7 +16,7 @@ PaperRss 会在本机保存运行所需的数据，包括：
 - Feed 正文、按需提取的网页正文、图片地址及相关缓存；
 - AI 摘要、翻译、划词解释和问答结果；
 - 应用偏好、刷新设置和 AI 服务配置；
-- FreshRSS 等用户主动添加的服务账户信息。
+- FreshRSS / Miniflux 等用户主动添加的服务账户信息。
 
 PaperRss stores data needed to operate locally, including:
 
@@ -25,7 +25,7 @@ PaperRss stores data needed to operate locally, including:
 - feed content, on-demand extracted web content, image URLs, and related caches;
 - AI summaries, translations, selection explanations, and answers;
 - app preferences, refresh settings, and AI service configuration; and
-- account information for services such as FreshRSS that you choose to add.
+- account information for services such as FreshRSS or Miniflux that you choose to add.
 
 网页正文缓存保存在本机数据库中，可在应用设置的“缓存数据”中清除。移除服务账户会删除 PaperRss 保存的相应账户配置；彻底删除所有本地数据可通过删除应用及其应用支持数据完成。
 
@@ -33,11 +33,11 @@ Extracted article caches are stored in the local database and can be cleared fro
 
 ## 2. 凭据保存 / Credential storage
 
-- FreshRSS 等服务凭据通过 macOS Keychain 保存。
+- FreshRSS / Miniflux 等服务凭据通过 macOS Keychain 保存。
 - 用户配置的 AI API Key 当前按供应商保存在该 Mac 的 PaperRss 本地应用偏好（`UserDefaults`）中，不同步到 PaperRss 服务器或 iCloud，也不以 Keychain 级别加密。升级迁移会保留旧的单一 API Key 用于兼容回滚；清空某个供应商的新键不会把旧键重新写回该供应商。请勿在共享的 macOS 用户账户中保存敏感 API Key。
 - PaperRss 不会把 API Key 写入公开仓库、反馈内容或文章导出。
 
-- Credentials for services such as FreshRSS are stored in macOS Keychain.
+- Credentials for services such as FreshRSS or Miniflux are stored in macOS Keychain.
 - User-configured AI API keys are currently stored per provider in PaperRss's local app preferences (`UserDefaults`) on that Mac. They are not synchronized to a PaperRss server or iCloud and are not encrypted at the level provided by Keychain. Upgrade migration retains the former single key for rollback compatibility; clearing a provider's new key does not repopulate it from that legacy key. Do not store a sensitive API key in a shared macOS user account.
 - PaperRss does not intentionally include API keys in the public repository, feedback content, or article exports.
 
@@ -46,14 +46,14 @@ Extracted article caches are stored in the local database and can be cleared fro
 根据用户配置和操作，PaperRss 客户端可能直接连接：
 
 1. **订阅源及原网站**：刷新 Feed、读取图标、加载文章图片；当 Feed 内容不足且用户打开文章时，可能请求公开的原文章页面并在本地提取正文。网站运营者会正常看到用户 IP、请求时间和请求头。
-2. **FreshRSS 或兼容服务**：同步订阅、文章及阅读状态。相关服务按其自身隐私政策处理数据。
+2. **FreshRSS / Miniflux 或兼容服务**：同步订阅、文章及阅读状态。相关服务按其自身隐私政策处理数据。
 3. **用户选择的 AI 服务**：只有在用户配置接口并主动使用 AI 功能时才会发起请求。根据功能不同，请求可能包含文章标题、文章正文或其片段、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。模型服务商会按其条款与隐私政策处理这些内容。
 4. **GitHub/Sparkle 更新来源**：检查更新和下载用户选择安装的新版本。
 
 Depending on your configuration and actions, the PaperRss client may connect directly to:
 
 1. **Feed and publisher servers** to refresh feeds, retrieve icons, and load article images. If a feed does not provide sufficient content and you open an article, PaperRss may request the publicly accessible article page and extract readable content locally. The publisher will ordinarily receive your IP address, request time, and request headers.
-2. **FreshRSS or compatible services** to synchronize subscriptions, entries, and reading state. Those services process data under their own privacy policies.
+2. **FreshRSS / Miniflux or compatible services** to synchronize subscriptions, entries, and reading state. Those services process data under their own privacy policies.
 3. **Your selected AI provider**, only after you configure an endpoint and invoke an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, your question, custom prompt, and target language. The provider processes this data under its own terms and privacy policy.
 4. **GitHub/Sparkle update sources** to check for updates and download a version you choose to install.
 
@@ -100,13 +100,13 @@ The PaperRss maintainer does not sell user data. The client sends necessary info
 - 本地数据会保留到用户清除缓存、删除账户、删除相应记录或移除应用数据为止。
 - 第三方服务的数据保留期限由其自身条款决定。
 - 用户可以不配置 AI 服务，并继续使用核心 RSS 阅读功能。
-- 用户可以在设置中清除网页正文缓存，并可随时移除 FreshRSS 等账户。
+- 用户可以在设置中清除网页正文缓存，并可随时移除 FreshRSS / Miniflux 等账户。
 - 任何本地软件都无法承诺绝对安全；请保护 Mac 登录账户、磁盘和 API Key。
 
 - Local data remains until you clear caches, remove an account or related record, or delete the app's data.
 - Third-party retention is governed by the relevant provider's terms.
 - You may use the core RSS reader without configuring an AI service.
-- You may clear extracted article caches in Settings and remove accounts such as FreshRSS at any time.
+- You may clear extracted article caches in Settings and remove accounts such as FreshRSS or Miniflux at any time.
 - No local software can promise absolute security; protect your Mac account, disk, and API keys.
 
 ## 8. 儿童 / Children

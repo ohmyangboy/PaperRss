@@ -618,12 +618,13 @@ public final class AppStore: ObservableObject {
             }) {
                 syncStates[account.id] = state
             }
-            if account.type == AccountType.freshRSS.rawValue {
+            if let accountType = AccountType(rawValue: account.type), let variant = accountType.readerVariant {
                 if account.isEnabled, let urlStr = account.endpointURL, let url = URL(string: urlStr), let username = account.username {
-                    let provider = FreshRSSAccountProvider(
+                    let provider = ReaderAccountProvider(
                         accountID: account.id,
                         endpointURL: url,
                         username: username,
+                        variant: variant,
                         database: libraryDatabase,
                         credentialStore: credentialStore,
                         session: customSession,
@@ -717,15 +718,17 @@ public final class AppStore: ObservableObject {
         cachedEntryLookup.removeAll(keepingCapacity: true)
         accountSyncStates = syncStates
 
-        for account in fetchedAccounts where account.type == AccountType.freshRSS.rawValue {
+        for account in fetchedAccounts {
+            guard let accountType = AccountType(rawValue: account.type), let variant = accountType.readerVariant else { continue }
             if account.isEnabled,
                let urlStr = account.endpointURL,
                let url = URL(string: urlStr),
                let username = account.username {
-                let provider = FreshRSSAccountProvider(
+                let provider = ReaderAccountProvider(
                     accountID: account.id,
                     endpointURL: url,
                     username: username,
+                    variant: variant,
                     database: database,
                     credentialStore: credentialStore,
                     session: customSession,
@@ -1704,7 +1707,7 @@ public final class AppStore: ObservableObject {
         }
     }
 
-    // MARK: - FreshRSS Account Management
+    // MARK: - Remote Reader Account Management
 
     @discardableResult
     public func addFreshRSSAccount(
@@ -1715,12 +1718,36 @@ public final class AppStore: ObservableObject {
         customSession: URLSession = .shared,
         waitForInitialSync: Bool = true
     ) async throws -> AccountRecord {
-        guard let rawURL = URL(string: endpointURLText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let host = rawURL.host, !host.isEmpty else {
+        try await addReaderAccount(
+            accountType: .freshRSS,
+            endpointURLText: endpointURLText,
+            username: username,
+            password: password,
+            displayName: displayName,
+            customSession: customSession,
+            waitForInitialSync: waitForInitialSync
+        )
+    }
+
+    /// 添加 Google Reader API 兼容的远端账号（FreshRSS / Miniflux）。
+    @discardableResult
+    public func addReaderAccount(
+        accountType: AccountType,
+        endpointURLText: String,
+        username: String,
+        password: String,
+        displayName: String? = nil,
+        customSession: URLSession = .shared,
+        waitForInitialSync: Bool = true
+    ) async throws -> AccountRecord {
+        guard let variant = accountType.readerVariant else {
+            throw ReaderAPIError.invalidEndpointURL(endpointURLText)
+        }
+        guard let rawURL = URL(string: endpointURLText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw ReaderAPIError.invalidEndpointURL(endpointURLText)
         }
 
-        let canonicalURL = ReaderAPIClient.canonicalBaseURL(for: rawURL)
+        let canonicalURL = try ReaderServiceVariant.validatedBaseURL(for: rawURL, variant: variant)
         let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUsername.isEmpty else {
             throw ReaderAPIError.invalidCredentials
@@ -1729,14 +1756,15 @@ public final class AppStore: ObservableObject {
             throw ReaderAPIError.invalidCredentials
         }
 
-        // 1. 原子检查是否存在相同 endpoint + username 的启用账号
+        // 1. 原子检查是否存在相同服务、规范化端点与用户名的启用账号
+        let accountTypeRaw = accountType.rawValue
         let isDuplicate = try libraryDatabase.read { db in
             let accounts = try AccountRecord
-                .filter(Column("type") == AccountType.freshRSS.rawValue && Column("is_enabled") == true)
+                .filter(Column("type") == accountTypeRaw && Column("is_enabled") == true)
                 .fetchAll(db)
             return accounts.contains { acc in
                 guard let ep = acc.endpointURL, let un = acc.username else { return false }
-                let canonicalExisting = (URL(string: ep).map { ReaderAPIClient.canonicalBaseURL(for: $0).absoluteString }) ?? ep
+                let canonicalExisting = (URL(string: ep).map { ReaderAPIClient.canonicalBaseURL(for: $0, variant: variant).absoluteString }) ?? ep
                 return canonicalExisting == canonicalURL.absoluteString && un == trimmedUsername
             }
         }
@@ -1744,32 +1772,33 @@ public final class AppStore: ObservableObject {
             throw ReaderAPIError.accountAlreadyExists("\(trimmedUsername) @ \(canonicalURL.host ?? "")")
         }
 
-        let tempAccountID = "freshRSS-\(UUID().uuidString)"
-        let tempCredentialStore = InMemoryCredentialStore(initialCredentials: [tempAccountID: password])
+        let tempAccountID = "\(accountTypeRaw)-\(UUID().uuidString)"
+        let tempCredentialStore = InMemoryCredentialStore(initialCredentials: [tempAccountID: password], scope: variant.credentialScope)
         let validatorClient = ReaderAPIClient(
             endpointURL: canonicalURL,
             username: trimmedUsername,
             accountID: tempAccountID,
             credentialStore: tempCredentialStore,
-            session: customSession
+            session: customSession,
+            variant: variant
         )
 
         // 2. 验证登录凭据
         try await validatorClient.validateCredentials()
 
         // 3. 插入数据库
-        let accountID = "freshRSS-\(UUID().uuidString)"
+        let accountID = "\(accountTypeRaw)-\(UUID().uuidString)"
         let now = Date().timeIntervalSince1970
         let accountTitle: String
         if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             accountTitle = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
-            accountTitle = rawURL.host ?? "FreshRSS"
+            accountTitle = rawURL.host ?? variant.serviceDisplayName
         }
 
         let accountRecord = AccountRecord(
             id: accountID,
-            type: AccountType.freshRSS.rawValue,
+            type: accountTypeRaw,
             displayName: accountTitle,
             endpointURL: canonicalURL.absoluteString,
             username: trimmedUsername,
@@ -1782,7 +1811,7 @@ public final class AppStore: ObservableObject {
 
         // 4. 将密码写入真实 Keychain
         do {
-            try credentialStore.saveFreshRSSPassword(password, accountID: accountID)
+            try credentialStore.savePassword(password, for: variant.credentialScope, accountID: accountID)
         } catch {
             // 如果 Keychain 写入失败，清理数据库账号记录
             try? await accountRepository.deleteAccount(id: accountID)
@@ -1790,10 +1819,11 @@ public final class AppStore: ObservableObject {
         }
 
         // 5. 注册 Provider 到 SyncCoordinator
-        let provider = FreshRSSAccountProvider(
+        let provider = ReaderAccountProvider(
             accountID: accountID,
             endpointURL: canonicalURL,
             username: trimmedUsername,
+            variant: variant,
             database: libraryDatabase,
             credentialStore: credentialStore,
             session: customSession,
@@ -1876,8 +1906,13 @@ public final class AppStore: ObservableObject {
             throw LocalAccountError.feedNotFound
         }
 
+        let accountType = try await accountRepository.fetchAccount(id: accountID).flatMap { AccountType(rawValue: $0.type) }
         await syncCoordinator.unregisterProvider(accountID: accountID)
-        try? credentialStore.deleteFreshRSSCredentials(accountID: accountID)
+        if let scope = accountType?.readerVariant?.credentialScope {
+            try? credentialStore.deleteCredentials(for: scope, accountID: accountID)
+        } else {
+            try? credentialStore.deleteFreshRSSCredentials(accountID: accountID)
+        }
         try await accountRepository.deleteAccount(id: accountID)
         reloadState()
     }

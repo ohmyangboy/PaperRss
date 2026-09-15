@@ -1,15 +1,49 @@
 import Foundation
 import Security
 
+/// 凭据命名空间。
+///
+/// 每个远端服务使用独立的 Keychain service，账号移除与凭据更新互不覆盖。
+/// `freshRSS` 的 Keychain service 保持历史命名，升级后无需重新输入密码。
+public enum CredentialScope: String, Codable, Hashable, Sendable {
+    case freshRSS
+    case miniflux
+
+    public var keychainService: String {
+        switch self {
+        case .freshRSS:
+            // 历史命名空间，不得变更，否则已保存的 FreshRSS 凭据将全部失效。
+            return "com.paperrss.freshrss"
+        case .miniflux:
+            return "com.paperrss.miniflux.googlereader"
+        }
+    }
+}
+
 /// 凭据安全持久化抽象协议。
 ///
 /// 遵循 Architecture Contract (Section 15 / INV-12)。
-/// FreshRSS API Password 必须且仅允许持久化在真实的系统 Keychain 中，
+/// 远端 API Password 必须且仅允许持久化在真实的系统 Keychain 中，
 /// 严禁存入 SQLite、UserDefaults、日志或错误消息。
 public protocol CredentialStore: Sendable {
-    func freshRSSPassword(accountID: String) throws -> String?
-    func saveFreshRSSPassword(_ password: String, accountID: String) throws
-    func deleteFreshRSSCredentials(accountID: String) throws
+    func password(for scope: CredentialScope, accountID: String) throws -> String?
+    func savePassword(_ password: String, for scope: CredentialScope, accountID: String) throws
+    func deleteCredentials(for scope: CredentialScope, accountID: String) throws
+}
+
+/// 旧版 FreshRSS 专用调用入口兼容层；实现委托到通用作用域接口。
+public extension CredentialStore {
+    func freshRSSPassword(accountID: String) throws -> String? {
+        try password(for: .freshRSS, accountID: accountID)
+    }
+
+    func saveFreshRSSPassword(_ password: String, accountID: String) throws {
+        try savePassword(password, for: .freshRSS, accountID: accountID)
+    }
+
+    func deleteFreshRSSCredentials(accountID: String) throws {
+        try deleteCredentials(for: .freshRSS, accountID: accountID)
+    }
 }
 
 public enum KeychainError: LocalizedError, Sendable {
@@ -30,16 +64,12 @@ public enum KeychainError: LocalizedError, Sendable {
 public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable {
     public static let shared = KeychainCredentialStore()
 
-    public let service: String
+    public init() {}
 
-    public init(service: String = "com.paperrss.freshrss") {
-        self.service = service
-    }
-
-    public func freshRSSPassword(accountID: String) throws -> String? {
+    public func password(for scope: CredentialScope, accountID: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: scope.keychainService,
             kSecAttrAccount as String: accountID,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -60,12 +90,12 @@ public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable
         return password
     }
 
-    public func saveFreshRSSPassword(_ password: String, accountID: String) throws {
+    public func savePassword(_ password: String, for scope: CredentialScope, accountID: String) throws {
         guard let data = password.data(using: .utf8) else { return }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: scope.keychainService,
             kSecAttrAccount as String: accountID
         ]
 
@@ -80,7 +110,7 @@ public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable
             newItem[kSecValueData as String] = data
             newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             let addStatus = SecItemAdd(newItem as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
+            if addStatus != errSecSuccess {
                 throw KeychainError.unhandledError(status: addStatus)
             }
         } else if status != errSecSuccess {
@@ -88,10 +118,10 @@ public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable
         }
     }
 
-    public func deleteFreshRSSCredentials(accountID: String) throws {
+    public func deleteCredentials(for scope: CredentialScope, accountID: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: scope.keychainService,
             kSecAttrAccount as String: accountID
         ]
 
@@ -107,25 +137,31 @@ public final class InMemoryCredentialStore: CredentialStore, @unchecked Sendable
     private let lock = NSLock()
     private var storage: [String: String] = [:]
 
-    public init(initialCredentials: [String: String] = [:]) {
-        self.storage = initialCredentials
+    public init(initialCredentials: [String: String] = [:], scope: CredentialScope = .freshRSS) {
+        for (accountID, password) in initialCredentials {
+            storage[Self.storageKey(scope: scope, accountID: accountID)] = password
+        }
     }
 
-    public func freshRSSPassword(accountID: String) throws -> String? {
+    public func password(for scope: CredentialScope, accountID: String) throws -> String? {
         lock.lock()
         defer { lock.unlock() }
-        return storage[accountID]
+        return storage[Self.storageKey(scope: scope, accountID: accountID)]
     }
 
-    public func saveFreshRSSPassword(_ password: String, accountID: String) throws {
+    public func savePassword(_ password: String, for scope: CredentialScope, accountID: String) throws {
         lock.lock()
         defer { lock.unlock() }
-        storage[accountID] = password
+        storage[Self.storageKey(scope: scope, accountID: accountID)] = password
     }
 
-    public func deleteFreshRSSCredentials(accountID: String) throws {
+    public func deleteCredentials(for scope: CredentialScope, accountID: String) throws {
         lock.lock()
         defer { lock.unlock() }
-        storage.removeValue(forKey: accountID)
+        storage.removeValue(forKey: Self.storageKey(scope: scope, accountID: accountID))
+    }
+
+    private static func storageKey(scope: CredentialScope, accountID: String) -> String {
+        "\(scope.rawValue)::\(accountID)"
     }
 }

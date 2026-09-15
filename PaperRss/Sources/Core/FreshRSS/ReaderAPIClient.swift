@@ -9,6 +9,7 @@ public actor ReaderAPIClient {
     public let endpointURL: URL
     public let username: String
     public let accountID: String
+    public let variant: ReaderServiceVariant
     private let credentialStore: CredentialStore
     private let session: URLSession
     private let authenticator: ReaderAPIAuthenticator
@@ -19,11 +20,13 @@ public actor ReaderAPIClient {
         accountID: String,
         credentialStore: CredentialStore,
         session: URLSession = .shared,
-        authenticator: ReaderAPIAuthenticator = ReaderAPIAuthenticator()
+        authenticator: ReaderAPIAuthenticator = ReaderAPIAuthenticator(),
+        variant: ReaderServiceVariant = .freshRSS
     ) {
         self.endpointURL = endpointURL
         self.username = username
         self.accountID = accountID
+        self.variant = variant
         self.credentialStore = credentialStore
         self.session = session
         self.authenticator = authenticator
@@ -31,29 +34,22 @@ public actor ReaderAPIClient {
 
     // MARK: - Canonicalization
 
-    /// 统一规范化用户输入的 FreshRSS 地址为正确的 Google Reader API 根地址。
-    public static func canonicalBaseURL(for rawURL: URL) -> URL {
-        var urlString = rawURL.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
-        while urlString.hasSuffix("/") {
-            urlString.removeLast()
-        }
-
-        if urlString.hasSuffix("/api/greader.php") || urlString.hasSuffix("/p/api/greader.php") {
-            return URL(string: urlString) ?? rawURL
-        }
-
-        let canonicalString = "\(urlString)/api/greader.php"
-        return URL(string: canonicalString) ?? rawURL
+    /// 统一规范化用户输入的服务地址为正确的协议根地址。
+    ///
+    /// - FreshRSS：`<base>/api/greader.php`；
+    /// - Miniflux：部署根地址，不追加 PHP 路径。
+    public static func canonicalBaseURL(for rawURL: URL, variant: ReaderServiceVariant = .freshRSS) -> URL {
+        ReaderServiceVariant.canonicalBaseURL(for: rawURL, variant: variant)
     }
 
     public var canonicalBaseURL: URL {
-        Self.canonicalBaseURL(for: endpointURL)
+        Self.canonicalBaseURL(for: endpointURL, variant: variant)
     }
 
     // MARK: - Authentication Helper
 
     private func getPassword() throws -> String {
-        guard let password = try credentialStore.freshRSSPassword(accountID: accountID), !password.isEmpty else {
+        guard let password = try credentialStore.password(for: variant.credentialScope, accountID: accountID), !password.isEmpty else {
             throw ReaderAPIError.invalidCredentials
         }
         return password
@@ -65,7 +61,8 @@ public actor ReaderAPIClient {
             endpointURL: endpointURL,
             username: username,
             password: password,
-            session: session
+            session: session,
+            variant: variant
         )
     }
 
@@ -85,7 +82,8 @@ public actor ReaderAPIClient {
                 endpointURL: endpointURL,
                 username: username,
                 password: password,
-                session: session
+                session: session,
+                variant: variant
             )
         }
 
@@ -106,9 +104,97 @@ public actor ReaderAPIClient {
                 endpointURL: endpointURL,
                 username: username,
                 password: password,
-                session: session
+                session: session,
+                variant: variant
             )
             let retryReq = requestBuilder(newAuth)
+            let (retryData, retryResp) = try await session.data(for: retryReq)
+            guard let retryHTTP = retryResp as? HTTPURLResponse else {
+                throw ReaderAPIError.networkError("Invalid HTTP response")
+            }
+            if retryHTTP.statusCode == 401 || retryHTTP.statusCode == 403 {
+                throw ReaderAPIError.invalidCredentials
+            }
+            guard (200...299).contains(retryHTTP.statusCode) else {
+                let snippet = String(data: retryData.prefix(200), encoding: .utf8)
+                throw ReaderAPIError.httpError(statusCode: retryHTTP.statusCode, bodySnippet: snippet)
+            }
+            return (retryData, retryHTTP)
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw ReaderAPIError.invalidCredentials
+            }
+            let snippet = String(data: data.prefix(200), encoding: .utf8)
+            throw ReaderAPIError.httpError(statusCode: httpResponse.statusCode, bodySnippet: snippet)
+        }
+
+        return (data, httpResponse)
+    }
+
+    /// 带 Write Token 的 POST 请求包装器。
+    ///
+    /// Miniflux 要求所有 POST（包括只读的 `stream/items/contents`）在表单中携带 `T`；
+    /// 401/403 重试时会同时失效 Auth Token 与 Write Token，并重新构造包含 `T` 的完整请求体，
+    /// 避免复用过期 write token 导致持续 401。
+    private func performWriteRequest(
+        _ requestBuilder: @Sendable (String, String) -> URLRequest,
+        allowRetryOnAuthError: Bool = true
+    ) async throws -> (Data, HTTPURLResponse) {
+        let password = try getPassword()
+
+        func makeRequest(authToken: String, writeToken: String) -> URLRequest {
+            var request = requestBuilder(authToken, writeToken)
+            if request.timeoutInterval <= 0 {
+                request.timeoutInterval = 30
+            }
+            return request
+        }
+
+        let authToken: String
+        if let current = await authenticator.currentAuthToken() {
+            authToken = current
+        } else {
+            authToken = try await authenticator.login(
+                endpointURL: endpointURL,
+                username: username,
+                password: password,
+                session: session,
+                variant: variant
+            )
+        }
+        let writeToken = try await authenticator.ensureWriteToken(
+            endpointURL: endpointURL,
+            username: username,
+            password: password,
+            session: session,
+            variant: variant
+        )
+
+        let (data, response) = try await session.data(for: makeRequest(authToken: authToken, writeToken: writeToken))
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ReaderAPIError.networkError("Invalid HTTP response")
+        }
+
+        if (httpResponse.statusCode == 401 || httpResponse.statusCode == 403) && allowRetryOnAuthError {
+            // Auth Token 与 Write Token 一并失效，重新登录并重建请求体
+            await authenticator.invalidateAuth()
+            let newAuth = try await authenticator.login(
+                endpointURL: endpointURL,
+                username: username,
+                password: password,
+                session: session,
+                variant: variant
+            )
+            let newWriteToken = try await authenticator.ensureWriteToken(
+                endpointURL: endpointURL,
+                username: username,
+                password: password,
+                session: session,
+                variant: variant
+            )
+            let retryReq = makeRequest(authToken: newAuth, writeToken: newWriteToken)
             let (retryData, retryResp) = try await session.data(for: retryReq)
             guard let retryHTTP = retryResp as? HTTPURLResponse else {
                 throw ReaderAPIError.networkError("Invalid HTTP response")
@@ -385,6 +471,75 @@ public actor ReaderAPIClient {
         return Array(set.ids)
     }
 
+    // MARK: - Reading List Enumeration (Miniflux-compatible)
+
+    /// 全量枚举指定 stream 的文章 ID（按服务端返回顺序，跨页去重）。
+    ///
+    /// 不使用 `ot` 时间过滤：`ot` 按发布时间过滤而非服务端修改序列，
+    /// 不能作为可靠增量游标；全量 ID 枚举成本低、无遗漏，正文按本地差集下载。
+    public func fetchAllItemIDs(inStream streamID: String, pageSize: Int = 1000) async throws -> [String] {
+        var orderedIDs: [String] = []
+        var seenKeys = Set<String>()
+        var continuation: String?
+        var visitedContinuations = Set<String>()
+
+        repeat {
+            try Task.checkCancellation()
+
+            let url = canonicalBaseURL
+                .appendingPathComponent("reader/api/0/stream/items/ids")
+
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            var queryItems = [
+                URLQueryItem(name: "s", value: streamID),
+                URLQueryItem(name: "n", value: String(pageSize)),
+                URLQueryItem(name: "output", value: "json")
+            ]
+            if let continuation, !continuation.isEmpty {
+                queryItems.append(URLQueryItem(name: "c", value: continuation))
+            }
+            components?.queryItems = queryItems
+
+            guard let requestURL = components?.url else {
+                throw ReaderAPIError.invalidEndpointURL(url.absoluteString)
+            }
+
+            let (data, _) = try await performRequest { authToken in
+                var request = URLRequest(url: requestURL)
+                request.httpMethod = "GET"
+                request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
+                return request
+            }
+
+            let page: ReaderAPIStreamItemIDsResponse
+            do {
+                page = try JSONDecoder().decode(ReaderAPIStreamItemIDsResponse.self, from: data)
+            } catch {
+                throw ReaderAPIError.decodingError("stream/items/ids [\(streamID)]: \(error.localizedDescription)")
+            }
+
+            for ref in page.itemRefs ?? [] {
+                let key = ReaderItemIDCodec.canonicalComparisonKey(for: ref.id)
+                guard !key.isEmpty else { continue }
+                if seenKeys.insert(key).inserted {
+                    orderedIDs.append(ref.id)
+                }
+            }
+
+            continuation = page.continuation.flatMap { $0.isEmpty ? nil : $0 }
+            if let continuation, !visitedContinuations.insert(continuation).inserted {
+                throw ReaderAPIError.decodingError("Repeated stream continuation [\(streamID)]")
+            }
+        } while continuation != nil
+
+        return orderedIDs
+    }
+
+    /// 全量枚举 reading-list 文章 ID。
+    public func fetchAllReadingListItemIDs(pageSize: Int = 1000) async throws -> [String] {
+        try await fetchAllItemIDs(inStream: "user/-/state/com.google/reading-list", pageSize: pageSize)
+    }
+
     // MARK: - Stream Item Contents
 
     /// 批量拉取指定 item IDs 的完整文章内容 (`/reader/api/0/stream/items/contents`)
@@ -409,17 +564,33 @@ public actor ReaderAPIClient {
                 throw ReaderAPIError.invalidEndpointURL(url.absoluteString)
             }
 
-            let (data, _) = try await performRequest { authToken in
+            @Sendable func makeRequest(requestURL: URL, chunk: [String], authToken: String, writeToken: String?) -> URLRequest {
                 var request = URLRequest(url: requestURL)
                 request.httpMethod = "POST"
                 request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-                let queryItems: [URLQueryItem] = chunk.map { URLQueryItem(name: "i", value: $0) }
+                var queryItems: [URLQueryItem] = chunk.map { URLQueryItem(name: "i", value: $0) }
+                if let writeToken {
+                    // Miniflux 对所有 POST（含只读的正文请求）强制要求表单 T 参数。
+                    queryItems.append(URLQueryItem(name: "T", value: writeToken))
+                }
                 var bodyComponents = URLComponents()
                 bodyComponents.queryItems = queryItems
                 request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
                 return request
+            }
+
+            let data: Data
+            if variant == .miniflux {
+                (data, _) = try await performWriteRequest { authToken, writeToken in
+                    makeRequest(requestURL: requestURL, chunk: chunk, authToken: authToken, writeToken: writeToken)
+                }
+            } else {
+                // FreshRSS 保持既有协议行为：正文 POST 不依赖 write token。
+                (data, _) = try await performRequest { authToken in
+                    makeRequest(requestURL: requestURL, chunk: chunk, authToken: authToken, writeToken: nil)
+                }
             }
 
             do {
@@ -560,9 +731,7 @@ public actor ReaderAPIClient {
             let url = canonicalBaseURL
                 .appendingPathComponent("reader/api/0/edit-tag")
 
-            let writeToken = try await getWriteToken()
-
-            let (data, response) = try await performRequest { authToken in
+            let (_, _) = try await performWriteRequest { authToken, writeToken in
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
@@ -582,22 +751,7 @@ public actor ReaderAPIClient {
                 request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
                 return request
             }
-
-            guard response.statusCode == 200 else {
-                let snippet = String(data: data.prefix(200), encoding: .utf8)
-                throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
-            }
         }
-    }
-
-    private func getWriteToken() async throws -> String {
-        let password = try getPassword()
-        return try await authenticator.ensureWriteToken(
-            endpointURL: endpointURL,
-            username: username,
-            password: password,
-            session: session
-        )
     }
 
     // MARK: - Subscription & Folder Management
@@ -605,9 +759,8 @@ public actor ReaderAPIClient {
     /// 快速新增订阅源 (`/reader/api/0/subscription/quickadd`)
     public func quickAddSubscription(url: URL) async throws -> ReaderAPIQuickAddResult {
         let quickAddURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/quickadd")
-        let writeToken = try await getWriteToken()
 
-        let (data, response) = try await performRequest { authToken in
+        let (data, _) = try await performWriteRequest { authToken, writeToken in
             var request = URLRequest(url: quickAddURL)
             request.httpMethod = "POST"
             request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
@@ -620,11 +773,6 @@ public actor ReaderAPIClient {
             ]
             request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
             return request
-        }
-
-        guard response.statusCode == 200 else {
-            let snippet = String(data: data.prefix(200), encoding: .utf8)
-            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
         }
 
         do {
@@ -645,9 +793,8 @@ public actor ReaderAPIClient {
         guard addFolderName != nil || removeFolderName != nil || title != nil else { return }
 
         let editURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/edit")
-        let writeToken = try await getWriteToken()
 
-        let (data, response) = try await performRequest { authToken in
+        let (_, _) = try await performWriteRequest { authToken, writeToken in
             var request = URLRequest(url: editURL)
             request.httpMethod = "POST"
             request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
@@ -673,19 +820,13 @@ public actor ReaderAPIClient {
             request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
             return request
         }
-
-        guard response.statusCode == 200 else {
-            let snippet = String(data: data.prefix(200), encoding: .utf8)
-            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
-        }
     }
 
     /// 退订订阅源 (`/reader/api/0/subscription/edit`)
     public func unsubscribe(streamID: String) async throws {
         let editURL = canonicalBaseURL.appendingPathComponent("reader/api/0/subscription/edit")
-        let writeToken = try await getWriteToken()
 
-        let (data, response) = try await performRequest { authToken in
+        let (_, _) = try await performWriteRequest { authToken, writeToken in
             var request = URLRequest(url: editURL)
             request.httpMethod = "POST"
             request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
@@ -700,19 +841,13 @@ public actor ReaderAPIClient {
             request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
             return request
         }
-
-        guard response.statusCode == 200 else {
-            let snippet = String(data: data.prefix(200), encoding: .utf8)
-            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
-        }
     }
 
     /// 删除/禁用标签分类 (`/reader/api/0/disable-tag`)
     public func disableTag(folderExternalID: String) async throws {
         let disableURL = canonicalBaseURL.appendingPathComponent("reader/api/0/disable-tag")
-        let writeToken = try await getWriteToken()
 
-        let (data, response) = try await performRequest { authToken in
+        let (_, _) = try await performWriteRequest { authToken, writeToken in
             var request = URLRequest(url: disableURL)
             request.httpMethod = "POST"
             request.setValue("GoogleLogin auth=\(authToken)", forHTTPHeaderField: "Authorization")
@@ -725,11 +860,6 @@ public actor ReaderAPIClient {
             ]
             request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
             return request
-        }
-
-        guard response.statusCode == 200 else {
-            let snippet = String(data: data.prefix(200), encoding: .utf8)
-            throw ReaderAPIError.httpError(statusCode: response.statusCode, bodySnippet: snippet)
         }
     }
 }

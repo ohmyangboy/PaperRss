@@ -33,9 +33,10 @@ public actor ReaderAPIAuthenticator {
         endpointURL: URL,
         username: String,
         password: String,
-        session: URLSession
+        session: URLSession,
+        variant: ReaderServiceVariant = .freshRSS
     ) async throws -> String {
-        let loginURL = ReaderAPIClient.canonicalBaseURL(for: endpointURL)
+        let loginURL = ReaderAPIClient.canonicalBaseURL(for: endpointURL, variant: variant)
             .appendingPathComponent("accounts/ClientLogin")
 
         var request = URLRequest(url: loginURL)
@@ -107,7 +108,8 @@ public actor ReaderAPIAuthenticator {
         endpointURL: URL,
         username: String,
         password: String,
-        session: URLSession
+        session: URLSession,
+        variant: ReaderServiceVariant = .freshRSS
     ) async throws -> String {
         if let existing = cachedWriteToken {
             return existing
@@ -121,11 +123,12 @@ public actor ReaderAPIAuthenticator {
                 endpointURL: endpointURL,
                 username: username,
                 password: password,
-                session: session
+                session: session,
+                variant: variant
             )
         }
 
-        let tokenURL = ReaderAPIClient.canonicalBaseURL(for: endpointURL)
+        let tokenURL = ReaderAPIClient.canonicalBaseURL(for: endpointURL, variant: variant)
             .appendingPathComponent("reader/api/0/token")
 
         var request = URLRequest(url: tokenURL)
@@ -145,7 +148,8 @@ public actor ReaderAPIAuthenticator {
                 endpointURL: endpointURL,
                 username: username,
                 password: password,
-                session: session
+                session: session,
+                variant: variant
             )
             var retryReq = URLRequest(url: tokenURL)
             retryReq.httpMethod = "GET"

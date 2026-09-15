@@ -1406,8 +1406,8 @@ private struct SidebarView: View {
         }
     }
 
-    private var freshRSSAccounts: [AccountRecord] {
-        store.accounts.filter { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }
+    private var remoteAccounts: [AccountRecord] {
+        store.accounts.filter { AccountType(rawValue: $0.type)?.isRemote == true && $0.isEnabled }
     }
 
     var body: some View {
@@ -1416,8 +1416,8 @@ private struct SidebarView: View {
             if store.isAccountEnabled("local-default") {
                 localSubscriptionsSection
             }
-            ForEach(freshRSSAccounts) { account in
-                freshRSSAccountSection(account)
+            ForEach(remoteAccounts) { account in
+                remoteAccountSection(account)
             }
         }
         .listStyle(.sidebar)
@@ -1426,14 +1426,14 @@ private struct SidebarView: View {
         .scrollIndicators(.never, axes: .vertical)
         #endif
         .overlay {
-            let hasAnyAccount = store.isAccountEnabled("local-default") || !freshRSSAccounts.isEmpty
+            let hasAnyAccount = store.isAccountEnabled("local-default") || !remoteAccounts.isEmpty
             if !hasAnyAccount {
                 PaperEmptyState(
                     title: I18N.localized("未启用任何账号"),
-                    description: I18N.localized("请前往“设置 -> 账号”启用本地或 FreshRSS 订阅账号。"),
+                    description: I18N.localized("请前往“设置 -> 账号”启用本地或远端订阅账号。"),
                     systemImage: "person.crop.circle.badge.xmark"
                 )
-            } else if (store.isAccountEnabled("local-default") ? store.feeds.isEmpty : true) && freshRSSAccounts.allSatisfy({ store.rootFeeds(for: $0.id).isEmpty && store.folders(for: $0.id).isEmpty }) {
+            } else if (store.isAccountEnabled("local-default") ? store.feeds.isEmpty : true) && remoteAccounts.allSatisfy({ store.rootFeeds(for: $0.id).isEmpty && store.folders(for: $0.id).isEmpty }) {
                 ColumnEmptyPrompt(
                     title: I18N.shared.localized("添加或导入 Feed", "Add or import Feed"),
                     isFeed: true,
@@ -1658,7 +1658,7 @@ private struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func freshRSSAccountSection(_ account: AccountRecord) -> some View {
+    private func remoteAccountSection(_ account: AccountRecord) -> some View {
         Section {
             DisclosureGroup(isExpanded: isAccountExpandedBinding(accountID: account.id)) {
                 ForEach(visibleFeeds(store.rootFeeds(for: account.id), accountID: account.id)) { feed in
@@ -3395,8 +3395,8 @@ private struct AddFeedSheet: View {
             initial = initialDestination
         } else if store.isAccountEnabled("local-default") {
             initial = FeedTargetDestination(accountID: "local-default", folder: nil)
-        } else if let firstFresh = store.accounts.first(where: { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) {
-            initial = FeedTargetDestination(accountID: firstFresh.id, folder: nil)
+        } else if let firstRemote = store.accounts.first(where: { AccountType(rawValue: $0.type)?.isRemote == true && $0.isEnabled }) {
+            initial = FeedTargetDestination(accountID: firstRemote.id, folder: nil)
         } else {
             initial = FeedTargetDestination(accountID: "local-default", folder: nil)
         }
@@ -3502,7 +3502,7 @@ private struct AddFeedSheet: View {
                     }
                 }
 
-                ForEach(store.accounts.filter { $0.type == AccountType.freshRSS.rawValue && $0.isEnabled }) { account in
+                ForEach(store.accounts.filter { AccountType(rawValue: $0.type)?.isRemote == true && $0.isEnabled }) { account in
                     Section(header: Text(account.displayName)) {
                         Text(I18N.shared.localizedFormat("%@ (根目录)", account.displayName)).tag(FeedTargetDestination(accountID: account.id, folder: nil))
                         ForEach(store.folders(for: account.id), id: \.self) { folder in
@@ -3590,8 +3590,17 @@ private struct AddFolderSheet: View {
         store.accounts.filter { $0.isEnabled }
     }
 
+    private var selectedAccountType: AccountType? {
+        store.accounts.first(where: { $0.id == selectedAccountID }).flatMap { AccountType(rawValue: $0.type) }
+    }
+
+    /// Miniflux 无法在不添加订阅的情况下创建空分类。
+    private var selectedAccountSupportsFolderCreation: Bool {
+        selectedAccountType != .miniflux
+    }
+
     private var canSubmit: Bool {
-        !folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedAccountSupportsFolderCreation
     }
 
     var body: some View {
@@ -3624,6 +3633,15 @@ private struct AddFolderSheet: View {
                 Text(I18N.localized("创建后可以将订阅源归类到此文件夹中。"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                if selectedAccountType == .miniflux {
+                    Text(I18N.localized(
+                        "Miniflux 不支持创建空文件夹。请在添加订阅时填写文件夹名称，服务端会自动创建。",
+                        englishFallback: "Miniflux cannot create empty folders. Enter a folder name when adding a feed and the server creates it automatically."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                }
 
                 Spacer()
             }

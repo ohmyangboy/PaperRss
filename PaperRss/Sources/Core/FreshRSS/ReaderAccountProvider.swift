@@ -1,12 +1,14 @@
 import Foundation
 import GRDB
 
-/// FreshRSS 账号提供者。
+/// Google Reader API 远端账号提供者（FreshRSS / Miniflux）。
 ///
 /// 遵循 Architecture Contract (Section 7.2, 16, 17 / INV-04, INV-06, INV-07, INV-08, INV-11)。
-/// 实现基于 Google Reader API 的订阅拉取、文章增量同步、双向状态调和与离线突变出站。
-public actor FreshRSSAccountProvider: AccountProvider {
+/// 实现基于 Google Reader API 的订阅拉取、文章同步、双向状态调和与离线突变出站；
+/// 服务差异（端点、文章发现策略、分类来源、删除语义）由 `variant` 分支处理。
+public actor ReaderAccountProvider: AccountProvider {
     public let accountID: String
+    public let variant: ReaderServiceVariant
     private let database: LibraryDatabase
     private let credentialStore: CredentialStore
     private let apiClient: ReaderAPIClient
@@ -19,6 +21,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
         accountID: String,
         endpointURL: URL,
         username: String,
+        variant: ReaderServiceVariant = .freshRSS,
         database: LibraryDatabase,
         credentialStore: CredentialStore,
         session: URLSession? = nil,
@@ -26,6 +29,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
     ) {
         self.onProgress = onProgress
         self.accountID = accountID
+        self.variant = variant
         self.database = database
         self.credentialStore = credentialStore
         self.apiClient = ReaderAPIClient(
@@ -33,7 +37,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
             username: username,
             accountID: accountID,
             credentialStore: credentialStore,
-            session: session ?? .shared
+            session: session ?? .shared,
+            variant: variant
         )
         self.outboxProcessor = ArticleStateOutboxProcessor(
             accountID: accountID,
@@ -51,6 +56,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
     ) {
         self.onProgress = onProgress
         self.accountID = accountID
+        self.variant = apiClient.variant
         self.database = database
         self.credentialStore = credentialStore
         self.apiClient = apiClient
@@ -104,7 +110,18 @@ public actor FreshRSSAccountProvider: AccountProvider {
     public func addFeed(url: URL, title: String?, folder: String?) async throws -> Feed {
         // 1. 调用远端 Google Reader API 进行订阅
         let quickAddResult = try await apiClient.quickAddSubscription(url: url)
-        let resolvedStreamID = quickAddResult.streamId ?? "feed/\(url.absoluteString)"
+        let resolvedStreamID: String
+        if let streamID = quickAddResult.streamId?.trimmingCharacters(in: .whitespacesAndNewlines), !streamID.isEmpty {
+            resolvedStreamID = streamID
+        } else if variant == .miniflux {
+            // Miniflux 必须使用服务端返回的真实订阅标识，禁止伪造 feed/<url> 身份。
+            if (quickAddResult.numResults ?? 0) <= 0 {
+                throw ReaderAPIError.unsupportedOperation("未找到该地址对应的订阅源。")
+            }
+            throw ReaderAPIError.unsupportedOperation("服务端未返回订阅标识，无法确认订阅结果。")
+        } else {
+            resolvedStreamID = "feed/\(url.absoluteString)"
+        }
         let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
 
@@ -129,7 +146,7 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
         let effectiveTitle = cleanTitle ?? remoteTitle ?? (url.host ?? url.absoluteString)
         let now = Date().timeIntervalSince1970
-        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL)
+        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL, variant: variant)
 
         var resolvedIcon: String? = nil
         if let raw = remoteIconURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
@@ -162,7 +179,9 @@ public actor FreshRSSAccountProvider: AccountProvider {
                     let folderRecord = FolderRecord(
                         id: folderID,
                         accountID: self.accountID,
-                        externalID: "user/-/label/\(cleanFolder)",
+                        // Miniflux 的分类标识由服务端生成（user/<id>/label/...），
+                        // 本地先以名称占位，待订阅同步按名称认领远端 external_id。
+                        externalID: variant == .miniflux ? nil : "user/-/label/\(cleanFolder)",
                         name: cleanFolder,
                         sortOrder: maxSort + 1,
                         isDeleted: false,
@@ -236,9 +255,17 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
         // 4. 抓取新订阅源的初始文章（对标 NetNewsWire initialFeedDownload）
         do {
-            let (items, _) = try await apiClient.fetchStreamContentsPage(streamID: resolvedStreamID, limit: 50)
-            if !items.isEmpty {
-                try persistArticles(items, fallbackFeedID: feedModel.id.uuidString)
+            let initialItems: [ReaderAPIStreamItem]
+            if variant == .miniflux {
+                // Miniflux 不实现 GET stream/contents：按 feed stream 枚举 ID 后批量取正文。
+                let feedIDs = try await apiClient.fetchAllItemIDs(inStream: resolvedStreamID, pageSize: 200)
+                initialItems = try await apiClient.fetchItemContents(itemIDs: Array(feedIDs.prefix(50)))
+            } else {
+                let (items, _) = try await apiClient.fetchStreamContentsPage(streamID: resolvedStreamID, limit: 50)
+                initialItems = items
+            }
+            if !initialItems.isEmpty {
+                try persistArticles(initialItems, fallbackFeedID: feedModel.id.uuidString)
             }
         } catch {
             // 抓取初始文章若遇异常不影响订阅添加成功，后续刷新仍可补齐
@@ -273,6 +300,11 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else {
             throw LocalAccountError.feedNotFound
+        }
+
+        if variant == .miniflux {
+            // Miniflux 的 API 无法表达「无订阅的空分类」；添加订阅时指定分类会自动创建。
+            throw ReaderAPIError.unsupportedOperation("Miniflux 不支持创建空分类；在添加订阅时填写分类名称即可自动创建。")
         }
 
         let now = Date().timeIntervalSince1970
@@ -335,6 +367,25 @@ public actor FreshRSSAccountProvider: AccountProvider {
 
         guard let folder = info.folder else { return }
 
+        if variant == .miniflux {
+            // Miniflux 的 disable-tag 只移除分类并把订阅重新归入剩余分类，绝不退订订阅。
+            if let folderExtID = folder.externalID, !folderExtID.isEmpty {
+                try await apiClient.disableTag(folderExternalID: folderExtID)
+                // 远端成功后以服务端结果为准刷新本地映射（订阅保留）。
+                try await syncSubscriptionsAndFolders()
+            } else {
+                // 从未同步到远端的本地分类：仅本地软删除。
+                let now = Date().timeIntervalSince1970
+                try database.write { db in
+                    var mutFolder = folder
+                    mutFolder.isDeleted = true
+                    mutFolder.updatedAt = now
+                    try mutFolder.save(db)
+                }
+            }
+            return
+        }
+
         // 2. 远端级联退订该文件夹下的所有 feeds
         for feed in info.feeds {
             if let extID = feed.externalID, !extID.isEmpty {
@@ -370,11 +421,28 @@ public actor FreshRSSAccountProvider: AccountProvider {
     public func syncSubscriptionsAndFolders() async throws {
         let subscriptions = try await apiClient.fetchSubscriptions()
         let now = Date().timeIntervalSince1970
-        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL)
+        let iconBaseURL = ReaderAPIClient.canonicalBaseURL(for: apiClient.endpointURL, variant: variant)
+
+        // Miniflux 的空分类只能通过 tag/list 读取；先合并标签来源，再以订阅 categories 覆盖权威名称。
+        var tagFolderNames: [String: String] = [:]
+        if variant == .miniflux {
+            let tags = try await apiClient.fetchTags()
+            for tag in tags {
+                guard tag.id.contains("/label/") else { continue }
+                let label = tag.label?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+                let name = label ?? Self.extractFolderName(from: tag.id).nonEmpty
+                guard let name, !name.isEmpty else { continue }
+                tagFolderNames[tag.id] = name
+            }
+        }
 
         try database.write { db in
-            // 1. 仅以 subscriptions[].categories 作为权威的订阅文件夹来源
+            // 1. subscriptions[].categories 与（Miniflux）tag/list 共同构成权威的订阅文件夹来源
             var categoryByExternalID: [String: String] = [:]
+
+            for (extID, name) in tagFolderNames {
+                categoryByExternalID[extID] = name
+            }
 
             for sub in subscriptions {
                 for cat in sub.categories {
@@ -565,6 +633,15 @@ public actor FreshRSSAccountProvider: AccountProvider {
         let remoteUnreadSet: ReaderItemIDSet? = try await apiClient.fetchAllUnreadItemIDs()
         let remoteStarredSet: ReaderItemIDSet? = try await apiClient.fetchAllStarredItemIDs()
 
+        if variant == .miniflux {
+            // Miniflux 不实现 GET stream/contents：全量 ID 枚举 + 本地差集 + 分批 POST 正文。
+            // 每轮刷新都做完整枚举，reconcileHistory 参数对 Miniflux 无额外语义。
+            return try await syncMinifluxArticlesAndStates(
+                remoteUnreadSet: remoteUnreadSet,
+                remoteStarredSet: remoteStarredSet
+            )
+        }
+
         // 手动刷新核对完整历史 ID，修复旧版本遗漏的普通已读文章；正文只补差集。
         var historyIDs = Set<String>()
         if reconcileHistory {
@@ -690,6 +767,64 @@ public actor FreshRSSAccountProvider: AccountProvider {
                             processedKeys: processedKeys, reconcile: true)
         if let hydrationError { throw hydrationError }
         return reachedBoundary
+    }
+
+    /// Miniflux 文章同步：全量 ID 枚举 + 本地正文差集 + 分批 POST 正文 + 字段级状态调和。
+    ///
+    /// - 不使用 `ot` 作为增量游标（它按发布时间过滤，会漏掉后入库的旧文章）；
+    /// - 服务端返回顺序（通常新→旧）即下载顺序，保证先可读最新内容；
+    /// - 每批独立事务落库，失败不回滚已成功批次，取消安全。
+    private func syncMinifluxArticlesAndStates(
+        remoteUnreadSet: ReaderItemIDSet?,
+        remoteStarredSet: ReaderItemIDSet?
+    ) async throws -> Bool {
+        // 1. 全量枚举 reading-list 文章 ID
+        let allStreamIDs = try await apiClient.fetchAllReadingListItemIDs()
+
+        // 2. 本地已有正文的条目集合（身份存在但缺正文的条目也要重新下载）
+        let completeExternalIDs: [String] = try database.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT i.external_id FROM items i
+                INNER JOIN articles a ON a.item_id = i.id
+                WHERE i.account_id = ? AND i.external_id IS NOT NULL
+                """, arguments: [self.accountID])
+        }
+        let completeKeys = ReaderItemIDCodec.buildCanonicalKeySet(from: Set(completeExternalIDs))
+
+        // 3. 计算待下载集合：reading-list ∪ 未读 ∪ 星标 中缺少正文的条目，保留服务端顺序
+        let specialIDs = (remoteUnreadSet?.ids ?? []).union(remoteStarredSet?.ids ?? [])
+        var plannedIDs: [String] = []
+        var plannedKeys = Set<String>()
+        for rawID in allStreamIDs + specialIDs.sorted() {
+            let key = ReaderItemIDCodec.canonicalComparisonKey(for: rawID)
+            guard !key.isEmpty, !completeKeys.contains(key) else { continue }
+            if plannedKeys.insert(key).inserted {
+                plannedIDs.append(rawID)
+            }
+        }
+
+        plannedDownloadKeys = plannedKeys
+        completedDownloadKeys.removeAll(keepingCapacity: true)
+        await onProgress?(AccountRefreshProgress(completed: 0, total: plannedIDs.count))
+
+        // 4. 分批下载正文并独立事务落库
+        let batchSize = 50
+        for start in stride(from: 0, to: plannedIDs.count, by: batchSize) {
+            try Task.checkCancellation()
+            let chunk = Array(plannedIDs[start..<min(start + batchSize, plannedIDs.count)])
+            let batch = try await apiClient.fetchItemContents(itemIDs: chunk)
+            try persistArticles(batch)
+            completedDownloadKeys.formUnion(batch.map { ReaderItemIDCodec.canonicalComparisonKey(for: $0.id) })
+            await onProgress?(AccountRefreshProgress(completed: completedDownloadKeys.count, total: plannedIDs.count))
+        }
+
+        // 5. 对未参与本轮下载的本地条目做字段级状态调和（pending 本地修改受保护）
+        await onProgress?(AccountRefreshProgress(completed: completedDownloadKeys.count, total: plannedIDs.count, phase: .reconciling))
+        try persistArticles([], remoteUnreadSet: remoteUnreadSet, remoteStarredSet: remoteStarredSet,
+                            processedKeys: plannedKeys, reconcile: true)
+
+        // 全量枚举与正文下载均已完成，允许推进同步完成时间。
+        return true
     }
 
     private func publishDownloadedProgress(_ items: [ReaderAPIStreamItem]) async {
@@ -936,8 +1071,8 @@ public actor FreshRSSAccountProvider: AccountProvider {
         if categoryID.contains("user/-/state/") || categoryID.contains("/state/com.google/") || categoryID.contains("org.freshrss") {
             return ""
         }
-        let labelPrefix = "user/-/label/"
-        if let range = categoryID.range(of: labelPrefix) {
+        // FreshRSS 使用 user/-/label/X；Miniflux 使用 user/<id>/label/X，统一按 /label/ 标记解析。
+        if let range = categoryID.range(of: "/label/") {
             let label = String(categoryID[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !label.isEmpty { return label }
         }
@@ -1007,3 +1142,6 @@ public actor FreshRSSAccountProvider: AccountProvider {
         }
     }
 }
+
+/// 兼容旧调用入口：默认使用 FreshRSS 服务预设的共享 Reader 账号 Provider。
+public typealias FreshRSSAccountProvider = ReaderAccountProvider

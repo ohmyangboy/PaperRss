@@ -56,10 +56,16 @@ public struct ReaderAPISubscriptionListResponse: Codable, Sendable {
 public struct ReaderAPITag: Codable, Sendable, Equatable {
     public let id: String
     public let sortid: String?
+    /// Miniflux `tag/list` 返回的分类展示名；FreshRSS 可能为空。
+    public let label: String?
+    /// Miniflux 返回的分类类型（例如 `folder`）；FreshRSS 可能为空。
+    public let type: String?
 
-    public init(id: String, sortid: String? = nil) {
+    public init(id: String, sortid: String? = nil, label: String? = nil, type: String? = nil) {
         self.id = id
         self.sortid = sortid
+        self.label = label
+        self.type = type
     }
 }
 

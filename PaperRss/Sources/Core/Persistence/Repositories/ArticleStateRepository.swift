@@ -42,7 +42,7 @@ public final class ArticleStateRepository: Sendable {
             try newState.save(db)
         }
 
-        // 检查所属账号类型，若为 remote (freshRSS) 账号，同事务内写入/更新 Outbox
+        // 检查所属账号类型是否为远端同步账号，若是同事务内写入/更新 Outbox
         if let row = try Row.fetchOne(db, sql: """
             SELECT a.id AS account_id, a.type AS account_type
             FROM items i
@@ -51,7 +51,7 @@ public final class ArticleStateRepository: Sendable {
         """, arguments: [itemID]) {
             let accountID: String = row["account_id"]
             let accountType: String = row["account_type"]
-            if accountType == AccountType.freshRSS.rawValue {
+            if AccountType(rawValue: accountType)?.syncsRemoteArticleStates == true {
                 if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "read", in: db) {
                     existingOutbox.desiredValue = isRead
                     existingOutbox.revision += 1
@@ -100,7 +100,7 @@ public final class ArticleStateRepository: Sendable {
             try newState.save(db)
         }
 
-        // 检查所属账号类型，若为 remote (freshRSS) 账号，同事务内写入/更新 Outbox
+        // 检查所属账号类型是否为远端同步账号，若是同事务内写入/更新 Outbox
         if let row = try Row.fetchOne(db, sql: """
             SELECT a.id AS account_id, a.type AS account_type
             FROM items i
@@ -109,7 +109,7 @@ public final class ArticleStateRepository: Sendable {
         """, arguments: [itemID]) {
             let accountID: String = row["account_id"]
             let accountType: String = row["account_type"]
-            if accountType == AccountType.freshRSS.rawValue {
+            if AccountType(rawValue: accountType)?.syncsRemoteArticleStates == true {
                 if var existingOutbox = try fetchOutboxRecord(accountID: accountID, itemID: itemID, stateKey: "starred", in: db) {
                     existingOutbox.desiredValue = isStarred
                     existingOutbox.revision += 1
@@ -209,13 +209,13 @@ public final class ArticleStateRepository: Sendable {
         """
         try db.execute(sql: updateSql, arguments: StatementArguments(updateArgs))
 
-        // 为所有属于 freshRSS 的 items 在同一事务中原子写入/更新 Outbox
+        // 为所有远端同步账号的 items 在同一事务中原子写入/更新 Outbox
         for row in affectedRows {
             let itemID: String = row["item_id"]
             let itemAccountID: String = row["account_id"]
             let accountType: String = row["account_type"]
 
-            if accountType == AccountType.freshRSS.rawValue {
+            if AccountType(rawValue: accountType)?.syncsRemoteArticleStates == true {
                 if var existingOutbox = try fetchOutboxRecord(accountID: itemAccountID, itemID: itemID, stateKey: "read", in: db) {
                     existingOutbox.desiredValue = true
                     existingOutbox.revision += 1

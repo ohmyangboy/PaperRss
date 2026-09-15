@@ -38,7 +38,7 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 - **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
 - **Feature-routed AI Integration**: Store separate API keys and model catalogs for OpenAI-compatible endpoints, DeepSeek, and Google Gemini; summaries, bilingual reading, and each selection action can use different models without hiding existing artifacts.
-- **Multi-Account Support**: Supports local accounts and FreshRSS server synchronization.
+- **Multi-Account Support**: Supports local accounts and FreshRSS / Miniflux server synchronization.
 
 For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 
@@ -161,7 +161,7 @@ For bugs, feature ideas, and code improvements, please open a [GitHub Issue](htt
 
 ## Privacy, Content, and Third-Party Software
 
-PaperRss is local-first, not completely offline. Subscriptions and extracted article caches are stored locally by default. The client connects directly to relevant third parties when refreshing feeds, synchronizing FreshRSS, loading publisher pages or images, checking for updates, or invoking an AI feature. Depending on the selected AI action, all or part of an article may be sent to the provider, so review that provider's terms before use.
+PaperRss is local-first, not completely offline. Subscriptions and extracted article caches are stored locally by default. The client connects directly to relevant third parties when refreshing feeds, synchronizing FreshRSS / Miniflux, loading publisher pages or images, checking for updates, or invoking an AI feature. Depending on the selected AI action, all or part of an article may be sent to the provider, so review that provider's terms before use.
 
 - [Privacy Policy](PRIVACY.md)
 - [Content and Copyright Notice](CONTENT_NOTICE.md)

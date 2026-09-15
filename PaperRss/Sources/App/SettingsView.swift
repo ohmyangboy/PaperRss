@@ -527,8 +527,8 @@ struct SettingsView: View {
             settingsGroup(
                 I18N.shared.localized("当前账号", "Current Accounts"),
                 info: I18N.shared.localized(
-                    "本地订阅与 FreshRSS 远端订阅相互隔离；禁用账号不会删除本地数据或凭据。",
-                    "Local and FreshRSS subscriptions stay separate. Disabling an account does not delete its data or credentials."
+                    "本地订阅与远端订阅相互隔离；禁用账号不会删除本地数据或凭据。",
+                    "Local and remote subscriptions stay separate. Disabling an account does not delete its data or credentials."
                 )
             ) {
                 // 本地账号
@@ -562,15 +562,15 @@ struct SettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
 
-                // FreshRSS 账号列表
-                let freshRSSAccounts = store.accounts.filter { $0.type == AccountType.freshRSS.rawValue }
-                ForEach(freshRSSAccounts, id: \.id) { account in
+                // 远端账号列表（FreshRSS / Miniflux）
+                let remoteAccounts = store.accounts.filter { AccountType(rawValue: $0.type)?.isRemote == true }
+                ForEach(remoteAccounts, id: \.id) { account in
                     Divider().padding(.horizontal, 18).opacity(0.18)
 
                     VStack(alignment: .leading, spacing: 10) {
                         // 主行：图标 + 标题与端点 + Toggle
                         HStack(spacing: 12) {
-                            Image(systemName: "server.rack")
+                            Image(systemName: account.type == AccountType.miniflux.rawValue ? "flame" : "server.rack")
                                 .font(.system(size: 20))
                                 .foregroundStyle(settingsAccentColor)
                                 .frame(width: 28)
@@ -660,10 +660,10 @@ struct SettingsView: View {
             }
 
             #if os(macOS)
-            if store.accounts.contains(where: { $0.type == AccountType.freshRSS.rawValue }) {
+            if store.accounts.contains(where: { AccountType(rawValue: $0.type)?.isRemote == true }) {
                 Text(I18N.shared.localized(
-                    "同步时，macOS 可能请求访问已保存的 FreshRSS 密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
-                    "When syncing, macOS may ask to access your saved FreshRSS password. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
+                    "同步时，macOS 可能请求访问已保存的账号密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
+                    "When syncing, macOS may ask to access your saved account passwords. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
                 ))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -719,7 +719,7 @@ struct SettingsView: View {
             Button(I18N.shared.localized("取消"), role: .cancel) {}
         } message: { account in
             Text(I18N.shared.localizedFormat(
-                "移除此账号将清除其在 PaperRss 本地同步的数据与凭据，但不会从 FreshRSS 服务器删除或退订您的 Feed。",
+                "移除此账号将清除其在 PaperRss 本地同步的数据与凭据，但不会从远端服务器删除或退订您的 Feed。",
                 account.displayName
             ))
         }
@@ -3608,13 +3608,22 @@ struct RefreshStatusView: View {
 
 private enum AccountProviderType: String, CaseIterable, Identifiable {
     case freshRSS
+    case miniflux
 
     var id: String { rawValue }
+
+    var accountType: AccountType {
+        switch self {
+        case .freshRSS: return .freshRSS
+        case .miniflux: return .miniflux
+        }
+    }
 
     @MainActor
     var title: String {
         switch self {
         case .freshRSS: return "FreshRSS"
+        case .miniflux: return "Miniflux"
         }
     }
 
@@ -3622,12 +3631,14 @@ private enum AccountProviderType: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .freshRSS: return I18N.shared.localized("兼容 Google Reader API 的自建 RSS 服务", "Google Reader compatible account")
+        case .miniflux: return I18N.shared.localized("自托管极简 RSS 服务（Google Reader 集成）", "Self-hosted minimalist RSS reader (Google Reader integration)")
         }
     }
 
     var icon: String {
         switch self {
         case .freshRSS: return "server.rack"
+        case .miniflux: return "flame"
         }
     }
 }
@@ -3654,10 +3665,7 @@ private struct AddAccountSheet: View {
             Divider()
 
             if let provider = selectedProvider {
-                switch provider {
-                case .freshRSS:
-                    freshRSSFormView
-                }
+                serviceFormView(provider)
             } else {
                 providerChooserView
             }
@@ -3755,17 +3763,28 @@ private struct AddAccountSheet: View {
         }
     }
 
-    private var freshRSSFormView: some View {
+    private func serviceFormView(_ provider: AccountProviderType) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(I18N.shared.localized("输入您的 FreshRSS 服务信息与 API 凭据。密码将安全保存在系统 Keychain 中。"))
+                switch provider {
+                case .freshRSS:
+                    Text(I18N.shared.localized("输入您的 FreshRSS 服务信息与 API 凭据。密码将安全保存在系统 Keychain 中。"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                case .miniflux:
+                    Text(I18N.shared.localized(
+                        "输入您的 Miniflux 服务地址与 Google Reader 凭据。请先在 Miniflux 的「设置 → 集成 → Google Reader」中启用并设置用户名与密码（不是原生 API Key）。",
+                        "Enter your Miniflux server address and Google Reader credentials. First enable and set a username and password under Miniflux “Settings → Integrations → Google Reader” (not the native API key)."
+                    ))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
 
                 #if os(macOS)
                 Text(I18N.shared.localized(
-                    "同步时，macOS 可能请求访问已保存的 FreshRSS 密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
-                    "When syncing, macOS may ask to access your saved FreshRSS password. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
+                    "同步时，macOS 可能请求访问已保存的密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
+                    "When syncing, macOS may ask to access your saved password. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
                 ))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -3777,7 +3796,7 @@ private struct AddAccountSheet: View {
                         Text(I18N.shared.localized("服务器地址"))
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
-                        TextField(I18N.shared.localized("https://rss.example.com 或 /api/greader.php"), text: $freshRSSEndpoint)
+                        TextField(serverAddressPlaceholder(for: provider), text: $freshRSSEndpoint)
                             .textFieldStyle(SettingsInputStyle())
                     }
 
@@ -3785,15 +3804,15 @@ private struct AddAccountSheet: View {
                         Text(I18N.shared.localized("用户名"))
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
-                        TextField(I18N.shared.localized("FreshRSS 用户名"), text: $freshRSSUsername)
+                        TextField(usernamePlaceholder(for: provider), text: $freshRSSUsername)
                             .textFieldStyle(SettingsInputStyle())
                     }
 
                     HStack {
-                        Text(I18N.shared.localized("API 密码"))
+                        Text(provider == .freshRSS ? I18N.shared.localized("API 密码") : I18N.shared.localized("密码"))
                             .font(.system(size: 13, weight: .medium))
                             .frame(width: 80, alignment: .leading)
-                        SecureField(I18N.shared.localized("用户配置中生成的 API 密码"), text: $freshRSSPassword)
+                        SecureField(passwordPlaceholder(for: provider), text: $freshRSSPassword)
                             .textFieldStyle(SettingsInputStyle())
                     }
 
@@ -3825,7 +3844,8 @@ private struct AddAccountSheet: View {
                             isAdding = true
                             errorMessage = nil
                             do {
-                                _ = try await store.addFreshRSSAccount(
+                                _ = try await store.addReaderAccount(
+                                    accountType: provider.accountType,
                                     endpointURLText: freshRSSEndpoint,
                                     username: freshRSSUsername,
                                     password: freshRSSPassword,
@@ -3855,6 +3875,33 @@ private struct AddAccountSheet: View {
                 .padding(.top, 8)
             }
             .padding(20)
+        }
+    }
+
+    private func serverAddressPlaceholder(for provider: AccountProviderType) -> String {
+        switch provider {
+        case .freshRSS:
+            return I18N.shared.localized("https://rss.example.com 或 /api/greader.php")
+        case .miniflux:
+            return I18N.shared.localized("https://rss.example.com（根地址，不含 /reader/api/0）", "https://rss.example.com (root URL, without /reader/api/0)")
+        }
+    }
+
+    private func usernamePlaceholder(for provider: AccountProviderType) -> String {
+        switch provider {
+        case .freshRSS:
+            return I18N.shared.localized("FreshRSS 用户名")
+        case .miniflux:
+            return I18N.shared.localized("Google Reader 用户名", "Google Reader username")
+        }
+    }
+
+    private func passwordPlaceholder(for provider: AccountProviderType) -> String {
+        switch provider {
+        case .freshRSS:
+            return I18N.shared.localized("用户配置中生成的 API 密码")
+        case .miniflux:
+            return I18N.shared.localized("Google Reader 密码", "Google Reader password")
         }
     }
 }

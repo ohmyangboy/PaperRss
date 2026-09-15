@@ -680,6 +680,54 @@ public enum DatabaseMigrations {
                 """)
         }
 
+        // v13: 扩展 accounts.type 约束以支持 Miniflux 账号身份。
+        // SQLite 无法直接修改 CHECK 约束，按官方推荐的表重建流程执行；
+        // GRDB 迁移期间禁用外键并在提交前执行 foreign_key_check。
+        migrator.registerMigration("v13-extend-account-types-miniflux") { db in
+            try extendAccountTypesToMiniflux(db)
+        }
+
         return migrator
+    }
+
+    /// v13 迁移主体：重建 `accounts` 表以扩展账号类型 CHECK 约束。
+    ///
+    /// 独立暴露以便迁移测试在受控数据库上复现升级路径。
+    /// 兼容极早期 Schema：endpoint_url / username / is_enabled 缺失时按默认值补齐。
+    static func extendAccountTypesToMiniflux(_ db: Database) throws {
+        guard try db.tableExists("accounts") else { return }
+
+        let existingColumns = Set(
+            try Row.fetchAll(db, sql: "PRAGMA table_info(accounts);").map { row in row["name"] as String }
+        )
+        let endpointExpr = existingColumns.contains("endpoint_url") ? "endpoint_url" : "NULL"
+        let usernameExpr = existingColumns.contains("username") ? "username" : "NULL"
+        let isEnabledExpr = existingColumns.contains("is_enabled") ? "is_enabled" : "1"
+
+        try db.execute(sql: """
+            CREATE TABLE accounts_new (
+                id              TEXT PRIMARY KEY NOT NULL,
+                type            TEXT NOT NULL,
+                display_name    TEXT NOT NULL,
+                endpoint_url    TEXT,
+                username        TEXT,
+                is_enabled      INTEGER NOT NULL DEFAULT 1,
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL,
+
+                CHECK (type IN ('local', 'freshRSS', 'miniflux'))
+            );
+
+            INSERT INTO accounts_new (id, type, display_name, endpoint_url, username, is_enabled, created_at, updated_at)
+            SELECT id, type, display_name, \(endpointExpr), \(usernameExpr), \(isEnabledExpr), created_at, updated_at
+            FROM accounts;
+
+            DROP TABLE accounts;
+
+            ALTER TABLE accounts_new RENAME TO accounts;
+
+            CREATE INDEX idx_accounts_type
+            ON accounts(type);
+            """)
     }
 }

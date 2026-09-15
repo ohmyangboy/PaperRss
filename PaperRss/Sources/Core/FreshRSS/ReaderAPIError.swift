@@ -15,32 +15,35 @@ public enum ReaderAPIError: LocalizedError, Sendable {
     case networkError(String)
     case requestCancelled
     case accountAlreadyExists(String)
+    case unsupportedOperation(String)
 
     public var errorDescription: String? {
         switch self {
         case let .invalidEndpointURL(url):
-            return I18N.localized("无效的 FreshRSS API 地址：\(url)")
+            return I18N.localized("无效的 API 地址：\(url)")
         case .invalidCredentials:
-            return I18N.localized("FreshRSS 用户名或 API 密码错误。")
+            return I18N.localized("账号或密码错误，请检查所选服务的登录凭据。")
         case .sessionExpired:
-            return I18N.localized("FreshRSS 登录会话已过期。")
+            return I18N.localized("登录会话已过期。")
         case .writeTokenUnavailable:
-            return I18N.localized("无法获取 FreshRSS 写操作 Token。")
+            return I18N.localized("无法获取写操作 Token。")
         case let .httpError(statusCode, bodySnippet):
             if let bodySnippet, !bodySnippet.isEmpty {
-                return I18N.localized("FreshRSS 服务器错误 (HTTP \(statusCode)): \(bodySnippet)")
+                return I18N.localized("服务器错误 (HTTP \(statusCode)): \(bodySnippet)")
             }
-            return I18N.localized("FreshRSS 服务器响应异常 (HTTP \(statusCode))。")
+            return I18N.localized("服务器响应异常 (HTTP \(statusCode))。")
         case let .decodingError(detail):
-            return I18N.localized("FreshRSS 数据解析失败：\(detail)")
+            return I18N.localized("数据解析失败：\(detail)")
         case let .serverError(message):
-            return I18N.localized("FreshRSS 错误：\(message)")
+            return I18N.localized("服务端错误：\(message)")
         case let .networkError(message):
             return I18N.localized("网络连接失败：\(message)")
         case .requestCancelled:
             return I18N.localized("请求已取消。")
         case let .accountAlreadyExists(detail):
-            return I18N.localized("该 FreshRSS 账号已存在：\(detail)")
+            return I18N.localized("该账号已存在：\(detail)")
+        case let .unsupportedOperation(message):
+            return I18N.localized("当前服务不支持该操作：\(message)")
         }
     }
 }

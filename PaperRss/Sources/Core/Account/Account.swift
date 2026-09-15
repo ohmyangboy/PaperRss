@@ -4,6 +4,26 @@ import Foundation
 public enum AccountType: String, Codable, Hashable, Sendable {
     case local
     case freshRSS
+    case miniflux
+
+    /// 是否为远端同步账号（参与远端订阅、文章与状态同步）。
+    public var isRemote: Bool {
+        self != .local
+    }
+
+    /// 是否参与远端文章状态双向同步（本地状态变化写入 outbox 并推送到远端）。
+    public var syncsRemoteArticleStates: Bool {
+        isRemote
+    }
+
+    /// 对应的 Google Reader 协议预设；本地账号为 nil。
+    public var readerVariant: ReaderServiceVariant? {
+        switch self {
+        case .local: return nil
+        case .freshRSS: return .freshRSS
+        case .miniflux: return .miniflux
+        }
+    }
 }
 
 /// 核心 Account 领域模型。
