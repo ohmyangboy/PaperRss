@@ -28,8 +28,8 @@ trap 'exit 143' TERM
 if [ "${1:-}" = "--isolated" ]; then
     ISOLATED_DIRECTORY="${2:-}"
     if [ -z "$ISOLATED_DIRECTORY" ]; then
-        mkdir -p .scratch/tmp
-        OWNED_DIRECTORY="$(mktemp -d "$PWD/.scratch/tmp/dev-home.XXXXXX")"
+        mkdir -p build/tmp
+        OWNED_DIRECTORY="$(mktemp -d "$PWD/build/tmp/dev-home.XXXXXX")"
         ISOLATED_DIRECTORY="$OWNED_DIRECTORY"
     fi
     if [[ "$ISOLATED_DIRECTORY" != /* || ! -d "$ISOLATED_DIRECTORY" ]]; then

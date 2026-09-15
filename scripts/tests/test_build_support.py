@@ -64,9 +64,9 @@ class BuildSupportTests(unittest.TestCase):
         keep.write_text("保留")
         child = self.start("import os,pathlib,sys; pathlib.Path(os.environ['TMPDIR'],'fixture').write_text('test'); sys.exit(7)")
         self.assertEqual(child.wait(timeout=10), 7)
-        self.assertEqual(list((self.root / ".scratch/tmp").iterdir()), [])
+        self.assertEqual(list((self.root / "build/tmp").iterdir()), [])
         self.assertEqual(keep.read_text(), "保留")
-        report = next((self.root / ".scratch/reports").glob("run-*.log"))
+        report = next((self.root / "build/reports").glob("run-*.log"))
         self.assertIn("退出码: 7", report.read_text())
 
     def test_same_lane_builds_are_serialized(self):
@@ -117,7 +117,7 @@ class BuildSupportTests(unittest.TestCase):
             self.assertTrue(ready.exists())
             child.send_signal(signal.SIGTERM)
             self.assertEqual(child.wait(timeout=5), 143)
-            self.assertEqual(list((self.root / ".scratch/tmp").iterdir()), [])
+            self.assertEqual(list((self.root / "build/tmp").iterdir()), [])
             self.assertEqual(self.start("pass").wait(timeout=5), 0)
         finally:
             if child.poll() is None:
@@ -132,7 +132,7 @@ class BuildSupportTests(unittest.TestCase):
         for p in (old, manual, recent):
             p.touch()
         link = self.root / "run-link.log"
-        link.symlink_to(manual)
+        link.symlink_to(manual) 
         stale = time.time() - 31 * 86400
         for p in (old, manual):
             os.utime(p, (stale, stale))
@@ -200,7 +200,7 @@ class BuildSupportTests(unittest.TestCase):
         script, env = self.prepare_shell_fixture("dev.sh", "exit 7\n")
         result = subprocess.run(["bash", str(script), "--isolated"], env=env, capture_output=True)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual(list((self.root / ".scratch/tmp").iterdir()), [])
+        self.assertEqual(list((self.root / "build/tmp").iterdir()), [])
 
     def test_isolated_dev_preserves_caller_home(self):
         script, env = self.prepare_shell_fixture("dev.sh", "exit 7\n")

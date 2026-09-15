@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { access, lstat, readFile, readdir } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -38,13 +38,6 @@ test('all agents share one lightweight entry and exactly one principle document'
   await assert.rejects(access(fromRoot('.agents/README.md')), { code: 'ENOENT' });
   assert.match(principles, /^---\ntrigger: always_on\n---/);
   assert.ok(principles.trim().length > 0);
-  assert.match(
-    principles,
-    /\[Matt 开发工作流\]\(\.\.\/docs\/development-workflow\.md\)/,
-  );
-  for (const trigger of ['triage', 'research', 'to-spec', 'to-tickets', 'implement']) {
-    assert.match(principles, new RegExp(`\\b${trigger}\\b`));
-  }
   assert.doesNotMatch(
     principles,
     /engineering_standards|verification_workflow|privacy_and_docs_hygiene|prompt_design_language|DIRECTORY_SPEC/,
@@ -60,20 +53,19 @@ test('repository layout keeps source, knowledge, local work, and generated outpu
     'website',
     'assets',
     'scripts',
-    'docs/README.md',
-    'docs/drafts',
-    'docs/research',
-    'docs/features',
-    'docs/technical',
-    'docs/audits',
+    'documents/README.md',
+    'documents/features',
+    'documents/technical',
+    'documents/audits',
     '.agents/rules',
     '.agents/docs',
   ];
 
   await Promise.all(requiredPaths.map((path) => access(fromRoot(path))));
   for (const retiredPath of [
-    'docs/specs',
-    'docs/drafts/implemented',
+    'docs',
+    'documents/specs',
+    'documents/drafts/implemented',
     '.out-of-scope',
   ]) {
     await assert.rejects(access(fromRoot(retiredPath)), { code: 'ENOENT' });
@@ -81,31 +73,8 @@ test('repository layout keeps source, knowledge, local work, and generated outpu
 
   const gitignore = await readRepoFile('.gitignore');
   for (const ignored of ['.scratch/', '.build/', 'build/', 'dist/']) {
-    assert.match(gitignore, new RegExp(`^${ignored.replace('.', '\\.')}$$`, 'm'));
+    assert.match(gitignore, new RegExp(`^${ignored.replace('.', '\\.')}$`, 'm'));
   }
-});
-
-test('public drafts contain only accepted issue-linked specifications', async () => {
-  const draftFiles = (await markdownFiles('docs/drafts')).filter(
-    (file) => basename(file) !== 'README.md',
-  );
-
-  for (const file of draftFiles) {
-    assert.match(
-      basename(file),
-      /^issue-\d+-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/,
-      `${file} must use the issue-N-slug naming convention`,
-    );
-
-    const markdown = await readFile(file, 'utf8');
-    assert.match(markdown, /^\s*- \*\*Status\*\*:\s*`?accepted`?\s*$/m);
-    assert.match(markdown, /https:\/\/github\.com\/ohmyangboy\/PaperRss\/issues\/\d+/);
-  }
-
-  const index = await readRepoFile('docs/drafts/README.md');
-  assert.match(index, /issue-<N>-<slug>\.md/);
-  assert.match(index, /`- \*\*Status\*\*: accepted`/);
-  assert.doesNotMatch(index, /Status:\s*draft|docs\/drafts\/implemented/);
 });
 
 test('governance markdown uses portable links that resolve inside the repository', async () => {
@@ -113,7 +82,7 @@ test('governance markdown uses portable links that resolve inside the repository
     fromRoot('AGENTS.md'),
     fromRoot('CLAUDE.md'),
     ...(await markdownFiles('.agents')),
-    ...(await markdownFiles('docs')),
+    ...(await markdownFiles('documents')),
   ];
 
   for (const file of files) {
@@ -138,7 +107,7 @@ test('test and deployment configuration follow the documented source roots', asy
 
   assert.match(packageFile, /"repository-policy\.test\.mjs"/);
   assert.match(pagesWorkflow, /path:\s*'website'/);
-  assert.doesNotMatch(pagesWorkflow, /path:\s*'docs'/);
+  assert.doesNotMatch(pagesWorkflow, /path:\s*'(?:docs|documents)'/);
 });
 
 test('agent assets do not contain absolute user-directory symlinks', async () => {

@@ -409,7 +409,7 @@ Swift actor 在 await 期间仍可能重入；不能仅凭“用了 actor”认�
 | `Tests/FreshRSSIntegrationTests.swift` | 保留并补强旧行为回归 |
 | `Tests/MinifluxCompatibilityTests.swift`（新增） | Miniflux 请求/响应 fixture 与同步用例 |
 | `Tests/ReaderAccountMigrationTests.swift`（新增） | 旧数据库、凭据、账号隔离迁移测试 |
-| `docs/technical/` 与用户接入文档 | 记录支持范围、账号设置、分类与同步限制 |
+| `documents/technical/` 与用户接入文档 | 记录支持范围、账号设置、分类与同步限制 |
 
 移动目录时同步核对 Swift Package 与 Xcode target 的源文件归属，避免 Swift Package 测试通过但 App target 缺少新文件。首个重构 PR 可以暂不搬目录，先保证行为一致，减少无关 diff。
 
@@ -484,7 +484,7 @@ PaperRss 链接均固定到本方案代码基线；Miniflux 官方实现链接�
 - **S8** 凭据接口与 Keychain：[CredentialStore.swift](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/PaperRss/Sources/Core/Account/CredentialStore.swift)
 - **S9** 账号恢复与管理：[AppStore.swift](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/PaperRss/Sources/Core/AppStore.swift)
 - **S10** 设置与侧栏：[SettingsView.swift](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/PaperRss/Sources/App/SettingsView.swift)、[RootView.swift](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/PaperRss/Sources/App/RootView.swift)
-- **S11** 已接受的架构原则：[架构规范](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/docs/technical/paperrss-data-account-architecture-v1.md)
+- **S11** 已接受的架构原则：[架构规范](https://github.com/ohmyangboy/PaperRss/blob/9c04916de3b92d60bf8aa3a7f687bb64127a2445/documents/technical/paperrss-data-account-architecture-v1.md)
 - **S12** Miniflux 协议说明：[官方实现 README](https://github.com/miniflux/v2/blob/main/internal/googlereader/README.md)
 - **S13** Miniflux 实际路由：[handler.go](https://github.com/miniflux/v2/blob/main/internal/googlereader/handler.go)
 - **S14** Miniflux 接入与原生 API：[Google Reader 文档](https://miniflux.app/docs/google_reader.html)、[原生 API 文档](https://miniflux.app/docs/api.html)

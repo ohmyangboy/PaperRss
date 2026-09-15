@@ -2456,7 +2456,7 @@ unread / starred。
 至少阅读：
 
 ```text
-docs/technical/本规范
+documents/technical/本规范
 PaperRss/Sources/Core/AppStore.swift
 PaperRss/Sources/Core/Models.swift
 相关 Repository / Provider
@@ -2466,8 +2466,8 @@ Tests/
 涉及 FreshRSS 时同时阅读：
 
 ```text
-docs/research/freshrss-api-research.md
-docs/research/netnewswire-account-system-and-greader.md
+documents/research/freshrss-api-research.md
+documents/research/netnewswire-account-system-and-greader.md
 ```
 
 ## Rule B — 不擅自重新设计 Scope
@@ -2738,9 +2738,9 @@ converged
 - `PaperRss/Sources/Core/CloudSyncService.swift`
 - `PaperRss/Sources/Core/KeychainStore.swift`
 - `Package.swift`
-- `docs/technical/architecture.md`
-- `docs/research/freshrss-api-research.md`
-- `docs/research/netnewswire-account-system-and-greader.md`
+- `documents/technical/architecture.md`
+- `documents/research/freshrss-api-research.md`
+- `documents/research/netnewswire-account-system-and-greader.md`
 - GitHub Issue #2：FreshRSS 支持
 - GitHub Issue #4：账号体系和底层数据存储架构改进
 

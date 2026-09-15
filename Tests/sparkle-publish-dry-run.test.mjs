@@ -174,7 +174,7 @@ test('publish dry-run 拒绝真实执行开关，不调用 gh/git，也不覆盖
   assert.equal(await readFile(output, 'utf8'), 'sentinel');
 });
 
-test('仓库内 appcast publisher 只写固定 docs 路径，并以 GitHub API 读回内容完成复验', async () => {
+test('仓库内 appcast publisher 只写固定 website 路径，并以 GitHub API 读回内容完成复验', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'paperrss-appcast-publisher-'));
   const fixture = await manifestFixture(parent, { version: '2.0.0', build: 20 });
   const appcast = join(parent, 'stable.xml');

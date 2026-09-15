@@ -46,7 +46,7 @@ const executableArchitectures = (app) => {
     fail(`cannot read architectures from ${executablePath}`);
   }
   if (!output) fail(`no architectures found in ${executablePath}`);
-  return [...new Set(output.split(/\s+/).map((arch) => arch === 'arm64e' ? 'arm64' : arch))]
+  return [...new Set(output.split(/\s+/).map((arch) => (arch.startsWith('arm64e') ? 'arm64' : arch)))]
     .sort((left, right) => left.localeCompare(right));
 };
 

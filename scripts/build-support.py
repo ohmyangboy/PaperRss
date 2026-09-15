@@ -155,7 +155,7 @@ def run_clean(store, keep_days, apply):
 
 def run(command, temporary=False, unlocked=False, lane=DEFAULT_LANE):
     state = ROOT / "build"
-    reports = ROOT / ".scratch" / "reports"
+    reports = state / "reports"
     state.mkdir(exist_ok=True)
     reports.mkdir(parents=True, exist_ok=True)
     locks = []
@@ -173,7 +173,7 @@ def run(command, temporary=False, unlocked=False, lane=DEFAULT_LANE):
         with contextlib.ExitStack() as stack:
             env = os.environ.copy()
             if temporary:
-                parent = ROOT / ".scratch" / "tmp"
+                parent = state / "tmp"
                 parent.mkdir(parents=True, exist_ok=True)
                 directory = stack.enter_context(tempfile.TemporaryDirectory(prefix="run-", dir=parent))
                 env.update(TMPDIR=directory + "/", TMP=directory, TEMP=directory)

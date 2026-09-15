@@ -13,7 +13,7 @@
 - [x] 🚧 自定义外观功能（进行中，支持阅读视图字体与排版自定义） 26.08.23
 - [ ] 公众号 RSS 支持调研
 - [x]  (废弃，可能设计版权问题）支持文档导出功能
-- [ ] V2 跨平台版本（[Tauri 可行性评估与垂直原型](docs/research/tauri-cross-platform-v2-assessment.md)） 26.08.29
+- [ ] V2 跨平台版本（[Tauri 可行性评估与垂直原型](documents/research/tauri-cross-platform-v2-assessment.md)） 26.08.29
 
 ## Bugfix
 

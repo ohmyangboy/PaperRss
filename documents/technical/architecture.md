@@ -4,7 +4,7 @@
 > 核对日期：2026-09-01
 > 适用范围：PaperRss macOS 主产品、共享 Core、仓库内网站与发布链路
 
-本文描述当前仓库已经实现的结构和运行边界。`docs/drafts/` 与 `docs/research/` 中的方案不是实现证据；代码、配置、脚本和运行结果与本文冲突时，以可执行事实为准并同步修正文档。
+本文描述当前仓库已经实现的结构和运行边界。`documents/drafts/` 与 `documents/research/` 中的方案不是实现证据；代码、配置、脚本和运行结果与本文冲突时，以可执行事实为准并同步修正文档。
 
 ## 1. 架构概览
 
@@ -189,7 +189,7 @@ CloudKit 同步代码已经存在，但设置页明确标记为“同步功能�
 
 ## 7. 网站、构建与发布
 
-[`website/`](../../website/) 是独立的原生 HTML、CSS 和 ES Modules 静态站点，含根入口及中英文页面。GitHub Actions 在 `website/**` 或 Pages workflow 变化时，直接上传该目录并部署；`docs/` 不参与官网构建。
+[`website/`](../../website/) 是独立的原生 HTML、CSS 和 ES Modules 静态站点，含根入口及中英文页面。GitHub Actions 在 `website/**` 或 Pages workflow 变化时，直接上传该目录并部署；`documents/` 不参与官网构建。
 
 发布链路由 [`scripts/release.sh`](../../scripts/release.sh) 编排：
 
