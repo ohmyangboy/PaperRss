@@ -195,3 +195,13 @@ PaperRss 基于 [GNU General Public License v3.0](LICENSE) 开源。
 [![PaperRss 赞赏名单预览](https://ohmyangboy.github.io/PaperRss/assets/sponsors-preview.png)](https://ohmyangboy.github.io/blog/posts/paperrss-sponsors/)
 
 预览随网站部署自动更新，点击图片查看最新完整名单（图片缓存可能稍有延迟）。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=ohmyangboy%2Fpaperrss&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ohmyangboy/paperrss&type=date&legend=top-left" />
+ </picture>
+</a>
