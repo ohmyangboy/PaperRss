@@ -31,7 +31,7 @@ Web 测试外层通过 `--unlocked` 不持构建锁，避免内部发布脚本�
 
 构建和测试报告写入 `build/reports/run-*.log`，后续持锁运行清除超过 30 天的报告；不设置后台定时任务。只有本工具创建的普通日志文件参与轮转，符号链接、人工报告、历史研究、截图、补丁与运行数据备份不参与自动删除。需长期保存的报告应复制到命名清晰的人工归档位置。
 
-`./scripts/clean.sh` 默认预览可回收的构建缓存，`--apply` 在持有全部构建锁后执行回收：脚本自有的 DerivedData 根、主 DerivedData 的编译缓存与 `.build` SwiftPM 缓存，只回收超过保留期（默认 7 天，`--keep-days` 可调，0 表示不按时间过滤）没有改动的目录。锁文件、`build/visual-verification` 等素材、`dist/` 发布产物与报告不在回收范围。需要定期回收时由用户自行调度该脚本，不设置后台定时任务。
+`./scripts/clean.sh` 默认预览可回收的构建缓存，`--apply` 在持有全部构建锁后执行回收：脚本自有的 DerivedData 根、主 DerivedData 的编译缓存与 `.build` SwiftPM 缓存。保留期分两档：固定根（脚本自有根、主 DerivedData 与 `.build`）默认 3 天，一次性隔离根（`PAPERRSS_DEV_DERIVED_DATA` 等临时指定的 DerivedData）固定 1 天；`--keep-days` 只调固定根，0 表示不按时间过滤。锁文件、`build/visual-verification` 等素材、`dist/` 发布产物与报告不在回收范围。构建入口（`dev.sh`/`verify.sh`/`test.sh`/`archive.sh`）每次持锁运行时按相同两档规则回收超期缓存，不设置后台定时任务。
 
 发布产物与缓存分开：`dist/release/<tag>` 与 `dist/archive/<日期时间>-<进程号>` 长期保留，不参与自动轮转；`archive.sh` 不再清空 `dist`。归档、dSYM、安装包、签名与发布校验记录须由发布维护者确认后单独处理。
 

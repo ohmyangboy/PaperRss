@@ -147,8 +147,10 @@ test('.github/workflows/deploy-pages.yml configures push, schedule, workflow_dis
   assert.match(workflowContent, /schedule:\s*\n\s*-\s*cron:\s*['"]17 \*\s*\/12 \* \* \*['"]/);
   assert.match(workflowContent, /workflow_dispatch:/);
 
-  // GitHub stars fetch step verifications
-  assert.match(workflowContent, /gh api repos\/ohmyangboy\/PaperRss/);
+  // GitHub stars fetch step verifications（使用 github.repository，fork 取自己的星数）
+  assert.match(workflowContent, /REPO:\s*\$\{\{\s*github\.repository\s*\}\}/);
+  assert.match(workflowContent, /gh api "repos\/\$REPO"/);
+  assert.doesNotMatch(workflowContent, /repos\/ohmyangboy\/PaperRss/);
   assert.match(workflowContent, /stargazers_count/);
   assert.match(workflowContent, /GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
   assert.match(workflowContent, /website\/github-stars\.json/);

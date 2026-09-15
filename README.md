@@ -139,16 +139,28 @@ curl -fsSL https://ohmyangboy.github.io/PaperRss/install.sh | bash -s -- --dry-r
 
 ## 从源码构建
 
-要求：macOS 14.0+、Xcode 15.0+、Swift 5.9+。
+构建环境要求：**Xcode 26.0+**（源码使用 macOS 26 SDK 的 `glassEffect` 等 API）、Swift 6.0 工具链、可安装 Xcode 26 的 macOS 主机（macOS 15.6+）。应用产物本身仍支持在 macOS 14.0+ 运行。
 
 ```bash
 git clone https://github.com/ohmyangboy/PaperRss.git
 cd PaperRss
 swift build -c release
-
-# 或使用 Xcode
-open PaperRss.xcodeproj
 ```
+
+日常开发与验证：
+
+```bash
+./scripts/dev.sh              # 构建并启动 App
+./scripts/dev.sh --isolated   # 临时数据目录隔离运行，不影响正在使用的实例
+./scripts/verify.sh --core    # Swift 单元与回归测试（完整分级见脚本注释）
+```
+
+或在 Xcode 中打开 `PaperRss.xcodeproj`，选择 **PaperRss** scheme 与 **My Mac** 后运行。
+
+二次开发注意：
+
+- 工程提交了原作者的签名 Team（`DEVELOPMENT_TEAM`）。请在 Xcode 的 Signing & Capabilities 中改成自己的 Team；命令行构建也可用 `CODE_SIGNING_ALLOWED=NO` 跳过签名。
+- `build/`、`.build/` 缓存会记录绝对路径；**移动仓库目录后**请先执行 `./scripts/clean.sh --apply`（`./scripts/clean.sh` 为预览）再构建。
 
 ## 赞赏与反馈
 

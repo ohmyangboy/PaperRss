@@ -5,18 +5,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APPLY=false
-KEEP_DAYS=7
+KEEP_DAYS=3
 
 usage() {
     cat <<'EOF'
 用法：
   ./scripts/clean.sh                   预览可回收的构建缓存
   ./scripts/clean.sh --apply           执行回收（持有全部构建锁，不与脚本构建并行）
-  ./scripts/clean.sh --keep-days 14    修改保留期，默认 7 天（0 表示不按时间过滤）
+  ./scripts/clean.sh --keep-days 14    修改固定根保留期，默认 3 天；一次性隔离根固定 1 天（0 表示不按时间过滤）
 
 回收范围：脚本自有的 DerivedData 根（build/isolated、build/archive、build/upgrade、
 build/FreshLaunchTest 等）、build/ 主 DerivedData 的编译缓存、.build SwiftPM 缓存。
-锁文件、build/visual-verification 等素材、dist/ 发布产物与报告不在回收范围。
+构建入口每次持锁运行也会按相同规则回收超期缓存。锁文件、build/visual-verification
+等素材、dist/ 发布产物与报告不在回收范围。
 EOF
 }
 

@@ -137,16 +137,28 @@ To install in your personal Applications folder, use `bash -s -- --app-dir "$HOM
 
 ## Build from Source
 
-Requirements: macOS 14.0+, Xcode 15.0+, Swift 5.9+.
+Toolchain requirements: **Xcode 26.0+** (the sources use macOS 26 SDK APIs such as `glassEffect`), a Swift 6.0 toolchain, and a host that can install Xcode 26 (macOS 15.6+). The built app still runs on macOS 14.0+.
 
 ```bash
 git clone https://github.com/ohmyangboy/PaperRss.git
 cd PaperRss
 swift build -c release
-
-# Or open with Xcode
-open PaperRss.xcodeproj
 ```
+
+Day-to-day development and verification:
+
+```bash
+./scripts/dev.sh              # build and launch the app
+./scripts/dev.sh --isolated   # run with a temporary data directory, leaving your main instance untouched
+./scripts/verify.sh --core    # Swift unit and regression tests (see the script header for all lanes)
+```
+
+Or open `PaperRss.xcodeproj` in Xcode, select the **PaperRss** scheme and **My Mac**, then run.
+
+Notes for forks:
+
+- The project commit includes the original author's signing team (`DEVELOPMENT_TEAM`). Pick your own team under Signing & Capabilities, or pass `CODE_SIGNING_ALLOWED=NO` for command-line builds.
+- The `build/` and `.build/` caches record absolute paths. After **moving the repository folder**, run `./scripts/clean.sh --apply` (use `./scripts/clean.sh` to preview) before building again.
 
 ## Support and Feedback
 

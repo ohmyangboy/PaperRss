@@ -88,11 +88,8 @@ FRESH_TEST_HOME="$(mktemp -d /private/tmp/paperrss-fresh-test.XXXXXX)"
 trap cleanup EXIT INT TERM
 
 if [ -z "${DEVELOPER_DIR:-}" ]; then
-    if [ -d "/Applications/Xcode-beta.app/Contents/Developer" ]; then
-        export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
-    else
-        export DEVELOPER_DIR="$(xcode-select -p)"
-    fi
+    # 跟随系统当前选择的开发者目录，可用 DEVELOPER_DIR 显式覆盖
+    export DEVELOPER_DIR="$(xcode-select -p)"
 fi
 
 if [ "$FRESH_TEST_SKIP_BUILD" = false ]; then

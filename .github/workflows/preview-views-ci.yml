@@ -2,15 +2,31 @@ name: Preview Views Verification
 
 on:
   push:
-    branches: [feature/issue-32-18-image-views]
+    branches: [main]
+    paths:
+      - 'PaperRss/Sources/**'
+      - 'PaperRss/Resources/**'
+      - 'Tests/**'
+      - 'AppTests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'scripts/**'
+      - 'documents/**'
+      - '.agents/**'
+      - '.github/workflows/preview-views-ci.yml'
   pull_request:
     paths:
       - 'PaperRss/Sources/**'
-      - 'PaperRss/Resources/Localization/**'
+      - 'PaperRss/Resources/**'
       - 'Tests/**'
       - 'AppTests/**'
-      - 'scripts/verify.sh'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'scripts/**'
+      - 'documents/**'
+      - '.agents/**'
       - '.github/workflows/preview-views-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,7 +41,7 @@ concurrency:
 
 jobs:
   macos-verification:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
@@ -49,11 +65,18 @@ jobs:
           ref: '0.8.0'
           path: .ci-deps/swift-cmark
           persist-credentials: false
-      - name: Verify immutable dependency revisions and resolve
+      - name: Verify toolchain, immutable dependency revisions and resolve
         run: |
           set -euo pipefail
           xcodebuild -version
           swift --version
+          SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK: $SDK_VERSION"
+          SDK_MAJOR="$(printf '%s' "$SDK_VERSION" | cut -d. -f1)"
+          if [ "$SDK_MAJOR" -lt 26 ]; then
+            echo "::error::需要 macOS 26 及以上 SDK（源码使用 glassEffect 等 API）；当前 $SDK_VERSION"
+            exit 1
+          fi
           test "$(git -C .ci-deps/swift-markdown rev-parse HEAD)" = 3c6f9523da3a1ec2fd829673e472d95b8097a3b8
           test "$(git -C .ci-deps/swift-cmark rev-parse HEAD)" = 924936d0427cb25a61169739a7660230bffa6ea6
           git config --global http.version HTTP/1.1

@@ -35,6 +35,7 @@ jobs:
       - name: Fetch and generate GitHub stars data
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -42,7 +43,7 @@ jobs:
           FETCHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           STARS=""
-          if response=$(gh api repos/ohmyangboy/PaperRss --jq '.stargazers_count' 2>/dev/null); then
+          if response=$(gh api "repos/$REPO" --jq '.stargazers_count' 2>/dev/null); then
             if [ -n "$response" ] && [ "$response" != "null" ]; then
               STARS="$response"
             fi
@@ -89,6 +90,8 @@ jobs:
         uses: actions/deploy-pages@v4
 
   deploy-server:
+    # 仅本仓库执行：fork 没有 PAPERRSS_* 部署凭据，跳过可避免无意义失败
+    if: github.repository == 'ohmyangboy/PaperRss'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

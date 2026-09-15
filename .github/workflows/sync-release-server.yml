@@ -14,11 +14,12 @@ permissions:
 
 jobs:
   sync:
-    # 手动运行允许执行；
-    # Release 自动触发时只处理正式版，不处理 prerelease
+    # 仅本仓库执行（fork 没有 PAPERRSS_* 凭据）；
+    # 手动运行允许执行；Release 自动触发时只处理正式版，不处理 prerelease
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.release.prerelease == false
+      github.repository == 'ohmyangboy/PaperRss' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.release.prerelease == false)
 
     runs-on: ubuntu-latest
     timeout-minutes: 15

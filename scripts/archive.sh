@@ -4,12 +4,8 @@ set -e
 # 确保脚本在项目根目录下运行
 cd "$(dirname "$0")/.."
 
-# 设置开发者目录：优先使用 Xcode-beta.app，若不存在则回退至默认 Xcode
-if [ -d "/Applications/Xcode-beta.app/Contents/Developer" ]; then
-    export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
-else
-    export DEVELOPER_DIR="$(xcode-select -p)"
-fi
+# 设置开发者目录：跟随系统当前选择，可用 DEVELOPER_DIR 显式覆盖
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 
 PROJECT_NAME="PaperRss"
 SCHEME_NAME="PaperRss"

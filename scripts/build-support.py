@@ -46,6 +46,11 @@ DERIVED_DATA_COMPONENTS = (
 # 脚本自有的固定 DerivedData 根，按整目录回收。
 OWNED_BUILD_DIRS = ("isolated", "archive", "upgrade", "FreshLaunchTest")
 
+# 保留期分档：一次性隔离根只服务单次实验，用更短的窗口回收；
+# 脚本自有根与主 DerivedData 由日常构建复用，用主保留期。
+FIXED_KEEP_DAYS = 3
+AD_HOC_KEEP_DAYS = 1
+
 
 def prune_reports(directory, days):
     cutoff = time.time() - days * 86400
@@ -95,43 +100,59 @@ def is_derived_data(path):
     )
 
 
-def collect_reclaimable(store, keep_days):
-    """列出超过保留期、可安全重建的构建缓存；隐藏锁与素材目录不参与。"""
-    cutoff = time.time() - keep_days * 86400
+def lane_targets(store, lanes):
+    """列出已持锁泳道内可安全回收的候选 (path, tier)；tier 决定保留期分档。"""
     targets = []
-    build = store / "build"
-    if build.is_dir():
-        for child in sorted(build.iterdir()):
-            if child.is_symlink() or child.name.startswith("."):
-                continue
-            if child.name in OWNED_BUILD_DIRS or is_derived_data(child):
-                targets.append(child)
-            elif child.name in DERIVED_DATA_COMPONENTS or child.name.endswith(".build"):
-                targets.append(child)
-    swiftpm = store / ".build"
-    if not swiftpm.is_symlink() and (
-        (swiftpm / "workspace-state.json").is_file() or (swiftpm / "checkouts").is_dir()
-    ):
-        targets.append(swiftpm)
+    if "app" in lanes:
+        build = store / "build"
+        if build.is_dir():
+            for child in sorted(build.iterdir()):
+                if child.is_symlink() or child.name.startswith("."):
+                    continue
+                if (child.name in OWNED_BUILD_DIRS or child.name in DERIVED_DATA_COMPONENTS
+                        or child.name.endswith(".build")):
+                    targets.append((child, "fixed"))
+                elif is_derived_data(child):
+                    targets.append((child, "ad_hoc"))
+    if "tests" in lanes:
+        swiftpm = store / ".build"
+        if not swiftpm.is_symlink() and (
+            (swiftpm / "workspace-state.json").is_file() or (swiftpm / "checkouts").is_dir()
+        ):
+            targets.append((swiftpm, "fixed"))
+    return targets
+
+
+def retention_days(keep_days):
+    """一次性根最多用 AD_HOC_KEEP_DAYS 天；keep_days=0 表示不按时间过滤。"""
+    return {"fixed": keep_days, "ad_hoc": min(keep_days, AD_HOC_KEEP_DAYS)}
+
+
+def collect_reclaimable(store, keep_days, lanes=("app", "tests")):
+    """列出超过保留期、可安全重建的构建缓存；隐藏锁与素材目录不参与。"""
+    days = retention_days(keep_days)
+    cutoffs = {tier: time.time() - value * 86400 for tier, value in days.items()}
     eligible = []
-    for target in targets:
+    for target, tier in lane_targets(store, lanes):
         try:
             size, latest = tree_stats(target)
         except OSError:
             continue
-        if latest < cutoff:
+        if latest < cutoffs[tier]:
             eligible.append((target, size, latest))
     return eligible
 
 
 def run_clean(store, keep_days, apply):
+    days = retention_days(keep_days)
+    scope = f"固定根 {days['fixed']} 天、一次性根 {days['ad_hoc']} 天"
     eligible = collect_reclaimable(store, keep_days)
     if not eligible:
-        print(f"没有超过 {keep_days} 天未改动的可回收构建缓存。")
+        print(f"没有超过保留期（{scope}）未改动的可回收构建缓存。")
         return 0
     total = sum(size for _, size, _ in eligible)
     action = "回收" if apply else "可回收"
-    print(f"{action}构建缓存（保留最近 {keep_days} 天改动，共 {human_size(total)}）：")
+    print(f"{action}构建缓存（保留期 {scope}，共 {human_size(total)}）：")
     failed = 0
     for path, size, latest in sorted(eligible, key=lambda item: item[1], reverse=True):
         label = path.relative_to(store)
@@ -153,6 +174,24 @@ def run_clean(store, keep_days, apply):
     return 1 if failed else 0
 
 
+def reclaim_stale_caches(lanes, keep_days=FIXED_KEEP_DAYS):
+    """构建入口运行时顺带回收超期缓存；只回收已持锁泳道，失败不阻断构建。"""
+    try:
+        eligible = collect_reclaimable(ROOT, keep_days, lanes)
+    except OSError:
+        return
+    for path, size, _latest in eligible:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError as error:
+            print(f"⚠️  回收失败 {path.relative_to(ROOT)}: {error}", file=sys.stderr)
+            continue
+        print(f"♻️  已回收超期缓存 {path.relative_to(ROOT)}  {human_size(size)}", flush=True)
+
+
 def run(command, temporary=False, unlocked=False, lane=DEFAULT_LANE):
     state = ROOT / "build"
     reports = state / "reports"
@@ -169,6 +208,8 @@ def run(command, temporary=False, unlocked=False, lane=DEFAULT_LANE):
             fcntl.flock(handle, fcntl.LOCK_EX)
             locks.append(handle)
     try:
+        if not unlocked:
+            reclaim_stale_caches(LANES[lane])
         prune_reports(reports, 30)
         with contextlib.ExitStack() as stack:
             env = os.environ.copy()
@@ -217,8 +258,8 @@ if __name__ == "__main__":
     parser.add_argument("--unlocked", action="store_true", help="仅供会自行调用构建锁的 Web 测试使用")
     parser.add_argument("--clean", action="store_true", help="预览或回收可重建的构建缓存")
     parser.add_argument("--apply", action="store_true", help="与 --clean 搭配，真正执行回收")
-    parser.add_argument("--keep-days", type=int, default=7, metavar="N",
-                        help="与 --clean 搭配，保留最近 N 天有改动的缓存（默认 7）")
+    parser.add_argument("--keep-days", type=int, default=FIXED_KEEP_DAYS, metavar="N",
+                        help="与 --clean 搭配，固定根保留最近 N 天有改动的缓存（默认 3；一次性根固定 1 天）")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.clean:

@@ -57,6 +57,7 @@ let package = Package(
                 "CodeHighlightWebKitProbe.swift",
                 "MathJaxWebKitProbe.swift",
                 "ReaderMediaLoadingWebKitProbe.swift",
+                "build-support.test.mjs",
                 "reader-media-loading.test.mjs",
                 "sidebar-unread-filter.test.mjs",
                 "mathjax-runtime.test.mjs",
