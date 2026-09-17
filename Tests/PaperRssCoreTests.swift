@@ -272,6 +272,30 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(entry.summary, "Short summary")
     }
 
+    func testFeedEntitiesAreDecodedForTitleSummaryAndAuthor() throws {
+        // CDATA 与二次转义不会经过 XML 实体解码，列表此前会直接显示
+        // `&#8212;`、`&#29233;` 这类原始实体（issue 39 截图左列）。
+        let data = Data("""
+        <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <channel><title>葬AI &#8212; 订阅</title><link>https://example.com</link>
+        <item>
+        <guid>item-1</guid>
+        <title>AI Dating都是衡水中学 &#29233;&#20570;&#3903;</title>
+        <link>https://example.com/hello</link>
+        <description><![CDATA[Good Start Labs trained an AI on a railroad game &#8212; and one version improved.]]></description>
+        <dc:creator>Richard &amp;amp; MacManus</dc:creator>
+        </item>
+        </channel></rss>
+        """.utf8)
+        let feed = try FeedParser.parse(data: data, baseURL: URL(string: "https://example.com/feed.xml")!)
+
+        XCTAssertEqual(feed.title, "葬AI — 订阅")
+        let entry = feed.entries[0]
+        XCTAssertEqual(entry.title, "AI Dating都是衡水中学 爱做༿")
+        XCTAssertEqual(entry.summary, "Good Start Labs trained an AI on a railroad game — and one version improved.")
+        XCTAssertEqual(entry.author, "Richard & MacManus")
+    }
+
     func testEntryListItemDoesNotCarryFullArticleContent() {
         let feedID = UUID()
         let longSummary = String(repeating: "摘要", count: 4_000)

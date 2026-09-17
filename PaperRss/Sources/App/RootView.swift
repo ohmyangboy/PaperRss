@@ -900,7 +900,8 @@ struct RootView: View {
                 isZenMode.toggle()
             }
         case .openOriginal:
-            guard let url = selectedEntry?.url else {
+            guard let entry = selectedEntry else { return }
+            guard entry.url != nil else {
                 cancelNavigationConfirmation(dismissToast: true)
                 showToast(
                     I18N.shared.localized("当前文章没有原文链接"),
@@ -909,10 +910,24 @@ struct RootView: View {
                 return
             }
             guard confirmReaderAction(action, entryID: entryID, promptFormat: "再按一次 %@ 打开原文") else { return }
-            AppInfo.openURL(url)
+            openOriginalArticle(entry)
         case .scrollDown:
             focusAndScrollArticle()
         }
+    }
+
+    /// 「打开原文」的唯一动作入口：键盘快捷键（经二次确认后）与工具栏按钮共用。
+    /// 工具栏按钮的可用性由调用方按 `entry.url` 置灰，这里保留兜底提示。
+    private func openOriginalArticle(_ entry: Entry) {
+        guard let url = entry.url else {
+            cancelNavigationConfirmation(dismissToast: true)
+            showToast(
+                I18N.shared.localized("当前文章没有原文链接"),
+                icon: "exclamationmark.triangle.fill"
+            )
+            return
+        }
+        AppInfo.openURL(url)
     }
 
     private var supportsUnreadFilter: Bool {
@@ -1171,6 +1186,11 @@ struct RootView: View {
                     withAnimation {
                         isZenMode.toggle()
                     }
+                },
+                canOpenOriginal: current.url != nil,
+                openOriginalKeyHint: readerShortcutKeyLabel(.openOriginal),
+                onOpenOriginal: {
+                    openOriginalArticle(current)
                 }
             )
             .environment(\.colorScheme, appearanceColorScheme)

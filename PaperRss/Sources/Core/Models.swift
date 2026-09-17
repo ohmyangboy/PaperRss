@@ -313,7 +313,11 @@ public struct ArticleCache: Codable, Hashable, Sendable {
     /// 页面 chrome，需重清洗换回干净推文正文。
     /// Revision 5: sanitizer 将 Twitter/RSSHub 引用推文容器（rsshub-quote）归一化为受控类 paper-quote-card，
     /// 旧缓存需重清洗以自愈显示方块卡片容器。
-    public static let currentNormalizationRevision = 5
+    /// Revision 6: 修复 srcset 逗号切分（Substack 型 CDN 图片被截断成 404 地址）
+    /// 与「正文容器选到碎片」导致的网页降级（页面 chrome 混入正文）；旧缓存需重清洗以恢复图片与干净正文。
+    /// Revision 7: 网页兜底路径新增通用交互式 chrome 裁剪（站点导航、作者行、
+    /// 点赞/分享工具栏、订阅 CTA）；付费文章等弱 Feed 场景此前会把页面 chrome 写进缓存，需重清洗。
+    public static let currentNormalizationRevision = 7
 
     public var entryID: String
     public var text: String

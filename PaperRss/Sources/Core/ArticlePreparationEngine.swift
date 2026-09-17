@@ -109,12 +109,13 @@ public final class ArticlePreparationEngine: Sendable {
                 return staleFallback(bestLocal: bestLocal, entry: entry)
             }
 
-            // 特殊自包含 feed（Twitter/RSSHub）的 feed 内容即权威全文：
+            // 强 Feed 内容即权威全文（含特殊自包含 feed：Twitter/RSSHub）：
             // revision 升级/公式修复只做本地重清洗，严禁抓网页升级。
-            // x.com 抽取产物会携带作者行、时间戳、Views、互动数等页面 chrome，
-            // 且这些 chrome 不受质量门槛约束——用它顶替干净推文正文是
-            // 「头像/渲染异常」类缺陷的根源（与 step 4「强 Feed 直接采用」同一不变量）。
-            if let feedCandidate, feedCandidate.quality.isSpecialSelfContained {
+            // x.com 与 Substack 等站点的网页抽取产物会携带作者行、时间戳、
+            // Views/点赞/Share 等页面 chrome，且这些 chrome 不受质量门槛约束——
+            // 用它顶替干净 Feed 正文是「头像/渲染异常」「排版错乱」类缺陷的根源
+            // （与 step 4「强 Feed 直接采用」同一不变量）。
+            if let feedCandidate, feedCandidate.quality.isStrong {
                 let prepared = feedCandidate.toPreparedArticle()
                 return ArticlePreparationResult(
                     prepared: prepared,

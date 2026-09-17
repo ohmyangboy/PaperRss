@@ -327,13 +327,11 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
                     context.coordinator.readerCapsuleItem?.isHidden = false
                 }
                 host.rootView = context.coordinator.readerCapsuleRootView(toolbarActions.readerCapsule)
-                let size = host.fittingSize
-                let width = size.width > 0 ? size.width : 140
-                let height = context.coordinator.readerCapsuleHeight(for: size.height)
-                let sizingView = context.coordinator.readerCapsuleMaterialContainer ?? host
-                sizingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
-                context.coordinator.readerCapsuleWidthConstraint?.constant = width
-                context.coordinator.readerCapsuleHeightConstraint?.constant = height
+                // NSHostingView 在 rootView 赋值当帧尚未完成 SwiftUI 布局，此处读到的
+                // fittingSize 是旧内容（常见为 0）并会退回粗估宽度，图标数量变化后
+                // 胶囊被裁切。先按当下值落位，再在下一帧按真实内容修正宽度。
+                context.coordinator.applyReaderCapsuleSize(from: host)
+                context.coordinator.scheduleReaderCapsuleSizeSync()
                 context.coordinator.readerCapsuleMaterialContainer?.applyThemeTint(
                     context.coordinator.chromeBackgroundColor
                 )
@@ -409,6 +407,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private var visualCenterTask: Task<Void, Never>?
         fileprivate weak var readerCapsuleWidthConstraint: NSLayoutConstraint?
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
+        /// 异步测量代际：内容/可见性变化后作废未执行的旧测量，避免用过期尺寸回写。
+        private var readerCapsuleSizeGeneration = 0
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var titleMaxWidthConstraint: NSLayoutConstraint?
@@ -475,6 +475,46 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
 
         fileprivate func readerCapsuleHeight(for contentHeight: CGFloat) -> CGFloat {
             usesLegacyReaderCapsuleMaterial ? max(36, contentHeight + 8) : max(28, contentHeight)
+        }
+
+        /// 按宿主视图当前 fittingSize 落位胶囊尺寸。rootView 刚赋值当帧量到的可能是
+        /// 旧内容，因此这里允许用粗估宽度先落位，由 `scheduleReaderCapsuleSizeSync`
+        /// 在下一帧用真实内容修正。
+        fileprivate func applyReaderCapsuleSize(from host: NSHostingView<AnyView>) {
+            guard !host.isHidden else { return }
+            // 容器被工具栏固定宽度约束，宿主 fittingSize 会被当前宽度钳制；
+            // intrinsicContentSize 反映 SwiftUI 内容理想尺寸，不受容器约束影响。
+            let intrinsic = host.intrinsicContentSize
+            let fitting = host.fittingSize
+            let width = intrinsic.width > 0 ? intrinsic.width : (fitting.width > 0 ? fitting.width : 140)
+            let contentHeight = intrinsic.height > 0 ? intrinsic.height : fitting.height
+            let height = readerCapsuleHeight(for: contentHeight)
+            let sizingView = readerCapsuleMaterialContainer ?? host
+            sizingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            if abs((readerCapsuleWidthConstraint?.constant ?? 0) - width) > 0.5 {
+                readerCapsuleWidthConstraint?.constant = width
+            }
+            if abs((readerCapsuleHeightConstraint?.constant ?? 0) - height) > 0.5 {
+                readerCapsuleHeightConstraint?.constant = height
+            }
+        }
+
+        /// 下一帧按真实 SwiftUI 内容重新测量并刷新约束，修正“当帧量到旧尺寸”
+        /// 导致的胶囊裁切（例如新增工具栏图标后宽度不足）。
+        fileprivate func scheduleReaderCapsuleSizeSync() {
+            readerCapsuleSizeGeneration &+= 1
+            let generation = readerCapsuleSizeGeneration
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.readerCapsuleSizeGeneration == generation,
+                          self.actions.showsReaderCapsule,
+                          let host = self.readerCapsuleHost,
+                          !host.isHidden else { return }
+                    self.applyReaderCapsuleSize(from: host)
+                    self.scheduleVisualToolbarCenter()
+                }
+            }
         }
 
         private func timelineBackRootView() -> AnyView {
@@ -2140,6 +2180,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 self.readerCapsuleHost = host
                 self.readerCapsuleWidthConstraint = widthConstraint
                 self.readerCapsuleHeightConstraint = heightConstraint
+                // 首次落位同样可能量到未完成布局的尺寸，下一帧校正一次。
+                scheduleReaderCapsuleSizeSync()
                 return item
 
             default:

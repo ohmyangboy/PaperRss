@@ -51,6 +51,21 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
         XCTAssertTrue(splitViewSource.contains("rootView.environment(\\.readerCapsuleMaterialHostedByAppKit, true)"))
     }
 
+    func testReaderCapsuleToolbarExposesOpenOriginalEntry() throws {
+        let readerSource = try appSource("ArticleReaderView.swift")
+        let rootSource = try appSource("RootView.swift")
+        let toolbarStart = try XCTUnwrap(readerSource.range(of: "struct ReaderCapsuleToolbar: View"))
+        let toolbarSource = readerSource[toolbarStart.lowerBound..<readerSource.endIndex]
+
+        XCTAssertTrue(toolbarSource.contains("toolbarSymbol(\"safari\""), "阅读工具栏胶囊必须提供打开原文的 SF Symbol 入口")
+        XCTAssertTrue(toolbarSource.contains("canOpenOriginal"))
+        XCTAssertTrue(toolbarSource.contains(".disabled(!canOpenOriginal)"), "没有原文链接时必须置灰")
+        XCTAssertTrue(toolbarSource.contains("onOpenOriginal"))
+        XCTAssertTrue(rootSource.contains("canOpenOriginal: current.url != nil"))
+        XCTAssertTrue(rootSource.contains("openOriginalKeyHint: readerShortcutKeyLabel(.openOriginal)"))
+        XCTAssertTrue(rootSource.contains("private func openOriginalArticle("), "按钮与快捷键必须共用同一动作入口")
+    }
+
     private func appSource(_ name: String) throws -> String {
         try String(
             contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/\(name)"),

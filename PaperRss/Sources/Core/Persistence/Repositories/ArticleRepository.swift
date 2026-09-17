@@ -242,13 +242,17 @@ public final class ArticleRepository: Sendable {
               let feedIDString: String = row["feed_id"],
               let feedUUID = UUID(uuidString: feedIDString) else { return nil }
 
-        let title: String = row["title"]
-        let author: String? = row["author"]
+        // 旧版把 CDATA 里的数字实体原样入库；读取时解码以自愈既有数据（写入侧已统一解码）。
+        let rawTitle: String = row["title"]
+        let rawSummary: String = row["summary"]
+        let rawAuthor: String? = row["author"]
+        let title = HTMLTextDecoder.decoded(rawTitle)
+        let summary = HTMLTextDecoder.decoded(rawSummary)
+        let author = rawAuthor.map(HTMLTextDecoder.decoded)
         let urlString: String? = row["url"]
         let url = urlString.flatMap { URL(string: $0) }
         let publishedAtTimestamp: Double? = row["published_at"]
         let publishedAt = publishedAtTimestamp.map { Date(timeIntervalSince1970: $0) }
-        let summary: String = row["summary"]
         let contentHTML: String? = row["content_html"]
         let isReadInt: Int = row["is_read"]
         let isStarredInt: Int = row["is_starred"]

@@ -545,6 +545,46 @@ final class ArticlePreparationEngineTests: XCTestCase {
         XCTAssertEqual(result.updatedCache?.normalizationRevision, ArticleCache.currentNormalizationRevision, "刷新必须把缓存升级到当前 revision 实现自愈")
     }
 
+    /// 普通全文 Feed 与特殊自包含 Feed 遵循同一不变量：强 Feed 正文即权威。
+    /// revision 刷新严禁用网页抽取产物顶替——Substack 页面会携带作者行、
+    /// 时间戳、点赞/评论数、Share 等 chrome（issue 39 的排版错乱根因）。
+    func testStrongFeedRefreshesFromFeedWithoutWebFetch() async {
+        let loader = MockPageLoader()
+        let engine = ArticlePreparationEngine(pageLoader: loader)
+        let entryID = "entry-substack-stale-cache"
+        let url = URL(string: "https://www.latent.space/p/good-start-labs")!
+        let feedBody = String(repeating: "Good Start Labs trained an AI on a railroad game. ", count: 20)
+        // 旧 revision 缓存模拟网页抽取产物：chrome 更多、文本更长，
+        // 因此 pickBestLocal 会优先选它——必须由强 Feed 快路修掉。
+        let staleChromeCache = ArticleCache(
+            entryID: entryID,
+            text: "Can Skills Learned in Games Transfer to Real-World Work?\n\nRichard MacManus\n\nSep 15, 2026\n\n60\n\n3\n\nShare\n\n\(feedBody)",
+            html: "<div><h1>Can Skills Learned in Games Transfer to Real-World Work?</h1><div>Richard MacManus</div><div>Sep 15, 2026</div><div>60</div><div>3</div><div>Share</div></div><p>\(feedBody)</p>",
+            imageURLs: [],
+            sourceURL: url,
+            isSanitized: true,
+            normalizationRevision: ArticleCache.currentNormalizationRevision - 1
+        )
+        let entry = Entry(
+            id: entryID,
+            feedID: defaultFeedID,
+            title: "Can Skills Learned in Games Transfer to Real-World Work?",
+            url: url,
+            publishedAt: .now,
+            summary: "",
+            contentHTML: "<p>\(feedBody)</p><p>\(feedBody)</p><p>\(feedBody)</p>"
+        )
+
+        let result = await engine.prepare(entry: entry, cached: staleChromeCache, policy: .foregroundRefresh)
+
+        XCTAssertEqual(loader.requestCount, 0, "强 Feed 的 revision 刷新严禁触发网页抓取")
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertEqual(result.cacheState, .current)
+        XCTAssertFalse(result.prepared.html.contains("Share"), "网页 chrome 不得进入正文")
+        XCTAssertFalse(result.prepared.html.contains("Sep 15, 2026"), "作者/日期行不得进入正文")
+        XCTAssertEqual(result.updatedCache?.normalizationRevision, ArticleCache.currentNormalizationRevision, "刷新必须把缓存升级到当前 revision 实现自愈")
+    }
+
     func testLegacyCorruptedMathCacheNetworkFailureRemainsRetryableFallback() async {        let loader = MockPageLoader()
         let url = URL(string: "https://example.com/legacy-math-offline")!
         loader.errorMap[url] = URLError(.notConnectedToInternet)

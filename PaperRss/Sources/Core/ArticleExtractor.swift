@@ -100,32 +100,59 @@ public enum ArticleExtractor {
         return false
     }
 
+    /// 按 HTML 规范切分 `srcset`：候选之间由逗号分隔，但逗号可以出现在 URL 内部
+    /// （Substack/Cloudinary 等 CDN 的路径自带逗号）。此前按逗号直接切分会把完整
+    /// URL 截断成前缀（如 `https://substackcdn.com/image/fetch/$s_!id!`），阅读器
+    /// 因此请求到 404 地址并把配图渲染成破图。
     static func parseBestURLFromSrcset(_ srcset: String, baseURL: URL?) -> URL? {
-        let items = srcset.components(separatedBy: ",")
         var bestURL: URL?
         var maxDescriptorValue: Double = -1
 
-        for item in items {
-            let parts = item.trimmingCharacters(in: .whitespacesAndNewlines)
-                .components(separatedBy: .whitespaces)
-                .filter { !$0.isEmpty }
-            guard let first = parts.first, !isPlaceholderImageURL(first),
-                  let url = safeRemoteURL(first, baseURL: baseURL) else { continue }
+        func consider(urlString: String, descriptor: String?) {
+            guard !isPlaceholderImageURL(urlString),
+                  let url = safeRemoteURL(urlString, baseURL: baseURL) else { return }
 
-            var descriptorVal: Double = 1.0
-            if parts.count > 1, let desc = parts.last {
-                let cleanDesc = desc.lowercased()
-                if cleanDesc.hasSuffix("w"), let w = Double(cleanDesc.dropLast()) {
-                    descriptorVal = w
-                } else if cleanDesc.hasSuffix("x"), let x = Double(cleanDesc.dropLast()) {
-                    descriptorVal = x * 1000
+            var descriptorValue: Double = 1.0
+            if let descriptor = descriptor?.lowercased() {
+                if descriptor.hasSuffix("w"), let width = Double(descriptor.dropLast()) {
+                    descriptorValue = width
+                } else if descriptor.hasSuffix("x"), let scale = Double(descriptor.dropLast()) {
+                    descriptorValue = scale * 1000
                 }
             }
 
-            if descriptorVal > maxDescriptorValue {
-                maxDescriptorValue = descriptorVal
+            if descriptorValue > maxDescriptorValue {
+                maxDescriptorValue = descriptorValue
                 bestURL = url
             }
+        }
+
+        // 规范分词：URL 是连续的非空白字符，尾随逗号只作候选分隔符。
+        var pendingURL: String?
+        var pendingDescriptor: String?
+        for token in htmlEntityDecoded(srcset).split(whereSeparator: { $0.isWhitespace }) {
+            var text = String(token)
+            let endsCandidate = text.hasSuffix(",")
+            if endsCandidate { text.removeLast() }
+
+            if pendingURL == nil {
+                guard !text.isEmpty else { continue }
+                pendingURL = text
+                if endsCandidate {
+                    consider(urlString: text, descriptor: nil)
+                    pendingURL = nil
+                }
+            } else {
+                pendingDescriptor = text
+                if endsCandidate {
+                    consider(urlString: pendingURL ?? "", descriptor: text)
+                    pendingURL = nil
+                    pendingDescriptor = nil
+                }
+            }
+        }
+        if let pendingURL {
+            consider(urlString: pendingURL, descriptor: pendingDescriptor)
         }
         return bestURL
     }
@@ -194,9 +221,12 @@ public enum ArticleExtractor {
         let cleaned = stripNoiseBlocks(normalized)
             .replacingOccurrences(of: "(?is)<(script|style|noscript|svg|canvas|iframe|form|nav|footer|aside)[^>]*>.*?</\\1>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "(?is)<!--.*?-->", with: " ", options: .regularExpression)
+        // 网页兜底路径的页面 chrome（站点导航、作者行、点赞/分享工具栏、
+        // 订阅 CTA）会在容器评分里跟随大容器混进正文；先做一次通用裁剪。
+        let chromeFree = stripInteractiveChromeBlocks(cleaned)
 
         // 运行容器评分器寻找最佳正文容器
-        if let bestContainer = extractBestArticleContainer(from: cleaned, baseURL: baseURL) {
+        if let bestContainer = extractBestArticleContainer(from: chromeFree, baseURL: baseURL) {
             let safeHTML = sanitizedHTML(bestContainer, baseURL: baseURL)
             let text = safeHTML.plainText
             if !text.isEmpty {
@@ -204,8 +234,63 @@ public enum ArticleExtractor {
             }
         }
 
-        let safeHTML = sanitizedHTML(cleaned, baseURL: baseURL)
+        let safeHTML = sanitizedHTML(chromeFree, baseURL: baseURL)
         return Content(text: safeHTML.plainText, html: safeHTML, imageURLs: imageURLs(from: safeHTML, baseURL: baseURL))
+    }
+
+    /// 通用交互式 chrome 裁剪：class/id 词元命中 `negativeContainerTokens`（含简单复数）
+    /// 且块内含交互元素（链接/按钮/表单控件/SVG）时整体移除。站点导航、作者行、
+    /// 点赞/分享工具栏、订阅 CTA 都具备这一结构特征；只含标题与文本的正文块不受影响。
+    /// 复用既有通用词表，不引入站点专属规则。
+    private static func stripInteractiveChromeBlocks(_ html: String) -> String {
+        let candidates = scanBalancedContainers(
+            from: html,
+            targetTags: ["article", "main", "section", "div", "header", "nav", "footer", "aside", "form", "ul", "ol"]
+        )
+        guard !candidates.isEmpty,
+              let interactiveExpression = try? NSRegularExpression(pattern: "(?is)<(a|button|input|select|textarea|svg|form)\\b") else {
+            return html
+        }
+
+        var removals: [(start: Int, end: Int)] = []
+        for candidate in candidates {
+            let attrMap = parseAttributesMap(from: candidate.attributes)
+            let classAndID = "\(attrMap["class"] ?? "") \(attrMap["id"] ?? "")"
+            guard matchesNegativeContainerToken(classAndID),
+                  interactiveExpression.firstMatch(
+                      in: candidate.fullHTML,
+                      range: NSRange(candidate.fullHTML.startIndex..., in: candidate.fullHTML)
+                  ) != nil else { continue }
+            removals.append((candidate.startOffset, candidate.endOffset))
+        }
+        guard !removals.isEmpty else { return html }
+
+        // 嵌套命中时只保留最外层，避免重复删除导致位移错乱。
+        var merged: [(start: Int, end: Int)] = []
+        for removal in removals.sorted(by: { $0.start < $1.start }) {
+            if let last = merged.last, removal.start >= last.start, removal.end <= last.end { continue }
+            merged.append(removal)
+        }
+
+        var result = html
+        for removal in merged.reversed() {
+            guard let startIndex = result.index(result.startIndex, offsetBy: removal.start, limitedBy: result.endIndex),
+                  let endIndex = result.index(result.startIndex, offsetBy: removal.end, limitedBy: result.endIndex) else { continue }
+            result.replaceSubrange(startIndex..<endIndex, with: "")
+        }
+        return result
+    }
+
+    private static func matchesNegativeContainerToken(_ classAndID: String) -> Bool {
+        let tokens = classAndID
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map { $0.lowercased() }
+        guard !tokens.isEmpty else { return false }
+        return tokens.contains { token in
+            negativeContainerTokens.contains { negative in
+                token == negative || token == negative + "s"
+            }
+        }
     }
 
     struct ScannedContainer: Sendable {
@@ -240,6 +325,13 @@ public enum ArticleExtractor {
 
         guard bestScore >= 35, let bestCandidate else { return nil }
 
+        // 片段型候选护栏：Substack 等「全文 Feed」的正文是顶层平铺的段落流，
+        // 没有包裹全文的容器；评分器会把带 figcaption 的图片 div 或长脚注 div
+        // 当成最佳容器（媒体/文本加分），导致正文只剩百来字，进而触发不必要的
+        // 网页降级并把页面 chrome（作者行、点赞数、Share）混进正文。
+        // 文本与 `<p>` 覆盖同时远小于整篇文档时，该候选只是正文碎片，退回整篇清洗。
+        if isFragmentaryContainer(bestCandidate, in: html) { return nil }
+
         // Some layouts keep a cover or media rail in a sibling of the text
         // container. Expand only to the nearest containing candidate when it
         // adds media without adding a substantial amount of unrelated text.
@@ -272,6 +364,29 @@ public enum ArticleExtractor {
         ) ?? 0
     }
 
+    /// 判定最佳容器是否属于「媒体/脚注型碎片」：段落数屈指可数、篇幅很小，
+    /// 且文本与 `<p>` 覆盖都远小于整篇文档。两个维度同时成立才回退，
+    /// 避免误伤「页面很大但正文容器较小」的网页抽取：网页正文容器通常集中承载
+    /// 页面多数段落，而 Feed 碎片只占极小比例。
+    private static func isFragmentaryContainer(_ candidate: ScannedContainer, in documentHTML: String) -> Bool {
+        let candidateParagraphs = paragraphCount(in: candidate.fullHTML)
+        guard candidateParagraphs < 2 else { return false }
+
+        let candidateTextCount = candidate.fullHTML.plainText.count
+        guard candidateTextCount < 1500 else { return false }
+
+        let documentTextCount = documentHTML.plainText.count
+        guard documentTextCount >= 1200, candidateTextCount * 4 < documentTextCount else { return false }
+        return candidateParagraphs * 4 < paragraphCount(in: documentHTML)
+    }
+
+    private static func paragraphCount(in html: String) -> Int {
+        (try? NSRegularExpression(pattern: "(?is)<p\\b"))?.numberOfMatches(
+            in: html,
+            range: NSRange(html.startIndex..., in: html)
+        ) ?? 0
+    }
+
     /// RSSHub 把内嵌引用（引用推文/转推来源）包进 `class="rsshub-quote"` 的容器，
     /// 清洗后归一化为 `class="paper-quote-card"`。该容器语义上永远是“被引用的附属内容”而非正文容器。
     private static func isEmbeddedQuoteContainer(_ candidate: ScannedContainer) -> Bool {
@@ -296,8 +411,10 @@ public enum ArticleExtractor {
     }
 
     /// 使用标签栈扫描平衡容器，天然安全支持同名与多级嵌套
-    private static func scanBalancedContainers(from html: String) -> [ScannedContainer] {
-        let targetTags: Set<String> = ["article", "main", "section", "div"]
+    private static func scanBalancedContainers(
+        from html: String,
+        targetTags: Set<String> = ["article", "main", "section", "div"]
+    ) -> [ScannedContainer] {
         let tagPattern = "(?is)</?([a-z][a-z0-9]*)\\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"
         guard let expression = try? NSRegularExpression(pattern: tagPattern) else { return [] }
         let range = NSRange(html.startIndex..., in: html)
@@ -310,7 +427,7 @@ public enum ArticleExtractor {
             let innerStart: String.Index
         }
 
-        var stacks: [String: [OpenTag]] = ["article": [], "main": [], "section": [], "div": []]
+        var stacks: [String: [OpenTag]] = Dictionary(uniqueKeysWithValues: targetTags.map { ($0, []) })
         var candidates: [ScannedContainer] = []
 
         for match in matches {

@@ -109,6 +109,165 @@ final class ArticleMediaAndExtractionTests: XCTestCase {
         XCTAssertTrue(content.html.contains("https://example.com/image-1200w.jpg"))
     }
 
+    /// Substack/Cloudinary 型 CDN 的路径自带逗号（`$s_!id!,w_424,...`），
+    /// 按逗号切分 srcset 会把完整地址截断成前缀（线上返回 404，渲染成破图）。
+    /// 解析必须按 HTML 规范以空白分词，逗号只作候选分隔符。
+    func testSrcsetKeepsCommasInsideCDNURLs() {
+        let small = "https://substackcdn.com/image/fetch/$s_!hNAj!,w_424,c_limit,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_2560x1440.png"
+        let large = "https://substackcdn.com/image/fetch/$s_!hNAj!,w_1456,c_limit,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_2560x1440.png"
+        let rawHTML = """
+        <div class="captioned-image-container">
+            <figure>
+                <picture>
+                    <source type="image/webp" srcset="\(small) 424w, \(large) 1456w">
+                    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                         srcset="\(small) 424w, \(large) 1456w"
+                         sizes="100vw" alt="">
+                </picture>
+            </figure>
+        </div>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://www.latent.space/p/post"))
+        let imageURLs = content.imageURLs.map(\.absoluteString)
+
+        XCTAssertEqual(imageURLs, [large], "带逗号的 CDN URL 必须原样保留，且按最高分辨率取候选")
+        XCTAssertTrue(content.html.contains("w_1456"))
+    }
+
+    func testImageFallsBackToSrcWhenAllSrcsetCandidatesArePlaceholders() {
+        let rawHTML = """
+        <article class="article-content">
+            <p>回退用例：srcset 全是占位图时应使用 src。</p>
+            <img src="https://example.com/valid.jpg"
+                 srcset="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw== 1x, https://example.com/1x1.png 2x"
+                 alt="Fallback">
+        </article>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertEqual(content.imageURLs.map(\.absoluteString), ["https://example.com/valid.jpg"])
+    }
+
+    /// Substack 等「全文 Feed」的正文是顶层平铺的段落流，没有包裹全文的容器；
+    /// 评分器曾把带 figcaption 的图片 div 当正文容器（正文只剩一句话），
+    /// 进而触发网页降级并把页面 chrome 混进正文。碎片候选必须退回整篇清洗。
+    func testFlatFeedBodyWithCaptionedFigureKeepsAllParagraphs() {
+        let paragraphBody = String(repeating: "这是一段足够长的正文内容，用于验证碎片护栏不会截断文章主体。", count: 8)
+        let caption = "Grok 4 Fast is the least likely to betray you in Diplomacy, according to these September 2026 rankings."
+        let imageURL = "https://substackcdn.com/image/fetch/$s_!Zv_Y!,w_1456,c_limit,f_webp,q_auto:good/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fdiplomacy_2202x1194.png"
+        let paragraphs = (1...6)
+            .map { "<p>正文第\($0)段：\(paragraphBody)</p>" }
+            .joined()
+        let rawHTML = """
+        <div class="captioned-image-container">
+            <figure>
+                <a href="/img"><img src="\(imageURL)" alt=""></a>
+                <figcaption>\(caption)</figcaption>
+            </figure>
+        </div>
+        \(paragraphs)
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://www.latent.space/p/post"))
+
+        XCTAssertTrue(content.text.contains("正文第1段"))
+        XCTAssertTrue(content.text.contains("正文第6段"), "碎片护栏命中时必须保留整篇正文")
+        XCTAssertTrue(content.text.contains("Grok 4 Fast"), "图注仍应保留")
+        XCTAssertGreaterThanOrEqual(content.html.components(separatedBy: "<p").count - 1, 6)
+    }
+
+    /// 单段长文容器（>1500 字）即便页面还有其它文本，也不属于媒体碎片，不得回退整篇。
+    func testSingleLongParagraphContainerIsNotTreatedAsFragment() {
+        let longParagraph = String(repeating: "正文内容重复用于拉长篇幅。", count: 140)
+        let noise = (1...12).map { "<p>站点噪声段落 \($0)，与正文无关的推荐文本。</p>" }.joined()
+        let rawHTML = """
+        <html><body>
+            <div class="noise-block">\(noise)</div>
+            <article class="article-content"><p>\(longParagraph)</p></article>
+        </body></html>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(content.text.contains("正文内容重复用于拉长篇幅"))
+        XCTAssertFalse(content.text.contains("站点噪声段落"), "长文容器不得被碎片护栏误伤")
+    }
+
+    /// 网页兜底路径的通用 chrome 裁剪：站点导航、作者行、点赞/分享工具栏都带
+    /// 交互元素（链接/按钮），必须整体剔除；正文与图注保留。
+    func testInteractiveChromeBlocksAreStrippedFromWebFallback() {
+        let rawHTML = """
+        <html><body>
+            <div class="main-menu">
+                <a href="/"><img src="https://example.com/logo.png" alt="Logo"></a>
+                <button type="button">Subscribe</button>
+                <a href="/sign-in">Sign in</a>
+            </div>
+            <div class="single-post">
+                <div class="post-header">
+                    <h1>文章标题</h1>
+                    <a href="https://example.com/@author">作者名</a>
+                    <div>Sep 05, 2026</div>
+                    <div>87</div>
+                    <div>Share</div>
+                </div>
+                <div class="post-body">
+                    <p>这是正文的第一段，包含足够的内容用于验证页面 chrome 会被剔除而正文被保留。</p>
+                    <p>这是正文的第二段，继续提供文章主体内容与论证。</p>
+                    <p>这是正文的第三段，收束全文观点并给出结论。</p>
+                </div>
+            </div>
+        </body></html>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(content.text.contains("这是正文的第一段"))
+        XCTAssertTrue(content.text.contains("这是正文的第三段"))
+        XCTAssertFalse(content.text.contains("Share"), "分享工具栏属于页面 chrome，必须剔除")
+        XCTAssertFalse(content.text.contains("Sep 05, 2026"), "作者/日期行不得进入正文")
+        XCTAssertFalse(content.text.contains("87"), "点赞计数不得进入正文")
+        XCTAssertFalse(
+            content.imageURLs.map(\.absoluteString).contains("https://example.com/logo.png"),
+            "站点 logo 不得进入正文"
+        )
+    }
+
+    /// 只含标题与文本的正文分节不得被 chrome 裁剪误伤。
+    func testNonInteractiveSectionHeaderIsKept() {
+        let rawHTML = """
+        <article class="article-content">
+            <div class="section-header"><h2>章节标题一</h2></div>
+            <p>章节正文段落，说明该分节的具体内容与结论，长度足够形成正文容器。</p>
+            <p>章节正文第二段，继续展开论述并补充证据。</p>
+            <p>章节正文第三段，收尾总结。</p>
+        </article>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(content.text.contains("章节标题一"), "不含交互元素的正文小标题不得被 chrome 裁剪误伤")
+    }
+
+    /// class 含 `ad` 子串（如 additional）时不得按广告误删：匹配必须按词元而不是子串。
+    func testContentBlockWithAdSubstringIsKept() {
+        let rawHTML = """
+        <article class="article-content">
+            <p>正文引言段落，用于建立文章容器与上下文。</p>
+            <div class="additional-material">
+                <p>延伸阅读：<a href="https://example.com/ref">参考资料</a>，包含少量辅助说明。</p>
+            </div>
+            <p>正文结论段落，总结全文。</p>
+        </article>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(content.text.contains("参考资料"), "additional 含 ad 子串但并非广告词元")
+    }
+
     // MARK: - 5. Figure and Figcaption Preservation
 
     func testFigureAndFigcaptionAreFullyPreserved() {

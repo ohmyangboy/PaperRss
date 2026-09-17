@@ -347,12 +347,13 @@ public final class TimelineQueryService: Sendable {
                   let feedIDString: String = row["feed_id"],
                   let feedUUID = UUID(uuidString: feedIDString) else { return nil }
 
-            let title: String = row["title"]
+            // 旧版入库的标题/摘要可能保留 CDATA 数字实体；投影时解码以自愈既有数据。
+            let title = HTMLTextDecoder.decoded(row["title"] as String)
             let urlString: String? = row["url"]
             let url = urlString.flatMap { URL(string: $0) }
-            let summary: String = row["summary"]
+            let summary = HTMLTextDecoder.decoded(row["summary"] as String)
             let preview = String(summary.prefix(240))
-            let sourceTitle: String = row["feed_title"]
+            let sourceTitle = HTMLTextDecoder.decoded(row["feed_title"] as String)
             let storedIconURLString: String? = row["stored_icon_url"]
             let siteURLString: String? = row["site_url"]
             let feedURLString: String = row["feed_url"]
@@ -576,12 +577,13 @@ public final class TimelineQueryService: Sendable {
               let feedIDString: String = row["feed_id"],
               let feedUUID = UUID(uuidString: feedIDString) else { return nil }
 
-        let title: String = row["title"]
+        // 旧版入库的标题/摘要可能保留 CDATA 数字实体；投影时解码以自愈既有数据。
+        let title = HTMLTextDecoder.decoded(row["title"] as String)
         let urlString: String? = row["url"]
         let url = urlString.flatMap { URL(string: $0) }
-        let summary: String = row["summary"]
+        let summary = HTMLTextDecoder.decoded(row["summary"] as String)
         let preview = String(summary.prefix(240))
-        let sourceTitle: String = row["feed_title"]
+        let sourceTitle = HTMLTextDecoder.decoded(row["feed_title"] as String)
         let storedIconURLString: String? = row["stored_icon_url"]
         let siteURLString: String? = row["site_url"]
         let feedURLString: String = row["feed_url"]

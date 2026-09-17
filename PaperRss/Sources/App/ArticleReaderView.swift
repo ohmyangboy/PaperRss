@@ -7267,6 +7267,11 @@ struct ReaderCapsuleToolbar: View {
     let onToggleRead: () -> Void
     let onToggleStar: () -> Void
     var onToggleZenMode: () -> Void = {}
+    /// 「打开原文」入口的可用性与快捷键提示由 RootView 统一注入，
+    /// 保证按钮与快捷键共用同一条链接判定与动作。
+    var canOpenOriginal: Bool = false
+    var openOriginalKeyHint: String = ""
+    var onOpenOriginal: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.paperAppearancePalette) private var appearancePalette
@@ -7326,9 +7331,23 @@ struct ReaderCapsuleToolbar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
             .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
+
+            Button(action: onOpenOriginal) {
+                toolbarSymbol("safari", isActive: false)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpenOriginal)
+            .accessibilityLabel(I18N.localized("打开原文"))
+            .help(openOriginalHelp)
         }
         .padding(.horizontal, 6)
         .frame(height: 28)
+    }
+
+    private var openOriginalHelp: String {
+        guard canOpenOriginal else { return I18N.localized("当前文章没有原文链接") }
+        let label = I18N.localized("打开原文")
+        return openOriginalKeyHint.isEmpty ? label : "\(label) (\(openOriginalKeyHint))"
     }
 
     #if os(macOS)

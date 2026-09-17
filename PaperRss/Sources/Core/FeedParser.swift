@@ -285,11 +285,11 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
             let stable = item["guid"] ?? item["id"] ?? link?.absoluteString ?? "\(item["title"] ?? "")|\(item["published"] ?? item["pubdate"] ?? UUID().uuidString)"
             entries.append(ParsedFeedEntry(
                 id: stable,
-                title: item["title"]?.nonEmpty ?? "未命名文章",
-                author: item["author"],
+                title: HTMLTextDecoder.decoded(item["title"] ?? "").nonEmpty ?? "未命名文章",
+                author: item["author"].map(HTMLTextDecoder.decoded),
                 url: link,
                 publishedAt: FeedParser.parseDate(item["published"] ?? item["updated"] ?? item["pubdate"]),
-                summary: item["summary"]?.plainText ?? item["description"]?.plainText ?? body?.plainText ?? "",
+                summary: HTMLTextDecoder.decoded(item["summary"]?.plainText ?? item["description"]?.plainText ?? body?.plainText ?? ""),
                 contentHTML: body,
                 languageHints: itemLanguageHints,
                 previewImage: EntryPreviewImageExtractor.extract(
@@ -312,7 +312,7 @@ private final class XMLFeedParser: NSObject, XMLParserDelegate {
         // still normally carries the publisher URL, which is a useful and
         // stable source for favicon fallback.
         let siteURL = feedLink ?? entries.compactMap(\.url).first.flatMap(Self.originURL)
-        return ParsedFeed(title: feedTitle.nonEmpty ?? "未命名订阅", siteURL: siteURL, iconURL: feedIconURL, entries: entries, languageHints: feedLanguageHints)
+        return ParsedFeed(title: HTMLTextDecoder.decoded(feedTitle).nonEmpty ?? "未命名订阅", siteURL: siteURL, iconURL: feedIconURL, entries: entries, languageHints: feedLanguageHints)
     }
 
     private static func originURL(_ url: URL) -> URL? {
