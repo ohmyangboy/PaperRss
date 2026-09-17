@@ -152,6 +152,20 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertEqual(FeedAttentionPolicy.dockBadgeLabel(unreadCount: 100, enabled: true), "99+")
     }
 
+    func testMacIconVisibilityPolicyRequiresMenuBarEntryBeforeHidingDock() {
+        XCTAssertFalse(MacIconVisibilityPolicy.resolvesHideDockIcon(true, showMenuBarIcon: false))
+        XCTAssertTrue(MacIconVisibilityPolicy.resolvesHideDockIcon(true, showMenuBarIcon: true))
+        XCTAssertFalse(MacIconVisibilityPolicy.resolvesHideDockIcon(false, showMenuBarIcon: true))
+        XCTAssertFalse(MacIconVisibilityPolicy.resolvesHideDockIcon(false, showMenuBarIcon: false))
+    }
+
+    func testFeedAttentionPolicyFormatsMenuBarUnreadTitle() {
+        XCTAssertNil(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 0))
+        XCTAssertEqual(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 1), "1")
+        XCTAssertEqual(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 99), "99")
+        XCTAssertEqual(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 100), "99+")
+    }
+
     func testFeedAttentionPolicyAllowsOneScheduledBackgroundSummary() {
         let primary = UUID()
         let beta = UUID()

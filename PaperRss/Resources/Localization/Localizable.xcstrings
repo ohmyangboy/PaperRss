@@ -278,6 +278,116 @@
         }
       }
     },
+    "Dock 图标隐藏时不可用。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unavailable while the Dock icon is hidden."
+          }
+        }
+      }
+    },
+    "在菜单栏显示图标与未读数量。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the icon and unread count in the menu bar."
+          }
+        }
+      }
+    },
+    "下次启动生效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takes effect after relaunch."
+          }
+        }
+      }
+    },
+    "需先开启「显示菜单栏图标」，否则应用将失去所有入口。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn on “Show Menu Bar Icon” first, or the app would lose every entry point."
+          }
+        }
+      }
+    },
+    "未读 %@ 篇" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ unread"
+          }
+        }
+      }
+    },
+    "未读文章" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unread Articles"
+          }
+        }
+      }
+    },
+    "显示菜单栏图标" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Menu Bar Icon"
+          }
+        }
+      }
+    },
+    "隐藏 Dock 图标" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Dock Icon"
+          }
+        }
+      }
+    },
+    "隐藏后应用不再出现在程序坞与 Cmd+Tab。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app no longer appears in the Dock or Cmd-Tab."
+          }
+        }
+      }
+    },
+    "打开 PaperRss" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open PaperRss"
+          }
+        }
+      }
+    },
+    "退出 PaperRss" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit PaperRss"
+          }
+        }
+      }
+    },
     "ESC退出，按下 ⌘/ 查看快捷键" : {
       "localizations" : {
         "en" : {

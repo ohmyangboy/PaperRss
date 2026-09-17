@@ -26,6 +26,7 @@ struct PaperRssApp: App {
         _store = StateObject(wrappedValue: store)
         _navigation = StateObject(wrappedValue: navigation)
         #if os(macOS)
+        MacSystemAttentionController.applyStoredIconVisibilityToLaunchingApplication()
         _attention = StateObject(wrappedValue: MacSystemAttentionController(store: store, navigation: navigation))
         _updateCoordinator = StateObject(wrappedValue: UpdateCoordinatorFactory.make())
         #endif

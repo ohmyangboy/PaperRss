@@ -12,9 +12,27 @@ public struct FeedNotificationSummary: Equatable, Sendable {
     }
 }
 
+/// macOS 图标可见性规则。
+public enum MacIconVisibilityPolicy {
+    /// 只有菜单栏图标开启时才允许隐藏 Dock 图标，否则应用会失去所有可见入口。
+    public static func resolvesHideDockIcon(_ hideDockIcon: Bool, showMenuBarIcon: Bool) -> Bool {
+        hideDockIcon && showMenuBarIcon
+    }
+}
+
 public enum FeedAttentionPolicy {
     public static func dockBadgeLabel(unreadCount: Int, enabled: Bool) -> String? {
-        guard enabled, unreadCount > 0 else { return nil }
+        guard enabled else { return nil }
+        return unreadBadgeText(unreadCount: unreadCount)
+    }
+
+    /// 菜单栏未读文案：未读为 0 时返回 nil（只保留图标），超过两位折叠为 99+。
+    public static func menuBarUnreadTitle(unreadCount: Int) -> String? {
+        unreadBadgeText(unreadCount: unreadCount)
+    }
+
+    private static func unreadBadgeText(unreadCount: Int) -> String? {
+        guard unreadCount > 0 else { return nil }
         return unreadCount > 99 ? "99+" : String(unreadCount)
     }
 

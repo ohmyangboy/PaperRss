@@ -77,6 +77,13 @@ private final class DockUnreadBadgeView: NSView {
 @MainActor
 final class MacSystemAttentionController: NSObject, ObservableObject {
     @Published private(set) var dockBadgeEnabled: Bool
+    /// 用户选择（下次启动生效）：隐藏 Dock 图标（含 Cmd+Tab），应用转为辅助（accessory）激活策略。
+    @Published private(set) var hideDockIcon: Bool
+    /// 用户选择（下次启动生效）：在菜单栏显示图标与未读数量。
+    @Published private(set) var showMenuBarIcon: Bool
+    /// 当前进程实际生效的图标可见性，启动时一次性应用。
+    @Published private(set) var appliedHideDockIcon: Bool
+    @Published private(set) var appliedShowMenuBarIcon: Bool
     @Published private(set) var feedNotificationsEnabled: Bool
     @Published private(set) var isNotificationPermissionDenied = false
     @Published private(set) var isRequestingNotificationAuthorization = false
@@ -84,6 +91,8 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     private enum PreferenceKey {
         static let dockBadgeEnabled = "PaperRss.macDockBadgeEnabled"
         static let feedNotificationsEnabled = "PaperRss.macFeedNotificationsEnabled"
+        static let hideDockIcon = "PaperRss.macHideDockIcon"
+        static let showMenuBarIcon = "PaperRss.macShowMenuBarIcon"
     }
 
     private let store: AppStore
@@ -94,6 +103,8 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     private weak var application: NSApplication?
     private var hasStarted = false
     private var dockBadgeView: DockUnreadBadgeView?
+    private var statusItem: NSStatusItem?
+    private var mainWindowOpener: (() -> Void)?
 
     init(
         store: AppStore,
@@ -106,9 +117,29 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         self.preferences = preferences
         self.notificationCenter = notificationCenter
         dockBadgeEnabled = preferences.bool(forKey: PreferenceKey.dockBadgeEnabled)
+        let storedShowMenuBarIcon = preferences.bool(forKey: PreferenceKey.showMenuBarIcon)
+        showMenuBarIcon = storedShowMenuBarIcon
+        // 修正历史或异常组合：没有菜单栏入口时不允许隐藏 Dock 图标。
+        let resolvedHideDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
+            preferences.bool(forKey: PreferenceKey.hideDockIcon),
+            showMenuBarIcon: storedShowMenuBarIcon
+        )
+        hideDockIcon = resolvedHideDockIcon
+        appliedHideDockIcon = resolvedHideDockIcon
+        appliedShowMenuBarIcon = storedShowMenuBarIcon
         feedNotificationsEnabled = false
         preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
         super.init()
+    }
+
+    /// 在 App 初始化阶段就按已存开关设置激活策略，避免启动瞬间闪现 Dock 图标。
+    static func applyStoredIconVisibilityToLaunchingApplication() {
+        let hidesDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
+            UserDefaults.standard.bool(forKey: PreferenceKey.hideDockIcon),
+            showMenuBarIcon: UserDefaults.standard.bool(forKey: PreferenceKey.showMenuBarIcon)
+        )
+        guard hidesDockIcon else { return }
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     func start(application: NSApplication) {
@@ -118,12 +149,45 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         notificationCenter.delegate = self
         observeStore()
         updateDockBadge()
+        applyIconVisibility()
+    }
+
+    /// 主窗口由 SwiftUI 场景管理，窗口被关闭后需要经 openWindow 重新创建。
+    func registerMainWindowOpener(_ opener: @escaping () -> Void) {
+        mainWindowOpener = opener
     }
 
     func setDockBadgeEnabled(_ enabled: Bool) {
         dockBadgeEnabled = enabled
         preferences.set(enabled, forKey: PreferenceKey.dockBadgeEnabled)
         updateDockBadge()
+    }
+
+    /// 图标可见性开关改动后需要重启才生效：运行中切换激活策略会让窗口短暂失去前台，
+    /// 因此开关只写入偏好，统一由下次启动时应用。
+    func setHideDockIcon(_ hidden: Bool) {
+        let resolved = MacIconVisibilityPolicy.resolvesHideDockIcon(
+            hidden,
+            showMenuBarIcon: showMenuBarIcon
+        )
+        guard hideDockIcon != resolved else { return }
+        hideDockIcon = resolved
+        preferences.set(resolved, forKey: PreferenceKey.hideDockIcon)
+    }
+
+    func setShowMenuBarIcon(_ visible: Bool) {
+        guard showMenuBarIcon != visible else { return }
+        showMenuBarIcon = visible
+        preferences.set(visible, forKey: PreferenceKey.showMenuBarIcon)
+        // 关闭菜单栏入口时同步取消隐藏 Dock，避免应用没有任何入口。
+        let resolvedHideDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
+            hideDockIcon,
+            showMenuBarIcon: visible
+        )
+        if hideDockIcon != resolvedHideDockIcon {
+            hideDockIcon = resolvedHideDockIcon
+            preferences.set(resolvedHideDockIcon, forKey: PreferenceKey.hideDockIcon)
+        }
     }
 
     func setFeedNotificationsEnabled(_ enabled: Bool) async {
@@ -153,6 +217,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.updateDockBadge()
+                self.updateStatusItem()
             }
             .store(in: &cancellables)
 
@@ -205,6 +270,109 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         dockTile.display()
     }
 
+    // MARK: - 图标可见性（Dock / 菜单栏）
+
+    /// 启动时一次性应用已存偏好；运行期间不再切换激活策略，避免窗口闪动。
+    private func applyIconVisibility() {
+        guard let application else { return }
+        appliedHideDockIcon = hideDockIcon
+        appliedShowMenuBarIcon = showMenuBarIcon
+        application.setActivationPolicy(hideDockIcon ? .accessory : .regular)
+        if showMenuBarIcon {
+            installStatusItemIfNeeded()
+        } else {
+            removeStatusItem()
+        }
+        updateStatusItem()
+        updateDockBadge()
+    }
+
+    private func installStatusItemIfNeeded() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.image = Self.statusItemImage()
+            button.imagePosition = .imageLeading
+            button.target = self
+            button.action = #selector(handleStatusItemClick(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.setAccessibilityLabel("PaperRss")
+        }
+        statusItem = item
+        updateStatusItem()
+    }
+
+    private func removeStatusItem() {
+        guard let statusItem else { return }
+        NSStatusBar.system.removeStatusItem(statusItem)
+        self.statusItem = nil
+    }
+
+    private func updateStatusItem() {
+        guard let button = statusItem?.button else { return }
+        let title = FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: store.sidebarCounts.allUnread)
+        button.title = title ?? ""
+        button.toolTip = title.map { I18N.shared.localizedFormat("未读 %@ 篇", $0) } ?? "PaperRss"
+    }
+
+    private static func statusItemImage() -> NSImage? {
+        #if SWIFT_PACKAGE
+        let source = Bundle.module.image(forResource: "PaperEmptyBrandIcon")
+        #else
+        let source = NSImage(named: "PaperEmptyBrandIcon")
+        #endif
+        guard let image = source?.copy() as? NSImage else { return source }
+        // 源图上下留有透明边距，按比例放大画布让字形接近菜单栏图标常用高度。
+        image.isTemplate = true
+        image.size = NSSize(width: 16, height: 18)
+        return image
+    }
+
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        guard let statusItem else { return }
+        if NSApplication.shared.currentEvent?.type == .rightMouseUp {
+            showStatusItemMenu(for: statusItem)
+        } else {
+            bringAppForward()
+        }
+    }
+
+    private func showStatusItemMenu(for statusItem: NSStatusItem) {
+        let menu = NSMenu()
+        menu.addItem(statusMenuItem(I18N.shared.localized("打开 PaperRss"), #selector(openMainWindowFromStatusItem(_:))))
+        menu.addItem(statusMenuItem(I18N.shared.localized("未读文章"), #selector(openUnreadFromStatusItem(_:))))
+        menu.addItem(.separator())
+        menu.addItem(statusMenuItem(I18N.shared.localized("刷新全部订阅"), #selector(refreshAllFromStatusItem(_:))))
+        menu.addItem(.separator())
+        menu.addItem(statusMenuItem(I18N.shared.localized("退出 PaperRss"), #selector(quitFromStatusItem(_:))))
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    private func statusMenuItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func openMainWindowFromStatusItem(_ sender: NSMenuItem) {
+        bringAppForward()
+    }
+
+    @objc private func openUnreadFromStatusItem(_ sender: NSMenuItem) {
+        navigation.openUnread()
+        bringAppForward()
+    }
+
+    @objc private func refreshAllFromStatusItem(_ sender: NSMenuItem) {
+        Task { await store.refresh() }
+    }
+
+    @objc private func quitFromStatusItem(_ sender: NSMenuItem) {
+        application?.terminate(nil)
+    }
+
     private func deliverNotification(
         for outcome: FeedRefreshOutcome,
         appWasActive: Bool
@@ -213,16 +381,27 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
     }
 
     private func openUnreadFromNotification() {
-        guard let application else { return }
         navigation.openUnread()
+        bringAppForward()
+    }
+
+    private func bringAppForward() {
+        guard let application else { return }
         application.activate(ignoringOtherApps: true)
+        if let window = mainWindow(in: application) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            mainWindowOpener?()
+        }
+    }
+
+    private func mainWindow(in application: NSApplication) -> NSWindow? {
         let settingsWindowIdentifier = NSUserInterfaceItemIdentifier("com_apple_SwiftUI_Settings_window")
-        let mainWindow = application.windows.first {
+        return application.windows.first {
             $0.canBecomeMain
                 && !($0 is NSPanel)
                 && $0.identifier != settingsWindowIdentifier
         }
-        mainWindow?.makeKeyAndOrderFront(nil)
     }
 }
 

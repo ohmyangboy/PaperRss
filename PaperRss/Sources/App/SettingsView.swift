@@ -2969,12 +2969,85 @@ struct SettingsView: View {
     }
 
     #if os(macOS)
+    private var hideDockIconDescription: String {
+        var parts: [String] = []
+        if attention.showMenuBarIcon {
+            parts.append(I18N.shared.localized(
+                "隐藏后应用不再出现在程序坞与 Cmd+Tab。",
+                "The app no longer appears in the Dock or Cmd-Tab."
+            ))
+        } else {
+            parts.append(I18N.shared.localized(
+                "需先开启「显示菜单栏图标」，否则应用将失去所有入口。",
+                "Turn on “Show Menu Bar Icon” first, or the app would lose every entry point."
+            ))
+        }
+        if attention.hideDockIcon != attention.appliedHideDockIcon {
+            parts.append(I18N.shared.localized("下次启动生效。", "Takes effect after relaunch."))
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private var showMenuBarIconDescription: String {
+        var parts = [
+            I18N.shared.localized(
+                "在菜单栏显示图标与未读数量。",
+                "Shows the icon and unread count in the menu bar."
+            )
+        ]
+        if attention.showMenuBarIcon != attention.appliedShowMenuBarIcon {
+            parts.append(I18N.shared.localized("下次启动生效。", "Takes effect after relaunch."))
+        }
+        return parts.joined(separator: " ")
+    }
+
     private var reminderSettings: some View {
         settingsGroup(
             I18N.shared.localized("提醒", "Alerts")
         ) {
             settingsRow(
-                I18N.shared.localized("Dock 未读徽标", "Dock unread badge")
+                I18N.shared.localized("隐藏 Dock 图标", "Hide Dock Icon"),
+                description: hideDockIconDescription
+            ) {
+                Toggle(
+                    I18N.shared.localized("隐藏 Dock 图标", "Hide Dock Icon"),
+                    isOn: Binding(
+                        get: { attention.hideDockIcon },
+                        set: { attention.setHideDockIcon($0) }
+                    )
+                )
+                .labelsHidden()
+                .disabled(!attention.showMenuBarIcon)
+                .accessibilityIdentifier("hide-dock-icon")
+            }
+
+            Divider().padding(.horizontal, 18).opacity(0.18)
+
+            settingsRow(
+                I18N.shared.localized("显示菜单栏图标", "Show Menu Bar Icon"),
+                description: showMenuBarIconDescription
+            ) {
+                Toggle(
+                    I18N.shared.localized("显示菜单栏图标", "Show Menu Bar Icon"),
+                    isOn: Binding(
+                        get: { attention.showMenuBarIcon },
+                        set: { attention.setShowMenuBarIcon($0) }
+                    )
+                )
+                .labelsHidden()
+                .accessibilityIdentifier("show-menu-bar-icon")
+            }
+
+            Divider().padding(.horizontal, 18).opacity(0.18)
+
+            settingsRow(
+                I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
+                description: attention.appliedHideDockIcon
+                    ? I18N.shared.localized(
+                        "Dock 图标隐藏时不可用。",
+                        "Unavailable while the Dock icon is hidden."
+                    )
+                    : nil
             ) {
                 Toggle(
                     I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
@@ -2984,6 +3057,7 @@ struct SettingsView: View {
                     )
                 )
                 .labelsHidden()
+                .disabled(attention.appliedHideDockIcon)
             }
         }
     }

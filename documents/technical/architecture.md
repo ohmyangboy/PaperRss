@@ -181,7 +181,7 @@ CloudKit 同步代码已经存在，但设置页明确标记为“同步功能�
 
 ## 6. 系统集成与产品表面
 
-- macOS Dock 未读角标由 `MacSystemAttentionController` 观察数据库并绘制自定义 Dock Tile；新文章系统通知路径当前被明确停用。
+- macOS 图标可见性由 `MacSystemAttentionController` 统一管理，两个开关默认关闭、改动均在下次启动生效（运行中不切激活策略，避免窗口闪动），且「隐藏 Dock 图标」依赖「显示菜单栏图标」（否则应用失去所有入口，规则见 `MacIconVisibilityPolicy`）：「隐藏 Dock 图标」启动时切换辅助激活策略，「显示菜单栏图标」用 `NSStatusItem` 绘制未读数量；Dock 未读角标为自定义 Dock Tile；新文章系统通知路径当前被明确停用。
 - `AppNavigationModel` 只承载跨系统入口的导航请求，当前用于打开未读列表。
 - OPML 导入只读取 `xmlUrl` 并去重；当前导出是有效 Feed 的扁平 outline，包含 `xmlUrl` 和可选 `htmlUrl`，不保留文件夹层级。
 - 更新检查通过 GitHub Releases 获取版本信息；忽略版本状态保存在本机。

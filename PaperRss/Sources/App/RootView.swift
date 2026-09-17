@@ -178,6 +178,7 @@ struct RootView: View {
     @ObservedObject var updateCoordinator: UpdateCoordinator
     @ObservedObject var attention: MacSystemAttentionController
     @ObservedObject var settingsEditor: AISettingsEditingSession
+    @Environment(\.openWindow) private var openWindow
     #endif
     @State private var selection: SidebarSelection? = .today
     // Keep selection independent from the value-semantic Entry model. Reading an
@@ -338,7 +339,11 @@ struct RootView: View {
         .focusedSceneValue(\.openPaperSettings, { showsSettings = true })
         .background(SettingsWindowRoute(open: { showsSettings = true }))
         .focusedSceneValue(\.paperReaderActive, !showsSettings)
-        .onAppear { isTimelineBrowsing = timelineStyle != .list }
+        .onAppear {
+            isTimelineBrowsing = timelineStyle != .list
+            // 菜单栏模式没有 Dock 图标可点，窗口关闭后由这里重新打开主窗口。
+            attention.registerMainWindowOpener { openWindow(id: "main") }
+        }
         .onChange(of: timelineShowsImages) { _, enabled in
             if !enabled { Task { await store.thumbnailStore.cancelAll() } }
         }
