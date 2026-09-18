@@ -7333,7 +7333,8 @@ struct ReaderCapsuleToolbar: View {
             .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
 
             Button(action: onOpenOriginal) {
-                toolbarSymbol("safari", isActive: false)
+                // `safari` 是正圆轮廓，与等字号的信封/星形相比视觉偏小；上浮 2pt 对齐光学大小。
+                toolbarSymbol("safari", isActive: false, pointSize: 15)
             }
             .buttonStyle(.plain)
             .disabled(!canOpenOriginal)
@@ -7378,11 +7379,11 @@ struct ReaderCapsuleToolbar: View {
         .contentShape(Circle())
     }
 
-    private func toolbarSymbol(_ name: String, isActive: Bool) -> some View {
+    private func toolbarSymbol(_ name: String, isActive: Bool, pointSize: CGFloat = Self.symbolPointSize) -> some View {
         Image(systemName: name)
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
-            .font(.system(size: Self.symbolPointSize, weight: .medium))
+            .font(.system(size: pointSize, weight: .medium))
             .frame(width: 28, height: 26)
             .background(isActive ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(.clear), in: Circle())
             .contentShape(Circle())
