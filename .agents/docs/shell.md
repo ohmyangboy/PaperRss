@@ -87,6 +87,5 @@ release.sh ──► verify.sh --core
 
 | 工作流 | 触发 | 执行 |
 | --- | --- | --- |
-| `preview-views-ci.yml` | push `main`、pull request、手动；路径含 `PaperRss/Sources/**`、`Tests/**`、`scripts/**`、`documents/**`、`.agents/**` | `verify.sh --core`、`--feature`、`--web`（macOS runner） |
 | `deploy-pages.yml` | push `main` 且改动 `website/**` 或赞赏预览脚本；每 12 小时 cron；手动 | `capture-sponsors-preview.py` 后部署 Pages |
 | `sync-release-server.yml` | 正式 Release 发布（非 prerelease）自动触发；手动 | 经 SSH 同步发布服务器资产 |
