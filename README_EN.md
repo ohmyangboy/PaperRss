@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -81,9 +81,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Stable v1.4.1 (Build 33)** adds customizable reader shortcuts and refines magazine arrow-key navigation with departure-position restore. Recommended for all users. See the [changelog](CHANGELOG.md).
-
-**Beta v1.4.2-beta.1 (Build 34)**: Adds Miniflux account support using the Google Reader credentials from Miniflux “Settings → Integrations” to sync subscriptions, categories, articles and two-way read/starred states alongside FreshRSS accounts. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.2-beta.1).
+**Stable v1.4.2 (Build 35)** fixes cold-launch crashes on macOS 14 / 15, and adds Miniflux account support, an “Open Original” reader entry and better article/image extraction. Recommended for all users. See the [changelog](CHANGELOG.md).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

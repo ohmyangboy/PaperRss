@@ -1,5 +1,29 @@
 # 更新记录 / Changelog
 
+## v1.4.2 · Build 35 · 2026-09-18
+
+PaperRss 1.4.2 修复了 macOS 14 与 macOS 15 用户自 1.4.1 起遇到的冷启动闪退，并带来 Miniflux 账号接入、阅读页「打开原文」入口与多项正文提取改进；建议所有用户升级。
+
+- 冷启动闪退修复（重要）：修复 1.4.1 起在 macOS 14 / 15 上打开应用即闪退（EXC_BREAKPOINT）的问题。原因为应用启动早期读取尚未就绪的系统菜单与 AppKit 单例；现在菜单扫描推迟到应用完成启动之后执行，并在系统菜单不可用时保持安全，任何系统版本都不再受影响。
+- Miniflux 账号接入（新功能）：设置 → 账号 → 添加账号新增 Miniflux 服务预设，使用 Miniflux「设置 → 集成 → Google Reader」配置的用户名与密码连接；支持订阅与分类拉取（含服务端空分类）、文章同步与双向已读/星标同步，离线修改可恢复重试。
+- 用户数据与多账号隔离：Miniflux 凭据保存在独立 Keychain 命名空间，与 FreshRSS、本地账号及各自状态队列完全隔离，可多账号并存互不影响。
+- 打开原文入口（新功能）：阅读工具栏胶囊最右新增「打开原文」按钮，没有原文链接时置灰；与快捷键（默认连按 `O O`）共用同一动作入口。
+- 正文与图片提取修复：修复 Substack 型 CDN 图片因 srcset 逗号切分被截断导致的破图；减少正文混入站点导航、作者行、点赞/分享等页面元素；标题与摘要中的 HTML 实体不再原样显示，旧缓存打开时自动重新清洗。
+- Dock 图标隐藏与菜单栏模式：支持隐藏 Dock 图标（含 Cmd+Tab）并常驻菜单栏显示图标与未读数，Dock 未读徽标与菜单栏未读文案一致（99+ 折叠），可随时切回。
+- 阅读工具栏与滚动细节：胶囊宽度与图标在窄窗口下保持稳定，修正列表 / 杂志切换后顶部导航模糊绑定丢失的问题。
+
+---
+
+PaperRss 1.4.2 fixes cold-launch crashes that macOS 14 and macOS 15 users hit since 1.4.1, and adds Miniflux account support, an “Open Original” reader entry and article-extraction improvements. Recommended for all users.
+
+- Cold-launch crash fix (important): fixed the crash-on-launch (EXC_BREAKPOINT) that affected macOS 14 / 15 users since 1.4.1. The app used to read the system menu and AppKit singletons before they were ready during launch; menu scanning now runs only after the app finishes launching and stays safe when the system menu is unavailable, on every macOS version.
+- Miniflux accounts (new): a Miniflux preset in Settings → Accounts → Add Account using the username and password from Miniflux “Settings → Integrations → Google Reader”; supports subscriptions and categories (including empty ones), article sync, two-way read/starred sync, and recoverable offline changes.
+- Data and multi-account isolation: Miniflux credentials live in a dedicated Keychain namespace, fully isolated from FreshRSS, local accounts and their state queues, so accounts coexist independently.
+- Open-original entry (new): the reader toolbar capsule gains an “Open Original” button (disabled when no link exists), sharing one action with the shortcut (default double-press `O O`).
+- Article and image extraction fixes: Substack-style CDN images no longer break from comma-split srcset URLs; site navigation, bylines and like/share chrome leak into article bodies less often; HTML entities in titles and summaries are no longer shown raw, and old caches re-clean on open.
+- Hide Dock icon & menu bar mode: hide the Dock icon (including Cmd+Tab) and keep PaperRss in the menu bar with an unread count; the Dock badge and menu bar count stay consistent (99+ capped), and you can switch back anytime.
+- Reader toolbar and scrolling polish: capsule width and icons stay stable in narrow windows, and the top navigation blur keeps its binding after switching between list and magazine views.
+
 ## v1.4.2-beta.1 · Build 34 · 2026-09-15
 
 本次为 Miniflux 账号接入的实验性 Beta；建议使用自建 Miniflux 的用户升级测试，稳定通道仍为 v1.4.1。

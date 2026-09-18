@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.4.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.4.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -83,9 +83,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**稳定版 v1.4.1（Build 33）** 新增「文章阅读」自定义快捷键，并优化杂志模式方向键就近导航与翻回位置恢复，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
-
-**Beta v1.4.2-beta.1（Build 34）**：新增 Miniflux 账号接入，使用 Miniflux「设置 → 集成」的 Google Reader 凭据同步订阅、分类、文章与双向已读/星标状态，与 FreshRSS 账号并存。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.2-beta.1)。
+**稳定版 v1.4.2（Build 35）** 修复 macOS 14 / 15 冷启动闪退，新增 Miniflux 账号接入与阅读页「打开原文」入口，并改进正文与图片提取，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
