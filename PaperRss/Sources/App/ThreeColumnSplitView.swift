@@ -42,6 +42,13 @@ private final class LegacyReaderCapsuleMaterialContainer: NSVisualEffectView {
     func applyThemeTint(_ color: NSColor) {
         tintView.layer?.backgroundColor = color.withAlphaComponent(0.14).cgColor
     }
+
+    /// 禅模式下工具栏透明、下方正文的文本光标会透到胶囊区域；
+    /// 胶囊整体固定为箭头光标，指针离开后由系统恢复。
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .arrow)
+    }
 }
 
 private struct TimelineReturnGlassButton: View {
@@ -320,6 +327,8 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
 
         // 更新工具栏中的阅读工具胶囊(SwiftUI 状态变化后刷新图标/可用态与显示隐藏)
         if let host = context.coordinator.readerCapsuleHost {
+            let wasVisible = context.coordinator.readerCapsuleVisible
+            context.coordinator.readerCapsuleVisible = toolbarActions.showsReaderCapsule
             if toolbarActions.showsReaderCapsule {
                 host.isHidden = false
                 context.coordinator.readerCapsuleMaterialContainer?.isHidden = false
@@ -335,9 +344,16 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
                 context.coordinator.readerCapsuleMaterialContainer?.applyThemeTint(
                     context.coordinator.chromeBackgroundColor
                 )
+                if !wasVisible {
+                    // 视觉/杂志时间线：等居中收敛后再显示，避免“先出现在占位处、再跳到对齐位置”。
+                    context.coordinator.handleReaderCapsuleBecameVisible(
+                        requiresVisualCentering: toolbarActions.usesVisualTimeline && !toolbarActions.isZenMode
+                    )
+                }
             } else {
                 host.isHidden = true
                 context.coordinator.readerCapsuleMaterialContainer?.isHidden = true
+                context.coordinator.resetReaderCapsuleReveal()
                 if #available(macOS 15.0, *) {
                     context.coordinator.readerCapsuleItem?.isHidden = true
                 }
@@ -407,8 +423,20 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         private var visualCenterTask: Task<Void, Never>?
         fileprivate weak var readerCapsuleWidthConstraint: NSLayoutConstraint?
         fileprivate weak var readerCapsuleHeightConstraint: NSLayoutConstraint?
+        /// 视图切换按钮的宽度约束：禅模式下收起为 0，避免隐藏后仍占位。
+        private weak var timelineControlsWidthConstraint: NSLayoutConstraint?
         /// 异步测量代际：内容/可见性变化后作废未执行的旧测量，避免用过期尺寸回写。
         private var readerCapsuleSizeGeneration = 0
+        /// 视觉/杂志时间线下胶囊“等待居中收敛后再显示”的待办标记。
+        private var pendingCapsuleReveal = false
+        /// 同上：工具栏标题（浏览态对齐目标）的待办标记。
+        private var pendingTitleReveal = false
+        /// 视觉对齐上下文键：浏览/阅读、是否显示标题变化时重新对齐。
+        private var lastVisualAlignmentKey = ""
+        /// 兜底显示任务：即使居中任务被后续更新频繁打断，也不会让对齐项一直隐形。
+        private var revealFallbackTask: Task<Void, Never>?
+        /// 上一轮更新时胶囊是否可见，用于识别 隐藏→可见 过渡。
+        fileprivate var readerCapsuleVisible = false
         fileprivate weak var entryListTitleItem: NSToolbarItem?
         private weak var titleLabel: NSTextField?
         private weak var titleMaxWidthConstraint: NSLayoutConstraint?
@@ -471,6 +499,68 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
             return AnyView(
                 rootView.environment(\.readerCapsuleMaterialHostedByAppKit, true)
             )
+        }
+
+        /// 胶囊从隐藏变为可见时的过渡处理。
+        ///
+        /// 杂志/视觉时间线里胶囊位置由 `centerVisualToolbar` 的对齐约束决定，收敛需要几帧；
+        /// 若直接显示，会先出现在弹性占位处、再跳到对齐位置（“往右跳动一下”）。
+        /// 因此先透明落位、等居中收敛后再一次性显示出来。
+        fileprivate func handleReaderCapsuleBecameVisible(requiresVisualCentering: Bool) {
+            guard requiresVisualCentering else {
+                pendingCapsuleReveal = false
+                setReaderCapsuleAlpha(1)
+                return
+            }
+            pendingCapsuleReveal = true
+            setReaderCapsuleAlpha(0)
+            scheduleRevealFallback()
+            scheduleVisualToolbarCenter()
+        }
+
+        fileprivate func resetReaderCapsuleReveal() {
+            pendingCapsuleReveal = false
+            setReaderCapsuleAlpha(1)
+        }
+
+        private func setReaderCapsuleAlpha(_ alpha: CGFloat) {
+            readerCapsuleHost?.alphaValue = alpha
+            readerCapsuleMaterialContainer?.alphaValue = alpha
+        }
+
+        private func revealReaderCapsuleIfNeeded() {
+            if pendingCapsuleReveal {
+                pendingCapsuleReveal = false
+                setReaderCapsuleAlpha(1)
+            }
+            if pendingTitleReveal {
+                pendingTitleReveal = false
+                titleLabel?.alphaValue = 1
+            }
+        }
+
+        /// 视觉/杂志时间线的对齐上下文（浏览/阅读、是否显示标题）变化时，先把待对齐的
+        /// 标题隐藏，等 `scheduleVisualToolbarCenter` 收敛后再显示，避免“先出现在旧位置、
+        /// 再跳到对齐位置”。仅在视觉时间线调用。
+        private func hideVisualAlignmentTargetIfNeeded() {
+            let key = "\(actions.usesMagazineTimeline)-\(actions.isTimelineBrowsing)-\(actions.showsEntryListTitle)"
+            guard key != lastVisualAlignmentKey else { return }
+            lastVisualAlignmentKey = key
+            guard actions.isTimelineBrowsing || actions.showsEntryListTitle,
+                  let titleLabel, titleLabel.alphaValue != 0 else { return }
+            pendingTitleReveal = true
+            titleLabel.alphaValue = 0
+            scheduleRevealFallback()
+        }
+
+        /// 兜底：居中收敛任务可能被高频更新反复打断，这里保证对齐项最终一定显示。
+        private func scheduleRevealFallback() {
+            revealFallbackTask?.cancel()
+            revealFallbackTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard let self, !Task.isCancelled else { return }
+                self.revealReaderCapsuleIfNeeded()
+            }
         }
 
         fileprivate func readerCapsuleHeight(for contentHeight: CGFloat) -> CGFloat {
@@ -1144,7 +1234,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 .paperTimelineBack, .flexibleSpace, .paperReaderCapsule, .flexibleSpace, .paperTimelineControls
             ]
             if actions.isZenMode {
-                return [.flexibleSpace, .paperReaderCapsule, .flexibleSpace, .paperTimelineControls]
+                // 禅模式只保留阅读胶囊。macOS 15+ 有中心项 API：胶囊是唯一项，
+                // 位置不再受其它控件进出导致的弹性空白重分配影响
+                // （否则进入禅模式瞬间胶囊会平移约半个控件宽度）。
+                // 旧系统没有中心项 API，仍用对称弹性空白居中。
+                if #available(macOS 15.0, *) {
+                    return [.paperReaderCapsule]
+                }
+                return [.flexibleSpace, .paperReaderCapsule, .flexibleSpace]
             }
             var result: [NSToolbarItem.Identifier] = [.toggleSidebar, .paperRefresh, .paperAddMenu]
             if !sidebarCollapsed { result.append(.paperSidebarTracker) }
@@ -1208,13 +1305,18 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// 用窗口坐标对齐阅读区；返回按钮不计入文章工具的视觉中心。
         func scheduleVisualToolbarCenter() {
             visualCenterTask?.cancel()
-            guard actions.usesVisualTimeline, !actions.isZenMode else { return }
+            guard actions.usesVisualTimeline, !actions.isZenMode else {
+                revealReaderCapsuleIfNeeded()
+                return
+            }
+            hideVisualAlignmentTargetIfNeeded()
             visualCenterTask = Task { @MainActor [weak self] in
                 for _ in 0..<3 {
                     await Task.yield()
                     guard !Task.isCancelled, let self else { return }
                     self.centerVisualToolbar()
                 }
+                self?.revealReaderCapsuleIfNeeded()
             }
         }
 
@@ -1781,7 +1883,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 case .paperReaderCapsule:
                     item.label = I18N.localized("阅读工具")
                     item.paletteLabel = I18N.localized("阅读工具")
-                    item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
+                    // 胶囊不再提供视觉提示，item 级 toolTip 保持为空。
+                    item.toolTip = nil
                 default:
                     break
                 }
@@ -1890,13 +1993,19 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// hidden tracking separators must not reserve a phantom list column.
         func syncZenModeState() {
             guard isReaderActive, let toolbar = splitViewController?.view.window?.toolbar else { return }
-            syncTimelineToolbarStructure()
+            // 先应用中心项再到重排 item：避免两趟布局各摆一次位置造成可见跳动。
             toolbar.centeredItemIdentifier = actions.isZenMode ? .paperReaderCapsule : nil
+            syncTimelineToolbarStructure()
             for item in toolbar.items {
-                let hidden = item.itemIdentifier == .paperReaderCapsule && !actions.showsReaderCapsule
+                var hidden = item.itemIdentifier == .paperReaderCapsule && !actions.showsReaderCapsule
+                // 禅模式下视图切换按钮必须让位：连同占位宽度一起收起。
+                if item.itemIdentifier == .paperTimelineControls {
+                    hidden = actions.isZenMode
+                }
                 if #available(macOS 15.0, *) { item.isHidden = hidden }
                 item.view?.isHidden = hidden
             }
+            timelineControlsWidthConstraint?.constant = actions.isZenMode ? 0 : Self.timelineAccessoryWidth
             readerCapsuleHost?.isHidden = !actions.showsReaderCapsule
             readerCapsuleMaterialContainer?.isHidden = !actions.showsReaderCapsule
             timelineBackButton?.isHidden = !actions.showsTimelineReturn
@@ -2106,12 +2215,14 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let host = NSHostingView(rootView: actions.timelineControls)
                 host.translatesAutoresizingMaskIntoConstraints = false
                 host.frame = NSRect(x: 0, y: 0, width: Self.timelineAccessoryWidth, height: 32)
+                let widthConstraint = host.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth)
                 NSLayoutConstraint.activate([
-                    host.widthAnchor.constraint(equalToConstant: Self.timelineAccessoryWidth),
+                    widthConstraint,
                     host.heightAnchor.constraint(equalToConstant: 32)
                 ])
                 item.view = host
                 timelineControlsHost = host
+                timelineControlsWidthConstraint = widthConstraint
                 return item
 
             case .paperVisualLeadingSpace, .paperVisualTrailingSpace:
@@ -2130,7 +2241,8 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
                 let item = NSToolbarItem(itemIdentifier: .paperReaderCapsule)
                 item.label = I18N.localized("阅读工具")
                 item.paletteLabel = I18N.localized("阅读工具")
-                item.toolTip = I18N.localized("C 翻译 · V 摘要 · B 上一篇 · N 下一篇 · M 收藏")
+                // 胶囊不提供视觉提示；item 级 toolTip 会横跨整条胶囊且延迟约 1s，这里保持为空。
+                item.toolTip = nil
                 item.autovalidates = false
                 item.isEnabled = true
                 if #available(macOS 15.0, *) {

@@ -101,6 +101,8 @@ struct ArticleReaderView: View {
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var showsMagazineReturn = false
+    /// 杂志/卡片路由在浏览态会把阅读器整列收起（WKWebView 仍存活）。
+    var isReaderCollapsed = false
     var isZenMode: Bool = false
     var onToggleZenMode: () -> Void = {}
     @State private var translationDocumentReady = false
@@ -117,6 +119,12 @@ struct ArticleReaderView: View {
     /// 期间不得显示不透明 loading 遮罩（否则产生“内容→纸面→内容”的屏闪）。
     /// isLoading 语义保持不变，供 onDocumentReady 握手使用。
     @State private var displaysMemoizedArticle = false
+    /// 杂志/卡片路由收起阅读器期间旧文档仍然活着（WKWebView 被整栏折叠而非销毁）；
+    /// 收起期间就把不透明遮罩盖好，重新呈现时等到新文档首帧上屏才揭开。
+    @State private var coversStaleDocument = false
+    /// WebView 里当前这篇文档的 entry（DOM 就绪或首帧绘制后登记）；
+    /// 重新呈现时若它已经是目标文章，遮罩可以直接撤掉（同一篇重进）。
+    @State private var onScreenDocumentEntryID: String?
     @State private var documentLoadFailed = false
     @State private var activeLoadEntryID: String?
     @State private var articleLoadSession = 0
@@ -245,7 +253,7 @@ struct ArticleReaderView: View {
                 readerBody
                     .zIndex(0)
             }
-            if isLoading && !displaysMemoizedArticle {
+            if (isLoading && !displaysMemoizedArticle) || coversStaleDocument {
                 loadingOverlay
                     .zIndex(2)
             } else if documentLoadFailed {
@@ -316,6 +324,19 @@ struct ArticleReaderView: View {
         .onChange(of: store.articleRefreshSignal) { _, signal in
             guard let signal, signal.entryID == entry.id else { return }
             articleReloadToken += 1
+        }
+        .onChange(of: isReaderCollapsed) { _, collapsed in
+            if collapsed {
+                // 收起后旧文档随时可能被重新揭示；先盖住，等目标文档首帧上屏再揭开。
+                coversStaleDocument = true
+            } else if onScreenDocumentEntryID == entry.id {
+                // 重新呈现的就是已经上屏的文档（同一篇重进），无需遮罩，立即恢复。
+                coversStaleDocument = false
+            }
+        }
+        .onAppear {
+            // 阅读器在收起态首次挂载（选中项在浏览态就已存在）时同样要盖住旧文档。
+            if isReaderCollapsed { coversStaleDocument = true }
         }
         .task(id: "\(entry.id)-\(articleReloadToken)") {
             translationDocumentReady = false
@@ -411,6 +432,17 @@ struct ArticleReaderView: View {
 
     private var hasReaderContent: Bool { preparedArticle != nil }
 
+    /// 首帧信号（onDocumentPainted）因脚本被拦截、视图长时间不可见等原因缺失时的兜底揭盖，
+    /// 避免不透明遮罩永久停留在阅读器上。
+    private func scheduleStaleDocumentCoverReleaseFallback(entryID: String) {
+        guard coversStaleDocument else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard coversStaleDocument, activeLoadEntryID == entryID else { return }
+            coversStaleDocument = false
+        }
+    }
+
     private var loadingOverlay: some View {
         ZStack {
             AppearanceSurface(role: .reader, appearance: store.readerAppearance, mode: readerAppearanceMode)
@@ -468,14 +500,24 @@ struct ArticleReaderView: View {
                     isLoading = false
                     showsLoadingIndicator = false
                     displaysMemoizedArticle = false
+                    onScreenDocumentEntryID = loadedEntryID
+                    // DOM 就绪 ≠ 首帧上屏：遮罩等 onDocumentPainted 揭开，
+                    // 这里只兜底，避免首帧信号缺失时遮罩永久停留。
+                    scheduleStaleDocumentCoverReleaseFallback(entryID: loadedEntryID)
                     requestVisibleTranslationsIfPossible()
                     return true
+                },
+                onDocumentPainted: { paintedEntryID in
+                    guard activeLoadEntryID == paintedEntryID else { return }
+                    onScreenDocumentEntryID = paintedEntryID
+                    coversStaleDocument = false
                 },
                 onDocumentLoadFailed: { loadedEntryID in
                     guard activeLoadEntryID == loadedEntryID else { return }
                     isLoading = false
                     showsLoadingIndicator = false
                     displaysMemoizedArticle = false
+                    coversStaleDocument = false
                     documentLoadFailed = true
                 },
                 summaryArtifact: effectiveSummaryArtifact,
@@ -547,6 +589,10 @@ struct ArticleReaderView: View {
                     isLoading = false
                     showsLoadingIndicator = false
                     displaysMemoizedArticle = false
+                    onScreenDocumentEntryID = loadedEntryID
+                    // DOM 就绪 ≠ 首帧上屏：遮罩等 onDocumentPainted 揭开，
+                    // 这里只兜底，避免首帧信号缺失时遮罩永久停留。
+                    scheduleStaleDocumentCoverReleaseFallback(entryID: loadedEntryID)
                     requestVisibleTranslationsIfPossible()
                     return true
                 },
@@ -555,6 +601,7 @@ struct ArticleReaderView: View {
                     isLoading = false
                     showsLoadingIndicator = false
                     displaysMemoizedArticle = false
+                    coversStaleDocument = false
                     documentLoadFailed = true
                 },
                 summaryArtifact: effectiveSummaryArtifact,
@@ -4546,14 +4593,23 @@ enum PaperReaderBridge {
     )
 
     static let documentReadyMessageName = "paperRssDocumentReady"
+    /// DOM 就绪不代表新文档已经上屏：阅读器的旧文档遮罩要等首帧绘制后才能揭开。
+    static let documentPaintedMessageName = "paperRssDocumentPainted"
 
     // 正文 DOM 就绪即可交互，不等待图片、视频等外部资源结束加载。
+    // 同时上报「首帧已提交绘制」：两次 rAF 后再排一个宏任务，此时首次绘制
+    // 已提交给合成器；DOM 就绪与首帧之间隔着布局与绘制，过早揭开遮罩会闪出上一篇。
     static let documentReadyScript = WKUserScript(
         source: """
         (() => {
           const generation = document.querySelector('meta[name="paper-rss-load-generation"]')?.content;
-          if (generation) {
-            window.webkit?.messageHandlers?.\(documentReadyMessageName)?.postMessage({ generation });
+          if (!generation) { return; }
+          window.webkit?.messageHandlers?.\(documentReadyMessageName)?.postMessage({ generation });
+          const notifyPainted = () => window.webkit?.messageHandlers?.\(documentPaintedMessageName)?.postMessage({ generation });
+          if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(notifyPainted, 0)));
+          } else {
+            setTimeout(notifyPainted, 0);
           }
         })();
         """,
@@ -5352,6 +5408,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
     let isInteractive: Bool
     let allowsNavigationWhenInactive: Bool
     let onDocumentReady: (String) -> Bool
+    /// 新文档首帧已提交绘制（macOS 用它决定何时揭开旧文档遮罩；iOS 未使用）。
+    var onDocumentPainted: (String) -> Void = { _ in }
     let onDocumentLoadFailed: (String) -> Void
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
@@ -5422,6 +5480,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
             context.coordinator,
             contentWorld: .defaultClient,
             name: PaperReaderBridge.documentReadyMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: PaperReaderBridge.documentPaintedMessageName
         )
         configuration.userContentController.add(
             context.coordinator,
@@ -5517,6 +5580,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.documentPaintedMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.readerShortcutMessageName,
             contentWorld: .defaultClient
         )
@@ -5540,6 +5607,9 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var loadedArticle: PreparedArticle?
         private var observedLoadSession: Int?
         private var completedArticleKey: String?
+        /// 最近一次 DOM 就绪的加载身份：didFinish 消费 navigationLoads 后，
+        /// 首帧信号仍能据此找到对应文章。
+        private var lastCompletedLoad: (entryID: String, generation: Int)?
         private var renderedTranslations: [String: String] = [:]
         private var renderedPendingTranslationIDs = Set<String>()
         private var renderedTranslationPreferences: TranslationPreferences?
@@ -5845,6 +5915,19 @@ private struct ArticleHTMLView: NSViewRepresentable {
                       let load = navigationLoads.values.first(where: { $0.generation == generation }),
                       let webView = message.webView else { return }
                 completeDocumentLoad(load, in: webView)
+                return
+            }
+            if message.name == PaperReaderBridge.documentPaintedMessageName {
+                guard message.frameInfo.isMainFrame,
+                      let payload = message.body as? [String: Any],
+                      let value = payload["generation"] as? String,
+                      let generation = Int(value),
+                      generation == currentLoadGeneration else { return }
+                // didFinish 会消费 navigationLoads；文档已就绪的情况从这里兜底取身份。
+                let entryID = navigationLoads.values.first(where: { $0.generation == generation })?.entryID
+                    ?? (lastCompletedLoad?.generation == generation ? lastCompletedLoad?.entryID : nil)
+                guard let entryID else { return }
+                parent.onDocumentPainted(entryID)
                 return
             }
             if !parent.isInteractive {
@@ -6182,6 +6265,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                       load.generation == self.currentLoadGeneration,
                       self.completedArticleKey != load.signature else { return }
                 self.completedArticleKey = load.signature
+                self.lastCompletedLoad = (load.entryID, load.generation)
                 self.failedLoadAttempts.removeValue(forKey: load.signature)
                 self.synchronizeReaderAppearance(in: webView, force: true)
                 self.synchronizeAudioWave(in: webView, level: self.parent.outputVolume.level, force: true)
@@ -6369,6 +6453,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
     let isInteractive: Bool
     let allowsNavigationWhenInactive: Bool
     let onDocumentReady: (String) -> Bool
+    /// 新文档首帧已提交绘制（macOS 用它决定何时揭开旧文档遮罩；iOS 未使用）。
+    var onDocumentPainted: (String) -> Void = { _ in }
     let onDocumentLoadFailed: (String) -> Void
     let summaryArtifact: AIArtifact?
     let isSummaryExpanded: Bool
@@ -6499,6 +6585,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: PaperReaderBridge.documentReadyMessageName,
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: PaperReaderBridge.documentPaintedMessageName,
             contentWorld: .defaultClient
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
@@ -7306,21 +7396,18 @@ struct ReaderCapsuleToolbar: View {
             .buttonStyle(.plain)
             .disabled(disabled)
             .accessibilityLabel("\(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
-            .help("\(I18N.localized(isBilingualActive ? "关闭逐段翻译" : "开启逐段翻译")) (C)")
 
             Button(action: onToggleRead) {
                 toolbarSymbol(isRead ? "envelope.open" : "envelope", isActive: false)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(I18N.localized(isRead ? "标为未读" : "标为已读"))
-            .help(I18N.localized(isRead ? "标为未读" : "标为已读"))
 
             Button(action: onToggleStar) {
                 toolbarSymbol(isStarred ? "star.fill" : "star", isActive: isStarred)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(I18N.localized(isStarred ? "取消收藏" : "收藏")) (M)")
-            .help("\(I18N.localized(isStarred ? "取消收藏" : "收藏")) (M)")
 
             Button(action: onToggleZenMode) {
                 toolbarSymbol(
@@ -7330,7 +7417,6 @@ struct ReaderCapsuleToolbar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
-            .help(I18N.localized(isZenMode ? "退出禅模式" : "禅模式全屏阅读"))
 
             Button(action: onOpenOriginal) {
                 // `safari` 是正圆轮廓，与等字号的信封/星形相比视觉偏小；上浮 2pt 对齐光学大小。
@@ -7338,15 +7424,15 @@ struct ReaderCapsuleToolbar: View {
             }
             .buttonStyle(.plain)
             .disabled(!canOpenOriginal)
-            .accessibilityLabel(I18N.localized("打开原文"))
-            .help(openOriginalHelp)
+            .accessibilityLabel(openOriginalAccessibilityLabel)
         }
         .padding(.horizontal, 6)
         .frame(height: 28)
+        .background { ReaderCapsuleCursorArea() }
     }
 
-    private var openOriginalHelp: String {
-        guard canOpenOriginal else { return I18N.localized("当前文章没有原文链接") }
+    /// 快捷键提示并入无障碍标签（不再提供视觉 hover 提示）。
+    private var openOriginalAccessibilityLabel: String {
         let label = I18N.localized("打开原文")
         return openOriginalKeyHint.isEmpty ? label : "\(label) (\(openOriginalKeyHint))"
     }

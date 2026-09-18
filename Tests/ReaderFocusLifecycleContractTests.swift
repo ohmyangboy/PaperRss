@@ -18,7 +18,7 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("isInteractive: isDisplayedDocumentInteractive"))
         XCTAssertTrue(articleReader.contains("window.paperRssReaderInteractive === false"))
         XCTAssertTrue(articleReader.contains("guard parent.allowsNavigationWhenInactive else { return }"))
-        XCTAssertTrue(articleReader.contains("if isLoading && !displaysMemoizedArticle"))
+        XCTAssertTrue(articleReader.contains("if (isLoading && !displaysMemoizedArticle) || coversStaleDocument"))
         XCTAssertTrue(articleReader.contains("let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)"))
         XCTAssertTrue(articleReader.contains("displaysMemoizedArticle = (memoizedPrepared != nil)"))
         XCTAssertTrue(articleReader.contains("if let memoizedPrepared {"))
@@ -52,6 +52,43 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertLessThan(identityCheck, translationInsertion)
         XCTAssertTrue(articleReader.contains("loadedText.htmlEscaped"))
         XCTAssertTrue(articleReader.contains("private var hasReaderContent: Bool { preparedArticle != nil }"))
+    }
+
+    /// 杂志/卡片路由在浏览态把阅读器整栏折叠（WKWebView 保留上一篇文档），
+    /// 重新呈现时必须先盖不透明遮罩，并且要等新文档首帧上屏（DOM ready 后两次 rAF）才揭开；
+    /// 列表模式不折叠阅读器，顺序阅读的无缝旧文档过渡保持不变。
+    func testMagazineRouteCoversStaleDocumentBeforeRevealingReader() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let articleReader = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/ArticleReaderView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(articleReader.contains("@State private var coversStaleDocument = false"))
+        XCTAssertTrue(articleReader.contains(".onChange(of: isReaderCollapsed) { _, collapsed in"))
+        XCTAssertTrue(articleReader.contains("coversStaleDocument = true"))
+        XCTAssertTrue(articleReader.contains("} else if onScreenDocumentEntryID == entry.id {"))
+        // DOM 就绪只作为兜底起点；首帧信号缺失时也必须揭盖。
+        XCTAssertTrue(articleReader.contains("scheduleStaleDocumentCoverReleaseFallback(entryID: loadedEntryID)"))
+        XCTAssertTrue(articleReader.contains("guard coversStaleDocument, activeLoadEntryID == entryID else { return }"))
+        // 揭盖路径：兜底、首帧回调、macOS/iOS 失败回调、重新呈现、声明。
+        XCTAssertEqual(articleReader.components(separatedBy: "coversStaleDocument = false").count - 1, 6)
+        // 首帧上屏信号：DOM ready 后再两次 rAF + 宏任务上报。
+        XCTAssertTrue(articleReader.contains("static let documentPaintedMessageName = \"paperRssDocumentPainted\""))
+        XCTAssertTrue(articleReader.contains("requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(notifyPainted, 0)))"))
+        XCTAssertTrue(articleReader.contains("onDocumentPainted: { paintedEntryID in"))
+        XCTAssertTrue(articleReader.contains("parent.onDocumentPainted(entryID)"))
+        // didFinish 会消费 navigationLoads，首帧信号需能回退到最近一次 DOM 就绪的加载。
+        XCTAssertTrue(articleReader.contains("private var lastCompletedLoad: (entryID: String, generation: Int)?"))
+        XCTAssertTrue(articleReader.contains("?? (lastCompletedLoad?.generation == generation ? lastCompletedLoad?.entryID : nil)"))
+        XCTAssertTrue(articleReader.contains("self.lastCompletedLoad = (load.entryID, load.generation)"))
+
+        let rootView = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(rootView.contains("isReaderCollapsed: timelineStyle != .list && isTimelineBrowsing && !isZenMode"))
     }
 
     func testMemoizedInstantSwitchAndNeighborPrefetchWiring() throws {

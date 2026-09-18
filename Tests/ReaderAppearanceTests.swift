@@ -306,13 +306,17 @@ final class ReaderAppearanceTests: XCTestCase {
             encoding: .utf8
         )
 
-        // 顶部导航模糊必须继续由滚动偏移驱动，并在 NSTableView 延迟创建时仍能绑定。
+        // 顶部导航模糊必须继续由滚动偏移驱动，并在 NSTableView 延迟创建时仍能绑定；
+        // 解析必须限定在当前栏目的宿主视图内，且每次 update 重新解析目标，
+        // 否则列表 ↔ 杂志切换后误绑相邻栏目会让模糊失效。
         XCTAssertTrue(rootView.contains("PaperTopBarBlur("))
         XCTAssertTrue(rootView.contains("opacity: isScrolled ? 1 : 0"))
         XCTAssertTrue(rootView.contains("ScrollOffsetObserver"))
         XCTAssertTrue(rootView.contains("maximumAttachmentAttempts"))
         XCTAssertTrue(rootView.contains("table.enclosingScrollView"))
         XCTAssertTrue(rootView.contains("static func dismantleNSView"))
+        XCTAssertTrue(rootView.contains("nearestHostingView"))
+        XCTAssertTrue(rootView.contains("refreshAttachment"))
     }
 
     private func restore(_ value: Any?, key: String, defaults: UserDefaults) {

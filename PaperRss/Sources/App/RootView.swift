@@ -343,6 +343,8 @@ struct RootView: View {
             isTimelineBrowsing = timelineStyle != .list
             // 菜单栏模式没有 Dock 图标可点，窗口关闭后由这里重新打开主窗口。
             attention.registerMainWindowOpener { openWindow(id: "main") }
+            // 主窗口已上屏，主菜单必然就绪：补一次快捷键保留表扫描（幂等）。
+            ReaderShortcutReservedCatalog.shared.scanMenuIfNeeded()
         }
         .onChange(of: timelineShowsImages) { _, enabled in
             if !enabled { Task { await store.thumbnailStore.cancelAll() } }
@@ -1126,6 +1128,7 @@ struct RootView: View {
                         else { returnToTimeline() }
                     },
                     showsMagazineReturn: timelineStyle == .magazine,
+                    isReaderCollapsed: timelineStyle != .list && isTimelineBrowsing && !isZenMode,
                     isZenMode: isZenMode,
                     onToggleZenMode: { withAnimation { isZenMode.toggle() } }
                 )
@@ -3018,10 +3021,13 @@ private struct EntryListView: View {
 ///
 /// SwiftUI 重建宿主视图时，一次性查找滚动视图可能发生在 NSTableView 尚未创建的时刻，
 /// 之后便永远失效（顶部导航模糊消失）。这里改为：
-/// 1. 优先在当前 NSHostingView 内由 NSTableView 反查 enclosingScrollView，不依赖
-///    `.background` 与 List 的兄弟顺序，也不会误选相邻栏目的滚动视图；
-/// 2. 首次查找失败时按短间隔重试，确保列表滚动一定被观察到。
-private struct ScrollOffsetObserver: NSViewRepresentable {
+/// 1. 只在当前栏目的 NSHostingView 内解析滚动容器：优先由 NSTableView 反查
+///    enclosingScrollView，其次才是本栏自己的 SwiftUI ScrollView。严禁向上越出
+///    宿主视图遍历兄弟节点——否则会误绑侧边栏/阅读栏滚动视图，切换视图样式
+///    （列表 ↔ 杂志）后绑定无法恢复，顶部模糊消失；
+/// 2. 每次 update 重新解析目标并按需改绑，样式切换或 List 重建都能自愈；
+/// 3. 目标尚未创建时按短间隔重试，确保列表滚动一定被观察到。
+struct ScrollOffsetObserver: NSViewRepresentable {
     let onOffsetChange: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -3033,11 +3039,7 @@ private struct ScrollOffsetObserver: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onOffsetChange = onOffsetChange
-        if let clipView = context.coordinator.clipView {
-            context.coordinator.checkOffset(clipView)
-        } else {
-            context.coordinator.scheduleAttachment(for: nsView)
-        }
+        context.coordinator.refreshAttachment(for: nsView)
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -3048,32 +3050,26 @@ private struct ScrollOffsetObserver: NSViewRepresentable {
         Coordinator(onOffsetChange: onOffsetChange)
     }
 
-    /// 优先使用当前 SwiftUI 宿主视图中的 NSTableView 反查滚动容器，失败时回退到
-    /// 兄弟节点遍历（卡片/杂志模式的 ScrollView 没有 NSTableView）。
+    /// 只在最近的 SwiftUI 宿主视图（当前栏目）内解析滚动容器。
+    /// 卡片/杂志模式的 ScrollView 没有 NSTableView，回退也仅限该宿主视图内部。
     static func findScrollView(from view: NSView) -> NSScrollView? {
+        guard let host = nearestHostingView(from: view) else { return nil }
+        if let table = findTableView(in: host),
+           let scrollView = table.enclosingScrollView {
+            return scrollView
+        }
+        return findScrollViewInSubtree(host)
+    }
+
+    /// 最近的 NSHostingView 祖先：每个 NSSplitViewItem 一栏各自独立宿主，
+    /// 用它作为查找边界可避免跨栏误绑。
+    static func nearestHostingView(from view: NSView) -> NSView? {
         var ancestor: NSView? = view
         while let candidate = ancestor {
             if String(describing: type(of: candidate)).contains("HostingView") {
-                if let table = findTableView(in: candidate),
-                   let scrollView = table.enclosingScrollView {
-                    return scrollView
-                }
-                break
+                return candidate
             }
             ancestor = candidate.superview
-        }
-
-        var current: NSView? = view
-        while let parent = current?.superview {
-            for sibling in parent.subviews where sibling !== current {
-                if let sv = findScrollViewInSubtree(sibling) {
-                    return sv
-                }
-            }
-            if let sv = parent as? NSScrollView {
-                return sv
-            }
-            current = parent
         }
         return nil
     }
@@ -3108,6 +3104,26 @@ private struct ScrollOffsetObserver: NSViewRepresentable {
 
         init(onOffsetChange: @escaping (CGFloat) -> Void) {
             self.onOffsetChange = onOffsetChange
+        }
+
+        /// 宿主视图每次更新时重新解析目标：
+        /// - 解析到目标且与当前绑定不同 → 改绑（列表 ↔ 杂志切换、List 重建）；
+        /// - 解析不到（杂志折页、List 尚未建表）→ 解除旧绑定并等待重试。
+        func refreshAttachment(for view: NSView) {
+            guard let scrollView = ScrollOffsetObserver.findScrollView(from: view) else {
+                if clipView != nil {
+                    unbind()
+                    onOffsetChange(0)
+                }
+                scheduleAttachment(for: view)
+                return
+            }
+            let target = scrollView.contentView
+            if clipView !== target {
+                bind(to: target)
+            } else {
+                checkOffset(target)
+            }
         }
 
         func scheduleAttachment(for view: NSView) {
@@ -3150,6 +3166,9 @@ private struct ScrollOffsetObserver: NSViewRepresentable {
         }
 
         func unbind() {
+            // 递增 token 作废在途重试，避免解绑后旧目标又写回绑定。
+            attachmentToken += 1
+            isAttemptingAttachment = false
             if let clipView {
                 NotificationCenter.default.removeObserver(
                     self,

@@ -9,18 +9,80 @@ import PaperRssCore
 /// 来源分两层：
 /// 1. 静态表：栏目/列表方向键导航与 `ThreeColumnSplitView` 硬编码的字号、
 ///    返回时间线等组合（包括 `=`/`+`、`-`/`_` 之类的等价别名）。
-/// 2. 动态表：运行时扫描 `NSApp.mainMenu`，覆盖复制、粘贴、关闭、退出等
-///    菜单快捷键，避免应用版本变化后静态表过期。
+/// 2. 动态表：扫描主菜单（`NSApp?.mainMenu`），覆盖复制、粘贴、关闭、退出等
+///    菜单快捷键。
+///
+/// 启动安全约束：SwiftUI 会在启动早期构建 Scene 列表，此时 AppKit 可能尚未
+/// 建立 `NSApplication`/`NSApp`（macOS 15 上 `mainMenu` 为 nil，macOS 14.8
+/// 上连 `NSApp` 本身都是 nil），任何隐式解包读取都会直接 trap 崩溃。
+/// 因此：
+/// - 初始化路径不读任何 AppKit 单例；
+/// - 菜单只在完成启动后扫描（`NSApplication.didFinishLaunchingNotification`
+///   或由 App 首帧显式调用 `scanMenuIfNeeded()`）；
+/// - 扫描通过可选链读取且对 nil 安全，扫描结果缓存，重复调用 O(1)。
 @MainActor
 final class ReaderShortcutReservedCatalog {
     static let shared = ReaderShortcutReservedCatalog()
+
+    /// 菜单扫描完成且有结果时发布；`ReaderShortcutSettings` 借此补跑一次
+    /// 清理，覆盖「启动早期只有静态表」时漏过的菜单保留组合。
+    static let didRefreshNotification = Notification.Name("PaperRss.readerShortcutReservedCatalogDidRefresh")
+    /// 测试与文档用：标记「菜单是否已完成首次扫描」。
+    private(set) var hasScannedMenu = false
 
     struct Entry {
         let combo: ReaderShortcutCombo
         let label: String
     }
 
-    private init() {}
+    private var cachedMenuEntries: [Entry] = []
+    private let retainedObservers: [NSObjectProtocol]
+
+    private init() {
+        retainedObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didFinishLaunchingNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    ReaderShortcutReservedCatalog.shared.scanMenuIfNeeded()
+                }
+            }
+        ]
+
+        // 兜底：单例在完成启动通知之后才首次建立（例如首个触达点是帮助窗口或
+        // 快捷键检查）时，上述通知已经错过；先把扫描推迟到下一个主循环。
+        //
+        // 注意：初始化路径不读任何 AppKit 单例——在部分系统（macOS 14.8.x 实测）
+        // SwiftUI 构建 Scene 列表时 `NSApp` 仍为 nil，读 `NSApp` 属性会触发
+        // 隐式解包 trap（EXC_BREAKPOINT）。扫描自身对 nil 也保持安全。
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                ReaderShortcutReservedCatalog.shared.scanMenuIfNeeded()
+            }
+        }
+    }
+
+    isolated deinit {
+        for observer in retainedObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// 完成启动后扫描一次主菜单并缓存。幂等；重复调用不会重新扫描。
+    /// 对「`NSApp`/主菜单尚未建立」保持安全：空结果不缓存，留待下次调用。
+    func scanMenuIfNeeded() {
+        guard !hasScannedMenu else { return }
+        let entries = Self.walkMenuEntries(NSApp?.mainMenu)
+        guard !entries.isEmpty else {
+            // 菜单尚未建立：不缓存空结果，等下一次调用再试。
+            return
+        }
+        hasScannedMenu = true
+        cachedMenuEntries = entries
+        NotificationCenter.default.post(name: Self.didRefreshNotification, object: nil)
+    }
 
     func reservedLabel(for combo: ReaderShortcutCombo) -> String? {
         entries().first { $0.combo == combo }?.label
@@ -87,7 +149,12 @@ final class ReaderShortcutReservedCatalog {
     }
 
     private func menuEntries() -> [Entry] {
-        guard let mainMenu = NSApp.mainMenu else { return [] }
+        cachedMenuEntries
+    }
+
+    /// 递归收集主菜单里的有效快捷键。与扫描时机解耦，便于单测。
+    static func walkMenuEntries(_ mainMenu: NSMenu?) -> [Entry] {
+        guard let mainMenu else { return [] }
         var result: [Entry] = []
         var visited = Set<ObjectIdentifier>()
 

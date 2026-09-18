@@ -66,6 +66,16 @@ final class MacOS14ZenModeToolbarContractTests: XCTestCase {
         XCTAssertTrue(rootSource.contains("private func openOriginalArticle("), "按钮与快捷键必须共用同一动作入口")
     }
 
+    func testVisualTimelineAlignsCapsuleBeforeRevealing() throws {
+        let source = try appSource("ThreeColumnSplitView.swift")
+
+        XCTAssertTrue(source.contains("handleReaderCapsuleBecameVisible"))
+        XCTAssertTrue(source.contains("requiresVisualCentering: toolbarActions.usesVisualTimeline"))
+        XCTAssertTrue(source.contains("hideVisualAlignmentTargetIfNeeded"), "杂志/视觉时间线的标题也必须等对齐收敛后再显示")
+        XCTAssertTrue(source.contains("scheduleRevealFallback"), "对齐项必须有兜底显示，避免一直隐形")
+        XCTAssertTrue(source.contains("revealReaderCapsuleIfNeeded"))
+    }
+
     private func appSource(_ name: String) throws -> String {
         try String(
             contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/App/\(name)"),

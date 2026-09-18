@@ -39,9 +39,29 @@ final class ReaderShortcutSettings: ObservableObject {
         }
         #if os(macOS)
         loaded = ReaderShortcutReservedCatalog.shared.sanitize(loaded)
+        NotificationCenter.default.addObserver(
+            forName: ReaderShortcutReservedCatalog.didRefreshNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                ReaderShortcutSettings.shared.refillFromReservedCatalog()
+            }
+        }
         #endif
         bindings = loaded
     }
+
+    #if os(macOS)
+    /// 菜单扫描完成后补跑一次清理：启动早期建立单例时动态保留表尚不可用，
+    /// 这里用完整保留表重新清洗已存绑定，保证系统快捷键永不被遮蔽。
+    private func refillFromReservedCatalog() {
+        let sanitized = ReaderShortcutReservedCatalog.shared.sanitize(bindings)
+        guard sanitized != bindings else { return }
+        bindings = sanitized
+        persist()
+    }
+    #endif
 
     /// 分配组合键；冲突时不写入。
     @discardableResult
