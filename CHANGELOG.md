@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## v1.4.3-beta.1 · Build 36 · 2026-09-21
+
+本次 Beta 修复深色纸面下公式与线稿插图不可读的问题，并让「隐藏 Dock 图标」随窗口即时生效；稳定通道仍为 v1.4.2。
+
+- 深色纸面插图反相（修复）：深色纸面下自动识别正文中的深色线稿、图表与公式图并反转明度（保留色相），照片与彩色插图保持原样；行内公式小图同样参与判定，修复 issue #41 深色模式下公式看不清的问题。
+- 判定按需且受限：仅深色纸面触发，逐篇按张数与并发上限分析，超限或失败一律按「不反相」处理，不阻塞阅读；结果复用系统图片缓存，重复阅读不产生额外流量。
+- 隐藏 Dock 图标即时生效（修复）：开关不再需要重启；窗口打开期间应用仍保留程序坞与 Cmd+Tab 入口，窗口全部关闭后才隐藏，再次打开窗口自动恢复。
+
+---
+
+This Beta fixes unreadable formulas and line-art figures on dark paper, and makes “Hide Dock Icon” take effect immediately with window visibility; the stable channel remains on v1.4.2.
+
+- Dark-paper image inversion (fix): on dark paper, dark line art, diagrams and formula images in article bodies are detected and inverted in lightness (hue preserved), while photos and colour illustrations stay untouched; inline formula thumbnails are included, fixing the low contrast reported in issue #41.
+- Bounded, on-demand analysis: only triggered on dark paper, with per-article count and concurrency limits; over-limit or failed images fall back to “no inversion” so reading is never blocked, and results reuse the system image cache, so re-reading costs no extra traffic.
+- Hide Dock Icon takes effect immediately (fix): no relaunch needed; while a window is open the app keeps its Dock and Cmd-Tab entry, hides only after every window is closed, and reappears when a window opens again.
+
 ## v1.4.2 · Build 35 · 2026-09-18
 
 PaperRss 1.4.2 修复了 macOS 14 与 macOS 15 用户自 1.4.1 起遇到的冷启动闪退，并带来 Miniflux 账号接入、阅读页「打开原文」入口与多项正文提取改进；建议所有用户升级。
