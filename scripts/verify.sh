@@ -9,6 +9,7 @@
 #   ./scripts/verify.sh --web         # 仅执行 Web Reader / JS Bridge / 快捷键策略测试
 #   ./scripts/verify.sh --mathjax-webkit # 执行需拉起 WebKit 的 MathJax Tier 3 探针
 #   ./scripts/verify.sh --highlight-webkit # 执行需拉起 WebKit 的代码高亮 Tier 3 探针
+#   ./scripts/verify.sh --image-invert-webkit # 执行需拉起 WebKit 的深色纸面插图反相 Tier 3 探针
 #   ./scripts/verify.sh --build       # 仅执行 macOS 宿主增量构建
 #   ./scripts/verify.sh --core        # 仅执行 Swift Core 数据与性能全量回归测试
 #   ./scripts/verify.sh --filter <名> # 运行指定测试类或测试方法
@@ -70,6 +71,12 @@ run_highlight_webkit_test() {
     echo -e "${GREEN}✔ 代码高亮 WKWebView 探针通过！${NC}"
 }
 
+run_image_invert_webkit_test() {
+    echo -e "\n${BLUE}▶ 执行深色纸面插图反相真实 WKWebView 探针...${NC}"
+    ./scripts/test-reader-image-inversion-webkit.sh
+    echo -e "${GREEN}✔ 插图反相 WKWebView 探针通过！${NC}"
+}
+
 run_core_tests() {
     echo -e "\n${BLUE}▶ 执行 Swift 全量单元与集成测试 (Core/Data/FreshRSS/Performance)...${NC}"
     python3 scripts/build-support.py --lane tests --temporary -- swift test --scratch-path "$PWD/.build"
@@ -108,6 +115,9 @@ case "$MODE" in
     --highlight-webkit)
         run_highlight_webkit_test
         ;;
+    --image-invert-webkit)
+        run_image_invert_webkit_test
+        ;;
     --build)
         run_build_test
         ;;
@@ -139,6 +149,7 @@ case "$MODE" in
         echo -e "  ./scripts/verify.sh --web         # 仅回归 Web / JS Bridge" >&2
         echo -e "  ./scripts/verify.sh --mathjax-webkit # MathJax Tier 3 WebKit 探针" >&2
         echo -e "  ./scripts/verify.sh --highlight-webkit # 代码高亮 Tier 3 WebKit 探针" >&2
+        echo -e "  ./scripts/verify.sh --image-invert-webkit # 深色纸面插图反相 Tier 3 WebKit 探针" >&2
         echo -e "  ./scripts/verify.sh --build       # macOS 宿主增量构建" >&2
         echo -e "  ./scripts/verify.sh --core        # 仅回归 Swift Core 测试" >&2
         echo -e "  ./scripts/verify.sh --filter <名> # 运行指定测试类/方法" >&2

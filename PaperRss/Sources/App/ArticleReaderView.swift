@@ -1523,12 +1523,14 @@ private func readerAppearanceJavaScript(
     variables["--paper-line-height"] = String(appearance.lineHeight)
     guard let data = try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]),
           let json = String(data: data, encoding: .utf8) else { return "" }
+    let isDark = palette.colorScheme == .dark ? "true" : "false"
     return """
     (() => {
       const root = document.documentElement;
       const values = \(json);
       Object.entries(values).forEach(([key, value]) => root.style.setProperty(key, value));
       root.style.colorScheme = '\(palette.colorScheme.rawValue)';
+      root.classList.toggle('paper-scheme-dark', \(isDark));
       if (document.body) {
         document.body.style.fontFamily = values['--paper-body-font-family'];
       }
@@ -1798,6 +1800,13 @@ img, video {
   border: .5px solid var(--paper-rule);
   border-radius: 6px;
   cursor: pointer;
+}
+/* 深色纸面下仅对经原生分析判定为深色线稿的插图做明度反转：保留色相，照片不改动。
+   刻意不排除 .paper-emoji：issue #41 的行内公式图正是被 emoji 分类器按尺寸标记的小图，
+   排除它们会让报告里的行内症状残留 */
+.paper-scheme-dark img.paper-img-invert {
+  filter: invert(1) hue-rotate(180deg);
+  transition: filter .18s ease;
 }
 /* 图片对齐语法（Obsidian ![[x|40|left]] / HTML align）归一化后的受控类：
    块级独占一行，仅改变水平对齐方向（居中为默认） */
@@ -4592,6 +4601,45 @@ enum PaperReaderBridge {
         in: .defaultClient
     )
 
+    /// 深色纸面下的插图反相标记：是否标记完全由原生判定驱动（`ReaderImageInversionService`），
+    /// 脚本只按 URL 把 `paper-img-invert` 受控类打到对应 img 上，不做任何图片过滤。
+    /// 刻意不跳过 `paper-emoji`：正文行内公式图正是被 emoji 分类器按尺寸标记的小图。
+    static let imageInversionScript = WKUserScript(
+        source: """
+        (() => {
+          const index = new Map();
+          const collect = () => {
+            index.clear();
+            document.querySelectorAll("img").forEach(image => {
+              const raw = image.currentSrc || image.getAttribute("src") || "";
+              if (!raw) return;
+              let absolute;
+              try { absolute = new URL(raw, document.baseURI).href; } catch (_) { return; }
+              if (index.has(absolute)) index.get(absolute).push(image);
+              else index.set(absolute, [image]);
+            });
+          };
+          window.paperRssImageInversion = {
+            apply(urls) {
+              collect();
+              let applied = 0;
+              (urls || []).forEach(url => {
+                (index.get(String(url)) || []).forEach(image => {
+                  if (image.classList.contains("paper-img-invert")) return;
+                  image.classList.add("paper-img-invert");
+                  applied += 1;
+                });
+              });
+              return applied;
+            }
+          };
+        })();
+        """,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true,
+        in: .defaultClient
+    )
+
     static let documentReadyMessageName = "paperRssDocumentReady"
     /// DOM 就绪不代表新文档已经上屏：阅读器的旧文档遮罩要等首帧绘制后才能揭开。
     static let documentPaintedMessageName = "paperRssDocumentPainted"
@@ -5189,6 +5237,7 @@ enum PaperReaderBridge {
         controller.addUserScript(imageRecoveryScript)
         controller.addUserScript(imageEmojiScript)
         controller.addUserScript(imageGalleryScript)
+        controller.addUserScript(imageInversionScript)
         #if os(macOS)
         controller.addUserScript(readerShortcutScript)
         #endif
@@ -5710,6 +5759,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                     contentWorld: .defaultClient
                 )
             }
+            synchronizeImageInversion(in: webView)
         }
 
         func synchronizeAudioWave(in webView: WKWebView, level: CGFloat, force: Bool = false) {
@@ -6072,6 +6122,48 @@ private struct ArticleHTMLView: NSViewRepresentable {
         /// 已注入 highlight.js 的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
         private var lastCodeHighlightInjectionKey: String?
 
+        /// 深色纸面插图反相判定的导航键与在飞任务；同一 key 只分析一次。
+        private var imageInversionKey: String?
+        private var imageInversionTask: Task<[URL], Never>?
+
+        /// 深色纸面才启动分析：浅色纸面零网络开销，文档 key 变化时重启。
+        private func startImageInversionAnalysisIfNeeded() {
+            let urls = parent.article.imageURLs
+            let key = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
+            guard imageInversionKey != key else { return }
+            imageInversionKey = key
+            imageInversionTask?.cancel()
+            imageInversionTask = nil
+            guard parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme == .dark,
+                  !urls.isEmpty else { return }
+            let referer = parent.article.baseURL
+            imageInversionTask = Task {
+                await ReaderImageInversionService.shared.invertibleURLs(for: urls, referer: referer)
+            }
+        }
+
+        /// 文档就绪后应用反相类名；浅色→深色切换（不重载文档）时补做一次分析。
+        private func synchronizeImageInversion(in webView: WKWebView) {
+            guard parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme == .dark else {
+                return
+            }
+            startImageInversionAnalysisIfNeeded()
+            let key = imageInversionKey
+            guard let task = imageInversionTask else { return }
+            Task { @MainActor [weak self, weak webView] in
+                let invertible = await task.value
+                guard let self, let webView,
+                      self.imageInversionKey == key,
+                      !invertible.isEmpty else { return }
+                _ = try? await webView.callAsyncJavaScript(
+                    "return window.paperRssImageInversion ? window.paperRssImageInversion.apply(urls) : 0;",
+                    arguments: ["urls": invertible.map(\.absoluteString)],
+                    in: nil,
+                    contentWorld: .defaultClient
+                )
+            }
+        }
+
         /// 导航完成后按需注入 highlight.js：文档无带语言标注代码块时运行时零求值。
         /// 运行时约 125KB 且求值为同步幂等着色，无需 MathJax 式重试。
         private func injectCodeHighlightingIfNeeded(in webView: WKWebView) {
@@ -6213,10 +6305,15 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 extraStyleCSS: paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
                     parent.readerAppearance,
                     mode: parent.readerAppearanceMode
-                )
+                ),
+                rootClassName: "paper-scheme-"
+                    + parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme.rawValue
             )
             renderedSummarySignature = nil
             renderedSelectionOptionsJSON = nil
+            imageInversionKey = nil
+            imageInversionTask?.cancel()
+            imageInversionTask = nil
             invalidateSelectionRequests()
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
@@ -6226,6 +6323,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
             pendingScrollOffset = 0
             currentLoadGeneration += 1
+            startImageInversionAnalysisIfNeeded()
             let generation = currentLoadGeneration
             let html = document.html.replacingOccurrences(
                 of: "<head>",
@@ -6273,6 +6371,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 self.synchronizeTranslations(in: webView)
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)
+                self.synchronizeImageInversion(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset = self.pendingScrollOffset,
@@ -6674,6 +6773,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                     contentWorld: .defaultClient
                 )
             }
+            synchronizeImageInversion(in: webView)
         }
 
         func synchronizeSummaryCard(in webView: WKWebView) {
@@ -6947,6 +7047,48 @@ private struct ArticleHTMLView: UIViewRepresentable {
         /// 已注入 highlight.js 的导航键（entryID|renderSignature|generation），避免同次导航重复求值。
         private var lastCodeHighlightInjectionKey: String?
 
+        /// 深色纸面插图反相判定的导航键与在飞任务；同一 key 只分析一次。
+        private var imageInversionKey: String?
+        private var imageInversionTask: Task<[URL], Never>?
+
+        /// 深色纸面才启动分析：浅色纸面零网络开销，文档 key 变化时重启。
+        private func startImageInversionAnalysisIfNeeded() {
+            let urls = parent.article.imageURLs
+            let key = "\(parent.entry.id)|\(loadedArticleKey ?? "")|\(currentLoadGeneration)"
+            guard imageInversionKey != key else { return }
+            imageInversionKey = key
+            imageInversionTask?.cancel()
+            imageInversionTask = nil
+            guard parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme == .dark,
+                  !urls.isEmpty else { return }
+            let referer = parent.article.baseURL
+            imageInversionTask = Task {
+                await ReaderImageInversionService.shared.invertibleURLs(for: urls, referer: referer)
+            }
+        }
+
+        /// 文档就绪后应用反相类名；浅色→深色切换（不重载文档）时补做一次分析。
+        private func synchronizeImageInversion(in webView: WKWebView) {
+            guard parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme == .dark else {
+                return
+            }
+            startImageInversionAnalysisIfNeeded()
+            let key = imageInversionKey
+            guard let task = imageInversionTask else { return }
+            Task { @MainActor [weak self, weak webView] in
+                let invertible = await task.value
+                guard let self, let webView,
+                      self.imageInversionKey == key,
+                      !invertible.isEmpty else { return }
+                _ = try? await webView.callAsyncJavaScript(
+                    "return window.paperRssImageInversion ? window.paperRssImageInversion.apply(urls) : 0;",
+                    arguments: ["urls": invertible.map(\.absoluteString)],
+                    in: nil,
+                    contentWorld: .defaultClient
+                )
+            }
+        }
+
         /// 导航完成后按需注入 highlight.js：文档无带语言标注代码块时运行时零求值。
         /// 运行时约 125KB 且求值为同步幂等着色，无需 MathJax 式重试。
         private func injectCodeHighlightingIfNeeded(in webView: WKWebView) {
@@ -7088,10 +7230,15 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 extraStyleCSS: paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
                     parent.readerAppearance,
                     mode: parent.readerAppearanceMode
-                )
+                ),
+                rootClassName: "paper-scheme-"
+                    + parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme.rawValue
             )
             renderedSummarySignature = nil
             renderedSelectionOptionsJSON = nil
+            imageInversionKey = nil
+            imageInversionTask?.cancel()
+            imageInversionTask = nil
             invalidateSelectionRequests()
             loadedArticleKey = document.renderSignature
             loadedDocumentIdentity = parent.entry.id
@@ -7101,6 +7248,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
             pendingContentOffset = .zero
             currentLoadGeneration += 1
+            startImageInversionAnalysisIfNeeded()
             let generation = currentLoadGeneration
             let html = document.html.replacingOccurrences(
                 of: "<head>",
@@ -7147,6 +7295,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 self.pendingContentOffset = nil
                 self.injectMathJaxRuntimeIfNeeded(in: webView)
                 self.injectCodeHighlightingIfNeeded(in: webView)
+                self.synchronizeImageInversion(in: webView)
                 guard self.parent.onDocumentReady(load.entryID) else { return }
                 self.synchronizeSelectionOptions(in: webView)
                 if let offset {

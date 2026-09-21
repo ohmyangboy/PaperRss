@@ -127,4 +127,30 @@ final class ReaderDocumentRendererTests: XCTestCase {
 
         XCTAssertNil(document.baseURL)
     }
+
+    // MARK: - 5. Root Class Marker for Dark-Scheme Figure Inversion
+
+    func testRootClassNameMarkerIsEscapedAndOptional() {
+        let dark = ReaderDocumentRenderer.renderDocument(
+            article: article("<p>正文</p>"),
+            documentIdentity: "dark-scheme",
+            rootClassName: "paper-scheme-dark"
+        ).html
+        XCTAssertTrue(dark.contains("<html class=\"paper-scheme-dark\"><head>"))
+
+        let plain = ReaderDocumentRenderer.renderDocument(
+            article: article("<p>正文</p>"),
+            documentIdentity: "plain-scheme"
+        ).html
+        XCTAssertTrue(plain.contains("<html><head>"), "缺省不输出 class 属性")
+
+        let escaped = ReaderDocumentRenderer.renderDocument(
+            article: article("<p>正文</p>"),
+            documentIdentity: "escaped-scheme",
+            rootClassName: "\" onload=alert(1) <x> & '"
+        ).html
+        XCTAssertTrue(escaped.contains(
+            "<html class=\"&quot; onload=alert(1) &lt;x&gt; &amp; &#39;\"><head>"
+        ), "属性值必须转义，不能逃出 class 属性")
+    }
 }

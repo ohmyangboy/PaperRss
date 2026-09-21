@@ -7,7 +7,7 @@
 | 脚本 | 作用 | 依赖 | 触发 |
 | --- | --- | --- | --- |
 | `scripts/build-support.py` | 统一构建执行器：泳道锁（app/tests）、超期缓存回收、报告轮转 | 无 | 被下列所有入口调用 |
-| `scripts/verify.sh` | 分级验证矩阵：无参数或 `--all` 全量；`--core`、`--feature`、`--filter <名>`、`--web`、`--build`、`--mathjax-webkit`、`--highlight-webkit` | `build-support.py`、swift、xcodebuild、node | 手动 + CI |
+| `scripts/verify.sh` | 分级验证矩阵：无参数或 `--all` 全量；`--core`、`--feature`、`--filter <名>`、`--web`、`--build`、`--mathjax-webkit`、`--highlight-webkit`、`--image-invert-webkit` | `build-support.py`、swift、xcodebuild、node | 手动 + CI |
 | `scripts/dev.sh` | 编译并拉起 macOS app；`--isolated [目录]` 起隔离实例（GUI 验收必须使用） | `build-support.py --lane app` | 手动 / Agent |
 | `scripts/clean.sh` | 预览回收构建缓存；`--apply` 持锁执行，`--keep-days N` 调固定根保留期 | `build-support.py --clean` | 手动；与构建入口的自动回收同逻辑 |
 
@@ -30,6 +30,7 @@
 | `scripts/test.sh` | 启动独立"新用户"实例（`build/FreshLaunchTest`）；`--skip-build` 复用上次构建 | `build-support.py --lane app` | 手动（首启 / 新用户验收） |
 | `scripts/test-mathjax-webkit.sh` | MathJax Tier3 探针（拉起 WebKit） | Xcode | `verify.sh --mathjax-webkit` 或手动 |
 | `scripts/test-highlight-webkit.sh` | 代码高亮 Tier3 探针 | Xcode | `verify.sh --highlight-webkit` 或手动 |
+| `scripts/test-reader-image-inversion-webkit.sh` | 深色纸面插图反相 Tier3 探针 | Xcode | `verify.sh --image-invert-webkit` 或手动 |
 | `scripts/test-reader-media-webkit.sh` | Reader 媒体 Tier3 探针 | Xcode | 手动（无入口引用） |
 | `scripts/archive.sh` | 归档 `.xcarchive`，不推送 | `build-support.py --lane all` | 手动 / 发布前 |
 

@@ -45,7 +45,8 @@ public enum ReaderDocumentRenderer: Sendable {
         headerHTML: String = "",
         topInset: Double = 0,
         fontSize: Int = 16,
-        extraStyleCSS: String? = nil
+        extraStyleCSS: String? = nil,
+        rootClassName: String = ""
     ) -> ReaderDocument {
         let safeInset = max(0.0, topInset)
         let clampedFontSize = min(36, max(12, fontSize))
@@ -63,7 +64,7 @@ public enum ReaderDocumentRenderer: Sendable {
 
         let html = """
         <!doctype html>
-        <html><head>
+        <html\(rootClassName.isEmpty ? "" : " class=\"\(htmlAttributeEscaped(rootClassName))\"")><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="\(standardCSP)">
@@ -77,5 +78,22 @@ public enum ReaderDocumentRenderer: Sendable {
             features: article.features,
             renderSignature: renderSignature
         )
+    }
+
+    /// 属性值转义（`&`、`"`、`<`、`>`、`'`）：Core 无现成的属性转义助手。
+    private static func htmlAttributeEscaped(_ value: String) -> String {
+        var escaped = ""
+        escaped.reserveCapacity(value.utf8.count)
+        for character in value {
+            switch character {
+            case "&": escaped += "&amp;"
+            case "\"": escaped += "&quot;"
+            case "<": escaped += "&lt;"
+            case ">": escaped += "&gt;"
+            case "'": escaped += "&#39;"
+            default: escaped.append(character)
+            }
+        }
+        return escaped
     }
 }
