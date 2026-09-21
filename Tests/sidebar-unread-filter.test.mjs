@@ -285,7 +285,8 @@ test('列表工具栏图标与阅读工具栏共用字号', async () => {
   assert.match(chrome, /pointSize: ReaderCapsuleToolbar.symbolPointSize, weight: \.medium/);
   assert.match(chrome, /let side: CGFloat = 18/);
   assert.match(chrome, /button.image = listToolbarImage\(button.image\)/);
-  assert.match(reader, /font\(\.system\(size: Self.symbolPointSize, weight: \.medium\)\)/);
+  assert.match(reader, /private func toolbarSymbol\(_ name: String, isActive: Bool, pointSize: CGFloat = Self\.symbolPointSize\)/);
+  assert.match(reader, /font\(\.system\(size: pointSize, weight: \.medium\)\)/);
 });
 
 test('未读过滤按钮在未激活时保持模板图像以自适应深色背景；全部已读具有原地 Popover 二次确认', async () => {

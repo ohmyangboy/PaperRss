@@ -94,7 +94,13 @@ for _ in 0..<3 {
                                                 usesVisualTimeline: visual, usesMagazineTimeline: magazine, isTimelineBrowsing: browsing)
                         let expected = harness.toolbarItemOrder(sidebarCollapsed: collapsed)
                         for _ in 0..<2 { harness.reconcileToolbarItems(in: toolbar, identifiers: expected) }
-                        let ids = toolbar.items.map(\\.itemIdentifier)
+                        var ids = toolbar.items.map(\\.itemIdentifier)
+                        if zen {
+                            // 禅模式（macOS 15+ 中心项 API）：右上角切换器实例必须保留但收起为 0 宽，
+                            // 不参与可见顺序，因此从实际项里剔除后再与期望顺序比较。
+                            assert(ids.last == .paperTimelineControls, "禅模式必须保留右上角切换器实例")
+                            ids.removeLast()
+                        }
                         assert(ids == expected, "工具栏顺序与当前路由不一致")
                         assert(toolbar.items.first { $0.itemIdentifier == .paperReaderCapsule } === reader,
                                "阅读胶囊被销毁重建")

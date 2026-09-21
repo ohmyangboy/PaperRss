@@ -5,7 +5,8 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../PaperRss/Sources/App/ArticleReaderView.swift', import.meta.url), 'utf8');
 const script = source.match(/static let documentReadyScript = WKUserScript\(\s*source: """([\s\S]*?)"""/)?.[1]
-  ?.replace(/\\\(documentReadyMessageName\)/g, 'paperRssDocumentReady');
+  ?.replace(/\\\(documentReadyMessageName\)/g, 'paperRssDocumentReady')
+  ?.replace(/\\\(documentPaintedMessageName\)/g, 'paperRssDocumentPainted');
 
 test('DOM 就绪发送当前加载批次，不等待媒体 load 事件', () => {
   assert.ok(script);
@@ -15,7 +16,9 @@ test('DOM 就绪发送当前加载批次，不等待媒体 load 事件', () => {
       document: { querySelector: () => generation ? { content: generation } : null },
       window: { webkit: { messageHandlers: { paperRssDocumentReady: {
         postMessage: message => messages.push(message.generation)
-      } } } }
+      } } } },
+      // 首帧绘制通知不在本用例范围：仅提供调度桩，避免沙箱缺失 setTimeout。
+      setTimeout: () => {}
     });
     assert.deepEqual(messages, generation ? [generation] : []);
   }
