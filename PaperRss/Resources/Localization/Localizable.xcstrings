@@ -278,32 +278,12 @@
         }
       }
     },
-    "Dock 图标隐藏时不可用。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unavailable while the Dock icon is hidden."
-          }
-        }
-      }
-    },
     "在菜单栏显示图标与未读数量。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shows the icon and unread count in the menu bar."
-          }
-        }
-      }
-    },
-    "下次启动生效。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Takes effect after relaunch."
           }
         }
       }
@@ -358,12 +338,22 @@
         }
       }
     },
-    "隐藏后应用不再出现在程序坞与 Cmd+Tab。" : {
+    "窗口存在时应用仍在程序坞与 Cmd+Tab，窗口全部关闭后自动隐藏。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The app no longer appears in the Dock or Cmd-Tab."
+            "value" : "The app stays in the Dock and Cmd-Tab while a window is open, and hides once every window is closed."
+          }
+        }
+      }
+    },
+    "窗口关闭、Dock 图标隐藏时不显示徽标。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The badge stays hidden whenever the Dock icon is hidden."
           }
         }
       }

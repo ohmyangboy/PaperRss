@@ -77,13 +77,11 @@ private final class DockUnreadBadgeView: NSView {
 @MainActor
 final class MacSystemAttentionController: NSObject, ObservableObject {
     @Published private(set) var dockBadgeEnabled: Bool
-    /// 用户选择（下次启动生效）：隐藏 Dock 图标（含 Cmd+Tab），应用转为辅助（accessory）激活策略。
+    /// 用户选择（即时生效）：隐藏 Dock 图标（含 Cmd+Tab）。窗口打开期间仍保留常规入口，
+    /// 窗口全部关闭后才转为辅助（accessory）激活策略。
     @Published private(set) var hideDockIcon: Bool
-    /// 用户选择（下次启动生效）：在菜单栏显示图标与未读数量。
+    /// 用户选择（即时生效）：在菜单栏显示图标与未读数量。
     @Published private(set) var showMenuBarIcon: Bool
-    /// 当前进程实际生效的图标可见性，启动时一次性应用。
-    @Published private(set) var appliedHideDockIcon: Bool
-    @Published private(set) var appliedShowMenuBarIcon: Bool
     @Published private(set) var feedNotificationsEnabled: Bool
     @Published private(set) var isNotificationPermissionDenied = false
     @Published private(set) var isRequestingNotificationAuthorization = false
@@ -120,26 +118,13 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         let storedShowMenuBarIcon = preferences.bool(forKey: PreferenceKey.showMenuBarIcon)
         showMenuBarIcon = storedShowMenuBarIcon
         // 修正历史或异常组合：没有菜单栏入口时不允许隐藏 Dock 图标。
-        let resolvedHideDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
+        hideDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
             preferences.bool(forKey: PreferenceKey.hideDockIcon),
             showMenuBarIcon: storedShowMenuBarIcon
         )
-        hideDockIcon = resolvedHideDockIcon
-        appliedHideDockIcon = resolvedHideDockIcon
-        appliedShowMenuBarIcon = storedShowMenuBarIcon
         feedNotificationsEnabled = false
         preferences.set(false, forKey: PreferenceKey.feedNotificationsEnabled)
         super.init()
-    }
-
-    /// 在 App 初始化阶段就按已存开关设置激活策略，避免启动瞬间闪现 Dock 图标。
-    static func applyStoredIconVisibilityToLaunchingApplication() {
-        let hidesDockIcon = MacIconVisibilityPolicy.resolvesHideDockIcon(
-            UserDefaults.standard.bool(forKey: PreferenceKey.hideDockIcon),
-            showMenuBarIcon: UserDefaults.standard.bool(forKey: PreferenceKey.showMenuBarIcon)
-        )
-        guard hidesDockIcon else { return }
-        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     func start(application: NSApplication) {
@@ -148,6 +133,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         hasStarted = true
         notificationCenter.delegate = self
         observeStore()
+        observeWindowVisibility()
         updateDockBadge()
         applyIconVisibility()
     }
@@ -163,8 +149,8 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         updateDockBadge()
     }
 
-    /// 图标可见性开关改动后需要重启才生效：运行中切换激活策略会让窗口短暂失去前台，
-    /// 因此开关只写入偏好，统一由下次启动时应用。
+    /// 隐藏 Dock 图标：窗口打开期间仍保留程序坞与 Cmd+Tab 入口，
+    /// 窗口全部关闭后才真正隐藏，改动即时生效。
     func setHideDockIcon(_ hidden: Bool) {
         let resolved = MacIconVisibilityPolicy.resolvesHideDockIcon(
             hidden,
@@ -173,6 +159,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
         guard hideDockIcon != resolved else { return }
         hideDockIcon = resolved
         preferences.set(resolved, forKey: PreferenceKey.hideDockIcon)
+        applyIconVisibility()
     }
 
     func setShowMenuBarIcon(_ visible: Bool) {
@@ -188,6 +175,7 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
             hideDockIcon = resolvedHideDockIcon
             preferences.set(resolvedHideDockIcon, forKey: PreferenceKey.hideDockIcon)
         }
+        applyIconVisibility()
     }
 
     func setFeedNotificationsEnabled(_ enabled: Bool) async {
@@ -272,19 +260,66 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
 
     // MARK: - 图标可见性（Dock / 菜单栏）
 
-    /// 启动时一次性应用已存偏好；运行期间不再切换激活策略，避免窗口闪动。
+    /// 应用两个图标开关：状态栏项立即装配，Dock 图标按窗口状态判定。
     private func applyIconVisibility() {
-        guard let application else { return }
-        appliedHideDockIcon = hideDockIcon
-        appliedShowMenuBarIcon = showMenuBarIcon
-        application.setActivationPolicy(hideDockIcon ? .accessory : .regular)
         if showMenuBarIcon {
             installStatusItemIfNeeded()
         } else {
             removeStatusItem()
         }
         updateStatusItem()
+        scheduleIconVisibilitySync()
         updateDockBadge()
+    }
+
+    /// Dock 图标只在「用户没要求隐藏」或「应用还有窗口」时可见。
+    /// 关掉最后一个窗口后应用退回辅助策略，重新唤出窗口时随窗口回到程序坞与 Cmd+Tab。
+    private func syncDockIconVisibility() {
+        guard let application else { return }
+        let hidesDockIcon = MacIconVisibilityPolicy.hidesDockIcon(
+            hideDockIcon,
+            hasPresentedWindow: hasPresentedWindow(in: application)
+        )
+        let policy: NSApplication.ActivationPolicy = hidesDockIcon ? .accessory : .regular
+        guard application.activationPolicy() != policy else { return }
+        application.setActivationPolicy(policy)
+        if hidesDockIcon, application.isActive {
+            // 没有窗口就不该再占着前台：交回上一个应用，菜单栏不残留空菜单。
+            application.deactivate()
+        }
+    }
+
+    /// 窗口显隐是 Dock 图标可见性的唯一依据；面板（弹出菜单、浮层）不算入口。
+    private func observeWindowVisibility() {
+        for name in [
+            NSWindow.didBecomeMainNotification,
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+            NSWindow.willCloseNotification
+        ] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] _ in
+                    self?.scheduleIconVisibilitySync()
+                }
+                .store(in: &cancellables)
+        }
+    }
+
+    /// 窗口通知与视图回调都可能落在窗口上屏/关闭的中间态（`willClose` 时窗口仍算可见），
+    /// 统一延后一拍再判定。
+    private func scheduleIconVisibilitySync() {
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.syncDockIconVisibility() }
+        }
+    }
+
+    /// 最小化窗口也算窗口：它不在常规主窗口判定里，但用户必须留着 Dock 图标才能把它取回来。
+    private func hasPresentedWindow(in application: NSApplication) -> Bool {
+        application.windows.contains { window in
+            guard !(window is NSPanel) else { return false }
+            return window.isMiniaturized || (window.canBecomeMain && window.isVisible)
+        }
     }
 
     private func installStatusItemIfNeeded() {
@@ -387,12 +422,28 @@ final class MacSystemAttentionController: NSObject, ObservableObject {
 
     private func bringAppForward() {
         guard let application else { return }
+        // 辅助策略下激活不会带回 Dock 图标与 Cmd+Tab：先恢复常规策略再唤出窗口。
+        prepareRegularPolicyForPresentation(application)
         application.activate(ignoringOtherApps: true)
         if let window = mainWindow(in: application) {
             window.makeKeyAndOrderFront(nil)
+        } else if let miniaturized = miniaturizedWindow(in: application) {
+            // 最小化窗口不在主窗口判定里：直接还原，避免再开一个窗口。
+            miniaturized.deminiaturize(nil)
+            miniaturized.makeKeyAndOrderFront(nil)
         } else {
             mainWindowOpener?()
         }
+    }
+
+    /// 唤出窗口前先回常规策略；窗口真正上屏后由窗口通知接管判定。
+    private func prepareRegularPolicyForPresentation(_ application: NSApplication) {
+        guard application.activationPolicy() != .regular else { return }
+        application.setActivationPolicy(.regular)
+    }
+
+    private func miniaturizedWindow(in application: NSApplication) -> NSWindow? {
+        application.windows.first { $0.isMiniaturized && !($0 is NSPanel) }
     }
 
     private func mainWindow(in application: NSApplication) -> NSWindow? {

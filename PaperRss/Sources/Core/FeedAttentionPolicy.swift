@@ -18,6 +18,12 @@ public enum MacIconVisibilityPolicy {
     public static func resolvesHideDockIcon(_ hideDockIcon: Bool, showMenuBarIcon: Bool) -> Bool {
         hideDockIcon && showMenuBarIcon
     }
+
+    /// Dock 图标只在窗口全部关闭后才隐藏：有窗口时应用仍需出现在程序坞与 Cmd+Tab，
+    /// 否则用户既切不回来，也没有 Dock 图标可以点。
+    public static func hidesDockIcon(_ hideDockIcon: Bool, hasPresentedWindow: Bool) -> Bool {
+        hideDockIcon && !hasPresentedWindow
+    }
 }
 
 public enum FeedAttentionPolicy {

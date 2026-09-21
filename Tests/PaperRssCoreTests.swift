@@ -159,6 +159,14 @@ final class PaperRssCoreTests: XCTestCase {
         XCTAssertFalse(MacIconVisibilityPolicy.resolvesHideDockIcon(false, showMenuBarIcon: false))
     }
 
+    func testMacIconVisibilityPolicyKeepsDockIconWhileAnyWindowIsPresent() {
+        // 有窗口就必须留在程序坞与 Cmd+Tab，隐藏只发生在窗口全部关闭之后。
+        XCTAssertFalse(MacIconVisibilityPolicy.hidesDockIcon(true, hasPresentedWindow: true))
+        XCTAssertTrue(MacIconVisibilityPolicy.hidesDockIcon(true, hasPresentedWindow: false))
+        XCTAssertFalse(MacIconVisibilityPolicy.hidesDockIcon(false, hasPresentedWindow: true))
+        XCTAssertFalse(MacIconVisibilityPolicy.hidesDockIcon(false, hasPresentedWindow: false))
+    }
+
     func testFeedAttentionPolicyFormatsMenuBarUnreadTitle() {
         XCTAssertNil(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 0))
         XCTAssertEqual(FeedAttentionPolicy.menuBarUnreadTitle(unreadCount: 1), "1")

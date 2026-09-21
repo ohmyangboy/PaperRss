@@ -2970,35 +2970,16 @@ struct SettingsView: View {
 
     #if os(macOS)
     private var hideDockIconDescription: String {
-        var parts: [String] = []
         if attention.showMenuBarIcon {
-            parts.append(I18N.shared.localized(
-                "隐藏后应用不再出现在程序坞与 Cmd+Tab。",
-                "The app no longer appears in the Dock or Cmd-Tab."
-            ))
-        } else {
-            parts.append(I18N.shared.localized(
-                "需先开启「显示菜单栏图标」，否则应用将失去所有入口。",
-                "Turn on “Show Menu Bar Icon” first, or the app would lose every entry point."
-            ))
-        }
-        if attention.hideDockIcon != attention.appliedHideDockIcon {
-            parts.append(I18N.shared.localized("下次启动生效。", "Takes effect after relaunch."))
-        }
-        return parts.joined(separator: " ")
-    }
-
-    private var showMenuBarIconDescription: String {
-        var parts = [
-            I18N.shared.localized(
-                "在菜单栏显示图标与未读数量。",
-                "Shows the icon and unread count in the menu bar."
+            return I18N.shared.localized(
+                "窗口存在时应用仍在程序坞与 Cmd+Tab，窗口全部关闭后自动隐藏。",
+                "The app stays in the Dock and Cmd-Tab while a window is open, and hides once every window is closed."
             )
-        ]
-        if attention.showMenuBarIcon != attention.appliedShowMenuBarIcon {
-            parts.append(I18N.shared.localized("下次启动生效。", "Takes effect after relaunch."))
         }
-        return parts.joined(separator: " ")
+        return I18N.shared.localized(
+            "需先开启「显示菜单栏图标」，否则应用将失去所有入口。",
+            "Turn on “Show Menu Bar Icon” first, or the app would lose every entry point."
+        )
     }
 
     private var reminderSettings: some View {
@@ -3025,7 +3006,10 @@ struct SettingsView: View {
 
             settingsRow(
                 I18N.shared.localized("显示菜单栏图标", "Show Menu Bar Icon"),
-                description: showMenuBarIconDescription
+                description: I18N.shared.localized(
+                    "在菜单栏显示图标与未读数量。",
+                    "Shows the icon and unread count in the menu bar."
+                )
             ) {
                 Toggle(
                     I18N.shared.localized("显示菜单栏图标", "Show Menu Bar Icon"),
@@ -3042,10 +3026,10 @@ struct SettingsView: View {
 
             settingsRow(
                 I18N.shared.localized("Dock 未读徽标", "Dock unread badge"),
-                description: attention.appliedHideDockIcon
+                description: attention.hideDockIcon
                     ? I18N.shared.localized(
-                        "Dock 图标隐藏时不可用。",
-                        "Unavailable while the Dock icon is hidden."
+                        "窗口关闭、Dock 图标隐藏时不显示徽标。",
+                        "The badge stays hidden whenever the Dock icon is hidden."
                     )
                     : nil
             ) {
@@ -3057,7 +3041,6 @@ struct SettingsView: View {
                     )
                 )
                 .labelsHidden()
-                .disabled(attention.appliedHideDockIcon)
             }
         }
     }
