@@ -268,6 +268,48 @@ final class ArticleMediaAndExtractionTests: XCTestCase {
         XCTAssertTrue(content.text.contains("参考资料"), "additional 含 ad 子串但并非广告词元")
     }
 
+    /// Tailwind 任意值里的 CSS 变量名不是布局语义词元：正文外层容器
+    /// `[--sticky-top:var(--header-h)]` 曾因 `header` 词元被判为页面 chrome 并整体删除，
+    /// openai.com 等站点因此只剩几十字标题可抽。
+    func testArbitraryValueVariableNameIsNotTreatedAsChromeToken() {
+        let rawHTML = """
+        <html><body>
+            <div class="[--page-top-gap:0px] [--sticky-top:var(--header-h)] pt-(--page-top-space)">
+                <div class="article-body">
+                    <p>第一段正文说明事件背景与关键时间线，并提供<a href="https://example.com/source">资料出处</a>。</p>
+                    <p>第二段正文继续展开论证，补充数据与访谈细节。</p>
+                    <p>第三段正文收束观点并给出后续计划。</p>
+                </div>
+            </div>
+        </body></html>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://openai.com/index/post"))
+
+        XCTAssertTrue(content.text.contains("第一段正文说明事件背景"), "变量名命中不得删除正文容器")
+        XCTAssertFalse(content.text.contains("--sticky-top"), "任意值本身不得进入正文")
+    }
+
+    /// Tailwind 变体前缀不是元素语义：`nav-desktop:ms-0` 里的 `nav` 只是断点条件。
+    func testVariantPrefixTokenIsNotTreatedAsChromeToken() {
+        let rawHTML = """
+        <html><body>
+            <div class="nav-desktop:pb-6">
+                <article class="article-content">
+                    <p>第一段正文介绍产品能力与使用场景，并附<a href="https://example.com/doc">文档链接</a>。</p>
+                    <p>第二段正文给出客户案例与结果数据。</p>
+                    <p>第三段正文总结收益。</p>
+                </article>
+            </div>
+        </body></html>
+        """
+
+        let content = ArticleExtractor.content(from: rawHTML, baseURL: URL(string: "https://example.com/post"))
+
+        XCTAssertTrue(content.text.contains("第一段正文介绍产品能力"), "变体前缀命中的容器不得按 chrome 删除")
+        XCTAssertTrue(content.text.contains("文档链接"), "容器内的链接文本应保留")
+    }
+
     // MARK: - 5. Figure and Figcaption Preservation
 
     func testFigureAndFigcaptionAreFullyPreserved() {

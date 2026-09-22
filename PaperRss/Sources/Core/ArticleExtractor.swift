@@ -282,15 +282,50 @@ public enum ArticleExtractor {
     }
 
     private static func matchesNegativeContainerToken(_ classAndID: String) -> Bool {
-        let tokens = classAndID
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map { $0.lowercased() }
+        let tokens = semanticClassTokens(from: classAndID)
         guard !tokens.isEmpty else { return false }
         return tokens.contains { token in
             negativeContainerTokens.contains { negative in
                 token == negative || token == negative + "s"
             }
         }
+    }
+
+    /// 从 class/id 文本中提取布局语义词元。切分前必须剔除两类非语义文本，
+    /// 否则正文大容器会被 `header`/`nav` 这类词元误判成页面 chrome 并整体删除：
+    /// 1. 任意值/变量：`[--sticky-top:var(--header-h)]`、`pt-(--page-top-space)`
+    ///    里的词只是 CSS 变量名或函数参数；
+    /// 2. Tailwind 变体前缀：`nav-desktop:ms-0` 的 `nav-desktop` 是断点条件，
+    ///    元素语义由冒号后的 `ms-0` 决定。
+    private static func semanticClassTokens(from classAndID: String) -> [String] {
+        classAndID
+            .split(whereSeparator: { $0.isWhitespace })
+            .flatMap { className -> [Substring] in
+                let withoutArbitraryValues = Substring(strippingArbitraryValueContents(String(className)))
+                guard let separator = withoutArbitraryValues.lastIndex(of: ":") else {
+                    return [withoutArbitraryValues]
+                }
+                return [withoutArbitraryValues[withoutArbitraryValues.index(after: separator)...]]
+            }
+            .flatMap { $0.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) }
+            .map { $0.lowercased() }
+    }
+
+    /// 删除 `[...]` / `(...)` 包裹的任意值与变量内容（支持嵌套），保留括号外文本。
+    private static func strippingArbitraryValueContents(_ className: String) -> String {
+        var result = ""
+        var depth = 0
+        for character in className {
+            switch character {
+            case "[", "(":
+                depth += 1
+            case "]", ")":
+                depth = max(0, depth - 1)
+            default:
+                if depth == 0 { result.append(character) }
+            }
+        }
+        return result
     }
 
     struct ScannedContainer: Sendable {
