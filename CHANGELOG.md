@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## v1.4.3-beta.2 · Build 37 · 2026-09-22
+
+本次 Beta 修复部分网站正文抓取失败的问题；稳定通道仍为 v1.4.2。
+
+- 正文抓取修复：修复 Tailwind 新版式站点（如 openai.com）正文容器 class 中的 CSS 变量与变体前缀被误判为页面导航词元、整篇文章被当作页面元素删除的问题。此前这些站点只能抓到摘要，点「重新拉取正文」会提示失败；现在可正常抓取全文，受影响的旧文章打开时会自动重抓。
+- 回归保护：新增两条正文抽取回归用例（CSS 变量名容器、Tailwind 变体前缀容器），并保留既有导航、作者行、分享栏等页面元素的剔除契约。
+
+---
+
+This Beta fixes article extraction failures on some sites; the stable channel remains on v1.4.2.
+
+- Extraction fix: on Tailwind-based layouts (e.g. openai.com), CSS variables and variant prefixes inside a container's class were misread as navigation keywords, so the whole article container was stripped as page chrome. Those sites previously returned only the summary and “Refetch Article Body” failed; full article bodies now load, and affected articles refetch automatically when opened.
+- Regression coverage: two new extraction tests (CSS-variable containers and Tailwind variant prefixes) while keeping the existing chrome-stripping contracts for navigation, bylines and share bars.
+
 ## v1.4.3-beta.1 · Build 36 · 2026-09-21
 
 本次 Beta 修复深色纸面下公式与线稿插图不可读的问题，并让「隐藏 Dock 图标」随窗口即时生效；稳定通道仍为 v1.4.2。

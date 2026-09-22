@@ -83,7 +83,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 **Stable v1.4.2 (Build 35)** fixes cold-launch crashes on macOS 14 / 15, and adds Miniflux account support, an “Open Original” reader entry and better article/image extraction. Recommended for all users. See the [changelog](CHANGELOG.md).
 
-**Beta v1.4.3-beta.1 (Build 36)**: dark-paper image inversion makes formulas and line-art figures readable in dark mode, and “Hide Dock Icon” now follows window visibility immediately. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.3-beta.1).
+**Beta v1.4.3-beta.2 (Build 37)**: fixes article extraction on Tailwind-based sites (e.g. openai.com) that previously returned only the summary; includes dark-paper image inversion and the “Hide Dock Icon” fix. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.3-beta.2).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

@@ -85,7 +85,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.4.2（Build 35）** 修复 macOS 14 / 15 冷启动闪退，新增 Miniflux 账号接入与阅读页「打开原文」入口，并改进正文与图片提取，建议所有用户升级。详情见 [更新记录](CHANGELOG.md)。
 
-**Beta v1.4.3-beta.1（Build 36）**：深色纸面下公式与线稿插图自动反相，修复深色模式公式看不清的问题；「隐藏 Dock 图标」改为随窗口即时生效。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.3-beta.1)。
+**Beta v1.4.3-beta.2（Build 37）**：修复 Tailwind 新版式站点（如 openai.com）正文抓取失败、只能看到摘要的问题；并包含深色纸面插图反相与「隐藏 Dock 图标」即时生效。[下载测试版](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.3-beta.2)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
