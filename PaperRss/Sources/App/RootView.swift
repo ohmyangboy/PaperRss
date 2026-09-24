@@ -3349,7 +3349,6 @@ private struct EntryRow: View {
     @Environment(\.paperAppearancePalette) private var appearancePalette
     @Environment(\.entryTranslations) private var entryTranslations
     @State private var revealsOriginal = false
-    @State private var hoverRevealTask: Task<Void, Never>?
 
     private var translatedTitle: String? {
         guard let translated = entryTranslations[entry.id]?.title,
@@ -3367,23 +3366,10 @@ private struct EntryRow: View {
         translatedTitle != nil || translatedSummary != nil
     }
 
-    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 默认显示译文；鼠标停留标题左侧热区 300ms 后才切回原文。
     /// 选中行保持译文，不再固定显示原文。
     private var showsTranslation: Bool {
         hasTranslation && !revealsOriginal
-    }
-
-    private func handleHover(_ hovering: Bool) {
-        hoverRevealTask?.cancel()
-        guard hovering else {
-            revealsOriginal = false
-            return
-        }
-        hoverRevealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            revealsOriginal = true
-        }
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -3414,44 +3400,36 @@ private struct EntryRow: View {
                 HStack(alignment: .top, spacing: 9) {
                     VStack(alignment: .leading, spacing: 5) {
                         // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）。
-                        // 原文与译文叠放：容器高度取两者较大值，切换时行高不变，仅 200ms 淡入淡出。
-                        ZStack(alignment: .topLeading) {
+                        // 原文与译文叠放：容器高度取两者较大值；两页在 240ms 内从右向左替换，并只保留轻微淡入淡出。
+                        TranslatedTextPage(showsTranslation: translatedTitle != nil && showsTranslation) {
                             Text(entry.title)
-                                .opacity(showsTranslation ? 0 : 1)
-                                .accessibilityHidden(showsTranslation)
-                            if let translatedTitle {
-                                // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
-                                (TitleTranslationBadge.inline(fontSize: 12)
-                                    + Text("  ")
-                                    + Text(translatedTitle))
-                                    .opacity(showsTranslation ? 1 : 0)
-                                    .accessibilityHidden(!showsTranslation)
-                            }
+                        } translation: {
+                            // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                            TitleTranslationBadge.inline(fontSize: 12)
+                                + Text("  ")
+                                + Text(translatedTitle ?? "")
                         }
                         .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
                         .tracking(0.1)
                         .foregroundStyle(primaryForegroundColor)
                         .lineLimit(entry.isSummaryVisible ? 2 : 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .animation(.easeInOut(duration: 0.2), value: showsTranslation)
+                        .translationRevealHotArea(
+                            isEnabled: translatedTitle != nil,
+                            isRevealingOriginal: $revealsOriginal
+                        )
 
                         // Desc 独占整行（仅在非冗余时渲染）；与标题一致，默认显示译文。
                         if entry.isSummaryVisible {
-                            ZStack(alignment: .topLeading) {
+                            TranslatedTextPage(showsTranslation: translatedSummary != nil && showsTranslation) {
                                 Text(entry.summaryPreview)
-                                    .opacity(showsTranslation ? 0 : 1)
-                                    .accessibilityHidden(showsTranslation)
-                                if let translatedSummary {
-                                    Text(translatedSummary)
-                                        .opacity(showsTranslation ? 1 : 0)
-                                        .accessibilityHidden(!showsTranslation)
-                                }
+                            } translation: {
+                                Text(translatedSummary ?? "")
                             }
                             .font(.subheadline)
                             .foregroundStyle(secondaryForegroundColor)
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .animation(.easeInOut(duration: 0.2), value: showsTranslation)
                         }
                     }
                     // 占满剩余宽度，把配图推到最右侧（配图默认靠右，不随文字长度左移）
@@ -3503,7 +3481,6 @@ private struct EntryRow: View {
             }
         }
         .padding(.vertical, 6)
-        .onHover(perform: handleHover)
         .accessibilityElement(children: .combine)
         .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
     }

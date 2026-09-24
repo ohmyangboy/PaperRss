@@ -194,7 +194,6 @@ struct TimelineArticleTile: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.entryTranslations) private var entryTranslations
     @State private var revealsOriginal = false
-    @State private var hoverRevealTask: Task<Void, Never>?
 
     @Environment(\.magazineStoryStyle) private var magazineStyle
 
@@ -214,23 +213,10 @@ struct TimelineArticleTile: View {
         translatedTitle != nil || translatedSummary != nil
     }
 
-    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 默认显示译文；鼠标停留标题左侧热区 300ms 后才切回原文。
     /// 选中卡片保持译文，不再固定显示原文。
     private var showsTranslation: Bool {
         hasTranslation && !revealsOriginal
-    }
-
-    private func handleHover(_ hovering: Bool) {
-        hoverRevealTask?.cancel()
-        guard hovering else {
-            revealsOriginal = false
-            return
-        }
-        hoverRevealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            revealsOriginal = true
-        }
     }
 
     private var isLead: Bool { layout == .lead }
@@ -282,7 +268,6 @@ struct TimelineArticleTile: View {
                     .opacity(isSelected ? 0.55 : 0.13), lineWidth: 0.7)
         }
         .contentShape(Rectangle())
-        .onHover(perform: handleHover)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityHint(I18N.localized("打开文章"))
@@ -307,43 +292,35 @@ struct TimelineArticleTile: View {
                 if entry.isStarred { Image(systemName: "star.fill").foregroundStyle(Color(paperHex: palette.warmHex)) }
             }
             .font(.caption).foregroundStyle(Color(paperHex: palette.mutedHex))
-            // 原文与译文叠放：容器高度取两者较大值，切换时行高不变，仅 200ms 淡入淡出。
-            ZStack(alignment: .topLeading) {
+            // 原文与译文叠放：容器高度取两者较大值；两页在 240ms 内从右向左替换，并只保留轻微淡入淡出。
+            TranslatedTextPage(showsTranslation: translatedTitle != nil && showsTranslation) {
                 Text(entry.title)
-                    .opacity(showsTranslation ? 0 : 1)
-                    .accessibilityHidden(showsTranslation)
-                if let translatedTitle {
-                    // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
-                    (TitleTranslationBadge.inline(fontSize: titleSize * 0.72)
-                        + Text("  ")
-                        + Text(translatedTitle))
-                        .opacity(showsTranslation ? 1 : 0)
-                        .accessibilityHidden(!showsTranslation)
-                }
+            } translation: {
+                // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                TitleTranslationBadge.inline(fontSize: titleSize * 0.72)
+                    + Text("  ")
+                    + Text(translatedTitle ?? "")
             }
             .font(.system(size: titleSize, weight: entry.isRead ? .regular : .semibold, design: .serif))
             .foregroundStyle(Color(paperHex: palette.inkHex))
             .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(.easeInOut(duration: 0.2), value: showsTranslation)
+            .translationRevealHotArea(
+                isEnabled: translatedTitle != nil,
+                isRevealingOriginal: $revealsOriginal
+            )
             if entry.isSummaryVisible {
-                ZStack(alignment: .topLeading) {
+                TranslatedTextPage(showsTranslation: translatedSummary != nil && showsTranslation) {
                     Text(entry.summaryPreview)
-                        .opacity(showsTranslation ? 0 : 1)
-                        .accessibilityHidden(showsTranslation)
-                    if let translatedSummary {
-                        Text(translatedSummary)
-                            .opacity(showsTranslation ? 1 : 0)
-                            .accessibilityHidden(!showsTranslation)
-                    }
+                } translation: {
+                    Text(translatedSummary ?? "")
                 }
                 .font(.system(size: 13))
                 .foregroundStyle(Color(paperHex: palette.mutedHex))
                 .lineLimit(isLead ? 4 : 3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.easeInOut(duration: 0.2), value: showsTranslation)
             }
             HStack(spacing: 8) {
                 Text(entry.accountSourceBadge).lineLimit(1)

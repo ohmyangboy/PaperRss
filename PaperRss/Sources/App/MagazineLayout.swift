@@ -742,7 +742,6 @@ struct MagazineStoryView: View {
     @State private var failed = false
     @State private var hovered = false
     @State private var revealsOriginal = false
-    @State private var hoverRevealTask: Task<Void, Never>?
 
     private var translatedTitle: String? {
         guard let translated = entryTranslations[entry.id]?.title,
@@ -760,24 +759,14 @@ struct MagazineStoryView: View {
         translatedTitle != nil || translatedSummary != nil
     }
 
-    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 默认显示译文；鼠标停留标题左侧热区 300ms 后才切回原文。
     /// 选中卡片保持译文，不再固定显示原文。
     private var showsTranslation: Bool {
         hasTranslation && !revealsOriginal
     }
 
-    private func handleHover(_ hovering: Bool) {
+    private func handleCardHover(_ hovering: Bool) {
         hovered = hovering
-        hoverRevealTask?.cancel()
-        guard hovering else {
-            revealsOriginal = false
-            return
-        }
-        hoverRevealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            revealsOriginal = true
-        }
     }
 
     private var request: ArticleThumbnailRequest? {
@@ -818,39 +807,31 @@ struct MagazineStoryView: View {
     private var storyText: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: style.textSpacing) {
-                // 原文与译文叠放：容器高度取两者较大值，切换时高度不变，仅 200ms 淡入淡出。
-                ZStack(alignment: .topLeading) {
+                // 原文与译文叠放：容器高度取两者较大值；两页在 240ms 内从右向左替换，并只保留轻微淡入淡出。
+                TranslatedTextPage(showsTranslation: translatedTitle != nil && showsTranslation) {
                     Text(entry.title)
-                        .opacity(showsTranslation ? 0 : 1)
-                        .accessibilityHidden(showsTranslation)
-                    if let translatedTitle {
-                        // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
-                        (TitleTranslationBadge.inline(fontSize: style.titleFontSize * 0.72)
-                            + Text("  ")
-                            + Text(translatedTitle))
-                            .opacity(showsTranslation ? 1 : 0)
-                            .accessibilityHidden(!showsTranslation)
-                    }
+                } translation: {
+                    // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                    TitleTranslationBadge.inline(fontSize: style.titleFontSize * 0.72)
+                        + Text("  ")
+                        + Text(translatedTitle ?? "")
                 }
                 .font(Font(MagazineStoryStyle.titleFont(style.titleFontSize)))
                 .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
                 .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
-                .animation(.easeInOut(duration: 0.2), value: showsTranslation)
+                .translationRevealHotArea(
+                    isEnabled: translatedTitle != nil,
+                    isRevealingOriginal: $revealsOriginal
+                )
                 if entry.isSummaryVisible && style.summaryLines > 0 {
-                    ZStack(alignment: .topLeading) {
+                    TranslatedTextPage(showsTranslation: translatedSummary != nil && showsTranslation) {
                         Text(entry.summaryPreview)
-                            .opacity(showsTranslation ? 0 : 1)
-                            .accessibilityHidden(showsTranslation)
-                        if let translatedSummary {
-                            Text(translatedSummary)
-                                .opacity(showsTranslation ? 1 : 0)
-                                .accessibilityHidden(!showsTranslation)
-                        }
+                    } translation: {
+                        Text(translatedSummary ?? "")
                     }
                     .font(.system(size: style.summaryFontSize))
                     .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
                     .foregroundStyle(Color(paperHex: palette.mutedHex))
-                    .animation(.easeInOut(duration: 0.2), value: showsTranslation)
                 }
             }
             if !style.stacksImage && style.imageHeight > 0 {
@@ -888,7 +869,7 @@ struct MagazineStoryView: View {
                     .padding(.vertical, 4).offset(x: -8)
             }
         }
-        .contentShape(Rectangle()).onHover(perform: handleHover)
+        .contentShape(Rectangle()).onHover(perform: handleCardHover)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .task(id: request) {
