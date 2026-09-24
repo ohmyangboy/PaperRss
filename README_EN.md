@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.3](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -32,21 +32,22 @@ _This project is inspired by another outstanding open-source RSS reader, [NetNew
 ## Highlights
 
 - **Immersive Magazine View & Metal Fold Turning**: Reimagined timeline browsing with Balanced Duo editorial layouts, automatic article preview extraction, realistic 3D paper fold turning with native audio, and a scrubbing page rail.
-- **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, and dependable navigation with fluid transitions between list and magazine styles.
+- **Immersive Paper-like Reading**: Serif typography tailored for long-form articles, light/dark themes, independent CJK and Latin font settings for bodies, headings and translations, and fluid transitions between list and magazine styles.
 - **Storage Governance & Automated Retention**: Configurable article retention periods (180 days default / 1 year / keep forever), permanent preservation for unread/starred items, tombstone resurrection protection, and background database compaction.
 - **Rendering Engine & LaTeX Math**: Re-engineered article preparation pipeline with native MathJax typesetting and markdown formula shielding for technical articles.
 - **On-Demand AI Summaries**: Every feature is completely optional — turn AI off entirely if you prefer, or trigger it on demand with the `V` shortcut.
 - **Contextual Selection Tools**: Translate, explain, or query selected text with full article context.
-- **Feature-routed AI Integration**: Store separate API keys and model catalogs for OpenAI-compatible endpoints, DeepSeek, and Google Gemini; summaries, bilingual reading, and each selection action can use different models without hiding existing artifacts.
+- **On-Demand Timeline Translation**: Translate visible foreign titles and summaries across list, timeline-card and magazine views; move to a title's left side to reveal the original briefly.
+- **Feature-routed AI Integration**: Store separate API keys and model catalogs for OpenAI-compatible endpoints, DeepSeek, and Google Gemini; summaries, bilingual reading, title translation and each selection action can use different models without hiding existing artifacts.
 - **Multi-Account Support**: Supports local accounts and FreshRSS / Miniflux server synchronization.
 
 For more upcoming features and bugfix plans, see [weekly.md](./weekly.md).
 
 ### AI service configuration
 
-Open **Settings → AI Features**. **Providers & Models** manages only connections, local API keys, and confirmed model catalogs for the built-in OpenAI-compatible, DeepSeek, and Google Gemini providers or custom endpoints. **Feature Routing** independently enables and selects a model for summaries, bilingual translation, selection translation, explanation, and Q&A. Google Gemini uses the official OpenAI-compatible endpoint `https://generativelanguage.googleapis.com/v1beta/openai` and requires a Gemini API key.
+Open **Settings → AI Features**. **Providers & Models** manages only connections, local API keys, and confirmed model catalogs for the built-in OpenAI-compatible, DeepSeek, and Google Gemini providers or custom endpoints. **Feature Routing** independently enables and selects a model for summaries, bilingual translation, title translation, selection translation, explanation, and Q&A. Translation preferences split automatic translation into **Article Content** and **List Titles**: enabling article translation also enables list-title translation, while list titles may be enabled on their own. Move to a title's left-side hot zone for 300ms to reveal the original; a one-time coachmark appears on first use. Google Gemini uses the official OpenAI-compatible endpoint `https://generativelanguage.googleapis.com/v1beta/openai` and requires a Gemini API key.
 
-On first launch after upgrading, the former single AI configuration is bound to all five features without dropping its API key, model, toggles, or custom prompt. Legacy settings keys remain for rollback compatibility. API keys stay in local app preferences and are not included in iCloud sync.
+On first launch after upgrading, the former single AI configuration is bound to all features without dropping its API key, model, toggles, or custom prompt. Legacy settings keys remain for rollback compatibility. API keys stay in local app preferences and are not included in iCloud sync.
 
 ## Screenshots
 
@@ -81,9 +82,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Stable v1.4.2 (Build 35)** fixes cold-launch crashes on macOS 14 / 15, and adds Miniflux account support, an “Open Original” reader entry and better article/image extraction. Recommended for all users. See the [changelog](CHANGELOG.md).
-
-**Beta v1.4.3-beta.2 (Build 37)**: fixes article extraction on Tailwind-based sites (e.g. openai.com) that previously returned only the summary; includes dark-paper image inversion and the “Hide Dock Icon” fix. [Download Beta](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.3-beta.2).
+**Stable v1.4.3 (Build 38)** adds separate CJK and Latin font settings and on-demand timeline title and summary translation, refines translated-title interactions, and includes fixes for article extraction, dark-paper images and Dock icon behavior. Recommended for all users. See the [changelog](CHANGELOG.md).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

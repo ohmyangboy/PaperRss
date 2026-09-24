@@ -1,5 +1,27 @@
 # 更新记录 / Changelog
 
+## v1.4.3 · Build 38 · 2026-09-24
+
+PaperRss 1.4.3 新增中西文字体分别设置与列表标题、摘要按需翻译，并收敛标题切换交互；同时把 1.4.3 Beta 的正文抓取、深色纸面插图与 Dock 图标修复带入稳定通道，建议所有用户升级。
+
+- 中西文字体分别设置（新功能）：阅读排版新增「中文字体」与「西文字体」两项，正文、文章标题和译文按「西文 → 中文 → 系统回退」逐字承接；旧版单字体设置可无损继续使用，未配置时保持原有观感。
+- 列表标题与摘要按需翻译（新功能）：设置中可独立开启「列表标题」并为「标题翻译」指定模型；普通列表、时间线卡片与杂志视图会按可见范围翻译外语标题和描述，支持黑白名单、本地语言判断、视口预取与翻译缓存。
+- 标题译文交互优化：默认显示译文；鼠标停留标题左侧热区 300ms 后可查看原文，切换采用从右向左的轻量翻页与少量淡入淡出。首次使用会在当前条目显示一次操作提示，移出热区即恢复译文。
+- 按需翻译稳定性：相同标题或摘要只请求一次，标题与摘要合并批处理；滚动停止后再取新条目，失败文本自动退避，重启或再次浏览时优先命中本地缓存，避免滚动过程中的请求风暴。
+- 正文抓取修复：修复 Tailwind 新版式站点（如 openai.com）的 CSS 变量与变体前缀被误判为页面导航词元、导致正文容器被删除的问题；受影响文章会重新抓取完整正文。
+- 深色纸面与 Dock 修复：深色纸面下自动反相深色线稿、图表与公式图并保留照片原貌；「隐藏 Dock 图标」现在随窗口显隐即时生效，无需重启。
+
+---
+
+PaperRss 1.4.3 adds separate CJK and Latin font settings and on-demand translation for timeline titles and summaries, while refining title-reveal interactions. It also promotes the 1.4.3 Beta fixes for article extraction, dark-paper images and Dock icon behavior to stable. Recommended for all users.
+
+- Separate CJK and Latin fonts (new): Reader typography now provides independent Chinese and Latin font settings; article bodies, headings and translations use a “Latin → CJK → system fallback” stack. Existing single-font settings remain compatible, and an unconfigured install keeps its previous appearance.
+- On-demand timeline title and summary translation (new): a dedicated “List Titles” preference and “Title Translation” model route are available across list, timeline-card and magazine views. Visible foreign titles and descriptions are translated on demand with feed lists, local language detection, viewport prefetching and a local translation cache.
+- Refined translated-title interaction: translations show by default; move to the title’s left-side hot zone for 300ms to reveal the original with a subtle right-to-left page transition and light fade. A one-time item-level coachmark appears on first use, and leaving the hot zone restores the translation.
+- Reliable on-demand requests: duplicate titles and summaries are sent once, title and summary work is batched, newly visible rows wait for scrolling to settle, failed text backs off, and cached translations are reused after relaunch or revisits to prevent request storms.
+- Article extraction fix: Tailwind-based sites such as openai.com no longer lose the full article container when CSS variables or variant prefixes resemble navigation keywords; affected articles automatically refetch their complete bodies.
+- Dark-paper and Dock fixes: dark line art, diagrams and formula images are lightness-inverted on dark paper while photos and colour illustrations remain unchanged; “Hide Dock Icon” now follows window visibility immediately without a relaunch.
+
 ## v1.4.3-beta.2 · Build 37 · 2026-09-22
 
 本次 Beta 修复部分网站正文抓取失败的问题；稳定通道仍为 v1.4.2。
