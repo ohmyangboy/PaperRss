@@ -242,9 +242,6 @@ struct SettingsView: View {
     @State private var isShowingCleanConfirmation = false
     @State private var storageStats: LibraryDatabase.StorageStats?
     @State private var hoveredSection: SettingsSection?
-    @State private var isFontPickerPresented = false
-    @State private var fontSearchText = ""
-    @FocusState private var isFontSearchFocused: Bool
 
     var body: some View {
         Group {
@@ -900,7 +897,7 @@ struct SettingsView: View {
                     }
                 }
                 .frame(minWidth: 736)
-                .frame(height: 300)
+                .frame(height: 380)
                 VStack(alignment: .leading, spacing: 16) {
                     appearancePreview
                     typographyPanel
@@ -985,18 +982,33 @@ struct SettingsView: View {
         AppearanceThreeColumnPreview(
             appearance: store.readerAppearance,
             mode: readerAppearanceMode,
-            bodyFont: readerPreviewFont
+            fonts: readerPreviewFonts
         )
     }
 
     private var typographyPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let families = availableReaderFontFamilies
+        return VStack(alignment: .leading, spacing: 16) {
             Text(I18N.shared.localized("排版", "Typography"))
                 .font(.system(size: 17, weight: .semibold))
             VStack(alignment: .leading, spacing: 8) {
-                Text(I18N.shared.localized("正文字体", "Body Font"))
+                Text(I18N.shared.localized("中文字体", "CJK Font"))
                     .font(.system(size: 13)).foregroundStyle(.secondary)
-                readerFontPicker
+                ReaderFontPicker(
+                    title: I18N.shared.localized("中文字体", "CJK Font"),
+                    selectedFamily: store.readerAppearance.cjkFontFamilyName,
+                    families: families
+                ) { store.setReaderCJKFontFamily($0) }
+            }
+            .help(I18N.shared.localized("所选西文字体缺少中文字形时，中文自动使用这里的字体。", "CJK glyphs fall back to this font when the Latin font has no Chinese coverage."))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(I18N.shared.localized("西文字体", "Latin Font"))
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                ReaderFontPicker(
+                    title: I18N.shared.localized("西文字体", "Latin Font"),
+                    selectedFamily: store.readerAppearance.latinFontFamilyName,
+                    families: families
+                ) { store.setReaderLatinFontFamily($0) }
             }
             Divider().opacity(0.3)
             VStack(alignment: .leading, spacing: 10) {
@@ -1039,7 +1051,7 @@ struct SettingsView: View {
             }
         }
         .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 380, alignment: .topLeading)
         .background(settingsGroupBackground, in: RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius))
         .overlay {
             RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius)
@@ -1080,112 +1092,6 @@ struct SettingsView: View {
         .accessibilityLabel(I18N.shared.localized("外观模式", "Theme Mode"))
     }
 
-    private var readerFontPicker: some View {
-        Button {
-            fontSearchText = ""
-            isFontPickerPresented = true
-        } label: {
-            HStack(spacing: 8) {
-                Text(selectedReaderFontName)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 32)
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.bordered)
-        .popover(isPresented: $isFontPickerPresented, arrowEdge: .trailing) {
-            readerFontPickerPopover
-        }
-        .accessibilityLabel(I18N.shared.localized("正文字体", "Body Font"))
-        .accessibilityValue(selectedReaderFontName)
-    }
-
-    private var readerFontPickerPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField(
-                I18N.shared.localized("搜索字体", "Search fonts"),
-                text: $fontSearchText
-            )
-            .textFieldStyle(SettingsInputStyle())
-            .focused($isFontSearchFocused)
-
-            if filteredReaderFontFamilies.isEmpty {
-                Text(I18N.shared.localized("没有匹配的字体", "No matching fonts"))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 120)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        readerFontOption(
-                            I18N.shared.localized("系统默认", "System Default"),
-                            family: nil
-                        )
-
-                        Divider()
-
-                        ForEach(filteredReaderFontFamilies, id: \.self) { family in
-                            readerFontOption(family, family: family)
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                }
-                .frame(width: 280, height: 300)
-            }
-        }
-        .padding(12)
-        .frame(width: 304)
-        .onAppear { isFontSearchFocused = true }
-        .onDisappear { isFontSearchFocused = false }
-    }
-
-    private var selectedReaderFontName: String {
-        store.readerAppearance.fontFamilyName
-            ?? I18N.shared.localized("系统默认", "System Default")
-    }
-
-    private var filteredReaderFontFamilies: [String] {
-        let query = fontSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return availableReaderFontFamilies }
-        return availableReaderFontFamilies.filter {
-            $0.localizedCaseInsensitiveContains(query)
-        }
-    }
-
-    private func readerFontOption(_ title: String, family: String?) -> some View {
-        let isSelected = store.readerAppearance.fontFamilyName == family
-
-        return Button {
-            store.setReaderFontFamily(family)
-            isFontPickerPresented = false
-        } label: {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(family.map { Font.custom($0, size: 13) } ?? .body)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(settingsAccentColor)
-                }
-            }
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
     private var availableReaderFontFamilies: [String] {
         #if os(macOS)
         NSFontManager.shared.availableFontFamilies.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -1210,11 +1116,24 @@ struct SettingsView: View {
         Color(paperHex: settingsAppearancePalette.accentHex)
     }
 
-    private var readerPreviewFont: Font {
-        if let family = store.readerAppearance.fontFamilyName {
+    private func readerPreviewFont(for family: String?) -> Font {
+        if let family {
             return .custom(family, size: CGFloat(store.articleFontSize))
         }
         return .system(size: CGFloat(store.articleFontSize))
+    }
+
+    private var readerPreviewFonts: ReaderPreviewFonts {
+        let titleSize: CGFloat = 15
+        let titleFallback = Font.system(size: titleSize, weight: .bold, design: .serif)
+        return ReaderPreviewFonts(
+            bodyLatin: readerPreviewFont(for: store.readerAppearance.latinFontFamilyName),
+            bodyCJK: readerPreviewFont(for: store.readerAppearance.cjkFontFamilyName),
+            titleLatin: store.readerAppearance.latinFontFamilyName
+                .map { Font.custom($0, size: titleSize).weight(.bold) } ?? titleFallback,
+            titleCJK: store.readerAppearance.cjkFontFamilyName
+                .map { Font.custom($0, size: titleSize).weight(.bold) } ?? titleFallback
+        )
     }
 
     private func readerBackgroundBinding(for mode: ReaderAppearanceMode) -> Binding<Color> {
@@ -1947,7 +1866,7 @@ struct SettingsView: View {
                 .accessibilityHidden(preferences.mode != .replacement)
             }
         }
-        .font(readerPreviewFont)
+        .font(readerPreviewFont(for: store.readerAppearance.latinFontFamilyName))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color(paperHex: palette.backgroundHex), in: RoundedRectangle(cornerRadius: 8))
@@ -3465,10 +3384,134 @@ struct SettingsView: View {
     }
 }
 
+/// 阅读正文的字体选择器：`selectedFamily == nil` 表示系统默认。
+/// 西文与中文两个入口复用同一套搜索、列表与弹层交互。
+private struct ReaderFontPicker: View {
+    let title: String
+    let selectedFamily: String?
+    let families: [String]
+    let onSelect: (String?) -> Void
+
+    @State private var isPickerPresented = false
+    @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
+
+    var body: some View {
+        Button {
+            searchText = ""
+            isPickerPresented = true
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedFontName)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 32)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.bordered)
+        .popover(isPresented: $isPickerPresented, arrowEdge: .trailing) {
+            pickerPopover
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedFontName)
+    }
+
+    private var pickerPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField(
+                I18N.shared.localized("搜索字体", "Search fonts"),
+                text: $searchText
+            )
+            .textFieldStyle(SettingsInputStyle())
+            .focused($isSearchFocused)
+
+            if filteredFamilies.isEmpty {
+                Text(I18N.shared.localized("没有匹配的字体", "No matching fonts"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        fontOption(
+                            I18N.shared.localized("系统默认", "System Default"),
+                            family: nil
+                        )
+
+                        Divider()
+
+                        ForEach(filteredFamilies, id: \.self) { family in
+                            fontOption(family, family: family)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .frame(width: 280, height: 300)
+            }
+        }
+        .padding(12)
+        .frame(width: 304)
+        .onAppear { isSearchFocused = true }
+        .onDisappear { isSearchFocused = false }
+    }
+
+    private var selectedFontName: String {
+        selectedFamily ?? I18N.shared.localized("系统默认", "System Default")
+    }
+
+    private var filteredFamilies: [String] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return families }
+        return families.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private func fontOption(_ title: String, family: String?) -> some View {
+        let isSelected = selectedFamily == family
+
+        return Button {
+            onSelect(family)
+            isPickerPresented = false
+        } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(family.map { Font.custom($0, size: 13) } ?? .body)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.tint)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// 三栏预览用到的正文与标题字体；标题在未配置自定义字体时回退系统 serif，与阅读器一致。
+private struct ReaderPreviewFonts {
+    let bodyLatin: Font
+    let bodyCJK: Font
+    let titleLatin: Font
+    let titleCJK: Font
+}
+
 private struct AppearanceThreeColumnPreview: View {
     let appearance: ReaderAppearance
     let mode: ReaderAppearanceMode
-    let bodyFont: Font
+    let fonts: ReaderPreviewFonts
 
     var body: some View {
         HStack(spacing: 1) {
@@ -3504,19 +3547,24 @@ private struct AppearanceThreeColumnPreview: View {
             .background(surface(.articleList))
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(I18N.shared.localized("静夜思 · 李白", "Quiet Night Thoughts · Li Bai"))
-                    .font(.system(size: 15, weight: .bold, design: .serif))
-                    .foregroundStyle(ink)
+                Text(scriptAwarePreviewText(
+                    I18N.shared.localized("静夜思 · 李白", "Quiet Night Thoughts · Li Bai"),
+                    latin: fonts.titleLatin,
+                    cjk: fonts.titleCJK
+                ))
+                .foregroundStyle(ink)
                 Text(I18N.shared.localized("唐诗选读 · 阅读预览", "Poetry · Reading Preview"))
                     .font(.system(size: 12))
                     .foregroundStyle(muted)
-                Text("床前明月光，疑是地上霜。\n举头望明月，低头思故乡。")
-                    .font(bodyFont)
+                Text(scriptAwarePreviewText("床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"))
                     .lineSpacing(CGFloat(appearance.fontSize) * max(0, appearance.lineHeight - 1.2))
                     .foregroundStyle(ink)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(I18N.shared.localized("在文字间放慢脚步，让阅读回归专注。主题同步呈现于侧栏、文章列表与正文，字体设置仅影响阅读内容。", "Slow down between the lines. The theme follows you across the sidebar, article list, and reader; font preferences apply only to reading content."))
-                    .font(bodyFont)
+                Text(scriptAwarePreviewText("To be, or not to be, that is the question."))
+                    .lineSpacing(CGFloat(appearance.fontSize) * max(0, appearance.lineHeight - 1.2))
+                    .foregroundStyle(ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(scriptAwarePreviewText(I18N.shared.localized("在文字间放慢脚步，让阅读回归专注。主题同步呈现于侧栏、文章列表与正文，字体设置仅影响阅读内容。", "Slow down between the lines. The theme follows you across the sidebar, article list, and reader; font preferences apply only to reading content.")))
                     .lineSpacing(CGFloat(appearance.fontSize) * max(0, appearance.lineHeight - 1.2))
                     .foregroundStyle(muted)
                     .lineLimit(4)
@@ -3527,7 +3575,7 @@ private struct AppearanceThreeColumnPreview: View {
             .background(surface(.reader))
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 300)
+        .frame(height: 380)
         .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: SettingsMetrics.cardCornerRadius, style: .continuous)
@@ -3553,6 +3601,34 @@ private struct AppearanceThreeColumnPreview: View {
         Capsule()
             .fill(ink.opacity(opacity))
             .frame(width: width, height: 4)
+    }
+
+    private func scriptAwarePreviewText(_ string: String) -> AttributedString {
+        scriptAwarePreviewText(string, latin: fonts.bodyLatin, cjk: fonts.bodyCJK)
+    }
+
+    /// 预览按脚本分配字体，复现阅读器中「西文优先、中文回退」的 CSS 字体栈行为。
+    private func scriptAwarePreviewText(_ string: String, latin: Font, cjk: Font) -> AttributedString {
+        var result = AttributedString()
+        for character in string {
+            var run = AttributedString(String(character))
+            run.font = Self.isCJK(character) ? cjk : latin
+            result.append(run)
+        }
+        return result
+    }
+
+    private static func isCJK(_ character: Character) -> Bool {
+        character.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x2E80...0x303F, 0x3040...0x30FF, 0x3100...0x318F,
+                 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+                 0xFE30...0xFE4F, 0xFF00...0xFFEF, 0x20000...0x2FA1F:
+                return true
+            default:
+                return false
+            }
+        }
     }
 }
 

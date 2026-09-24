@@ -1483,17 +1483,6 @@ private extension String {
     }
 }
 
-private func readerFontStack(for appearance: ReaderAppearance) -> String {
-    let systemFallback = "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
-    guard let family = appearance.fontFamilyName else { return systemFallback }
-    let escaped = family
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
-        .replacingOccurrences(of: "\n", with: " ")
-        .replacingOccurrences(of: "\r", with: " ")
-    return "\"\(escaped)\", \(systemFallback)"
-}
-
 private func readerAppearanceStyle(
     _ appearance: ReaderAppearance,
     mode: ReaderAppearanceMode
@@ -1504,7 +1493,7 @@ private func readerAppearanceStyle(
         .map { "\($0.key): \($0.value);" }
         .joined(separator: " ")
     return """
-    :root { color-scheme: \(palette.colorScheme.rawValue); \(variables) --paper-body-font-family: \(readerFontStack(for: appearance)); }
+    :root { color-scheme: \(palette.colorScheme.rawValue); \(variables) --paper-body-font-family: \(appearance.bodyFontStack); --paper-title-font-family: \(appearance.titleFontStack); }
     :root { --paper-line-height: \(appearance.lineHeight); }
     body { font-family: var(--paper-body-font-family); }
     .paper-header-container, .paper-summary-card, #paper-rss-toc-rail {
@@ -1519,7 +1508,8 @@ private func readerAppearanceJavaScript(
 ) -> String {
     let palette = appearance.palette(for: mode)
     var variables = palette.cssVariables
-    variables["--paper-body-font-family"] = readerFontStack(for: appearance)
+    variables["--paper-body-font-family"] = appearance.bodyFontStack
+    variables["--paper-title-font-family"] = appearance.titleFontStack
     variables["--paper-line-height"] = String(appearance.lineHeight)
     guard let data = try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]),
           let json = String(data: data, encoding: .utf8) else { return "" }
@@ -1613,7 +1603,7 @@ body > :not(.paper-header-container):not(#paper-rss-toc-rail):not(#paper-rss-toc
   padding: 0;
 }
 .paper-header-title {
-  font-family: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+  font-family: var(--paper-title-font-family, "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif);
   font-size: 1.85em;
   font-weight: 700;
   line-height: 1.28;
@@ -1782,7 +1772,7 @@ p, ul, ol, dl, blockquote, pre, table, figure { margin: 0 0 1.2em; }
 h1, h2, h3, h4, h5, h6 {
   margin: 1.6em 0 .58em;
   color: var(--paper-ink);
-  font-family: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+  font-family: var(--paper-title-font-family, "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif);
   font-weight: 700;
   line-height: 1.28;
   letter-spacing: .012em;
@@ -2060,6 +2050,14 @@ th, td {
   color: var(--paper-muted);
   font-size: 0.96em;
   line-height: var(--paper-line-height, 1.72);
+}
+/* 译文跟随源块的字体分工：标题旁的译文与源标题共用同一字体栈。 */
+h1 + .paper-rss-translation, h2 + .paper-rss-translation, h3 + .paper-rss-translation,
+h4 + .paper-rss-translation, h5 + .paper-rss-translation, h6 + .paper-rss-translation {
+  font-family: var(--paper-title-font-family, "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif);
+}
+blockquote + .paper-rss-translation {
+  font-family: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
 }
 .paper-rss-translation-label {
   position: relative;

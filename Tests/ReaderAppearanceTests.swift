@@ -61,7 +61,7 @@ final class ReaderAppearanceTests: XCTestCase {
     func testCustomBackgroundCreatesCustomStateAndResetKeepsTypography() {
         var appearance = ReaderAppearance(
             preset: .geek,
-            fontFamilyName: "Iowan Old Style",
+            latinFontFamilyName: "Iowan Old Style",
             fontSize: 21
         )
 
@@ -73,7 +73,7 @@ final class ReaderAppearanceTests: XCTestCase {
         appearance.resetToPreset()
         XCTAssertFalse(appearance.isCustom)
         XCTAssertEqual(appearance.backgroundHex(for: .light), "#1A1B26")
-        XCTAssertEqual(appearance.fontFamilyName, "Iowan Old Style")
+        XCTAssertEqual(appearance.latinFontFamilyName, "Iowan Old Style")
         XCTAssertEqual(appearance.fontSize, 21)
     }
 
@@ -125,22 +125,120 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertEqual(store.readerAppearance.fontSize, 20)
 
         store.setReaderThemePreset(.white)
-        store.setReaderFontFamily("Avenir Next")
+        store.setReaderLatinFontFamily("Avenir Next")
+        store.setReaderCJKFontFamily("Songti SC")
         store.setReaderBackgroundHex("#F7F7F8", for: .light)
         XCTAssertTrue(store.readerAppearance.isCustom)
         XCTAssertNotNil(defaults.data(forKey: appearanceKey))
 
         store = AppStore(testDatabase: .empty) { _ in fatalError("Unused in test") }
         XCTAssertEqual(store.readerAppearance.preset, .white)
-        XCTAssertEqual(store.readerAppearance.fontFamilyName, "Avenir Next")
+        XCTAssertEqual(store.readerAppearance.latinFontFamilyName, "Avenir Next")
+        XCTAssertEqual(store.readerAppearance.cjkFontFamilyName, "Songti SC")
         XCTAssertEqual(store.readerAppearance.backgroundHex(for: .light), "#F7F7F8")
 
         store.resetReaderAppearanceToPreset()
         XCTAssertFalse(store.readerAppearance.isCustom)
-        XCTAssertEqual(store.readerAppearance.fontFamilyName, "Avenir Next")
+        XCTAssertEqual(store.readerAppearance.latinFontFamilyName, "Avenir Next")
+        XCTAssertEqual(store.readerAppearance.cjkFontFamilyName, "Songti SC")
 
         store.resetReaderAppearanceToDefault()
         XCTAssertEqual(store.readerAppearance, .default)
+        XCTAssertNil(store.readerAppearance.latinFontFamilyName)
+        XCTAssertNil(store.readerAppearance.cjkFontFamilyName)
+    }
+
+    func testLegacySingleFontDecodesIntoLatinFontWithUnchangedStack() throws {
+        let legacy = Data(#"{"preset":"paper","fontFamilyName":"Avenir Next","fontSize":17}"#.utf8)
+        let appearance = try JSONDecoder().decode(ReaderAppearance.self, from: legacy)
+
+        XCTAssertEqual(appearance.latinFontFamilyName, "Avenir Next")
+        XCTAssertNil(appearance.cjkFontFamilyName)
+        XCTAssertEqual(
+            appearance.bodyFontStack,
+            "\"Avenir Next\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+    }
+
+    func testFontStackOrdersLatinThenCJKThenSystemFallback() {
+        XCTAssertEqual(
+            ReaderAppearance.default.bodyFontStack,
+            "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+
+        let cjkOnly = ReaderAppearance(cjkFontFamilyName: "Songti SC")
+        XCTAssertEqual(
+            cjkOnly.bodyFontStack,
+            "\"Songti SC\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+
+        let both = ReaderAppearance(
+            latinFontFamilyName: "Iowan Old Style",
+            cjkFontFamilyName: "Songti SC"
+        )
+        XCTAssertEqual(
+            both.bodyFontStack,
+            "\"Iowan Old Style\", \"Songti SC\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+    }
+
+    func testTitleFontStackKeepsSerifFallbackAndScriptOrder() {
+        XCTAssertEqual(
+            ReaderAppearance.default.titleFontStack,
+            "\"New York\", \"Iowan Old Style\", \"Songti SC\", \"STSong\", Georgia, serif"
+        )
+
+        let cjkOnly = ReaderAppearance(cjkFontFamilyName: "Songti SC")
+        XCTAssertEqual(
+            cjkOnly.titleFontStack,
+            "\"Songti SC\", \"New York\", \"Iowan Old Style\", \"Songti SC\", \"STSong\", Georgia, serif"
+        )
+
+        let both = ReaderAppearance(
+            latinFontFamilyName: "Iowan Old Style",
+            cjkFontFamilyName: "Songti SC"
+        )
+        XCTAssertEqual(
+            both.titleFontStack,
+            "\"Iowan Old Style\", \"Songti SC\", \"New York\", \"Iowan Old Style\", \"Songti SC\", \"STSong\", Georgia, serif"
+        )
+    }
+
+    func testFontStackNormalizesDeduplicatesAndEscapesFamilyNames() {
+        var appearance = ReaderAppearance(
+            latinFontFamilyName: "  Iowan Old Style  ",
+            cjkFontFamilyName: "iowan old style"
+        )
+        XCTAssertEqual(appearance.latinFontFamilyName, "Iowan Old Style")
+        XCTAssertEqual(
+            appearance.bodyFontStack,
+            "\"Iowan Old Style\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+
+        appearance.setCJKFontFamilyName("  ")
+        XCTAssertNil(appearance.cjkFontFamilyName)
+
+        appearance.setLatinFontFamilyName("Weird \"Font\" \\Name")
+        XCTAssertEqual(
+            appearance.bodyFontStack,
+            "\"Weird \\\"Font\\\" \\\\Name\", -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+        )
+    }
+
+    func testAppearanceRoundTripsBothFontsUnderLegacyLatinKey() throws {
+        let appearance = ReaderAppearance(
+            latinFontFamilyName: "Avenir Next",
+            cjkFontFamilyName: "Songti SC"
+        )
+        let data = try JSONEncoder().encode(appearance)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(json.contains(#""fontFamilyName":"Avenir Next""#))
+        XCTAssertTrue(json.contains(#""cjkFontFamilyName":"Songti SC""#))
+
+        let decoded = try JSONDecoder().decode(ReaderAppearance.self, from: data)
+        XCTAssertEqual(decoded.latinFontFamilyName, "Avenir Next")
+        XCTAssertEqual(decoded.cjkFontFamilyName, "Songti SC")
     }
 
     func testAppearanceSettingsAndThreeColumnWiringStayCoordinated() throws {
@@ -165,8 +263,25 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertTrue(appearanceSection.contains("resetReaderAppearanceToPreset"))
         XCTAssertTrue(appearanceSection.contains("resetReaderAppearanceToDefault"))
         XCTAssertTrue(appearanceSection.contains("setAppTheme"))
-        XCTAssertTrue(appearanceSection.contains("readerFontPicker"))
-        XCTAssertTrue(appearanceSection.contains("filteredReaderFontFamilies"))
+        XCTAssertEqual(appearanceSection.components(separatedBy: "ReaderFontPicker(").count - 1, 2)
+        XCTAssertTrue(appearanceSection.contains("setReaderLatinFontFamily"))
+        XCTAssertTrue(appearanceSection.contains("setReaderCJKFontFamily"))
+
+        // 中文字体设置项必须排在英文字体之前。
+        let cjkPickerIndex = try XCTUnwrap(appearanceSection.range(of: "setReaderCJKFontFamily"))
+        let latinPickerIndex = try XCTUnwrap(appearanceSection.range(of: "setReaderLatinFontFamily"))
+        XCTAssertLessThan(cjkPickerIndex.lowerBound, latinPickerIndex.lowerBound)
+
+        // 预览必须同时包含中英混排样例（莎士比亚英文句）。
+        XCTAssertTrue(settings.contains("To be, or not to be, that is the question."))
+        XCTAssertTrue(settings.contains("scriptAwarePreviewText"))
+        XCTAssertTrue(settings.contains("ReaderPreviewFonts"))
+
+        let fontPickerStart = try XCTUnwrap(settings.range(of: "private struct ReaderFontPicker: View"))
+        let fontPickerEnd = try XCTUnwrap(settings.range(of: "private struct AppearanceThreeColumnPreview: View", range: fontPickerStart.upperBound..<settings.endIndex))
+        let fontPicker = settings[fontPickerStart.lowerBound..<fontPickerEnd.lowerBound]
+        XCTAssertTrue(fontPicker.contains("filteredFamilies"))
+        XCTAssertTrue(fontPicker.contains("系统默认"))
 
         XCTAssertTrue(reader.contains("AppearanceSurface(role: .reader"))
         XCTAssertEqual(reader.components(separatedBy: "synchronizeReaderAppearance(in: webView)").count - 1, 2)
@@ -174,6 +289,14 @@ final class ReaderAppearanceTests: XCTestCase {
         XCTAssertFalse(reader.contains("html, body { background: var(--paper-reader-background)"))
         XCTAssertTrue(reader.contains(".paper-header-container, .paper-summary-card, #paper-rss-toc-rail"))
         XCTAssertTrue(reader.contains("body > :not(.paper-header-container)"))
+        // 标题与译文跟随中西文字体分工，未配置时回退既有 serif 栈。
+        XCTAssertTrue(reader.contains("--paper-title-font-family"))
+        // 标题、正文标题与标题旁译文三处都走标题字体栈。
+        XCTAssertEqual(
+            reader.components(separatedBy: "font-family: var(--paper-title-font-family").count - 1,
+            3
+        )
+        XCTAssertTrue(reader.contains("h1 + .paper-rss-translation"))
 
         let rootView = try String(
             contentsOf: root.appendingPathComponent("PaperRss/Sources/App/RootView.swift"),

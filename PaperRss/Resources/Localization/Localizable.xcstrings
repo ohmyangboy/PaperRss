@@ -727,6 +727,16 @@
         }
       }
     },
+    "中文字体" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CJK Font"
+          }
+        }
+      }
+    },
     "主题只改变文章阅读区，不会改变导航、布局或功能状态。" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2887,6 +2897,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "My Mac (Local Account)"
+          }
+        }
+      }
+    },
+    "所选西文字体缺少中文字形时，中文自动使用这里的字体。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CJK glyphs fall back to this font when the Latin font has no Chinese coverage."
           }
         }
       }
@@ -5197,6 +5217,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Menu"
+          }
+        }
+      }
+    },
+    "西文字体" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Latin Font"
           }
         }
       }

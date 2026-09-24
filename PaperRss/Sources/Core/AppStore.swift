@@ -3540,9 +3540,15 @@ public final class AppStore: ObservableObject {
         saveReaderAppearanceIfNeeded(updated)
     }
 
-    public func setReaderFontFamily(_ fontFamilyName: String?) {
+    public func setReaderLatinFontFamily(_ fontFamilyName: String?) {
         var updated = readerAppearance
-        updated.setFontFamilyName(fontFamilyName)
+        updated.setLatinFontFamilyName(fontFamilyName)
+        saveReaderAppearanceIfNeeded(updated)
+    }
+
+    public func setReaderCJKFontFamily(_ fontFamilyName: String?) {
+        var updated = readerAppearance
+        updated.setCJKFontFamilyName(fontFamilyName)
         saveReaderAppearanceIfNeeded(updated)
     }
 

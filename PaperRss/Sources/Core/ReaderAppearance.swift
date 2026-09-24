@@ -51,10 +51,15 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
     public static let minimumFontSize = 13
     public static let maximumFontSize = 25
     public static let defaultLineHeight = 1.72
+    public static let systemFontFallback = "-apple-system, BlinkMacSystemFont, \"Helvetica Neue\", sans-serif"
+    public static let serifFontFallback = "\"New York\", \"Iowan Old Style\", \"Songti SC\", \"STSong\", Georgia, serif"
     public static let `default` = ReaderAppearance()
 
     public private(set) var preset: ReaderThemePreset
-    public private(set) var fontFamilyName: String?
+    /// 西文（拉丁）正文字体；编码键沿用旧 `fontFamilyName`，保证旧数据可读与旧版本可降级读回。
+    public private(set) var latinFontFamilyName: String?
+    /// 中文（CJK）正文字体：西文字体缺字形时逐字符承接中文。
+    public private(set) var cjkFontFamilyName: String?
     public private(set) var fontSize: Int
     public private(set) var lineHeight: Double
     public private(set) var customLightBackgroundHex: String?
@@ -62,14 +67,16 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
 
     public init(
         preset: ReaderThemePreset = .paper,
-        fontFamilyName: String? = nil,
+        latinFontFamilyName: String? = nil,
+        cjkFontFamilyName: String? = nil,
         fontSize: Int = ReaderAppearance.defaultFontSize,
         lineHeight: Double = ReaderAppearance.defaultLineHeight,
         customLightBackgroundHex: String? = nil,
         customDarkBackgroundHex: String? = nil
     ) {
         self.preset = preset
-        self.fontFamilyName = Self.normalizedFontFamily(fontFamilyName)
+        self.latinFontFamilyName = Self.normalizedFontFamily(latinFontFamilyName)
+        self.cjkFontFamilyName = Self.normalizedFontFamily(cjkFontFamilyName)
         self.fontSize = Self.clampedFontSize(fontSize)
         self.lineHeight = lineHeight.isFinite ? min(2.4, max(1.2, lineHeight)) : Self.defaultLineHeight
         self.customLightBackgroundHex = Self.normalizedHex(customLightBackgroundHex)
@@ -81,14 +88,18 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case preset, fontFamilyName, fontSize, lineHeight, customLightBackgroundHex, customDarkBackgroundHex
+        case preset
+        case latinFontFamilyName = "fontFamilyName"
+        case cjkFontFamilyName
+        case fontSize, lineHeight, customLightBackgroundHex, customDarkBackgroundHex
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             preset: try values.decodeIfPresent(ReaderThemePreset.self, forKey: .preset) ?? .paper,
-            fontFamilyName: try values.decodeIfPresent(String.self, forKey: .fontFamilyName),
+            latinFontFamilyName: try values.decodeIfPresent(String.self, forKey: .latinFontFamilyName),
+            cjkFontFamilyName: try values.decodeIfPresent(String.self, forKey: .cjkFontFamilyName),
             fontSize: try values.decodeIfPresent(Int.self, forKey: .fontSize) ?? Self.defaultFontSize,
             lineHeight: try values.decodeIfPresent(Double.self, forKey: .lineHeight) ?? Self.defaultLineHeight,
             customLightBackgroundHex: try values.decodeIfPresent(String.self, forKey: .customLightBackgroundHex),
@@ -105,8 +116,12 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
         resetToPreset()
     }
 
-    public mutating func setFontFamilyName(_ name: String?) {
-        fontFamilyName = Self.normalizedFontFamily(name)
+    public mutating func setLatinFontFamilyName(_ name: String?) {
+        latinFontFamilyName = Self.normalizedFontFamily(name)
+    }
+
+    public mutating func setCJKFontFamilyName(_ name: String?) {
+        cjkFontFamilyName = Self.normalizedFontFamily(name)
     }
 
     public mutating func setFontSize(_ size: Int) {
@@ -202,12 +217,45 @@ public struct ReaderAppearance: Codable, Equatable, Sendable {
     public var normalized: ReaderAppearance {
         ReaderAppearance(
             preset: preset,
-            fontFamilyName: fontFamilyName,
+            latinFontFamilyName: latinFontFamilyName,
+            cjkFontFamilyName: cjkFontFamilyName,
             fontSize: fontSize,
             lineHeight: lineHeight,
             customLightBackgroundHex: customLightBackgroundHex,
             customDarkBackgroundHex: customDarkBackgroundHex
         )
+    }
+
+    /// 正文 CSS `font-family`：西文字体优先，缺字形时逐字符回退到中文字体，最后回到系统栈。
+    /// 未配置中文或两项均为系统默认时，输出与旧版单字体完全一致。
+    public var bodyFontStack: String {
+        fontStack(fallback: Self.systemFontFallback)
+    }
+
+    /// 标题与译文正文的 `font-family`：同样的中西文分工，但回退到既有 serif 栈。
+    /// 未配置字体时保持升级前的标题观感。
+    public var titleFontStack: String {
+        fontStack(fallback: Self.serifFontFallback)
+    }
+
+    public func fontStack(fallback: String) -> String {
+        var families: [String] = []
+        for family in [latinFontFamilyName, cjkFontFamilyName].compactMap({ $0 }) {
+            guard !families.contains(where: { $0.caseInsensitiveCompare(family) == .orderedSame }) else { continue }
+            families.append(family)
+        }
+        guard !families.isEmpty else { return fallback }
+        return families.map(Self.cssQuotedFontFamily).joined(separator: ", ")
+            + ", " + fallback
+    }
+
+    private static func cssQuotedFontFamily(_ name: String) -> String {
+        let escaped = name
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return "\"\(escaped)\""
     }
 
     private func presetPalette(for mode: ReaderAppearanceMode) -> ReaderAppearancePalette {
