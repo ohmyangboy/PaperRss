@@ -4,3 +4,4 @@
 
 - [macOS 文章章节导航轨道（TOC Rail）](macos-article-toc-rail.md)
 - [macOS 文章阅读自定义快捷键](macos-reader-shortcut-customization.md)
+- [中间列标题翻译（Timeline Title Translation）](timeline-title-translation.md)

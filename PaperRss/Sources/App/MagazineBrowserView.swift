@@ -90,6 +90,9 @@ final class MagazineEditionCache: ObservableObject {
         var textScale: CGFloat = 1
         var scopeID: UUID? = nil
         var imageRatios: [String: CGFloat] = [:]
+        /// entryID → 标题/摘要译文；参与排版测量（按译文换行）但不参与
+        /// 已展示页的冻结判断，避免译文到达时整本重排。
+        var displayTexts: [String: TranslatedEntryText] = [:]
     }
     @Published private(set) var pages: [MagazinePage] = []
     @Published private(set) var layouts: [String: MagazinePageLayout] = [:]
@@ -132,7 +135,8 @@ final class MagazineEditionCache: ObservableObject {
         return retained + MagazinePaginator.pages(entries: next.entries.filter { !ids.contains($0.id) },
             folders: next.folders, arrangement: next.arrangement, size: size, showsImages: next.showsImages,
             hasMore: next.hasMore, textScale: next.textScale, locale: next.locale,
-            imageRatios: next.imageRatios, measurements: measurements, cancelsWithTask: cancelsWithTask)
+            imageRatios: next.imageRatios, displayTexts: next.displayTexts,
+            measurements: measurements, cancelsWithTask: cancelsWithTask)
     }
 
     private func publish(_ next: Input, resolved: [MagazinePageLayout]) {
@@ -227,6 +231,8 @@ struct MagazineBrowserView<Tile: View>: View {
     var onFocusSidebar: () -> Void = {}
     var coverTitle: String = ""
     var onClearSelection: () -> Void = {}
+    /// 当前页（含下一页预取）的条目变化回调，用于标题翻译的按需取用。
+    var onVisibleEntriesChange: ([EntryListItem]) -> Void = { _ in }
     let tile: (EntryListItem, CGFloat, TimelineTileLayout) -> Tile
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
     @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.fold.rawValue
@@ -236,6 +242,7 @@ struct MagazineBrowserView<Tile: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.locale) private var locale
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.entryTranslations) private var entryTranslations
     @StateObject private var edition = MagazineEditionCache()
     @State private var coverAnimating = false
     @State private var autoOpenedScope: UUID?
@@ -285,7 +292,8 @@ struct MagazineBrowserView<Tile: View>: View {
     private var editionInput: MagazineEditionCache.Input {
         .init(entries: entries, folders: folders, arrangement: arrangement, capacity: 12,
               locale: locale.identifier, viewport: turning != .scroll ? MagazinePaginator.foldViewport(availableSize) : availableSize,
-              showsImages: showsImages, hasMore: hasMore, scopeID: memory.magazineScopeID)
+              showsImages: showsImages, hasMore: hasMore, scopeID: memory.magazineScopeID,
+              displayTexts: entryTranslations)
     }
     private var pages: [MagazinePage] { edition.pages }
     /// 空杂志不自动开页；内容排出版面后 id 变化会重新计时，避免在“暂无文章”时开出一本空书。
@@ -460,6 +468,9 @@ struct MagazineBrowserView<Tile: View>: View {
             }
             .onChange(of: availableSize) { _, _ in cancelTurn() }
             .onChange(of: showsImages) { _, _ in cancelTurn() }
+            .onChange(of: pageIndex) { _, index in reportVisibleEntries(around: index) }
+            .onChange(of: pages.map(\.id)) { _, _ in reportVisibleEntries(around: pageIndex) }
+            .onAppear { reportVisibleEntries(around: pageIndex) }
         }
         .background(turning != .scroll ? Color(nsColor: stageBackground) : Color.clear)
         .accessibilityIdentifier("magazine.browser")
@@ -813,6 +824,23 @@ struct MagazineBrowserView<Tile: View>: View {
         railScrubSourceAnchor = nil
         railScrubForward = nil
         railScrubSessionID = nil
+    }
+
+    /// 上报当前页与下一页的条目给标题翻译调度器（下一页用于翻页预取）。
+    /// 排版尚未完成时不回调，保持上一次的范围。
+    private func reportVisibleEntries(around index: Int) {
+        guard !pages.isEmpty, pages.indices.contains(index) else { return }
+        var entries: [EntryListItem] = []
+        var seen = Set<String>()
+        for offset in 0...1 {
+            let target = index + offset
+            guard pages.indices.contains(target) else { continue }
+            for entry in pages[target].entries where seen.insert(entry.id).inserted {
+                entries.append(entry)
+            }
+        }
+        guard !entries.isEmpty else { return }
+        onVisibleEntriesChange(entries)
     }
 
     private func pageContent(_ page: MagazinePage, index: Int) -> some View {

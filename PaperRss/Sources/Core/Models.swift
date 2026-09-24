@@ -301,6 +301,28 @@ public struct EntryListItem: Identifiable, Hashable, Sendable {
         self.accountDisplayName = accountDisplayName
         summaryIsVisible = Self.shouldShowSummary(title: title, summary: summaryPreview)
     }
+
+    /// 保留身份与派生字段，仅替换标题/摘要。用于按译文排版/测量：
+    /// `summaryIsVisible` 沿用原判定，摘要显隐不因译文长度跳动。
+    public func withTitle(_ title: String, summary: String? = nil) -> EntryListItem {
+        EntryListItem(
+            id: id,
+            feedID: feedID,
+            title: title,
+            url: url,
+            summaryPreview: summary ?? summaryPreview,
+            sourceTitle: sourceTitle,
+            feedIconURL: feedIconURL,
+            publishedAt: publishedAt,
+            isRead: isRead,
+            isStarred: isStarred,
+            accountID: accountID,
+            accountType: accountType,
+            accountDisplayName: accountDisplayName,
+            summaryIsVisible: summaryIsVisible,
+            previewImageURL: previewImageURL
+        )
+    }
 }
 
 public struct ArticleCache: Codable, Hashable, Sendable {

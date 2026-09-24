@@ -31,6 +31,9 @@ public enum AIModelSource: String, Codable, Sendable {
 public enum AIFeatureKind: String, Codable, CaseIterable, Sendable {
     case summary
     case bilingualTranslation
+    /// 中间列文章标题的按需翻译。独立于正文双语翻译，便于给标题指定
+    /// 更快/更便宜的翻译模型（列表级请求量远高于正文）。
+    case titleTranslation
     case selectionTranslation
     case selectionExplanation
     case selectionAsk
@@ -151,6 +154,9 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     public var showsSelectionTranslation: Bool
     public var customPrompt: String
     public var automaticallyTranslate: Bool
+    /// 中间列标题与摘要的按需翻译开关。打开「文章内容」自动翻译时会一并打开，
+    /// 也可以单独控制。
+    public var automaticallyTranslateTitles: Bool
     public var translationPreferences: TranslationPreferences
 
     public static let `default` = AIFeaturePreferences(
@@ -172,7 +178,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         showsSelectionTranslation: Bool = true,
         customPrompt: String = "",
         translationPreferences: TranslationPreferences = .default,
-        automaticallyTranslate: Bool = false
+        automaticallyTranslate: Bool = false,
+        automaticallyTranslateTitles: Bool = false
     ) {
         self.targetLanguage = targetLanguage
         self.showsAISummary = showsAISummary
@@ -183,6 +190,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
         self.customPrompt = customPrompt
         self.translationPreferences = translationPreferences
         self.automaticallyTranslate = automaticallyTranslate
+        self.automaticallyTranslateTitles = automaticallyTranslateTitles
     }
 
     public init(configuration: LLMConfiguration, translationPreferences: TranslationPreferences = .default, automaticallyTranslate: Bool = false) {
@@ -201,7 +209,7 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case targetLanguage, showsAISummary, automaticallyGenerateSummary
         case showsSelectionExplanation, showsSelectionAsk, showsSelectionTranslation, customPrompt
-        case translationPreferences, automaticallyTranslate
+        case translationPreferences, automaticallyTranslate, automaticallyTranslateTitles
     }
 
     public init(from decoder: Decoder) throws {
@@ -215,7 +223,8 @@ public struct AIFeaturePreferences: Codable, Hashable, Sendable {
             showsSelectionTranslation: try values.decodeIfPresent(Bool.self, forKey: .showsSelectionTranslation) ?? true,
             customPrompt: try values.decodeIfPresent(String.self, forKey: .customPrompt) ?? "",
             translationPreferences: try values.decodeIfPresent(TranslationPreferences.self, forKey: .translationPreferences) ?? .default,
-            automaticallyTranslate: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslate) ?? false
+            automaticallyTranslate: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslate) ?? false,
+            automaticallyTranslateTitles: try values.decodeIfPresent(Bool.self, forKey: .automaticallyTranslateTitles) ?? false
         )
     }
 
@@ -552,9 +561,11 @@ public struct AISettings: Codable, Hashable, Sendable {
         features: .default,
         featureConfigurations: Dictionary(uniqueKeysWithValues: AIFeatureKind.allCases.map {
             ($0, AIFeatureConfiguration(
-                isEnabled: true,
+                // 标题翻译会把列表标题发送给模型，新装也默认关闭，
+                // 由用户在功能配置中显式打开。
+                isEnabled: $0 != .titleTranslation,
                 model: AIModelReference(providerID: AIProviderID.deepSeek, modelID: "deepseek-v4-flash"),
-                reasoningMode: $0 == .bilingualTranslation || $0 == .selectionTranslation ? "关闭" : "自动"
+                reasoningMode: $0 == .bilingualTranslation || $0 == .titleTranslation || $0 == .selectionTranslation ? "关闭" : "自动"
             ))
         })
     )
@@ -643,6 +654,32 @@ public struct AISettings: Codable, Hashable, Sendable {
 
     public func updatingFeatures(_ features: AIFeaturePreferences) -> AISettings {
         AISettings(activeProviderID: activeProviderID, providers: providers, features: features, featureConfigurations: featureConfigurations, schema: schema)
+    }
+
+    /// 开关「文章内容」自动翻译。打开时同时打开「列表标题」并确保标题
+    /// 翻译能力可用；关闭时不动「列表标题」（两者可独立控制）。
+    public func settingArticleAutoTranslation(_ enabled: Bool) -> AISettings {
+        var features = self.features
+        features.automaticallyTranslate = enabled
+        if enabled { features.automaticallyTranslateTitles = true }
+        let next = updatingFeatures(features)
+        return enabled ? next.ensuringTitleTranslationEnabled() : next
+    }
+
+    /// 单独开关「列表标题」自动翻译；打开时确保标题翻译能力可用。
+    public func settingTitleAutoTranslation(_ enabled: Bool) -> AISettings {
+        var features = self.features
+        features.automaticallyTranslateTitles = enabled
+        let next = updatingFeatures(features)
+        return enabled ? next.ensuringTitleTranslationEnabled() : next
+    }
+
+    private func ensuringTitleTranslationEnabled() -> AISettings {
+        guard configuration(for: .titleTranslation)?.isEnabled != true else { return self }
+        var configuration = configuration(for: .titleTranslation)
+            ?? AIFeatureConfiguration(isEnabled: true, model: nil)
+        configuration.isEnabled = true
+        return updatingFeature(.titleTranslation, configuration: configuration)
     }
 
     public func updatingFeature(
@@ -841,6 +878,9 @@ public struct AISettings: Codable, Hashable, Sendable {
         switch kind {
         case .summary: features.showsAISummary
         case .bilingualTranslation: true
+        // 标题翻译是列表级的新数据流（会把标题发送给模型）；老设置缺失该
+        // 功能配置时保守地保持关闭，由用户在功能配置中显式打开。
+        case .titleTranslation: false
         case .selectionTranslation: features.showsSelectionTranslation
         case .selectionExplanation: features.showsSelectionExplanation
         case .selectionAsk: features.showsSelectionAsk

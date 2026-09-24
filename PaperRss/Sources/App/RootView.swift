@@ -401,6 +401,7 @@ struct RootView: View {
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
                 columnFocusState: columnFocusState,
+                titleTranslator: store.titleTranslator,
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) },
                 viewStyle: timelineStyle,
@@ -484,6 +485,7 @@ struct RootView: View {
                 selectedEntryID: $selectedEntryID,
                 retainedUnreadIDs: $retainedEntryListIDs,
                 columnFocusState: columnFocusState,
+                titleTranslator: store.titleTranslator,
                 autoScrollTrigger: autoScrollTrigger,
                 onFeedback: { showToast($0) }
             )
@@ -2556,6 +2558,7 @@ private struct EntryListView: View {
     @Binding var selectedEntryID: String?
     @Binding var retainedUnreadIDs: Set<String>
     @ObservedObject var columnFocusState: PaperColumnFocusState
+    @ObservedObject var titleTranslator: FeedTitleTranslationCoordinator
     var autoScrollTrigger: UUID
     var onFeedback: (String) -> Void = { _ in }
     var viewStyle: TimelineViewStyle = .list
@@ -2778,6 +2781,35 @@ private struct EntryListView: View {
         }
     }
 
+    /// 把当前可见行上报给标题翻译调度器：滚动到哪里、翻译到哪里。
+    /// 视口下方额外预取一行左右，滚动时译文往往已就绪；去抖、去重、
+    /// 黑白名单与批量合并在调度器内完成，视图只提供范围。
+    private func reportVisibleTitleTranslation(frames: [String: CGRect], viewport: CGRect) {
+        guard !frames.isEmpty else { return }
+        let prefetchViewport = CGRect(
+            x: viewport.minX,
+            y: viewport.minY,
+            width: viewport.width,
+            height: viewport.height + Self.titleTranslationPrefetchInset
+        )
+        let visibleIDs = Set(frames.filter { $0.value.intersects(prefetchViewport) }.map(\.key))
+        guard !visibleIDs.isEmpty else { return }
+        let candidates = loadedEntries
+            .filter { visibleIDs.contains($0.id) }
+            .map {
+                TitleTranslationCandidate(
+                    entryID: $0.id,
+                    feedID: $0.feedID,
+                    title: $0.title,
+                    // 摘要不显示（与标题冗余）时不翻译。
+                    summary: $0.isSummaryVisible ? $0.summaryPreview : nil
+                )
+            }
+        titleTranslator.updateScope(candidates)
+    }
+
+    private static let titleTranslationPrefetchInset: CGFloat = 260
+
     private func visualEntry(_ entry: EntryListItem, width: CGFloat, layout: TimelineTileLayout) -> some View {
         Button {
             onOpenEntry()
@@ -2838,6 +2870,16 @@ private struct EntryListView: View {
                 onNeedMore: loadNextPage,
                 onFocusSidebar: { ThreeColumnSplitViewCoordinator.current?.setActiveColumn(0) },
                 coverTitle: magazineScopeTitle, onClearSelection: { visualSelectionID = nil },
+                onVisibleEntriesChange: { entries in
+                    titleTranslator.updateScope(entries.map {
+                        TitleTranslationCandidate(
+                            entryID: $0.id,
+                            feedID: $0.feedID,
+                            title: $0.title,
+                            summary: $0.isSummaryVisible ? $0.summaryPreview : nil
+                        )
+                    })
+                },
                 tile: { entry, width, layout in visualEntry(entry, width: width, layout: layout) })
                 .focusable().focused($visualHasFocus).focusEffectDisabled()
                 .onAppear { visualHasFocus = isListFocused }
@@ -2898,12 +2940,14 @@ private struct EntryListView: View {
             }
             .environment(\.colorScheme, appearanceColorScheme)
             .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
+            .environment(\.entryTranslations, titleTranslator.translations)
             #if os(iOS)
             .navigationTitle(selection.title)
             #endif
             .onPreferenceChange(TimelineRowFrames.self) { frames in
-                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
                 let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
+                reportVisibleTitleTranslation(frames: frames, viewport: viewport)
+                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
                 if let first = frames.filter({ $0.value.intersects(viewport) }).min(by: { $0.value.minY < $1.value.minY }) {
                     presentation.visibleAnchor = first.key
                 }
@@ -2932,6 +2976,7 @@ private struct EntryListView: View {
                 presentation.resetScope()
                 visualSelectionID = nil
                 retainedUnreadIDs.removeAll()
+                titleTranslator.resetScope()
                 loadInitialPage()
             }
             .onChange(of: unreadOnly) { _, _ in
@@ -2948,6 +2993,13 @@ private struct EntryListView: View {
             }
             .onChange(of: store.timelineRevision) { _, _ in
                 reloadCurrentPages()
+                titleTranslator.refresh()
+            }
+            .onChange(of: store.aiSettings) { _, _ in
+                titleTranslator.refresh()
+            }
+            .onChange(of: store.autoTranslationRevision) { _, _ in
+                titleTranslator.refresh()
             }
             .onChange(of: autoScrollTrigger) { _, _ in
                 if let newID = selectedEntryID {
@@ -3295,6 +3347,44 @@ private struct EntryRow: View {
     var thumbnailStore: ArticleThumbnailStore?
     @Environment(\.displayScale) private var displayScale
     @Environment(\.paperAppearancePalette) private var appearancePalette
+    @Environment(\.entryTranslations) private var entryTranslations
+    @State private var revealsOriginal = false
+    @State private var hoverRevealTask: Task<Void, Never>?
+
+    private var translatedTitle: String? {
+        guard let translated = entryTranslations[entry.id]?.title,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var translatedSummary: String? {
+        guard let translated = entryTranslations[entry.id]?.summary,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var hasTranslation: Bool {
+        translatedTitle != nil || translatedSummary != nil
+    }
+
+    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 选中行保持译文，不再固定显示原文。
+    private var showsTranslation: Bool {
+        hasTranslation && !revealsOriginal
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        hoverRevealTask?.cancel()
+        guard hovering else {
+            revealsOriginal = false
+            return
+        }
+        hoverRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            revealsOriginal = true
+        }
+    }
 
     private func formattedDate(_ date: Date) -> String {
         let calendar = Calendar.current
@@ -3323,19 +3413,45 @@ private struct EntryRow: View {
                 // 标题/描述区：配图与文字同处一行，不侵占下方的元信息行
                 HStack(alignment: .top, spacing: 9) {
                     VStack(alignment: .leading, spacing: 5) {
-                        // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）
-                        Text(entry.title)
-                            .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
-                            .tracking(0.1)
-                            .foregroundStyle(primaryForegroundColor)
-                            .lineLimit(entry.isSummaryVisible ? 2 : 4)
+                        // Title 独占整行（当隐藏 Desc 时扩展显示至 4 行，确保与普通文章高度一致）。
+                        // 原文与译文叠放：容器高度取两者较大值，切换时行高不变，仅 200ms 淡入淡出。
+                        ZStack(alignment: .topLeading) {
+                            Text(entry.title)
+                                .opacity(showsTranslation ? 0 : 1)
+                                .accessibilityHidden(showsTranslation)
+                            if let translatedTitle {
+                                // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                                (TitleTranslationBadge.inline(fontSize: 12)
+                                    + Text("  ")
+                                    + Text(translatedTitle))
+                                    .opacity(showsTranslation ? 1 : 0)
+                                    .accessibilityHidden(!showsTranslation)
+                            }
+                        }
+                        .font(.system(.headline, design: .serif).weight(entry.isRead ? .regular : .semibold))
+                        .tracking(0.1)
+                        .foregroundStyle(primaryForegroundColor)
+                        .lineLimit(entry.isSummaryVisible ? 2 : 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .animation(.easeInOut(duration: 0.2), value: showsTranslation)
 
-                        // Desc 独占整行（仅在非冗余时渲染）
+                        // Desc 独占整行（仅在非冗余时渲染）；与标题一致，默认显示译文。
                         if entry.isSummaryVisible {
-                            Text(entry.summaryPreview)
-                                .font(.subheadline)
-                                .foregroundStyle(secondaryForegroundColor)
-                                .lineLimit(2)
+                            ZStack(alignment: .topLeading) {
+                                Text(entry.summaryPreview)
+                                    .opacity(showsTranslation ? 0 : 1)
+                                    .accessibilityHidden(showsTranslation)
+                                if let translatedSummary {
+                                    Text(translatedSummary)
+                                        .opacity(showsTranslation ? 1 : 0)
+                                        .accessibilityHidden(!showsTranslation)
+                                }
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(secondaryForegroundColor)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .animation(.easeInOut(duration: 0.2), value: showsTranslation)
                         }
                     }
                     // 占满剩余宽度，把配图推到最右侧（配图默认靠右，不随文字长度左移）
@@ -3387,6 +3503,7 @@ private struct EntryRow: View {
             }
         }
         .padding(.vertical, 6)
+        .onHover(perform: handleHover)
         .accessibilityElement(children: .combine)
         .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
     }

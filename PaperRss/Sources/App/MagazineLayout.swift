@@ -221,6 +221,7 @@ enum MagazinePaginator {
     static func pages(entries: [EntryListItem], folders: [UUID: String], arrangement: MagazineArrangement,
                       size: CGSize, showsImages: Bool, hasMore: Bool = false, textScale: CGFloat = 1,
                       locale: String = "", imageRatios: [String: CGFloat] = [:],
+                      displayTexts: [String: TranslatedEntryText] = [:],
                       measurements: MagazineMeasurementCache = MagazineMeasurementCache(),
                       cancelsWithTask: Bool = false) -> [MagazinePageLayout] {
         let paper = pageWidth(size.width)
@@ -230,7 +231,16 @@ enum MagazinePaginator {
         let flow = needsFlow(size, textScale: textScale)
         let spread = !flow && paper >= 860
         let leafWidth = spread ? (width - gutter) / 2 : width
-        let groups = MagazineEdition.groups(entries: entries, arrangement: arrangement, folders: folders)
+        // 排版与测量使用译文标题/摘要；页面数据仍保留原条目，渲染层再按需取译文。
+        let displayEntries = entries.map { entry in
+            guard let text = displayTexts[entry.id] else { return entry }
+            let title = text.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = text.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (title?.isEmpty == false) || (summary?.isEmpty == false) else { return entry }
+            return entry.withTitle(title?.isEmpty == false ? title! : entry.title,
+                                   summary: summary?.isEmpty == false ? summary : nil)
+        }
+        let groups = MagazineEdition.groups(entries: displayEntries, arrangement: arrangement, folders: folders)
         var output: [MagazinePageLayout] = []
 
         func measure(_ entry: EntryListItem, _ style: MagazineStoryStyle, _ width: CGFloat) -> CGFloat {
@@ -727,9 +737,48 @@ struct MagazineStoryView: View {
     let store: ArticleThumbnailStore
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.displayScale) private var scale
+    @Environment(\.entryTranslations) private var entryTranslations
     @State private var image: ArticleThumbnail?
     @State private var failed = false
     @State private var hovered = false
+    @State private var revealsOriginal = false
+    @State private var hoverRevealTask: Task<Void, Never>?
+
+    private var translatedTitle: String? {
+        guard let translated = entryTranslations[entry.id]?.title,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var translatedSummary: String? {
+        guard let translated = entryTranslations[entry.id]?.summary,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var hasTranslation: Bool {
+        translatedTitle != nil || translatedSummary != nil
+    }
+
+    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 选中卡片保持译文，不再固定显示原文。
+    private var showsTranslation: Bool {
+        hasTranslation && !revealsOriginal
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        hovered = hovering
+        hoverRevealTask?.cancel()
+        guard hovering else {
+            revealsOriginal = false
+            return
+        }
+        hoverRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            revealsOriginal = true
+        }
+    }
 
     private var request: ArticleThumbnailRequest? {
         style.thumbnailRequest(for: entry, width: width, scale: scale)
@@ -769,14 +818,39 @@ struct MagazineStoryView: View {
     private var storyText: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: style.textSpacing) {
-                Text(entry.title)
-                    .font(Font(MagazineStoryStyle.titleFont(style.titleFontSize)))
-                    .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
-                    .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
+                // 原文与译文叠放：容器高度取两者较大值，切换时高度不变，仅 200ms 淡入淡出。
+                ZStack(alignment: .topLeading) {
+                    Text(entry.title)
+                        .opacity(showsTranslation ? 0 : 1)
+                        .accessibilityHidden(showsTranslation)
+                    if let translatedTitle {
+                        // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                        (TitleTranslationBadge.inline(fontSize: style.titleFontSize * 0.72)
+                            + Text("  ")
+                            + Text(translatedTitle))
+                            .opacity(showsTranslation ? 1 : 0)
+                            .accessibilityHidden(!showsTranslation)
+                    }
+                }
+                .font(Font(MagazineStoryStyle.titleFont(style.titleFontSize)))
+                .lineLimit(style.titleLines >= 10000 ? nil : style.titleLines).lineSpacing(style.titleLineSpacing)
+                .foregroundStyle(Color(paperHex: palette.inkHex).opacity(entry.isRead ? 0.88 : 1))
+                .animation(.easeInOut(duration: 0.2), value: showsTranslation)
                 if entry.isSummaryVisible && style.summaryLines > 0 {
-                    Text(entry.summaryPreview).font(.system(size: style.summaryFontSize))
-                        .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
-                        .foregroundStyle(Color(paperHex: palette.mutedHex))
+                    ZStack(alignment: .topLeading) {
+                        Text(entry.summaryPreview)
+                            .opacity(showsTranslation ? 0 : 1)
+                            .accessibilityHidden(showsTranslation)
+                        if let translatedSummary {
+                            Text(translatedSummary)
+                                .opacity(showsTranslation ? 1 : 0)
+                                .accessibilityHidden(!showsTranslation)
+                        }
+                    }
+                    .font(.system(size: style.summaryFontSize))
+                    .lineLimit(style.summaryLines >= 10000 ? nil : style.summaryLines).lineSpacing(style.summaryLineSpacing)
+                    .foregroundStyle(Color(paperHex: palette.mutedHex))
+                    .animation(.easeInOut(duration: 0.2), value: showsTranslation)
                 }
             }
             if !style.stacksImage && style.imageHeight > 0 {
@@ -814,7 +888,7 @@ struct MagazineStoryView: View {
                     .padding(.vertical, 4).offset(x: -8)
             }
         }
-        .contentShape(Rectangle()).onHover { hovered = $0 }
+        .contentShape(Rectangle()).onHover(perform: handleHover)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .task(id: request) {

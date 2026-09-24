@@ -3019,18 +3019,12 @@
         }
       }
     },
-    "打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。" : {
+    "文章内容：打开文章时自动识别外语并翻译正文；列表标题：按需翻译中间列的标题与摘要。可通过黑白名单指定订阅。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detect and translate foreign-language articles when opened. Use feed lists for exceptions."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。"
+            "value" : "Article content: translate foreign-language articles when opened. List titles: translate timeline titles and summaries on demand. Use feed lists for exceptions."
           }
         }
       }
@@ -5014,6 +5008,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Translation Language"
+          }
+        }
+      }
+    },
+    "标题翻译" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title Translation"
+          }
+        }
+      }
+    },
+    "在中间列按需翻译可见标题与摘要，悬停或选中可查看原文。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translate visible timeline titles and summaries on demand; hover or select to see the original."
+          }
+        }
+      }
+    },
+    "已翻译的标题" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translated title"
+          }
+        }
+      }
+    },
+    "文章内容" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Article content"
+          }
+        }
+      }
+    },
+    "列表标题" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List titles"
           }
         }
       }

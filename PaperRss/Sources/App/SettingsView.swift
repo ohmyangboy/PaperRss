@@ -1338,6 +1338,7 @@ struct SettingsView: View {
                     LazyVGrid(columns: aiFeatureColumns, alignment: .leading, spacing: 16) {
                         featureConfigurationRow(.summary)
                         featureConfigurationRow(.bilingualTranslation)
+                        featureConfigurationRow(.titleTranslation)
                     }
                 }
 
@@ -1635,6 +1636,7 @@ struct SettingsView: View {
         switch kind {
         case .summary: "doc.text"
         case .bilingualTranslation: "character.bubble"
+        case .titleTranslation: "text.bubble"
         case .selectionTranslation: "text.magnifyingglass"
         case .selectionExplanation: "text.book.closed"
         case .selectionAsk: "questionmark.bubble"
@@ -1679,6 +1681,7 @@ struct SettingsView: View {
         switch kind {
         case .summary: I18N.shared.localized("文章摘要", "Article Summary")
         case .bilingualTranslation: I18N.shared.localized("双语翻译", "Bilingual Translation")
+        case .titleTranslation: I18N.shared.localized("标题翻译", "Title Translation")
         case .selectionTranslation: I18N.shared.localized("划词翻译", "Selection Translation")
         case .selectionExplanation: I18N.shared.localized("划词解释", "Selection Explanation")
         case .selectionAsk: I18N.shared.localized("划词提问", "Selection Q&A")
@@ -1689,6 +1692,7 @@ struct SettingsView: View {
         switch kind {
         case .summary: I18N.shared.localized("为当前文章生成可长期保留的摘要。", "Generate a durable summary for the article.")
         case .bilingualTranslation: I18N.shared.localized("按可见段落生成原文与译文对照。", "Translate visible paragraphs alongside the original.")
+        case .titleTranslation: I18N.shared.localized("在中间列按需翻译可见标题与摘要，悬停或选中可查看原文。", "Translate visible timeline titles and summaries on demand; hover or select to see the original.")
         case .selectionTranslation: I18N.shared.localized("翻译阅读器中选中的文字。", "Translate selected text in the reader.")
         case .selectionExplanation: I18N.shared.localized("结合上下文解释选中的内容。", "Explain selected text using its context.")
         case .selectionAsk: I18N.shared.localized("围绕选中内容继续提问。", "Ask follow-up questions about selected text.")
@@ -1729,11 +1733,19 @@ struct SettingsView: View {
     private var translationPreferencesSection: some View {
         settingsGroup(I18N.shared.localized("翻译偏好", "Translation Preferences")) {
             settingsRow(I18N.shared.localized("自动翻译 · Beta", "Automatic Translation · Beta"),
-                        description: I18N.shared.localized("打开文章时自动识别外语并翻译，可通过黑白名单指定订阅。", "Detect and translate foreign-language articles when opened. Use feed lists for exceptions.")) {
-                Toggle("", isOn: featurePreferenceBinding(\.automaticallyTranslate))
-                    .toggleStyle(.switch)
-                    .accessibilityLabel(I18N.shared.localized("自动翻译 Beta", "Automatic Translation Beta"))
-                    .accessibilityIdentifier("translation-automatic-beta")
+                        description: I18N.shared.localized(
+                            "文章内容：打开文章时自动识别外语并翻译正文；列表标题：按需翻译中间列的标题与摘要。可通过黑白名单指定订阅。",
+                            "Article content: translate foreign-language articles when opened. List titles: translate timeline titles and summaries on demand. Use feed lists for exceptions."
+                        )) {
+                HStack(spacing: 14) {
+                    Toggle(I18N.shared.localized("文章内容", "Article content"), isOn: articleAutoTranslationBinding)
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("translation-automatic-article")
+                    Toggle(I18N.shared.localized("列表标题", "List titles"), isOn: titleAutoTranslationBinding)
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("translation-automatic-titles")
+                }
+                .fixedSize()
             }
 
             settingsRow(I18N.localized("翻译黑白名单", englishFallback: "Translation feed lists")) {
@@ -1803,6 +1815,22 @@ struct SettingsView: View {
                 preferences[keyPath: keyPath] = value
                 featurePreferenceBinding(\.translationPreferences).wrappedValue = preferences
             }
+        )
+    }
+
+    /// 「文章内容」自动翻译：打开时联动打开「列表标题」并确保标题翻译能力可用。
+    private var articleAutoTranslationBinding: Binding<Bool> {
+        Binding(
+            get: { store.aiSettings.features.automaticallyTranslate },
+            set: { store.saveAISettings(store.aiSettings.settingArticleAutoTranslation($0)) }
+        )
+    }
+
+    /// 「列表标题」自动翻译：可独立开关；打开时确保标题翻译能力可用。
+    private var titleAutoTranslationBinding: Binding<Bool> {
+        Binding(
+            get: { store.aiSettings.features.automaticallyTranslateTitles },
+            set: { store.saveAISettings(store.aiSettings.settingTitleAutoTranslation($0)) }
         )
     }
 

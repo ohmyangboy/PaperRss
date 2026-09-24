@@ -449,9 +449,13 @@ final class AIProviderTests: XCTestCase {
         XCTAssertTrue(settings.providers.allSatisfy(\.isEnabled))
         for kind in AIFeatureKind.allCases {
             let configuration = try XCTUnwrap(settings.configuration(for: kind))
-            XCTAssertTrue(configuration.isEnabled)
+            // 标题翻译是列表级的新数据流，默认关闭，需要用户显式打开。
+            XCTAssertEqual(configuration.isEnabled, kind != .titleTranslation)
             XCTAssertEqual(configuration.model, expected)
-            XCTAssertEqual(configuration.reasoningMode, kind == .bilingualTranslation || kind == .selectionTranslation ? "关闭" : "自动")
+            XCTAssertEqual(
+                configuration.reasoningMode,
+                kind == .bilingualTranslation || kind == .titleTranslation || kind == .selectionTranslation ? "关闭" : "自动"
+            )
         }
         XCTAssertFalse(settings.features.automaticallyGenerateSummary)
     }

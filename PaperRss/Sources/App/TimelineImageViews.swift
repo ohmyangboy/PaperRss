@@ -192,8 +192,46 @@ struct TimelineArticleTile: View {
     let thumbnailStore: ArticleThumbnailStore
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.entryTranslations) private var entryTranslations
+    @State private var revealsOriginal = false
+    @State private var hoverRevealTask: Task<Void, Never>?
 
     @Environment(\.magazineStoryStyle) private var magazineStyle
+
+    private var translatedTitle: String? {
+        guard let translated = entryTranslations[entry.id]?.title,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var translatedSummary: String? {
+        guard let translated = entryTranslations[entry.id]?.summary,
+              !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return translated
+    }
+
+    private var hasTranslation: Bool {
+        translatedTitle != nil || translatedSummary != nil
+    }
+
+    /// 默认显示译文；鼠标停留 1 秒后才切回原文（避免滚动/划过时频繁切换）。
+    /// 选中卡片保持译文，不再固定显示原文。
+    private var showsTranslation: Bool {
+        hasTranslation && !revealsOriginal
+    }
+
+    private func handleHover(_ hovering: Bool) {
+        hoverRevealTask?.cancel()
+        guard hovering else {
+            revealsOriginal = false
+            return
+        }
+        hoverRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            revealsOriginal = true
+        }
+    }
 
     private var isLead: Bool { layout == .lead }
     private var isCompact: Bool { layout == .compact || layout == .supporting }
@@ -202,8 +240,10 @@ struct TimelineArticleTile: View {
     private var imageHeight: CGFloat { min(isLead ? 260 : 180, imageWidth * 9 / 16) }
     private var isTextNote: Bool { (!showsImages || entry.previewImageURL == nil) && !entry.isSummaryVisible }
     private var titleSize: CGFloat {
-        if isLead { return entry.title.count > 110 ? 23 : 27 }
-        if isTextNote { return entry.title.count < 90 ? 22 : 19 }
+        // 用原文与译文中较长者判定字号，悬停切换不改变换行与行高。
+        let titleLength = max(entry.title.count, translatedTitle?.count ?? 0)
+        if isLead { return titleLength > 110 ? 23 : 27 }
+        if isTextNote { return titleLength < 90 ? 22 : 19 }
         return 18
     }
 
@@ -242,6 +282,7 @@ struct TimelineArticleTile: View {
                     .opacity(isSelected ? 0.55 : 0.13), lineWidth: 0.7)
         }
         .contentShape(Rectangle())
+        .onHover(perform: handleHover)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityHint(I18N.localized("打开文章"))
@@ -266,16 +307,43 @@ struct TimelineArticleTile: View {
                 if entry.isStarred { Image(systemName: "star.fill").foregroundStyle(Color(paperHex: palette.warmHex)) }
             }
             .font(.caption).foregroundStyle(Color(paperHex: palette.mutedHex))
-            Text(entry.title)
-                .font(.system(size: titleSize, weight: entry.isRead ? .regular : .semibold, design: .serif))
-                .foregroundStyle(Color(paperHex: palette.inkHex))
-                .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
-                .fixedSize(horizontal: false, vertical: true)
+            // 原文与译文叠放：容器高度取两者较大值，切换时行高不变，仅 200ms 淡入淡出。
+            ZStack(alignment: .topLeading) {
+                Text(entry.title)
+                    .opacity(showsTranslation ? 0 : 1)
+                    .accessibilityHidden(showsTranslation)
+                if let translatedTitle {
+                    // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                    (TitleTranslationBadge.inline(fontSize: titleSize * 0.72)
+                        + Text("  ")
+                        + Text(translatedTitle))
+                        .opacity(showsTranslation ? 1 : 0)
+                        .accessibilityHidden(!showsTranslation)
+                }
+            }
+            .font(.system(size: titleSize, weight: entry.isRead ? .regular : .semibold, design: .serif))
+            .foregroundStyle(Color(paperHex: palette.inkHex))
+            .lineLimit(isLead || !entry.isSummaryVisible ? 5 : 3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.easeInOut(duration: 0.2), value: showsTranslation)
             if entry.isSummaryVisible {
-                Text(entry.summaryPreview).font(.system(size: 13))
-                    .foregroundStyle(Color(paperHex: palette.mutedHex))
-                    .lineLimit(isLead ? 4 : 3)
-                    .fixedSize(horizontal: false, vertical: true)
+                ZStack(alignment: .topLeading) {
+                    Text(entry.summaryPreview)
+                        .opacity(showsTranslation ? 0 : 1)
+                        .accessibilityHidden(showsTranslation)
+                    if let translatedSummary {
+                        Text(translatedSummary)
+                            .opacity(showsTranslation ? 1 : 0)
+                            .accessibilityHidden(!showsTranslation)
+                    }
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(Color(paperHex: palette.mutedHex))
+                .lineLimit(isLead ? 4 : 3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeInOut(duration: 0.2), value: showsTranslation)
             }
             HStack(spacing: 8) {
                 Text(entry.accountSourceBadge).lineLimit(1)

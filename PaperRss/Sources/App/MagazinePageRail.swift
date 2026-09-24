@@ -143,6 +143,7 @@ struct MagazinePageRail: View {
     let onScrubCancelled: () -> Void
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.entryTranslations) private var entryTranslations
     @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
     @ObservedObject private var outputVolume = SystemOutputVolumeMonitor.shared
     @State private var hoverPosition: CGFloat?
@@ -348,7 +349,7 @@ struct MagazinePageRail: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color(paperHex: palette.mutedHex))
                         .frame(width: 22, alignment: .trailing)
-                    Text(entry.title)
+                    Text(entryTranslations[entry.id]?.title ?? entry.title)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color(paperHex: palette.inkHex))
                         .fixedSize(horizontal: false, vertical: true)

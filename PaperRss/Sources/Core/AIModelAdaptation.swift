@@ -37,7 +37,10 @@ extension AIModelOption {
     }
 
     public func supports(_ feature: AIFeatureKind) -> Bool {
-        !usesTranslationAdaptation || feature == .bilingualTranslation || feature == .selectionTranslation
+        !usesTranslationAdaptation
+            || feature == .bilingualTranslation
+            || feature == .titleTranslation
+            || feature == .selectionTranslation
     }
 }
 

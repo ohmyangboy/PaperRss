@@ -54,6 +54,18 @@ public struct AIRequestStatus: Sendable, Equatable {
     }
 }
 
+/// 标题翻译的会话指纹：模型、目标语言与提示版本的组合变化时，
+/// 内存译文与失败计数全部作废，避免串用旧模型的结果。
+public struct TitleTranslationSession: Sendable {
+    public let fingerprint: String
+    public let targetLanguage: String
+
+    public init(fingerprint: String, targetLanguage: String) {
+        self.fingerprint = fingerprint
+        self.targetLanguage = targetLanguage
+    }
+}
+
 /// 单篇正文重新拉取完成后的失效信号，用于驱动阅读页自动重载。
 public struct ArticleRefreshSignal: Sendable, Equatable {
     public let entryID: String
@@ -98,6 +110,37 @@ public final class AppStore: ObservableObject {
     /// projection for existing callers.
     @Published public private(set) var aiSettings: AISettings = .default
     public let aiWorkspace = ArticleAIWorkspace(maximumBackgroundConcurrency: 6)
+
+    /// 列表标题的按需翻译调度器。视图只上报可见范围，去抖、批量、
+    /// 缓存与失败退避都由它统一处理。
+    public lazy var titleTranslator: FeedTitleTranslationCoordinator = makeTitleTranslator()
+
+    /// 标题翻译当前可用的会话（功能开关、列表标题开关、模型与目标语言就绪时非空）。
+    public var titleTranslationSession: TitleTranslationSession? {
+        guard aiSettings.features.automaticallyTranslateTitles else { return nil }
+        guard let (execution, _) = executionSnapshot(for: .titleTranslation) else { return nil }
+        return TitleTranslationSession(
+            fingerprint: execution.fingerprint(for: .translation, promptVersion: Self.translationPromptVersion),
+            targetLanguage: execution.configuration.targetLanguage
+        )
+    }
+
+    private func makeTitleTranslator() -> FeedTitleTranslationCoordinator {
+        FeedTitleTranslationCoordinator(
+            configurationProvider: { [weak self] in
+                guard let self, let session = self.titleTranslationSession else { return nil }
+                return TitleTranslationContext(
+                    sessionID: session.fingerprint,
+                    targetLanguage: session.targetLanguage,
+                    feedLists: self.translationFeedLists
+                )
+            },
+            translate: { [weak self] texts, context in
+                guard let self else { return .empty }
+                return await self.translateEntryTexts(texts, targetLanguage: context.targetLanguage)
+            }
+        )
+    }
 
     /// 进程内已准备正文 LRU 缓存：命中时 Reader 可跳过 prepare 管线即时换页。
     public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
@@ -2248,7 +2291,7 @@ public final class AppStore: ObservableObject {
               aiSettings.resolvedConfiguration(for: feature) != nil else { return nil }
         let execution = currentAIExecutionContext(for: feature)
         if execution.configuration.usesTranslationAdaptation,
-           feature != .bilingualTranslation && feature != .selectionTranslation {
+           feature != .bilingualTranslation && feature != .titleTranslation && feature != .selectionTranslation {
             emitTransientNotice(LLMServiceError.translationOnly.localizedDescription)
             return nil
         }
@@ -2777,6 +2820,167 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    /// 列表标题/摘要翻译：一批文本（标题或摘要）合并为少量请求；命中
+    /// 翻译记忆的文本不产生请求，结果写回记忆供后续复用。
+    public func translateEntryTexts(
+        _ texts: [String],
+        targetLanguage: String? = nil,
+        isRequestCurrent: @MainActor @Sendable @escaping () -> Bool = { true }
+    ) async -> TitleTranslationBatchResult {
+        var seen = Set<String>()
+        let uniqueTexts = texts.filter { text in
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && seen.insert(text).inserted
+        }
+        guard !uniqueTexts.isEmpty, isRequestCurrent() else { return .empty }
+        guard let (baseExecution, apiKey) = executionSnapshot(for: .titleTranslation) else { return .empty }
+        var configuration = baseExecution.configuration
+        if let targetLanguage {
+            let normalizedLanguage = targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedLanguage.isEmpty { configuration.targetLanguage = normalizedLanguage }
+        }
+        let execution = AIExecutionContext(
+            providerID: baseExecution.providerID,
+            providerKind: baseExecution.providerKind,
+            configuration: configuration
+        )
+
+        // 未配置 API Key 属于可预期的环境状态：不计失败，等配置完成后重试。
+        guard !apiKey.isEmpty || !providerRequiresAPIKey(execution.providerKind) else {
+            emitTransientNotice(LLMServiceError.missingAPIKey.localizedDescription)
+            return .empty
+        }
+
+        var translations: [String: String] = [:]
+        var failed = Set<String>()
+
+        // 1. 翻译记忆命中：不产生请求。
+        var unresolved: [String] = []
+        for text in uniqueTexts {
+            if let cached = cachedTranslation(for: text, configuration: configuration, executionContext: execution) {
+                translations[text] = cached
+            } else {
+                unresolved.append(text)
+            }
+        }
+        guard !unresolved.isEmpty else {
+            return TitleTranslationBatchResult(translations: translations)
+        }
+
+        // 2. 未命中文本分批发（最多两批并行），字符与数量上限复用正文翻译口径。
+        let fingerprint = execution.fingerprint(for: .translation, promptVersion: Self.translationPromptVersion)
+        let batches = titleTranslationBatches(from: unresolved.sorted())
+        let service = llm
+        let batchConfiguration = configuration
+        await withTaskGroup(of: (translations: [String: String], failed: Set<String>).self) { group in
+            var nextBatchIndex = 0
+            func enqueueNextBatch() {
+                guard nextBatchIndex < batches.count else { return }
+                let batch = batches[nextBatchIndex]
+                nextBatchIndex += 1
+                group.addTask {
+                    guard !Task.isCancelled else { return ([:], Set(batch)) }
+                    return await Self.translateTextSources(
+                        batch,
+                        configuration: batchConfiguration,
+                        apiKey: apiKey,
+                        service: service
+                    )
+                }
+            }
+            for _ in 0..<min(2, batches.count) { enqueueNextBatch() }
+            for await outcome in group {
+                // 已返回的批次一律写回记忆（即使请求期间范围变化），保证结果不浪费。
+                for (text, translation) in outcome.translations {
+                    translations[text] = translation
+                    cacheTranslations(
+                        [BilingualSegment(
+                            id: "text:\(text.stableDigest)",
+                            original: text,
+                            translation: translation,
+                            providerID: execution.providerID,
+                            modelID: configuration.model,
+                            configurationFingerprint: fingerprint
+                        )],
+                        configuration: configuration,
+                        executionContext: execution
+                    )
+                }
+                failed.formUnion(outcome.failed)
+                if isRequestCurrent() { enqueueNextBatch() }
+            }
+        }
+        return TitleTranslationBatchResult(translations: translations, failedTexts: failed)
+    }
+
+    /// 单批文本翻译。批量协议不被服务端接受时（400/422 或响应形状错误）
+    /// 才回退为逐条；网络、鉴权与限流错误保持整批失败，不放大请求。
+    private static func translateTextSources(
+        _ sources: [String],
+        configuration: LLMConfiguration,
+        apiKey: String,
+        service: LLMService
+    ) async -> (translations: [String: String], failed: Set<String>) {
+        do {
+            let values = try await service.translateBatch(paragraphs: sources, configuration: configuration, apiKey: apiKey)
+            var translations: [String: String] = [:]
+            for (source, value) in zip(sources, values) {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { translations[source] = trimmed }
+            }
+            let failed = Set(sources).subtracting(translations.keys)
+            return (translations, failed)
+        } catch {
+            guard sources.count > 1,
+                  !Task.isCancelled,
+                  Self.shouldRetryTitleIndividually(error) else {
+                return ([:], Set(sources))
+            }
+            var translations: [String: String] = [:]
+            var failed = Set<String>()
+            for source in sources {
+                guard !Task.isCancelled else { break }
+                do {
+                    let value = try await service.translate(paragraph: source, configuration: configuration, apiKey: apiKey)
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty { failed.insert(source) } else { translations[source] = trimmed }
+                } catch {
+                    failed.insert(source)
+                }
+            }
+            return (translations, failed)
+        }
+    }
+
+    private static func shouldRetryTitleIndividually(_ error: Error) -> Bool {
+        guard let error = error as? LLMServiceError else { return false }
+        switch error {
+        case .invalidResponse, .truncatedResponse: return true
+        case let .httpStatus(code, _): return code == 400 || code == 422
+        default: return false
+        }
+    }
+
+    private func titleTranslationBatches(from sources: [String]) -> [[String]] {
+        var batches: [[String]] = []
+        var current: [String] = []
+        var characterCount = 0
+        for source in sources {
+            let wouldExceedLimit = !current.isEmpty && (
+                current.count >= Self.maximumTitlesPerTranslationBatch
+                    || characterCount + source.count > Self.maximumCharactersPerTranslationBatch
+            )
+            if wouldExceedLimit {
+                batches.append(current)
+                current = []
+                characterCount = 0
+            }
+            current.append(source)
+            characterCount += source.count
+        }
+        if !current.isEmpty { batches.append(current) }
+        return batches
+    }
+
     private func executeSelectionAI(
         entry: Entry,
         kind: AIArtifactKind,
@@ -2934,6 +3138,8 @@ public final class AppStore: ObservableObject {
     private static let translationMemoryEntryPrefix = "translation-memory-v4:"
     private static let maximumParagraphsPerTranslationBatch = 4
     private static let maximumCharactersPerTranslationBatch = 1_200
+    /// 标题很短，单批可比正文段落大得多；仍保留字符上限兜底超长标题。
+    private static let maximumTitlesPerTranslationBatch = 20
 
     private final class SummaryStreamTracker: @unchecked Sendable {
         private let lock = NSLock()

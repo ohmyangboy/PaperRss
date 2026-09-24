@@ -39,16 +39,17 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 - **渲染引擎与数学公式（LaTeX）**：重构富文本准备引擎，原生集成 MathJax 排版与公式防转义保护，完美呈现学术长文。
 - **按需 AI 摘要**：所有功能完全可以选用，如果你不喜欢AI，干掉它；或者在需要的时候按下V键
 - **划词翻译、解释与提问**：结合文章上下文理解所选文字。
-- **自由模型接入**：支持按供应商保存 OpenAI 兼容接口、DeepSeek 与 Google Gemini API Key；摘要、双语和三种划词能力可分别选择模型，切换配置不会隐藏已有 AI 产物。
+- **中间列标题与摘要翻译**：滚动到哪里、翻译到哪里；列表里的外语标题与描述按需翻译，悬停或选中即可核对原文。
+- **自由模型接入**：支持按供应商保存 OpenAI 兼容接口、DeepSeek 与 Google Gemini API Key；摘要、双语、标题与摘要翻译和三种划词能力可分别选择模型，切换配置不会隐藏已有 AI 产物。
 - **多账户接入**：支持本地账户与 FreshRSS / Miniflux 服务，提供双向未读/星标同步。
 
 更多功能升级和 Bugfix 计划见 [weekly.md](./weekly.md)
 
 ### AI 服务配置
 
-在“设置 → AI 功能”中，“供应商与模型”只管理 OpenAI 兼容接口、DeepSeek、Google Gemini 或自定义端点的连接、API Key 与模型目录；远端模型经多选确认后才加入配置。“功能配置”分别为摘要、双语翻译、划词翻译、解释和提问设置开关与模型。Google Gemini 使用官方 OpenAI-compatible 地址 `https://generativelanguage.googleapis.com/v1beta/openai`，需要填入 Gemini API Key。
+在“设置 → AI 功能”中，“供应商与模型”只管理 OpenAI 兼容接口、DeepSeek、Google Gemini 或自定义端点的连接、API Key 与模型目录；远端模型经多选确认后才加入配置。“功能配置”分别为摘要、双语翻译、标题翻译、划词翻译、解释和提问设置开关与模型。翻译偏好中的自动翻译分为两个开关：“文章内容”（打开文章时自动翻译正文）与“列表标题”（按需翻译中间列的标题与摘要）；打开“文章内容”会自动打开“列表标题”，也可只开“列表标题”。悬停列表行停留 1 秒可查看原文。Google Gemini 使用官方 OpenAI-compatible 地址 `https://generativelanguage.googleapis.com/v1beta/openai`，需要填入 Gemini API Key。
 
-旧版本的单一 AI 配置会在首次启动时绑定到五项功能，原有 API Key、模型、开关和自定义 Prompt 都会保留；旧配置键仍保留用于兼容回滚。API Key 只保存在本机应用偏好，不参与 iCloud 同步。
+旧版本的单一 AI 配置会在首次启动时绑定到各功能，原有 API Key、模型、开关和自定义 Prompt 都会保留；旧配置键仍保留用于兼容回滚。API Key 只保存在本机应用偏好，不参与 iCloud 同步。
 
 ## 真实界面
 

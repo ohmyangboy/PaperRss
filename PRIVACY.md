@@ -47,14 +47,14 @@ Extracted article caches are stored in the local database and can be cleared fro
 
 1. **订阅源及原网站**：刷新 Feed、读取图标、加载文章图片；当 Feed 内容不足且用户打开文章时，可能请求公开的原文章页面并在本地提取正文。网站运营者会正常看到用户 IP、请求时间和请求头。
 2. **FreshRSS / Miniflux 或兼容服务**：同步订阅、文章及阅读状态。相关服务按其自身隐私政策处理数据。
-3. **用户选择的 AI 服务**：只有在用户配置接口并主动使用 AI 功能时才会发起请求。根据功能不同，请求可能包含文章标题、文章正文或其片段、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。模型服务商会按其条款与隐私政策处理这些内容。
+3. **用户选择的 AI 服务**：只有在用户配置接口并主动使用 AI 功能时才会发起请求。根据功能不同，请求可能包含文章标题、文章正文或其片段、选中文字、附近段落、用户问题、自定义 Prompt 和目标语言。开启「标题翻译」后，列表滚动可见的文章标题与摘要会按需发送给模型（无需打开文章）；可以随时在功能配置中关闭。模型服务商会按其条款与隐私政策处理这些内容。
 4. **GitHub/Sparkle 更新来源**：检查更新和下载用户选择安装的新版本。
 
 Depending on your configuration and actions, the PaperRss client may connect directly to:
 
 1. **Feed and publisher servers** to refresh feeds, retrieve icons, and load article images. If a feed does not provide sufficient content and you open an article, PaperRss may request the publicly accessible article page and extract readable content locally. The publisher will ordinarily receive your IP address, request time, and request headers.
 2. **FreshRSS / Miniflux or compatible services** to synchronize subscriptions, entries, and reading state. Those services process data under their own privacy policies.
-3. **Your selected AI provider**, only after you configure an endpoint and invoke an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, your question, custom prompt, and target language. The provider processes this data under its own terms and privacy policy.
+3. **Your selected AI provider**, only after you configure an endpoint and invoke an AI feature. Depending on the feature, a request may include the article title, all or part of the article text, selected text, nearby paragraphs, your question, custom prompt, and target language. When “Title Translation” is enabled, titles and summaries visible while scrolling the timeline are sent to the model on demand without opening the article; you can disable it at any time under Feature Routing. The provider processes this data under its own terms and privacy policy.
 4. **GitHub/Sparkle update sources** to check for updates and download a version you choose to install.
 
 在提交保密、付费、受访问限制或含敏感个人信息的内容给第三方 AI 服务前，请先确认你有权这样做，并审查服务商的数据保留与训练政策。

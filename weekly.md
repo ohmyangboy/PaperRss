@@ -4,6 +4,7 @@
 
 - [ ] 中英文字体分别设置（[#27](https://github.com/ohmyangboy/PaperRss/issues/27)） 26.09.07
 - [x] 订阅源按未读筛选（[#26](https://github.com/ohmyangboy/PaperRss/issues/26)） 26.09.07
+- [x] 中间列标题与摘要翻译（[#38](https://github.com/ohmyangboy/PaperRss/issues/38)） 26.09.24
 - [ ] Feed 搜索（[#26](https://github.com/ohmyangboy/PaperRss/issues/26)） 26.09.07
 - [ ] 文章列表显示封面缩略图（[#18](https://github.com/ohmyangboy/PaperRss/issues/18)） 26.09.07
 - [x] AI个性化供应商配置 26.09.06
