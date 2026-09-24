@@ -413,10 +413,20 @@ final class ReaderAIAndRuntimeRegressionTests: XCTestCase {
         // 第二页 100 条
         let page2 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 100)
         XCTAssertEqual(page2.count, 100)
+        XCTAssertEqual(
+            store.fetchAdjacentItem(scope: .all, currentItemID: page1[99].id, direction: .next)?.id,
+            page2.first?.id,
+            "快捷键跨过第一页边界时，下一篇必须是可追加页的第一行"
+        )
 
         // 第三页 60 条
         let page3 = store.fetchTimelinePage(scope: .all, limit: 100, offset: 200)
         XCTAssertEqual(page3.count, 60)
+        XCTAssertEqual(
+            store.fetchAdjacentItem(scope: .all, currentItemID: page2[99].id, direction: .next)?.id,
+            page3.first?.id,
+            "连续跨页后，选中目标仍应存在于下一页"
+        )
 
         // 验证去重后总数完整覆盖 260 条
         let allFetched = page1 + page2 + page3

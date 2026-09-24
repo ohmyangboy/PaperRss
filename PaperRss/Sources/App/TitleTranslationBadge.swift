@@ -90,7 +90,7 @@ struct TranslatedTextPage<Original: View, Translation: View>: View {
 }
 
 extension View {
-    /// 标题翻译只在最左侧窄热区触发，方向与从右向左的替换动画一致。
+    /// 在承载视图的左侧 48% 热区触发原文显示，方向与翻页动画一致。
     func translationRevealHotArea(
         isEnabled: Bool,
         isRevealingOriginal: Binding<Bool>
@@ -105,7 +105,7 @@ extension View {
 }
 
 private struct TranslationRevealHotAreaModifier: ViewModifier {
-    private static let hotAreaWidth: CGFloat = 72
+    private static let hotAreaFraction: CGFloat = 0.48
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("title_translation_reveal_hint_shown_v1") private var hasShownHint = false
@@ -124,52 +124,57 @@ private struct TranslationRevealHotAreaModifier: ViewModifier {
         content
             .overlay(alignment: .leading) {
                 if isEnabled {
-                    Color.clear
-                        .frame(width: Self.hotAreaWidth)
-                        .contentShape(Rectangle())
-                        .onHover(perform: handleHover)
-                        .accessibilityHidden(true)
+                    GeometryReader { geometry in
+                        Color.clear
+                            .frame(width: geometry.size.width * Self.hotAreaFraction)
+                            .contentShape(Rectangle())
+                            .onHover(perform: handleHover)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .overlay(alignment: .leading) {
                 if showsHint {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.accentColor.opacity(0.08))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1)
-                        }
-                        .frame(width: Self.hotAreaWidth)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.accentColor.opacity(0.08))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1)
+                            }
+                            .frame(width: geometry.size.width * Self.hotAreaFraction)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .overlay(alignment: .topLeading) {
                 if showsHint {
-                    Label {
-                        Text(I18N.shared.localized(
-                            "移到标题左侧查看原文",
-                            "Move left on a title to view the original"
-                        ))
-                    } icon: {
-                        Image(systemName: "arrow.left")
+                    GeometryReader { geometry in
+                        Label {
+                            Text(I18N.shared.localized(
+                                "移到标题左侧查看原文",
+                                "Move left on a title to view the original"
+                            ))
+                        } icon: {
+                            Image(systemName: "arrow.left")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                        }
+                        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .offset(x: geometry.size.width * Self.hotAreaFraction + 8, y: 4)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                    }
-                    .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 80)
-                    .padding(.top, 4)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
                 }
             }
             .onChange(of: isEnabled) { _, enabled in

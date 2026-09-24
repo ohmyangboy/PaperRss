@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.4.4 · Build 39 · 2026-09-25
+
+本次是体验优化版本，推荐所有用户升级。
+
+- 文章列表切换更跟手：减少列表行重复更新与标题翻译请求，缩略图预处理改为增量执行。
+- 键盘快速切换和跨页浏览更顺畅：选中态保持稳定，列表在接近边缘或切换页面时将当前文章滚动到视口中间。
+- 正文加载反馈更清晰：连续切换文章时显示小尺寸加载提示，减少阅读区空白等待。
+- 标题翻译动画继续保留；列表左侧 48% 的整行区域可悬停查看原文。
+
+---
+
+This is an experience-focused update. Recommended for all users.
+
+- Faster article-list navigation: reduce repeated row updates and title-translation requests, and prepare thumbnails incrementally.
+- Smoother keyboard and cross-page browsing: keep selection stable and center the current article when it reaches the viewport edge or a new page.
+- Clearer reader loading feedback: show a compact progress indicator during rapid article switches instead of an empty reader pane.
+- Keep the translated-title animation; hover over the left 48% of a list row to reveal the original text.
+
 ## v1.4.3 · Build 38 · 2026-09-24
 
 PaperRss 1.4.3 新增中西文字体分别设置与列表标题、摘要按需翻译，并收敛标题切换交互；同时把 1.4.3 Beta 的正文抓取、深色纸面插图与 Dock 图标修复带入稳定通道，建议所有用户升级。

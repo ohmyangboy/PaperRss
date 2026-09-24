@@ -291,6 +291,7 @@ struct ThreeColumnSplitView<Sidebar: View, Content: View, Detail: View>: NSViewC
     }
 
     func updateNSViewController(_ splitVC: NSSplitViewController, context: Context) {
+        ArticleSwitchTrace.mark("split update")
         context.coordinator.setReaderActive(isReaderActive)
         // 更新工具栏动作状态
         context.coordinator.actions = toolbarActions

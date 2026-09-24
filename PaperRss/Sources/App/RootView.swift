@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import os
 #if os(macOS)
 import AppKit
 import WebKit
@@ -14,6 +15,36 @@ import PaperRssCore
 import PaperRssUpdateSupport
 #endif
 #endif
+
+/// Opt-in timing for a list click through the first reader paint.
+/// Launch a Debug build with PAPERRSS_TRACE_SWITCH=1 and inspect the ArticleSwitch log category.
+@MainActor
+enum ArticleSwitchTrace {
+    #if DEBUG
+    private static let enabled = ProcessInfo.processInfo.environment["PAPERRSS_TRACE_SWITCH"] == "1"
+    private static let logger = Logger(subsystem: "com.yangbukun.PaperRss", category: "ArticleSwitch")
+    private static var currentEntryID: String?
+    private static var startedAt = 0.0
+    #endif
+
+    static func begin(_ entryID: String) {
+        #if DEBUG
+        guard enabled else { return }
+        currentEntryID = entryID
+        startedAt = ProcessInfo.processInfo.systemUptime
+        logger.debug("selection received: 0 ms")
+        #endif
+    }
+
+    static func mark(_ phase: String, entryID: String? = nil) {
+        #if DEBUG
+        guard enabled, startedAt > 0,
+              entryID == nil || currentEntryID == entryID else { return }
+        let elapsedMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+        logger.debug("\(phase, privacy: .public): \(elapsedMS, privacy: .public) ms")
+        #endif
+    }
+}
 
 enum SidebarSelection: Hashable {
     case today
@@ -255,6 +286,7 @@ struct RootView: View {
                 if oldID != newID {
                     cancelNavigationConfirmation(dismissToast: true)
                 }
+                if let newID { ArticleSwitchTrace.mark("root selection updated", entryID: newID) }
                 if let newID, timelineStyle != .list && isTimelineBrowsing {
                     openTimelineArticle(anchor: newID)
                 }
@@ -725,6 +757,7 @@ struct RootView: View {
         guard let selectedEntryID else {
             // 没有选中项时，拉取当前时间线第一篇
             if let firstID = store.fetchTimelinePage(scope: currentTimelineScope, unreadOnly: effectiveUnreadOnly, limit: 1, offset: 0).first?.id {
+                ArticleSwitchTrace.begin(firstID)
                 self.selectedEntryID = firstID
                 if currentTimelineScope == .unread || effectiveUnreadOnly {
                     self.retainedEntryListIDs.insert(firstID)
@@ -763,6 +796,7 @@ struct RootView: View {
             }
 
             let nextID = nextItem.id
+            ArticleSwitchTrace.begin(nextID)
             self.selectedEntryID = nextID
             if currentTimelineScope == .unread || effectiveUnreadOnly {
                 self.retainedEntryListIDs.insert(nextID)
@@ -834,6 +868,7 @@ struct RootView: View {
             cancelNavigationConfirmation(dismissToast: true)
         }
         let nextID = adjacentItem.id
+        ArticleSwitchTrace.begin(nextID)
         self.selectedEntryID = nextID
         if currentTimelineScope == .unread || effectiveUnreadOnly {
             self.retainedEntryListIDs.insert(nextID)
@@ -2551,6 +2586,8 @@ private struct FolderRowView: View {
 }
 
 private struct EntryListView: View {
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: AppStore
     let appearanceMode: ReaderAppearanceMode
     let selection: SidebarSelection
@@ -2568,12 +2605,17 @@ private struct EntryListView: View {
     @ObservedObject var presentation = TimelinePresentationMemory()
     var onOpenEntry: () -> Void = {}
     @State private var visualSelectionID: String?
+    @State private var listSelectionScrollID: String?
     @FocusState private var visualHasFocus: Bool
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
+    @State private var loadedEntryIndexes: [String: Int] = [:]
     @State private var hasMore: Bool = true
     @State private var isLoadingPage: Bool = false
+    // Advance only after a complete preview batch. A cancelled batch is retried.
+    @State private var previewPreparedCount = 0
+    @State private var previewPreparationID = UUID()
     private let pageSize = 100
 
     private var appearancePalette: ReaderAppearancePalette {
@@ -2625,8 +2667,11 @@ private struct EntryListView: View {
             offset: 0
         )
         loadedEntries = firstPage
+        loadedEntryIndexes = Dictionary(uniqueKeysWithValues: firstPage.enumerated().map { ($0.element.id, $0.offset) })
         hasMore = (firstPage.count == pageSize)
         isLoadingPage = false
+        previewPreparedCount = 0
+        previewPreparationID = UUID()
         // 切换订阅源后首屏预热：行渲染前图标已就绪，避免整列闪兜底徽章。
         store.iconStore.warmUp(items: firstPage)
     }
@@ -2641,13 +2686,19 @@ private struct EntryListView: View {
             limit: pageSize,
             offset: loadedEntries.count
         )
-        let existingIDs = Set(loadedEntries.map(\.id))
-        let freshItems = page.filter { !existingIDs.contains($0.id) }
+        let freshItems = page.filter { loadedEntryIndexes[$0.id] == nil }
         if freshItems.isEmpty {
             hasMore = false
         } else {
+            var indexes = loadedEntryIndexes
+            let firstIndex = loadedEntries.count
+            for (offset, item) in freshItems.enumerated() {
+                indexes[item.id] = firstIndex + offset
+            }
             loadedEntries.append(contentsOf: freshItems)
+            loadedEntryIndexes = indexes
             hasMore = (page.count == pageSize)
+            previewPreparationID = UUID()
             // 滚动加载下一页时预热新页涉及的 feed。
             store.iconStore.warmUp(items: freshItems)
         }
@@ -2663,10 +2714,29 @@ private struct EntryListView: View {
             limit: totalCount,
             offset: 0
         )
+        let pageIdentityChanged = refreshed.count != loadedEntries.count ||
+            zip(refreshed, loadedEntries).contains { $0.0.id != $0.1.id }
         loadedEntries = refreshed
+        loadedEntryIndexes = Dictionary(uniqueKeysWithValues: refreshed.enumerated().map { ($0.element.id, $0.offset) })
         hasMore = (refreshed.count >= totalCount)
+        if pageIdentityChanged {
+            previewPreparedCount = 0
+            previewPreparationID = UUID()
+        }
         // 刷新后的列表可能引入新 feed，幂等预热（store 内自动去重）。
         store.iconStore.warmUp(items: refreshed)
+    }
+
+    /// Keep the next page ready before keyboard navigation reaches the boundary.
+    /// Reader shortcuts can also select a row before its page has been mounted.
+    private func loadPageForSelectedEntryIfNeeded(_ entryID: String) {
+        guard viewStyle == .list else { return }
+        if let index = loadedEntryIndexes[entryID] {
+            if index >= loadedEntries.count - 20 { loadNextPage() }
+        } else if hasMore {
+            loadNextPage()
+            ArticleSwitchTrace.mark("page appended", entryID: entryID)
+        }
     }
 
     /// 将当前选择范围在数据库中的全部未读文章标记为已读。
@@ -2693,7 +2763,7 @@ private struct EntryListView: View {
     }
 
     private func patchEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
-        guard let index = loadedEntries.firstIndex(where: { $0.id == entryID }) else { return }
+        guard let index = loadedEntryIndexes[entryID] else { return }
         if let isRead { loadedEntries[index].isRead = isRead }
         if let isStarred { loadedEntries[index].isStarred = isStarred }
     }
@@ -2705,6 +2775,7 @@ private struct EntryListView: View {
                 // 原生 List 在自身结构调和、局部刷新或状态变化时可能会发出瞬态 nil。
                 // 严禁让原生 List 决定应用层选择状态，忽略此类瞬态 nil 以免清空 selectedEntryID 或 retainedUnreadIDs。
                 guard let newID else { return }
+                ArticleSwitchTrace.begin(newID)
 
                 // 在未读浏览会话中，累积保留所有在当前会话中被阅读过的条目
                 if timelineScope == .unread || unreadOnly {
@@ -2713,6 +2784,7 @@ private struct EntryListView: View {
                     retainedUnreadIDs.removeAll()
                 }
                 selectedEntryID = newID
+                if viewStyle == .list { listSelectionScrollID = newID }
             }
         )
     }
@@ -2721,7 +2793,10 @@ private struct EntryListView: View {
     private func entryRowView(for entry: EntryListItem) -> some View {
         let isSelected = selectedEntryID == entry.id
         EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused,
-                 showsImages: showsImages, thumbnailStore: store.thumbnailStore)
+                 showsImages: showsImages, thumbnailStore: store.thumbnailStore,
+                 palette: appearancePalette, displayScale: displayScale,
+                 translation: titleTranslator.translations[entry.id], appLanguage: store.appLanguage)
+            .equatable()
             .tag(entry.id)
             .contentShape(Rectangle())
             // 让主题选中卡片与列表边缘、相邻条目保持明确的呼吸空间；
@@ -2729,6 +2804,7 @@ private struct EntryListView: View {
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             .listRowBackground(
                 EntryRowSelectionSurface(
+                    entryID: entry.id,
                     isSelected: isSelected,
                     isFocused: isListFocused,
                     palette: appearancePalette
@@ -2737,7 +2813,8 @@ private struct EntryListView: View {
             .background(rowFrame(entry.id))
             .contextMenu { entryContextMenu(entry) }
             .onAppear {
-                if entry.id == loadedEntries.last?.id {
+                if let index = loadedEntryIndexes[entry.id],
+                   index >= loadedEntries.count - 20 {
                     loadNextPage()
                 }
             }
@@ -2784,18 +2861,32 @@ private struct EntryListView: View {
     /// 把当前可见行上报给标题翻译调度器：滚动到哪里、翻译到哪里。
     /// 视口下方额外预取一行左右，滚动时译文往往已就绪；去抖、去重、
     /// 黑白名单与批量合并在调度器内完成，视图只提供范围。
-    private func reportVisibleTitleTranslation(frames: [String: CGRect], viewport: CGRect) {
-        guard !frames.isEmpty else { return }
+    private func reportVisibleTitleTranslation(frames: [String: CGRect], viewport: CGRect) -> String? {
+        guard !frames.isEmpty else { return nil }
         let prefetchViewport = CGRect(
             x: viewport.minX,
             y: viewport.minY,
             width: viewport.width,
             height: viewport.height + Self.titleTranslationPrefetchInset
         )
-        let visibleIDs = Set(frames.filter { $0.value.intersects(prefetchViewport) }.map(\.key))
-        guard !visibleIDs.isEmpty else { return }
-        let candidates = loadedEntries
-            .filter { visibleIDs.contains($0.id) }
+        var visibleIndexes: [Int] = []
+        var firstVisible: (id: String, minY: CGFloat)?
+        for (id, frame) in frames {
+            if frame.intersects(viewport) {
+                if let currentFirst = firstVisible {
+                    if frame.minY < currentFirst.minY { firstVisible = (id, frame.minY) }
+                } else {
+                    firstVisible = (id, frame.minY)
+                }
+            }
+            if frame.intersects(prefetchViewport), let index = loadedEntryIndexes[id] {
+                visibleIndexes.append(index)
+            }
+        }
+        guard !visibleIndexes.isEmpty else { return firstVisible?.id }
+        visibleIndexes.sort()
+        let candidates = visibleIndexes
+            .map { loadedEntries[$0] }
             .map {
                 TitleTranslationCandidate(
                     entryID: $0.id,
@@ -2806,6 +2897,7 @@ private struct EntryListView: View {
                 )
             }
         titleTranslator.updateScope(candidates)
+        return firstVisible?.id
     }
 
     private static let titleTranslationPrefetchInset: CGFloat = 260
@@ -2946,23 +3038,42 @@ private struct EntryListView: View {
             #endif
             .onPreferenceChange(TimelineRowFrames.self) { frames in
                 let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
-                reportVisibleTitleTranslation(frames: frames, viewport: viewport)
-                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
-                if let first = frames.filter({ $0.value.intersects(viewport) }).min(by: { $0.value.minY < $1.value.minY }) {
-                    presentation.visibleAnchor = first.key
+                if viewStyle == .list {
+                    presentation.visibleRowFrames = frames
+                    presentation.viewportFrame = viewport
                 }
+                let firstVisibleID = reportVisibleTitleTranslation(frames: frames, viewport: viewport)
+                guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
+                if let firstVisibleID { presentation.visibleAnchor = firstVisibleID }
             }
             .task(id: presentation.restorationID) {
                 guard viewStyle != .magazine else { return }
+                let selectionAtStart = selectedEntryID
+                let scrollRequestAtStart = autoScrollTrigger
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-                if let anchor = presentation.restoreAnchor, loadedEntries.contains(where: { $0.id == anchor }) {
+                guard selectedEntryID == selectionAtStart,
+                      autoScrollTrigger == scrollRequestAtStart else {
+                    presentation.finishRestoration()
+                    return
+                }
+                if let anchor = presentation.restoreAnchor, loadedEntryIndexes[anchor] != nil {
                     proxy.scrollTo(anchor, anchor: .top)
                 }
                 presentation.finishRestoration()
             }
-            .task(id: showsImages ? loadedEntries.map(\.id) : []) {
-                guard showsImages else { return }
-                await store.prepareTimelinePreviews(entryIDs: loadedEntries.map(\.id))
+            .task(id: previewPreparationID) {
+                guard showsImages, previewPreparedCount < loadedEntries.count else { return }
+                let end = loadedEntries.count
+                let ids = loadedEntries[previewPreparedCount..<end].map(\.id)
+                // AppStore batches its SQL work and publishes one timeline revision
+                // for the entire pending range, rather than once per page.
+                await store.prepareTimelinePreviews(entryIDs: ids)
+                guard !Task.isCancelled else { return }
+                previewPreparedCount = end
+            }
+            .onChange(of: showsImages) { _, enabled in
+                if enabled { previewPreparedCount = 0 }
+                previewPreparationID = UUID()
             }
             .onChange(of: keyboardRequest) { _, request in
                 if let request { handleTimelineKey(request, proxy: proxy, width: geometry.size.width) }
@@ -2988,6 +3099,7 @@ private struct EntryListView: View {
                         retainedUnreadIDs.insert(newID)
                     }
                     if viewStyle != .magazine { visualSelectionID = newID }
+                    loadPageForSelectedEntryIfNeeded(newID)
                     patchEntryState(entryID: newID, isRead: true)
                 }
             }
@@ -3001,13 +3113,29 @@ private struct EntryListView: View {
             .onChange(of: store.autoTranslationRevision) { _, _ in
                 titleTranslator.refresh()
             }
-            .onChange(of: autoScrollTrigger) { _, _ in
-                if let newID = selectedEntryID {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation {
-                            proxy.scrollTo(newID, anchor: .center)
-                        }
-                    }
+            .task(id: autoScrollTrigger) {
+                guard let targetID = selectedEntryID else { return }
+                // Wait one display interval for a newly appended page to join the List.
+                // SwiftUI cancels this task when rapid navigation supersedes the target.
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                guard !Task.isCancelled, selectedEntryID == targetID,
+                      loadedEntryIndexes[targetID] != nil else { return }
+                if viewStyle == .list, !presentation.shouldCenterSelection(targetID) { return }
+                ArticleSwitchTrace.mark("scroll requested", entryID: targetID)
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                    proxy.scrollTo(targetID, anchor: .center)
+                }
+            }
+            .task(id: listSelectionScrollID) {
+                guard let targetID = listSelectionScrollID else { return }
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                guard !Task.isCancelled, listSelectionScrollID == targetID,
+                      selectedEntryID == targetID,
+                      loadedEntryIndexes[targetID] != nil else { return }
+                guard presentation.shouldCenterSelection(targetID) else { return }
+                ArticleSwitchTrace.mark("list scroll requested", entryID: targetID)
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                    proxy.scrollTo(targetID, anchor: .center)
                 }
             }
             #if os(iOS)
@@ -3294,27 +3422,36 @@ private struct PaperCapsuleButton: NSViewRepresentable {
 #endif
 
 private struct EntryRowSelectionSurface: View {
+    let entryID: String
     let isSelected: Bool
     let isFocused: Bool
     let palette: ReaderAppearancePalette
 
     var body: some View {
-        if isSelected {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(selectionFill)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .strokeBorder(
-                            selectionBorder,
-                            lineWidth: 0.5
-                        )
-                }
-                // listRowBackground 会占满原生 row；把留白施加到卡片本身，
-                // 才不会让主题选中态贴住列表边缘。
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-        } else {
-            Color.clear
+        Group {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(selectionFill)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .strokeBorder(
+                                selectionBorder,
+                                lineWidth: 0.5
+                            )
+                    }
+                    // listRowBackground 会占满原生 row；把留白施加到卡片本身，
+                    // 才不会让主题选中态贴住列表边缘。
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+            } else {
+                Color.clear
+            }
+        }
+        .onChange(of: isSelected) { _, selected in
+            if selected { ArticleSwitchTrace.mark("selected row updated", entryID: entryID) }
+        }
+        .onAppear {
+            if isSelected { ArticleSwitchTrace.mark("selected row mounted", entryID: entryID) }
         }
     }
 
@@ -3339,25 +3476,36 @@ private struct EntryRowSelectionSurface: View {
     }
 }
 
-private struct EntryRow: View {
+private struct EntryRow: View, Equatable {
     let entry: EntryListItem
     let isSelected: Bool
     let isFocused: Bool
     var showsImages = false
     var thumbnailStore: ArticleThumbnailStore?
-    @Environment(\.displayScale) private var displayScale
-    @Environment(\.paperAppearancePalette) private var appearancePalette
-    @Environment(\.entryTranslations) private var entryTranslations
+    let palette: ReaderAppearancePalette
+    let displayScale: CGFloat
+    let translation: TranslatedEntryText?
+    let appLanguage: AppLanguage
     @State private var revealsOriginal = false
 
+    private var appearancePalette: ReaderAppearancePalette { palette }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entry == rhs.entry && lhs.isSelected == rhs.isSelected &&
+            lhs.isFocused == rhs.isFocused && lhs.showsImages == rhs.showsImages &&
+            lhs.thumbnailStore === rhs.thumbnailStore && lhs.palette == rhs.palette &&
+            lhs.displayScale == rhs.displayScale && lhs.translation == rhs.translation &&
+            lhs.appLanguage == rhs.appLanguage
+    }
+
     private var translatedTitle: String? {
-        guard let translated = entryTranslations[entry.id]?.title,
+        guard let translated = translation?.title,
               !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return translated
     }
 
     private var translatedSummary: String? {
-        guard let translated = entryTranslations[entry.id]?.summary,
+        guard let translated = translation?.summary,
               !translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return translated
     }
@@ -3366,7 +3514,7 @@ private struct EntryRow: View {
         translatedTitle != nil || translatedSummary != nil
     }
 
-    /// 默认显示译文；鼠标停留标题左侧热区 300ms 后才切回原文。
+    /// 默认显示译文；鼠标停留整行左侧热区 300ms 后才切回原文。
     /// 选中行保持译文，不再固定显示原文。
     private var showsTranslation: Bool {
         hasTranslation && !revealsOriginal
@@ -3404,7 +3552,7 @@ private struct EntryRow: View {
                         TranslatedTextPage(showsTranslation: translatedTitle != nil && showsTranslation) {
                             Text(entry.title)
                         } translation: {
-                            // 行内标识：首行带图标，换行文字回到行首；原文模式无图标无占位。
+                            // 保持页面身份稳定，让异步译文到达时也能执行翻页动画。
                             TitleTranslationBadge.inline(fontSize: 12)
                                 + Text("  ")
                                 + Text(translatedTitle ?? "")
@@ -3414,10 +3562,6 @@ private struct EntryRow: View {
                         .foregroundStyle(primaryForegroundColor)
                         .lineLimit(entry.isSummaryVisible ? 2 : 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .translationRevealHotArea(
-                            isEnabled: translatedTitle != nil,
-                            isRevealingOriginal: $revealsOriginal
-                        )
 
                         // Desc 独占整行（仅在非冗余时渲染）；与标题一致，默认显示译文。
                         if entry.isSummaryVisible {
@@ -3481,8 +3625,15 @@ private struct EntryRow: View {
             }
         }
         .padding(.vertical, 6)
+        .translationRevealHotArea(
+            isEnabled: hasTranslation,
+            isRevealingOriginal: $revealsOriginal
+        )
         .accessibilityElement(children: .combine)
         .accessibilityHint(I18N.localized("单击以在右侧打开文章"))
+        .onChange(of: hasTranslation) { _, hasTranslation in
+            if !hasTranslation { revealsOriginal = false }
+        }
     }
 
     private var appearanceMutedColor: Color {

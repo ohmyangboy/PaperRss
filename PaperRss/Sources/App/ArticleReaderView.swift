@@ -115,8 +115,7 @@ struct ArticleReaderView: View {
     @State private var parsedReaderEntryID: String?
     @State private var isLoading = true
     @State private var showsLoadingIndicator = false
-    /// 本次加载命中内存缓存：旧文档由 WebKit 保持绘制到新文档 commit，
-    /// 期间不得显示不透明 loading 遮罩（否则产生“内容→纸面→内容”的屏闪）。
+    /// 命中内存缓存时先保留旧文档；没有旧文档或等待较久时再显示加载遮罩。
     /// isLoading 语义保持不变，供 onDocumentReady 握手使用。
     @State private var displaysMemoizedArticle = false
     /// 杂志/卡片路由收起阅读器期间旧文档仍然活着（WKWebView 被整栏折叠而非销毁）；
@@ -152,6 +151,12 @@ struct ArticleReaderView: View {
     private var canNavigateDisplayedDocument: Bool {
         isDisplayedDocumentInteractive ||
             (documentLoadFailed && activeLoadEntryID == entry.id && displayedEntry?.id == entry.id)
+    }
+    private var needsLoadingCover: Bool {
+        // A memoized transition may keep the old document visible briefly.
+        // Once it takes longer, or no document has appeared yet, show progress.
+        coversStaleDocument || (isLoading &&
+            (!displaysMemoizedArticle || showsLoadingIndicator || onScreenDocumentEntryID == nil))
     }
 
     private var effectiveSummaryArtifact: AIArtifact? {
@@ -253,7 +258,7 @@ struct ArticleReaderView: View {
                 readerBody
                     .zIndex(0)
             }
-            if (isLoading && !displaysMemoizedArticle) || coversStaleDocument {
+            if needsLoadingCover {
                 loadingOverlay
                     .zIndex(2)
             } else if documentLoadFailed {
@@ -339,6 +344,8 @@ struct ArticleReaderView: View {
             if isReaderCollapsed { coversStaleDocument = true }
         }
         .task(id: "\(entry.id)-\(articleReloadToken)") {
+            ArticleSwitchTrace.mark("reader task", entryID: entry.id)
+            let wasWaitingForDocument = isLoading && activeLoadEntryID != nil
             translationDocumentReady = false
             store.dismissError()
             let requestedEntry = entry
@@ -349,12 +356,12 @@ struct ArticleReaderView: View {
             )
             activeAIGeneration = requestedAIGeneration
             activeLoadEntryID = requestedEntry.id
-            // 内存命中：跳过 loading 遮罩直接换页（WebKit 保持旧页直到新文档 commit）；
-            // 未命中：维持既有 loading 行为，150ms 后才显示文案。
+            // 内存命中时短暂保留旧页；其他情况立即显示进度环。
+            // 连续切换时延续加载提示，避免每篇重置后长期只见空白背景。
             let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)
             displaysMemoizedArticle = (memoizedPrepared != nil)
             isLoading = true
-            showsLoadingIndicator = false
+            showsLoadingIndicator = wasWaitingForDocument
             documentLoadFailed = false
             isSummaryExpanded = false
             visibleBilingualParagraphIDs = []
@@ -363,17 +370,18 @@ struct ArticleReaderView: View {
             // markRead 含同步 DB 写 + 侧栏聚合 + objectWillChange，
             // 推迟到过渡帧之后执行，避免切换瞬间叠加额外渲染压力。
             Task { @MainActor in
+                guard activeLoadEntryID == requestedEntry.id,
+                      articleLoadSession == requestedLoadSession,
+                      !requestedEntry.isRead else { return }
                 store.markRead(requestedEntry)
             }
 
-            if memoizedPrepared == nil {
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    guard articleLoadSession == requestedLoadSession,
-                          activeLoadEntryID == requestedEntry.id,
-                          isLoading else { return }
-                    showsLoadingIndicator = true
-                }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard articleLoadSession == requestedLoadSession,
+                      activeLoadEntryID == requestedEntry.id,
+                      isLoading else { return }
+                showsLoadingIndicator = true
             }
 
             let prepared: PreparedArticle
@@ -449,10 +457,11 @@ struct ArticleReaderView: View {
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture {}
-            if showsLoadingIndicator {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .controlSize(.small)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(I18N.localized("正在准备正文…"))
+                if showsLoadingIndicator {
                     Text(I18N.localized("正在准备正文…"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -509,6 +518,7 @@ struct ArticleReaderView: View {
                 },
                 onDocumentPainted: { paintedEntryID in
                     guard activeLoadEntryID == paintedEntryID else { return }
+                    ArticleSwitchTrace.mark("first document paint", entryID: paintedEntryID)
                     onScreenDocumentEntryID = paintedEntryID
                     coversStaleDocument = false
                 },

@@ -8,6 +8,8 @@ import PaperRssCore
 @MainActor
 final class TimelinePresentationMemory: ObservableObject {
     var visibleAnchor: String?
+    var visibleRowFrames: [String: CGRect] = [:]
+    var viewportFrame: CGRect = .zero
     var browseAnchor: String?
     var openingFrameInWindow: CGRect?
     @Published var magazineIsOpen = false
@@ -32,10 +34,18 @@ final class TimelinePresentationMemory: ObservableObject {
         restorationID = UUID()
     }
     func finishRestoration() { isRestoring = false }
+    func shouldCenterSelection(_ entryID: String) -> Bool {
+        guard viewportFrame.height > 0, let frame = visibleRowFrames[entryID] else { return true }
+        let margin = min(120, viewportFrame.height * 0.18)
+        return frame.minY < viewportFrame.minY + margin ||
+            frame.maxY > viewportFrame.maxY - margin
+    }
     func resetScope() {
         magazineIsOpen = false
         magazineScopeID = UUID()
         visibleAnchor = nil
+        visibleRowFrames = [:]
+        viewportFrame = .zero
         browseAnchor = nil
         magazineAnchor = nil
         restoreAnchor = nil

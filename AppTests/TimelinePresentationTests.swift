@@ -33,6 +33,25 @@ final class TimelinePresentationTests: XCTestCase {
         XCTAssertFalse(memory.isRestoring)
     }
 
+    func testKeyboardSelectionCentersOnlyWhenItReachesViewportEdge() {
+        let memory = TimelinePresentationMemory()
+        memory.viewportFrame = CGRect(x: 0, y: 52, width: 400, height: 600)
+        memory.visibleRowFrames = [
+            "middle": CGRect(x: 0, y: 300, width: 400, height: 64),
+            "bottom": CGRect(x: 0, y: 580, width: 400, height: 64),
+            "top": CGRect(x: 0, y: 64, width: 400, height: 64)
+        ]
+
+        XCTAssertFalse(memory.shouldCenterSelection("middle"))
+        XCTAssertTrue(memory.shouldCenterSelection("bottom"))
+        XCTAssertTrue(memory.shouldCenterSelection("top"))
+        XCTAssertTrue(memory.shouldCenterSelection("next-page"))
+
+        memory.resetScope()
+        XCTAssertTrue(memory.visibleRowFrames.isEmpty)
+        XCTAssertEqual(memory.viewportFrame, .zero)
+    }
+
     func testToolbarControlsExistWithoutSelectedArticleAndRemainTrailing() {
         let actions = ToolbarActions(onRefresh: {}, onAddFeed: {}, onAddFolder: {}, onImport: {}, onExport: {},
             isRefreshing: false, selectionTitle: "Feed", hasUnread: false, onMarkAllRead: {},
@@ -391,4 +410,3 @@ final class TimelinePresentationTests: XCTestCase {
     }
 
 }
-

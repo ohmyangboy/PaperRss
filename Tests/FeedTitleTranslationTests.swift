@@ -106,6 +106,28 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.translations["b"]?.title, "T:Same")
     }
 
+    func testUnchangedVisibleScopeDoesNotRetryFailedTranslation() async {
+        let feedID = UUID()
+        let recorder = Recorder()
+        let coordinator = FeedTitleTranslationCoordinator(
+            configurationProvider: {
+                TitleTranslationContext(sessionID: "s1", targetLanguage: "简体中文", feedLists: [feedID: .whitelist])
+            },
+            translate: { texts, _ in
+                recorder.batches.append(texts)
+                return TitleTranslationBatchResult(failedTexts: Set(texts))
+            }
+        )
+        coordinator.debounceInterval = .milliseconds(5)
+        let visible = [candidate("a", feedID: feedID, title: "Alpha")]
+        coordinator.updateScope(visible)
+        await waitFor("首次翻译失败") { recorder.batches.count == 1 }
+
+        for _ in 0..<5 { coordinator.updateScope(visible) }
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(recorder.batches.count, 1)
+    }
+
     func testBlacklistSkipsAndWhitelistBypassesLanguageProbe() async {
         let black = UUID()
         let white = UUID()

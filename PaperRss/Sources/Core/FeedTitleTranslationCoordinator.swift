@@ -137,7 +137,9 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
     /// 可以在滚动帧里高频调用；首屏立即翻译，之后的更新等滚动停止后触发。
     public func updateScope(_ candidates: [TitleTranslationCandidate]) {
         var seen = Set<String>()
-        visibleCandidates = candidates.filter { seen.insert($0.entryID).inserted }
+        let uniqueCandidates = candidates.filter { seen.insert($0.entryID).inserted }
+        guard uniqueCandidates != visibleCandidates else { return }
+        visibleCandidates = uniqueCandidates
         let shouldRunImmediately = !hasPerformedInitialPass && !isProcessing
         scheduleWork(afterDebounce: !shouldRunImmediately)
     }
