@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.4.4](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.4.4](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.4.5-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.5-beta.1) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -84,7 +84,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**稳定版 v1.4.4（Build 39）** 优化文章列表切换、跨页滚动与正文加载反馈，保留标题翻译动画，推荐所有用户升级。详情见 [更新记录](CHANGELOG.md)。
+**稳定版 v1.4.4（Build 39）** 推荐所有用户升级。Beta 通道已提供 **v1.4.5-beta.1（Build 40）**，重点优化列表切换、跨页加载和正文渲染，并支持复制 AI 摘要；欢迎 Beta 用户测试。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

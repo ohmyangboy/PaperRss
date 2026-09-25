@@ -46,6 +46,47 @@ enum ArticleSwitchTrace {
     }
 }
 
+/// Debug timing for a sidebar click through the first timeline page.
+@MainActor
+enum SidebarSwitchTrace {
+    #if DEBUG
+    private static let enabled = ProcessInfo.processInfo.environment["PAPERRSS_TRACE_SWITCH"] == "1"
+    private static let logger = Logger(subsystem: "com.yangbukun.PaperRss", category: "SidebarSwitch")
+    private static var startedAt = 0.0
+    #endif
+
+    static func begin() {
+        #if DEBUG
+        guard enabled else { return }
+        startedAt = ProcessInfo.processInfo.systemUptime
+        logger.debug("selection received: 0 ms")
+        #endif
+    }
+
+    static func mark(_ phase: String) {
+        #if DEBUG
+        guard enabled, startedAt > 0 else { return }
+        let elapsedMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+        logger.debug("\(phase, privacy: .public): \(elapsedMS, privacy: .public) ms")
+        #endif
+    }
+
+    static func finish() {
+        #if DEBUG
+        mark("first page ready")
+        startedAt = 0
+        #endif
+    }
+
+    static func recordTimelineReload(startedAt: TimeInterval) {
+        #if DEBUG
+        guard enabled else { return }
+        let durationMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+        logger.debug("timeline revision reload: \(durationMS, privacy: .public) ms")
+        #endif
+    }
+}
+
 enum SidebarSelection: Hashable {
     case today
     case unread
@@ -1193,12 +1234,14 @@ struct RootView: View {
             get: { selection },
             set: { newSelection in
                 guard newSelection != selection else { return }
+                SidebarSwitchTrace.begin()
                 cancelNavigationConfirmation(dismissToast: true)
                 selectedEntryID = nil
                 retainedEntryListIDs.removeAll()
                 timelineMemory.resetScope()
                 isTimelineBrowsing = timelineStyle != .list
                 selection = newSelection
+                SidebarSwitchTrace.mark("selection state updated")
             }
         )
     }
@@ -2606,17 +2649,28 @@ private struct EntryListView: View {
     var onOpenEntry: () -> Void = {}
     @State private var visualSelectionID: String?
     @State private var listSelectionScrollID: String?
+    @State private var visibleImageIDs: Set<String> = []
     @FocusState private var visualHasFocus: Bool
 
     @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
     @State private var loadedEntryIndexes: [String: Int] = [:]
     @State private var hasMore: Bool = true
-    @State private var isLoadingPage: Bool = false
+    @State private var isLoadingPage: Bool = true
+    @State private var nextPageTask: Task<Void, Never>?
     // Advance only after a complete preview batch. A cancelled batch is retried.
     @State private var previewPreparedCount = 0
     @State private var previewPreparationID = UUID()
     private let pageSize = 100
+
+    private struct InitialPageRequest: Hashable {
+        let selection: SidebarSelection
+        let unreadOnly: Bool
+    }
+
+    private var initialPageRequest: InitialPageRequest {
+        InitialPageRequest(selection: selection, unreadOnly: unreadOnly)
+    }
 
     private var appearancePalette: ReaderAppearancePalette {
         store.readerAppearance.palette(for: appearanceMode)
@@ -2656,22 +2710,48 @@ private struct EntryListView: View {
         loadedEntries.contains { !$0.isRead }
     }
 
-    private func loadInitialPage() {
-        guard !isLoadingPage else { return }
+    private func clearInitialPage() {
+        nextPageTask?.cancel()
+        nextPageTask = nil
+        loadedEntries = []
+        loadedEntryIndexes = [:]
+        visibleImageIDs.removeAll()
+        hasMore = false
         isLoadingPage = true
-        let firstPage = store.fetchTimelinePage(
-            scope: timelineScope,
-            unreadOnly: unreadOnly,
-            retainingIDs: retainedUnreadIDs,
+        previewPreparedCount = 0
+        previewPreparationID = UUID()
+    }
+
+    private func loadInitialPage(for request: InitialPageRequest) async {
+        let scope = timelineScope
+        let retainedIDs = retainedUnreadIDs
+        let revisionAtStart = store.timelineRevision
+        SidebarSwitchTrace.mark("first page query started")
+        var firstPage = await store.fetchTimelinePageAsync(
+            scope: scope,
+            unreadOnly: request.unreadOnly,
+            retainingIDs: retainedIDs,
             limit: pageSize,
             offset: 0
         )
+        guard !Task.isCancelled, initialPageRequest == request else { return }
+        // A refresh may publish a new timeline while this query is in flight.
+        // Re-read off the main thread so an older snapshot cannot replace it.
+        if store.timelineRevision != revisionAtStart {
+            firstPage = await store.fetchTimelinePageAsync(
+                scope: scope,
+                unreadOnly: request.unreadOnly,
+                retainingIDs: retainedIDs,
+                limit: pageSize,
+                offset: 0
+            )
+            guard !Task.isCancelled, initialPageRequest == request else { return }
+        }
         loadedEntries = firstPage
         loadedEntryIndexes = Dictionary(uniqueKeysWithValues: firstPage.enumerated().map { ($0.element.id, $0.offset) })
         hasMore = (firstPage.count == pageSize)
         isLoadingPage = false
-        previewPreparedCount = 0
-        previewPreparationID = UUID()
+        SidebarSwitchTrace.finish()
         // 切换订阅源后首屏预热：行渲染前图标已就绪，避免整列闪兜底徽章。
         store.iconStore.warmUp(items: firstPage)
     }
@@ -2679,30 +2759,56 @@ private struct EntryListView: View {
     private func loadNextPage() {
         guard !isLoadingPage, hasMore else { return }
         isLoadingPage = true
-        let page = store.fetchTimelinePage(
-            scope: timelineScope,
-            unreadOnly: unreadOnly,
-            retainingIDs: retainedUnreadIDs,
-            limit: pageSize,
-            offset: loadedEntries.count
-        )
-        let freshItems = page.filter { loadedEntryIndexes[$0.id] == nil }
-        if freshItems.isEmpty {
-            hasMore = false
-        } else {
-            var indexes = loadedEntryIndexes
-            let firstIndex = loadedEntries.count
-            for (offset, item) in freshItems.enumerated() {
-                indexes[item.id] = firstIndex + offset
+        let request = initialPageRequest
+        let scope = timelineScope
+        let retainingIDs = retainedUnreadIDs
+        let offset = loadedEntries.count
+        nextPageTask = Task {
+            var revision = store.timelineRevision
+            var page = await store.fetchTimelinePageAsync(
+                scope: scope,
+                unreadOnly: request.unreadOnly,
+                retainingIDs: retainingIDs,
+                limit: pageSize,
+                offset: offset
+            )
+            guard !Task.isCancelled, initialPageRequest == request,
+                  loadedEntries.count == offset else { return }
+            if store.timelineRevision != revision {
+                revision = store.timelineRevision
+                page = await store.fetchTimelinePageAsync(
+                    scope: scope,
+                    unreadOnly: request.unreadOnly,
+                    retainingIDs: retainedUnreadIDs,
+                    limit: pageSize,
+                    offset: offset
+                )
+                guard !Task.isCancelled, initialPageRequest == request,
+                      loadedEntries.count == offset else { return }
             }
-            loadedEntries.append(contentsOf: freshItems)
-            loadedEntryIndexes = indexes
-            hasMore = (page.count == pageSize)
-            previewPreparationID = UUID()
-            // 滚动加载下一页时预热新页涉及的 feed。
-            store.iconStore.warmUp(items: freshItems)
+            if store.timelineRevision != revision {
+                isLoadingPage = false
+                reloadCurrentPages()
+                return
+            }
+            let freshItems = page.filter { loadedEntryIndexes[$0.id] == nil }
+            if freshItems.isEmpty {
+                hasMore = false
+            } else {
+                var indexes = loadedEntryIndexes
+                let firstIndex = loadedEntries.count
+                for (index, item) in freshItems.enumerated() {
+                    indexes[item.id] = firstIndex + index
+                }
+                loadedEntries.append(contentsOf: freshItems)
+                loadedEntryIndexes = indexes
+                hasMore = (page.count == pageSize)
+                previewPreparationID = UUID()
+                // 滚动加载下一页时预热新页涉及的 feed。
+                store.iconStore.warmUp(items: freshItems)
+            }
+            isLoadingPage = false
         }
-        isLoadingPage = false
     }
 
     private func reloadCurrentPages() {
@@ -2793,7 +2899,7 @@ private struct EntryListView: View {
     private func entryRowView(for entry: EntryListItem) -> some View {
         let isSelected = selectedEntryID == entry.id
         EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused,
-                 showsImages: showsImages, thumbnailStore: store.thumbnailStore,
+                 showsImages: showsImages && visibleImageIDs.contains(entry.id), thumbnailStore: store.thumbnailStore,
                  palette: appearancePalette, displayScale: displayScale,
                  translation: titleTranslator.translations[entry.id], appLanguage: store.appLanguage)
             .equatable()
@@ -2812,12 +2918,6 @@ private struct EntryListView: View {
             )
             .background(rowFrame(entry.id))
             .contextMenu { entryContextMenu(entry) }
-            .onAppear {
-                if let index = loadedEntryIndexes[entry.id],
-                   index >= loadedEntries.count - 20 {
-                    loadNextPage()
-                }
-            }
     }
 
     @ViewBuilder
@@ -2858,11 +2958,10 @@ private struct EntryListView: View {
         }
     }
 
-    /// 把当前可见行上报给标题翻译调度器：滚动到哪里、翻译到哪里。
-    /// 视口下方额外预取一行左右，滚动时译文往往已就绪；去抖、去重、
-    /// 黑白名单与批量合并在调度器内完成，视图只提供范围。
-    private func reportVisibleTitleTranslation(frames: [String: CGRect], viewport: CGRect) -> String? {
-        guard !frames.isEmpty else { return nil }
+    /// 只有真实进入视口的行才启动缩略图，并据此决定何时加载下一页。
+    /// 标题翻译复用同一可见范围；额外预取视口下方 260pt。
+    private func reportVisibleRows(frames: [String: CGRect], viewport: CGRect) -> (String?, Int?) {
+        guard !frames.isEmpty else { return (nil, nil) }
         let prefetchViewport = CGRect(
             x: viewport.minX,
             y: viewport.minY,
@@ -2871,8 +2970,12 @@ private struct EntryListView: View {
         )
         var visibleIndexes: [Int] = []
         var firstVisible: (id: String, minY: CGFloat)?
+        var lastVisibleIndex: Int?
         for (id, frame) in frames {
             if frame.intersects(viewport) {
+                if let index = loadedEntryIndexes[id] {
+                    lastVisibleIndex = max(lastVisibleIndex ?? index, index)
+                }
                 if let currentFirst = firstVisible {
                     if frame.minY < currentFirst.minY { firstVisible = (id, frame.minY) }
                 } else {
@@ -2883,7 +2986,11 @@ private struct EntryListView: View {
                 visibleIndexes.append(index)
             }
         }
-        guard !visibleIndexes.isEmpty else { return firstVisible?.id }
+        if viewStyle == .list {
+            let imageIDs = Set(visibleIndexes.map { loadedEntries[$0].id })
+            if imageIDs != visibleImageIDs { visibleImageIDs = imageIDs }
+        }
+        guard !visibleIndexes.isEmpty else { return (firstVisible?.id, lastVisibleIndex) }
         visibleIndexes.sort()
         let candidates = visibleIndexes
             .map { loadedEntries[$0] }
@@ -2897,7 +3004,7 @@ private struct EntryListView: View {
                 )
             }
         titleTranslator.updateScope(candidates)
-        return firstVisible?.id
+        return (firstVisible?.id, lastVisibleIndex)
     }
 
     private static let titleTranslationPrefetchInset: CGFloat = 260
@@ -3042,7 +3149,11 @@ private struct EntryListView: View {
                     presentation.visibleRowFrames = frames
                     presentation.viewportFrame = viewport
                 }
-                let firstVisibleID = reportVisibleTitleTranslation(frames: frames, viewport: viewport)
+                let (firstVisibleID, lastVisibleIndex) = reportVisibleRows(frames: frames, viewport: viewport)
+                if viewStyle == .list, let lastVisibleIndex,
+                   lastVisibleIndex >= loadedEntries.count - 20 {
+                    loadNextPage()
+                }
                 guard viewStyle != .magazine, !presentation.isRestoring, viewStyle == .list || isBrowsing else { return }
                 if let firstVisibleID { presentation.visibleAnchor = firstVisibleID }
             }
@@ -3078,20 +3189,18 @@ private struct EntryListView: View {
             .onChange(of: keyboardRequest) { _, request in
                 if let request { handleTimelineKey(request, proxy: proxy, width: geometry.size.width) }
             }
-            .onAppear {
-                if loadedEntries.isEmpty {
-                    loadInitialPage()
-                }
+            .task(id: initialPageRequest) {
+                await loadInitialPage(for: initialPageRequest)
             }
             .onChange(of: selection) { _, _ in
                 presentation.resetScope()
                 visualSelectionID = nil
                 retainedUnreadIDs.removeAll()
                 titleTranslator.resetScope()
-                loadInitialPage()
+                clearInitialPage()
             }
             .onChange(of: unreadOnly) { _, _ in
-                loadInitialPage()
+                clearInitialPage()
             }
             .onChange(of: selectedEntryID) { _, newID in
                 if let newID {
@@ -3104,7 +3213,10 @@ private struct EntryListView: View {
                 }
             }
             .onChange(of: store.timelineRevision) { _, _ in
+                guard !isLoadingPage else { return }
+                let startedAt = ProcessInfo.processInfo.systemUptime
                 reloadCurrentPages()
+                SidebarSwitchTrace.recordTimelineReload(startedAt: startedAt)
                 titleTranslator.refresh()
             }
             .onChange(of: store.aiSettings) { _, _ in

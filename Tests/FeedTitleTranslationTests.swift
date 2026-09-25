@@ -8,6 +8,7 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
     private final class Recorder: @unchecked Sendable {
         var batches: [[String]] = []
         var probes: [String] = []
+        var probesOnMainThread: [Bool] = []
     }
 
     private final class SessionBox: @unchecked Sendable {
@@ -149,6 +150,7 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
             },
             languageProbe: { text, _ in
                 recorder.probes.append(text)
+                recorder.probesOnMainThread.append(Thread.isMainThread)
                 return false // 一律判定为“已是目标语言”
             }
         )
@@ -166,6 +168,7 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(recorder.batches.flatMap { $0 }), ["Whitelisted", "Whitelisted summary"])
         // 白名单不经过语言探测；名单外的标题与摘要分别判定。
         XCTAssertEqual(Set(recorder.probes), ["Other", "Other summary"])
+        XCTAssertEqual(recorder.probesOnMainThread, [false, false])
     }
 
     func testFailuresStopAfterTwoAttemptsAcrossPasses() async {
@@ -255,6 +258,38 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
 
         await waitFor("已完成的翻译结果不被丢弃") { coordinator.translations["a"]?.title == "T:Alpha" }
         await waitFor("新范围也会被处理") { coordinator.translations["b"]?.title == "T:Beta" }
+    }
+
+    func testScopeUpdateDuringLanguageProbeSkipsStaleRequest() async {
+        let feedID = UUID()
+        let probeStarted = expectation(description: "旧范围语言探测已开始")
+        let releaseProbe = DispatchSemaphore(value: 0)
+        let recorder = Recorder()
+        let coordinator = FeedTitleTranslationCoordinator(
+            configurationProvider: {
+                TitleTranslationContext(sessionID: "s1", targetLanguage: "简体中文", feedLists: [:])
+            },
+            translate: { texts, _ in
+                recorder.batches.append(texts)
+                return TitleTranslationBatchResult(translations: Dictionary(uniqueKeysWithValues: texts.map { ($0, "T:" + $0) }))
+            },
+            languageProbe: { text, _ in
+                if text == "Old" {
+                    probeStarted.fulfill()
+                    _ = releaseProbe.wait(timeout: .now() + 2)
+                }
+                return true
+            }
+        )
+        coordinator.debounceInterval = .milliseconds(5)
+        coordinator.updateScope([candidate("old", feedID: feedID, title: "Old")])
+        await fulfillment(of: [probeStarted], timeout: 1)
+        coordinator.updateScope([candidate("new", feedID: feedID, title: "New")])
+        releaseProbe.signal()
+
+        await waitFor("新范围译文") { coordinator.translations["new"]?.title == "T:New" }
+        XCTAssertNil(coordinator.translations["old"])
+        XCTAssertEqual(recorder.batches, [["New"]])
     }
 
     func testDisabledFeatureClearsPublishedTranslations() async {

@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.4.5-beta.1 · Build 40 · 2026-09-26
+
+本次 Beta 聚焦列表与阅读性能提升，欢迎 Beta 通道用户升级测试；稳定版仍为 v1.4.4。
+
+- 列表切换和跨页加载更顺畅：文章查询改为异步执行，缩略图只为当前可见的列表行准备。
+- 标题翻译减少卡顿：语言识别移至后台处理，切换订阅范围后会丢弃过期结果。
+- 正文更快就绪：文章清理、段落索引和阅读文档渲染移至后台，快速切换时会取消过期渲染。
+- AI 摘要可直接复制；选中摘要文字时不会意外折叠卡片。
+
+---
+
+This Beta focuses on faster list navigation and article reading. Beta channel users are invited to try it; the stable version remains v1.4.4.
+
+- Smoother list switching and pagination: article queries run asynchronously, and thumbnails are prepared only for rows currently visible in the list.
+- Less interruption from title translation: language detection runs in the background, and stale results are discarded after changing feed scope.
+- Faster article readiness: article cleanup, paragraph indexing and reader document rendering run in the background; outdated renders are cancelled during rapid switching.
+- Copy AI summaries directly, and select summary text without accidentally collapsing the card.
+
 ## v1.4.4 · Build 39 · 2026-09-25
 
 本次是体验优化版本，推荐所有用户升级。

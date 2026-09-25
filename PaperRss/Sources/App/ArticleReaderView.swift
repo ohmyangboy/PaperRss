@@ -129,6 +129,8 @@ struct ArticleReaderView: View {
     @State private var articleLoadSession = 0
     @State private var articleReloadToken = 0
     @State private var isSummaryExpanded = false
+    @State private var showsSummaryCopyFeedback = false
+    @State private var summaryCopyFeedbackTask: Task<Void, Never>?
     @State private var visibleBilingualParagraphIDs: [String] = []
     @State private var pendingBilingualParagraphIDs: Set<String> = []
     /// Paragraph IDs that failed translation, with the number of failed
@@ -200,6 +202,44 @@ struct ArticleReaderView: View {
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
             isSummaryExpanded.toggle()
         }
+    }
+
+    /// SwiftUI 回退卡的复制入口：写剪贴板并把图标短暂切换为对勾反馈。
+    private func copySummaryFromFallbackCard() {
+        copySummaryToClipboard()
+        guard effectiveSummaryArtifact?.content.isEmpty == false else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+            showsSummaryCopyFeedback = true
+        }
+        summaryCopyFeedbackTask?.cancel()
+        summaryCopyFeedbackTask = Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            showsSummaryCopyFeedback = false
+        }
+    }
+
+    /// 摘要卡片 copy 按钮与 SwiftUI 回退卡共用的剪贴板写入。
+    /// 渲染时 `#`/`-`/`**` 会被转成加粗或列表符号，复制前同步去掉这些
+    /// markdown 标记，避免用户拿到带符号的原始文本。
+    private func copySummaryToClipboard() {
+        guard let summary = effectiveSummaryArtifact, !summary.content.isEmpty else { return }
+        let lines = summary.content.components(separatedBy: "\n").map { line -> String in
+            var trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") {
+                trimmed = trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+            }
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                trimmed = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+            return trimmed
+        }
+        let plainText = lines
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            .replacingOccurrences(of: "**", with: "")
+        guard !plainText.isEmpty else { return }
+        AppInfo.copyToClipboard(plainText)
     }
 
     private var artifact: AIArtifact? {
@@ -391,20 +431,24 @@ struct ArticleReaderView: View {
                 prepared = await store.prepareArticle(for: requestedEntry)
             }
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
+            ArticleSwitchTrace.mark("article prepared", entryID: requestedEntry.id)
 
             let loadedText = prepared.text.isEmpty ? requestedEntry.sourceText : prepared.text
-            let sourceHTML: String
-            if prepared.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !loadedText.isEmpty {
-                sourceHTML = "<p>\(loadedText.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>"))</p>"
-            } else {
-                sourceHTML = prepared.html
-            }
-            let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: sourceHTML, articleTitle: requestedEntry.title) ?? ""
-            let parsedParagraphs: [ReaderParagraph] = await Task.detached(priority: .userInitiated) { () -> [ReaderParagraph] in
-                guard !loadedHTML.isEmpty else { return [] }
-                return ArticleExtractor.readerParagraphs(in: loadedHTML, title: requestedEntry.title)
+            let sourceHTML = prepared.html
+            let articleTitle = requestedEntry.title
+            let (loadedHTML, parsedParagraphs) = await Task.detached(priority: .userInitiated) { () -> (String, [ReaderParagraph]) in
+                let html: String
+                if sourceHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !loadedText.isEmpty {
+                    html = "<p>\(loadedText.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>"))</p>"
+                } else {
+                    html = sourceHTML
+                }
+                let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: html, articleTitle: articleTitle) ?? ""
+                guard !loadedHTML.isEmpty else { return (loadedHTML, []) }
+                return (loadedHTML, ArticleExtractor.readerParagraphs(in: loadedHTML, title: articleTitle))
             }.value
             guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
+            ArticleSwitchTrace.mark("content indexed", entryID: requestedEntry.id)
 
             displayedEntry = requestedEntry
             preparedArticle = PreparedArticle(
@@ -544,6 +588,7 @@ struct ArticleReaderView: View {
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
                 onToggleSummary: toggleSummary,
+                onCopySummary: copySummaryToClipboard,
                 onReaderShortcut: { action in
                     guard canNavigateDisplayedDocument else { return }
                     onReaderShortcut(action)
@@ -628,6 +673,7 @@ struct ArticleReaderView: View {
                 onSelectionRequest: performSelectionRequest,
                 onGenerateSummary: { force in generateSummary(force: force) },
                 onToggleSummary: toggleSummary,
+                onCopySummary: copySummaryToClipboard,
                 onSelectNextEntry: {
                     guard canNavigateDisplayedDocument else { return }
                     onSelectNextEntry()
@@ -744,27 +790,49 @@ struct ArticleReaderView: View {
     private var summaryCard: some View {
         if store.llmConfiguration.showsAISummary {
             VStack(alignment: .leading, spacing: 9) {
+                // header 承担折叠/展开点击区；正文保持 textSelection，
+                // 避免划选摘要文字时误触收起。
                 HStack(spacing: 8) {
                     Label(I18N.localized("AI 摘要"), systemImage: "sparkles")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                     Spacer()
                     if store.summaryArtifact(for: entry) != nil {
-                        Button {
-                            withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
-                                isSummaryExpanded.toggle()
+                        HStack(spacing: 6) {
+                            if effectiveSummaryArtifact?.content.isEmpty == false {
+                                Button {
+                                    copySummaryFromFallbackCard()
+                                } label: {
+                                    Image(systemName: showsSummaryCopyFeedback ? "checkmark" : "doc.on.doc")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .background(Color.accentColor.opacity(0.09), in: Circle())
+                                .accessibilityLabel(I18N.shared.localized("复制 AI 摘要"))
                             }
-                        } label: {
-                            Image(systemName: isSummaryExpanded ? "chevron.up" : "chevron.down")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 24, height: 24)
-                                .contentShape(Circle())
+                            Button {
+                                toggleSummary()
+                            } label: {
+                                Image(systemName: isSummaryExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(Color.accentColor.opacity(0.09), in: Circle())
+                            .accessibilityLabel(I18N.shared.localized(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要"))
+                            .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
                         }
-                        .buttonStyle(.plain)
-                        .background(Color.accentColor.opacity(0.09), in: Circle())
-            .accessibilityLabel(I18N.shared.localized(isSummaryExpanded ? "收起 AI 摘要" : "展开 AI 摘要"))
-                        .accessibilityHint(isSummaryExpanded ? "隐藏完整摘要" : "显示完整摘要")
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if store.summaryArtifact(for: entry) != nil {
+                        toggleSummary()
                     }
                 }
 
@@ -835,14 +903,6 @@ struct ArticleReaderView: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(PaperTheme.noteBorder(scheme: colorScheme), lineWidth: 1)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if store.summaryArtifact(for: entry) != nil {
-                    withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1.0)) {
-                        isSummaryExpanded.toggle()
-                    }
-                }
             }
             .accessibilityElement(children: .contain)
         }
@@ -1360,6 +1420,15 @@ private enum PaperReaderHeaderBuilder {
         return formattedLines.joined(separator: "<br>")
     }
 
+    static let summaryCopyIconSVG = """
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+    """
+
+    /// 复制成功反馈用的对勾图标，与 `summaryCopyIconSVG` 同风格同尺寸。
+    static let summaryCheckmarkSVG = """
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    """
+
     static func summaryCardHTML(
         summaryArtifact: AIArtifact?,
         isSummaryExpanded: Bool,
@@ -1423,17 +1492,23 @@ private enum PaperReaderHeaderBuilder {
 
             let headerSubtextHTML = isSummaryExpanded ? "" : "<span class=\"paper-summary-subtext\">\(previewText.htmlEscaped)</span>"
             let actionIcon = isSummaryExpanded ? chevronDownSVG : chevronRightSVG
+            let copyTitle = I18N.localized("复制 AI 摘要").htmlEscaped
 
             return """
-            <div class="paper-summary-card paper-summary-collapse \(isSummaryExpanded ? "is-expanded" : "is-collapsed")" id="paper-summary-card" data-paper-action="toggleSummary">
-              <div class="paper-summary-header">
+            <div class="paper-summary-card paper-summary-collapse \(isSummaryExpanded ? "is-expanded" : "is-collapsed")" id="paper-summary-card">
+              <div class="paper-summary-header" data-paper-action="toggleSummary">
                 <div class="paper-summary-header-left">
                   <span class="paper-summary-title">\(titleText)</span>
                   \(headerSubtextHTML)
                 </div>
-                <button class="paper-summary-ai-btn" data-paper-action="toggleSummary">
-                  \(actionIcon)
-                </button>
+                <div class="paper-summary-actions">
+                  <button class="paper-summary-ai-btn" data-paper-action="copySummary" title="\(copyTitle)" aria-label="\(copyTitle)">
+                    \(summaryCopyIconSVG)
+                  </button>
+                  <button class="paper-summary-ai-btn" data-paper-action="toggleSummary">
+                    \(actionIcon)
+                  </button>
+                </div>
               </div>
               <div class="paper-summary-body \(bodyClass)">
                 <div class="paper-summary-text">\(formattedContent)</div>
@@ -1644,18 +1719,26 @@ body > :not(.paper-header-container):not(#paper-rss-toc-rail):not(#paper-rss-toc
   padding: 10px 14px;
   margin: 0 0 20px 0;
   font-size: 0.92em;
-  cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
-  user-select: none;
+  -webkit-user-select: text;
+  user-select: text;
 }
 .paper-summary-card:hover {
   border-color: var(--paper-accent);
 }
+/* 只有 header 是折叠/展开的点击区；正文保持可选中复制，不做触发区。 */
 .paper-summary-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  cursor: pointer;
+}
+.paper-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 .paper-summary-header-left {
   display: flex;
@@ -1721,6 +1804,7 @@ body > :not(.paper-header-container):not(#paper-rss-toc-rail):not(#paper-rss-toc
 }
 .paper-summary-text {
   line-height: 1.6;
+  cursor: text;
 }
 .paper-summary-text strong,
 .paper-summary-text b {
@@ -2521,23 +2605,34 @@ enum PaperReaderBridge {
                 }
                 return;
               } else if (action === "toggleSummary") {
+                // 有文字选区时（选中摘要后松手/尝试复制）不折叠，
+                // 否则用户划选正文的动作会被误判成"收起卡片"。
+                const sel = window.getSelection ? window.getSelection() : null;
+                if (sel && sel.toString() && sel.toString().trim().length > 0) {
+                  return;
+                }
                 event.preventDefault();
                 event.stopPropagation();
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssToggleSummary) {
                   window.webkit.messageHandlers.paperRssToggleSummary.postMessage({});
                 }
                 return;
-              }
-            }
-
-            const summaryCard = event.target ? event.target.closest(".paper-summary-card") : null;
-            if (summaryCard) {
-              const sel = window.getSelection();
-              if (sel && sel.toString() && sel.toString().trim().length > 0) {
+              } else if (action === "copySummary") {
+                event.preventDefault();
+                event.stopPropagation();
+                const copyIcon = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+                const checkIcon = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                btn.innerHTML = checkIcon;
+                btn.classList.add("copied");
+                setTimeout(() => {
+                  if (!btn.isConnected) return;
+                  btn.innerHTML = copyIcon;
+                  btn.classList.remove("copied");
+                }, 1500);
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssCopySummary) {
+                  window.webkit.messageHandlers.paperRssCopySummary.postMessage({});
+                }
                 return;
-              }
-              if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperRssToggleSummary) {
-                window.webkit.messageHandlers.paperRssToggleSummary.postMessage({});
               }
             }
           }, true);
@@ -5485,6 +5580,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
     ) async -> ReaderSelectionResponse
     let onGenerateSummary: (Bool) -> Void
     let onToggleSummary: () -> Void
+    var onCopySummary: () -> Void = {}
     var onReaderShortcut: (ReaderShortcutAction) -> Void = { _ in }
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
@@ -5570,6 +5666,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
             contentWorld: .defaultClient,
             name: "paperRssToggleSummary"
         )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssCopySummary"
+        )
         PaperReaderBridge.installStandardUserScripts(in: configuration.userContentController)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -5650,6 +5751,10 @@ private struct ArticleHTMLView: NSViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: "paperRssToggleSummary",
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssCopySummary",
             contentWorld: .defaultClient
         )
         webView.stopLoading()
@@ -6058,6 +6163,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 parent.onGenerateSummary(force)
             case "paperRssToggleSummary":
                 parent.onToggleSummary()
+            case "paperRssCopySummary":
+                parent.onCopySummary()
             default:
                 break
             }
@@ -6276,8 +6383,11 @@ private struct ArticleHTMLView: NSViewRepresentable {
             }
             // 连击合并：同一 runloop 内快速连续切换时只加载最终目标，
             // 跳过中间文章的全文构建与 WebKit 导航（NetNewsWire 式无中间态）。
-            if scheduledNavigationEntryID == parent.entry.id { return }
+            if scheduledNavigationEntryID == parent.entry.id,
+               scheduledNavigationLoadSession == parent.loadSession { return }
+            documentRenderTask?.cancel()
             scheduledNavigationEntryID = parent.entry.id
+            scheduledNavigationLoadSession = parent.loadSession
             let requestedEntryID = parent.entry.id
             DispatchQueue.main.async {
                 self.performDocumentLoad(entryID: requestedEntryID, in: webView)
@@ -6287,7 +6397,7 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private func performDocumentLoad(entryID: String, in webView: WKWebView) {
             guard scheduledNavigationEntryID == entryID,
                   parent.entry.id == entryID else { return }
-            scheduledNavigationEntryID = nil
+            let loadSession = parent.loadSession
             let initialTranslationState = translationState()
             let headerHTML = PaperReaderHeaderBuilder.headerHTML(
                 entry: parent.entry,
@@ -6302,21 +6412,57 @@ private struct ArticleHTMLView: NSViewRepresentable {
                 titleSegment: parent.inlineTranslations.first(where: { $0.id == "title" }),
                 isTitlePending: parent.pendingTranslationIDs.contains("title")
             )
-            let document = ReaderDocumentRenderer.renderDocument(
-                article: parent.article,
-                documentIdentity: parent.entry.id,
-                translations: parent.inlineTranslations,
-                pendingTranslationIDs: parent.isBilingualMode ? parent.pendingTranslationIDs : [],
-                headerHTML: headerHTML,
-                topInset: Double(parent.contentTopInset),
-                fontSize: parent.fontSize,
-                extraStyleCSS: paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
-                    parent.readerAppearance,
-                    mode: parent.readerAppearanceMode
-                ),
-                rootClassName: "paper-scheme-"
-                    + parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme.rawValue
+            let article = parent.article
+            let translations = parent.inlineTranslations
+            let pendingIDs = parent.isBilingualMode ? parent.pendingTranslationIDs : []
+            let topInset = Double(parent.contentTopInset)
+            let fontSize = parent.fontSize
+            let styleCSS = paperArticleStyle + ReaderTranslationPresentation.style + readerAppearanceStyle(
+                parent.readerAppearance,
+                mode: parent.readerAppearanceMode
             )
+            let rootClassName = "paper-scheme-"
+                + parent.readerAppearance.palette(for: parent.readerAppearanceMode).colorScheme.rawValue
+            ArticleSwitchTrace.mark("document render queued", entryID: entryID)
+            let renderTask = Task.detached(priority: .userInitiated) { () -> ReaderDocument? in
+                guard !Task.isCancelled else { return nil }
+                return ReaderDocumentRenderer.renderDocument(
+                    article: article,
+                    documentIdentity: entryID,
+                    translations: translations,
+                    pendingTranslationIDs: pendingIDs,
+                    headerHTML: headerHTML,
+                    topInset: topInset,
+                    fontSize: fontSize,
+                    extraStyleCSS: styleCSS,
+                    rootClassName: rootClassName
+                )
+            }
+            documentRenderTask = renderTask
+            Task { @MainActor [weak self, weak webView] in
+                guard let document = await renderTask.value,
+                      let self, let webView,
+                      self.scheduledNavigationEntryID == entryID,
+                      self.scheduledNavigationLoadSession == loadSession,
+                      self.parent.entry.id == entryID,
+                      self.parent.loadSession == loadSession else { return }
+                self.scheduledNavigationEntryID = nil
+                self.scheduledNavigationLoadSession = nil
+                self.documentRenderTask = nil
+                ArticleSwitchTrace.mark("document assembled", entryID: entryID)
+                self.commitDocumentLoad(document, article: article,
+                                        initialTranslationState: initialTranslationState,
+                                        entryID: entryID, in: webView)
+            }
+        }
+
+        private func commitDocumentLoad(
+            _ document: ReaderDocument,
+            article: PreparedArticle,
+            initialTranslationState: (translations: [String: String], pendingIDs: Set<String>),
+            entryID: String,
+            in webView: WKWebView
+        ) {
             renderedSummarySignature = nil
             renderedSelectionOptionsJSON = nil
             imageInversionKey = nil
@@ -6324,8 +6470,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
             imageInversionTask = nil
             invalidateSelectionRequests()
             loadedArticleKey = document.renderSignature
-            loadedDocumentIdentity = parent.entry.id
-            loadedArticle = parent.article
+            loadedDocumentIdentity = entryID
+            loadedArticle = article
             completedArticleKey = nil
             renderedTranslations = initialTranslationState.translations
             renderedPendingTranslationIDs = initialTranslationState.pendingIDs
@@ -6335,22 +6481,23 @@ private struct ArticleHTMLView: NSViewRepresentable {
             let generation = currentLoadGeneration
             let html = document.html.replacingOccurrences(
                 of: "<head>",
-                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\"><meta name=\"paper-rss-document-identity\" content=\"\(parent.entry.id.htmlEscaped)\">"
+                with: "<head><meta name=\"paper-rss-load-generation\" content=\"\(generation)\"><meta name=\"paper-rss-document-identity\" content=\"\(entryID.htmlEscaped)\">"
             )
             if let navigation = webView.loadHTMLString(html, baseURL: document.baseURL) {
                 navigationLoads[ObjectIdentifier(navigation)] = (
-                    entryID: parent.entry.id,
+                    entryID: entryID,
                     signature: document.renderSignature,
                     generation: generation
                 )
             } else {
                 handleLoadFailure(
-                    entryID: parent.entry.id,
+                    entryID: entryID,
                     signature: document.renderSignature,
                     generation: generation,
                     in: webView
                 )
             }
+            ArticleSwitchTrace.mark("webview navigation started", entryID: entryID)
             synchronizeSelectionOptions(in: webView)
         }
 
@@ -6535,6 +6682,8 @@ private struct ArticleHTMLView: NSViewRepresentable {
         private var currentLoadGeneration = 0
         /// 已排定待执行导航的目标条目；同 runloop 内被更新目标覆盖即作废。
         private var scheduledNavigationEntryID: String?
+        private var scheduledNavigationLoadSession: Int?
+        private var documentRenderTask: Task<ReaderDocument?, Never>?
         private var navigationLoads: [ObjectIdentifier: (entryID: String, signature: String, generation: Int)] = [:]
         private var failedLoadAttempts: [String: Int] = [:]
     }
@@ -6580,6 +6729,7 @@ private struct ArticleHTMLView: UIViewRepresentable {
     ) async -> ReaderSelectionResponse
     let onGenerateSummary: (Bool) -> Void
     let onToggleSummary: () -> Void
+    var onCopySummary: () -> Void = {}
     var onSelectNextEntry: () -> Void = {}
     var onFocusListView: () -> Void = {}
     var showsMagazineReturn = false
@@ -6641,6 +6791,11 @@ private struct ArticleHTMLView: UIViewRepresentable {
             context.coordinator,
             contentWorld: .defaultClient,
             name: "paperRssToggleSummary"
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            contentWorld: .defaultClient,
+            name: "paperRssCopySummary"
         )
         PaperReaderBridge.installStandardUserScripts(in: configuration.userContentController)
 
@@ -6704,6 +6859,10 @@ private struct ArticleHTMLView: UIViewRepresentable {
         )
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: "paperRssToggleSummary",
+            contentWorld: .defaultClient
+        )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "paperRssCopySummary",
             contentWorld: .defaultClient
         )
         webView.stopLoading()
@@ -6983,6 +7142,8 @@ private struct ArticleHTMLView: UIViewRepresentable {
                 parent.onGenerateSummary(force)
             case "paperRssToggleSummary":
                 parent.onToggleSummary()
+            case "paperRssCopySummary":
+                parent.onCopySummary()
             default:
                 break
             }

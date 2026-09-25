@@ -75,12 +75,12 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
 
     @Published public private(set) var translations: [String: TranslatedEntryText] = [:]
 
-    private enum TranslatedField {
+    private enum TranslatedField: Sendable {
         case title
         case summary
     }
 
-    private struct PendingItem {
+    private struct PendingItem: Sendable {
         let entryID: String
         let field: TranslatedField
     }
@@ -206,37 +206,24 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
             failedAttempts.removeAll()
         }
 
-        // 每轮只判定一次黑白名单与语言，并按文本去重：同一文本（例如重复的
-        // 摘要）只请求一次；同一轮内每个翻译单元最多请求一次，失败重试留给
-        // 后续触发（滚动、设置变化），避免网络/限流类错误立即放大请求。
-        var pending: [String: [PendingItem]] = [:]
-        var seenEntries = Set<String>()
-        var textCount = 0
-        for candidate in visibleCandidates {
-            guard textCount < maximumTextsPerPass else { break }
-            guard seenEntries.insert(candidate.entryID).inserted else { continue }
-            let translated = translations[candidate.entryID]
-            let units: [(TranslatedField, String)] = [
-                (.title, candidate.title),
-                (.summary, candidate.summary ?? "")
-            ]
-            for (field, text) in units {
-                guard textCount < maximumTextsPerPass else { break }
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-                switch field {
-                case .title where translated?.title != nil: continue
-                case .summary where translated?.summary != nil: continue
-                default: break
-                }
-                let digest = text.stableDigest
-                guard (failedAttempts[digest] ?? 0) < maximumFailuresPerText else { continue }
-                guard shouldTranslate(text, feedID: candidate.feedID, context: context) else { continue }
-                if pending[text] == nil {
-                    textCount += 1
-                }
-                pending[text, default: []].append(PendingItem(entryID: candidate.entryID, field: field))
-            }
+        // NaturalLanguage may take tens of milliseconds for a visible page.
+        // Snapshot coordinator state, then do language detection off MainActor.
+        let candidates = visibleCandidates
+        let translated = translations
+        let failures = failedAttempts
+        let probe = languageProbe
+        let limit = maximumTextsPerPass
+        let failureLimit = maximumFailuresPerText
+        let pending = await Task.detached(priority: .userInitiated) {
+            Self.pendingItems(
+                candidates: candidates, translated: translated, failures: failures,
+                context: context, limit: limit, failureLimit: failureLimit, languageProbe: probe
+            )
+        }.value
+        guard configurationProvider()?.sessionID == context.sessionID else { return }
+        if visibleCandidates != candidates {
+            needsAnotherPass = true
+            return
         }
         guard !pending.isEmpty else { return }
 
@@ -262,13 +249,51 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
         }
     }
 
-    private func shouldTranslate(_ text: String, feedID: UUID, context: TitleTranslationContext) -> Bool {
-        switch context.feedLists[feedID] {
-        case .blacklist: return false
-        case .whitelist: return true
-        // 名单之外：本地识别文本语言，只有确认已是目标语言才跳过。
-        case nil: return languageProbe(text, context.targetLanguage)
+    /// 每轮只判定一次黑白名单与语言，并按文本去重；失败重试留给后续触发。
+    private nonisolated static func pendingItems(
+        candidates: [TitleTranslationCandidate],
+        translated: [String: TranslatedEntryText],
+        failures: [String: Int],
+        context: TitleTranslationContext,
+        limit: Int,
+        failureLimit: Int,
+        languageProbe: LanguageProbe
+    ) -> [String: [PendingItem]] {
+        var pending: [String: [PendingItem]] = [:]
+        var seenEntries = Set<String>()
+        var textCount = 0
+        for candidate in candidates {
+            guard textCount < limit else { break }
+            guard seenEntries.insert(candidate.entryID).inserted else { continue }
+            let existing = translated[candidate.entryID]
+            let units: [(TranslatedField, String)] = [
+                (.title, candidate.title),
+                (.summary, candidate.summary ?? "")
+            ]
+            for (field, text) in units {
+                guard textCount < limit else { break }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                switch field {
+                case .title where existing?.title != nil: continue
+                case .summary where existing?.summary != nil: continue
+                default: break
+                }
+                let digest = text.stableDigest
+                guard (failures[digest] ?? 0) < failureLimit else { continue }
+                switch context.feedLists[candidate.feedID] {
+                case .blacklist: continue
+                case .whitelist: break
+                case nil:
+                    guard languageProbe(text, context.targetLanguage) else { continue }
+                }
+                if pending[text] == nil {
+                    textCount += 1
+                }
+                pending[text, default: []].append(PendingItem(entryID: candidate.entryID, field: field))
+            }
         }
+        return pending
     }
 
     private func store(_ value: TranslatedEntryText, for entryID: String) {

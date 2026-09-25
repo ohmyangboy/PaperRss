@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.3](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.4.4](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Beta v1.4.5-beta.1](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.4.5-beta.1) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -82,7 +82,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Stable v1.4.3 (Build 38)** adds separate CJK and Latin font settings and on-demand timeline title and summary translation, refines translated-title interactions, and includes fixes for article extraction, dark-paper images and Dock icon behavior. Recommended for all users. See the [changelog](CHANGELOG.md).
+**Stable v1.4.4 (Build 39)** is recommended for all users. **Beta v1.4.5-beta.1 (Build 40)** focuses on faster list switching, pagination and article rendering, and adds AI summary copying; Beta channel users are invited to test it. See the [changelog](CHANGELOG.md).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

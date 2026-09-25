@@ -1922,6 +1922,16 @@
         }
       }
     },
+    "复制 AI 摘要" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy AI Summary"
+          }
+        }
+      }
+    },
     "复制文章 ID" : {
       "localizations" : {
         "en" : {

@@ -1022,6 +1022,23 @@ public final class AppStore: ObservableObject {
         )) ?? []
     }
 
+    /// Feed scope changes must not run the first-page query on MainActor.
+    public func fetchTimelinePageAsync(
+        scope: TimelineScope,
+        unreadOnly: Bool = false,
+        retainingIDs: Set<String> = [],
+        limit: Int = 100,
+        offset: Int = 0
+    ) async -> [EntryListItem] {
+        (try? await localProvider.timelineQueryService.fetchListItemsAsync(
+            scope: scope,
+            unreadOnly: unreadOnly,
+            retainingIDs: retainingIDs,
+            limit: limit,
+            offset: offset
+        )) ?? []
+    }
+
     public func fetchAdjacentItem(
         scope: TimelineScope,
         unreadOnly: Bool = false,
