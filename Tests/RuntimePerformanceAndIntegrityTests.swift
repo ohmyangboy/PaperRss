@@ -109,8 +109,8 @@ final class RuntimePerformanceAndIntegrityTests: XCTestCase {
     }
 
     @MainActor
-    func testMarkReadDoesNotReloadFullTimelines() throws {
-        _ = try seedLargeScaleFixture(itemCount: 50_000)
+    func testMarkReadDoesNotReloadFullTimelines() async throws {
+        let (feedID, _) = try seedLargeScaleFixture(itemCount: 50_000)
 
         let store = AppStore(fileManager: .default, databaseURL: sqliteURL)
         guard let firstUnreadItem = store.unreadEntryListItems.first else {
@@ -125,6 +125,48 @@ final class RuntimePerformanceAndIntegrityTests: XCTestCase {
         let start = CFAbsoluteTimeGetCurrent()
         store.markRead(entryID: targetID, read: true)
         let duration = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
+        print("TIMELINE_INTERACTION_BASELINE markReadMainThreadMS=\(duration)")
+
+        let pageStart = CFAbsoluteTimeGetCurrent()
+        let page = store.fetchTimelinePage(scope: .unread, limit: 100)
+        let pageDuration = (CFAbsoluteTimeGetCurrent() - pageStart) * 1000.0
+        print("TIMELINE_INTERACTION_BASELINE unreadPage100MainThreadMS=\(pageDuration)")
+        XCTAssertEqual(page.count, 100)
+
+        let feedPageStart = CFAbsoluteTimeGetCurrent()
+        let feedPage = store.fetchTimelinePage(scope: .feed(feedID: feedID), limit: 100)
+        let feedPageDuration = (CFAbsoluteTimeGetCurrent() - feedPageStart) * 1000.0
+        XCTAssertEqual(feedPage.count, 100)
+        let adjacentStart = CFAbsoluteTimeGetCurrent()
+        let adjacent = store.fetchAdjacentItem(
+            scope: .unread,
+            currentItemID: page[3].id,
+            direction: .next
+        )
+        let adjacentDuration = (CFAbsoluteTimeGetCurrent() - adjacentStart) * 1000.0
+        let feedAdjacentStart = CFAbsoluteTimeGetCurrent()
+        let feedAdjacent = store.fetchAdjacentItem(
+            scope: .feed(feedID: feedID),
+            currentItemID: page[3].id,
+            direction: .next
+        )
+        let feedAdjacentDuration = (CFAbsoluteTimeGetCurrent() - feedAdjacentStart) * 1000.0
+        print("TIMELINE_INTERACTION_AFTER feedPage100QueryMS=\(feedPageDuration)")
+        print("TIMELINE_INTERACTION_BASELINE unreadAdjacentMainThreadMS=\(adjacentDuration) feedAdjacentMainThreadMS=\(feedAdjacentDuration)")
+        XCTAssertNotNil(adjacent)
+        XCTAssertNotNil(feedAdjacent)
+
+        let anotherID = try XCTUnwrap(page.first?.id)
+        let provider = LocalAccountProvider(accountID: "local-default", database: libraryDB)
+        let writeStart = CFAbsoluteTimeGetCurrent()
+        try provider.markRead(entryID: anotherID, read: true)
+        let writeDuration = (CFAbsoluteTimeGetCurrent() - writeStart) * 1000.0
+        let countsStart = CFAbsoluteTimeGetCurrent()
+        _ = try TimelineQueryService(database: libraryDB).fetchSidebarCounts(
+            startOfDayTimestamp: Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        )
+        let countsDuration = (CFAbsoluteTimeGetCurrent() - countsStart) * 1000.0
+        print("TIMELINE_INTERACTION_BASELINE writeMainThreadMS=\(writeDuration) sidebarCountsMainThreadMS=\(countsDuration)")
 
         // 验证只做局部更新与单个 Sidebar SQL 聚合，不重新加载 4 个全量 Timeline
         XCTAssertLessThan(duration, 500.0, "markRead must be fine-grained and not reload all 4 timelines, took \(duration)ms")
@@ -133,6 +175,24 @@ final class RuntimePerformanceAndIntegrityTests: XCTestCase {
         XCTAssertEqual(store.sidebarCounts.allUnread, initialUnreadCount - 1)
         if let updatedItem = store.entryListItems.first(where: { $0.id == targetID }) {
             XCTAssertTrue(updatedItem.isRead)
+        }
+
+        let readerEntries = try [page[1].id, page[2].id].map { id in
+            try XCTUnwrap(store.entry(id: id))
+        }
+        let readerStart = CFAbsoluteTimeGetCurrent()
+        for entry in readerEntries { store.markReadFromReader(entry) }
+        let readerMainThreadDuration = (CFAbsoluteTimeGetCurrent() - readerStart) * 1000.0
+        print("TIMELINE_INTERACTION_AFTER readerTwoMarksMainThreadMS=\(readerMainThreadDuration)")
+        XCTAssertLessThan(readerMainThreadDuration, 50.0, "Reader selection must not aggregate sidebar counts on MainActor")
+
+        let deadline = Date().addingTimeInterval(3)
+        while store.sidebarCounts.allUnread != initialUnreadCount - 4 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(store.sidebarCounts.allUnread, initialUnreadCount - 4)
+        for entry in readerEntries {
+            XCTAssertTrue(store.entry(id: entry.id)?.isRead == true)
         }
     }
 

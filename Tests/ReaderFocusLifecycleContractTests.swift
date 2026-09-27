@@ -30,7 +30,7 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("private var scheduledNavigationEntryID: String?"))
         XCTAssertEqual(articleReader.components(separatedBy: "performDocumentLoad(entryID: requestedEntryID, in: webView)").count - 1, 2)
         XCTAssertTrue(articleReader.contains("guard scheduledNavigationEntryID == entryID,\n                  parent.entry.id == entryID else { return }"))
-        XCTAssertTrue(articleReader.contains("guard activeLoadEntryID == requestedEntry.id,\n                      articleLoadSession == requestedLoadSession,\n                      !requestedEntry.isRead else { return }\n                store.markRead(requestedEntry)"))
+        XCTAssertTrue(articleReader.contains("guard activeLoadEntryID == requestedEntry.id,\n                      articleLoadSession == requestedLoadSession,\n                      !requestedEntry.isRead else { return }\n                store.markReadFromReader(requestedEntry)"))
         // 翻译更新只走批量同步脚本（单次 DOM 变更 + 单次滚动补偿），不得逐段 evaluateJavaScript
         XCTAssertFalse(articleReader.contains("updateInlineTranslationInWebView"))
         XCTAssertFalse(articleReader.contains("paperRssSelectionAssistant?.updateInlineTranslation"))

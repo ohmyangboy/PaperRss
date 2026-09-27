@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## v1.4.5 · Build 41 · 2026-09-27
+
+本次稳定版带来更顺畅的列表与阅读体验，并修复滚动闪退和部分正文图片加载失败；推荐所有用户升级。
+
+- 列表与阅读响应更快：异步加载文章页、减少切换文章时的主线程查询，并将缩略图准备限定在可见范围；修复普通列表连续滚动时偶发的布局闪退。
+- 正文图片加载更可靠：图片加载失败时自动重试，减少需要重新拉取原文的情况。
+- 杂志阅读更稳定：优化封面与翻页过渡、相邻页标题翻译预取，并新增 Paper、White、Book 三种纸张质感。
+- 阅读音浪改用系统输出音频的频谱驱动；AI 摘要支持直接复制。
+
+---
+
+This stable release makes list navigation and reading smoother, fixes an occasional scrolling crash and improves article image loading. Recommended for all users.
+
+- Faster list and reader response: load article pages asynchronously, reduce main-thread queries during article switching and prepare thumbnails only for visible rows; fix an occasional layout crash during continuous list scrolling.
+- More reliable article images: retry failed image loads so fewer articles need to be fetched again.
+- More stable magazine reading: refine cover and page-turn transitions, prefetch title translations for adjacent pages and add Paper, White and Book textures.
+- Drive the reading audio wave from the system output spectrum; copy AI summaries directly.
+
 ## v1.4.5-beta.1 · Build 40 · 2026-09-26
 
 本次 Beta 聚焦列表与阅读性能提升，欢迎 Beta 通道用户升级测试；稳定版仍为 v1.4.4。

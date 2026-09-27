@@ -413,7 +413,7 @@ struct ArticleReaderView: View {
                 guard activeLoadEntryID == requestedEntry.id,
                       articleLoadSession == requestedLoadSession,
                       !requestedEntry.isRead else { return }
-                store.markRead(requestedEntry)
+                store.markReadFromReader(requestedEntry)
             }
 
             Task { @MainActor in
@@ -2804,13 +2804,15 @@ enum PaperReaderBridge {
             state.buttons.forEach((button, index) => {
               const line = button.children?.[0];
               if (!line?.style) return;
-              const sampleIndex = Math.min(state.audioWaveLevels.length - 1,
-                Math.floor(index * state.audioWaveLevels.length / state.buttons.length));
-              const sample = state.audioWaveLevels[sampleIndex] ?? state.audioWaveLevel;
+              const first = Math.floor(index * state.audioWaveLevels.length / state.buttons.length);
+              const last = Math.max(first + 1,
+                Math.floor((index + 1) * state.audioWaveLevels.length / state.buttons.length));
+              const sample = state.audioWaveLevels.length
+                ? Math.max(...state.audioWaveLevels.slice(first, last)) : state.audioWaveLevel;
               const level = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
                 ? 0 : Math.min(1, Math.max(0, Number(sample) || 0));
               line.style.width = "";
-              line.style.transform = `scaleX(${(8 + Math.round(18 * level)) / 8})`;
+              line.style.transform = `scaleX(${(8 + Math.round(24 * level)) / 8})`;
             });
           };
 
@@ -4562,25 +4564,32 @@ enum PaperReaderBridge {
     static let imageRecoveryScript = WKUserScript(
         source: """
         (() => {
+          const retryFailedImage = image => {
+            const retry = Number(image.dataset.paperRssRetry || "0");
+            const original = image.dataset.paperRssOriginalSource || image.currentSrc || image.src;
+            if (!original || retry >= 2) return;
+            image.dataset.paperRssOriginalSource = original;
+            image.dataset.paperRssRetry = String(retry + 1);
+            window.setTimeout(() => {
+              try {
+                const url = new URL(original, document.baseURI);
+                url.searchParams.set("_paper_rss_retry", String(retry + 1));
+                image.src = url.href;
+              } catch (_) {
+                image.src = original;
+              }
+            }, retry === 0 ? 350 : 1200);
+          };
           const attachRecovery = image => {
             if (!image || image.dataset.paperRssRecoveryAttached === "1") return;
             image.dataset.paperRssRecoveryAttached = "1";
-            image.addEventListener("error", () => {
-              const retry = Number(image.dataset.paperRssRetry || "0");
-              const original = image.dataset.paperRssOriginalSource || image.currentSrc || image.src;
-              if (!original || retry >= 2) return;
-              image.dataset.paperRssOriginalSource = original;
-              image.dataset.paperRssRetry = String(retry + 1);
-              window.setTimeout(() => {
-                try {
-                  const url = new URL(original, document.baseURI);
-                  url.searchParams.set("_paper_rss_retry", String(retry + 1));
-                  image.src = url.href;
-                } catch (_) {
-                  image.src = original;
-                }
-              }, retry === 0 ? 350 : 1200);
-            }, { passive: true });
+            image.addEventListener("error", () => retryFailedImage(image), { passive: true });
+            // A cached image can fail before this document-end script attaches.
+            // In that case no future error event arrives, so retry it now.
+            const source = image.currentSrc || image.getAttribute("src") || "";
+            if (image.complete && !image.naturalWidth && /^https?:/i.test(source)) {
+              retryFailedImage(image);
+            }
           };
           document.querySelectorAll("img").forEach(attachRecovery);
         })();

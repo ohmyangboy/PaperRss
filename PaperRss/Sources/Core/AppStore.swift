@@ -145,6 +145,16 @@ public final class AppStore: ObservableObject {
     /// 进程内已准备正文 LRU 缓存：命中时 Reader 可跳过 prepare 管线即时换页。
     public private(set) var preparedArticleMemoryCache = PreparedArticleMemoryCache()
     private var neighborPrefetchTask: Task<Void, Never>?
+    private var sidebarCountsRefreshTask: Task<Void, Never>?
+    private var sidebarCountsRefreshGeneration: UInt64 = 0
+
+    @discardableResult
+    private func beginSidebarCountsRefresh() -> UInt64 {
+        sidebarCountsRefreshGeneration &+= 1
+        sidebarCountsRefreshTask?.cancel()
+        sidebarCountsRefreshTask = nil
+        return sidebarCountsRefreshGeneration
+    }
 
     /// 兼容旧调用方的进度值，但不再作为 AppStore 的发布属性。
     /// 刷新进度属于刷新状态模块，不能让每个 feed 完成都使三栏失效。
@@ -603,6 +613,7 @@ public final class AppStore: ObservableObject {
     @Published public var foldersByAccount: [String: [String]] = [:]
 
     public func reloadState() {
+        beginSidebarCountsRefresh()
         autoTranslationRevision += 1
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
@@ -692,6 +703,7 @@ public final class AppStore: ObservableObject {
     /// 异步构造刷新后的 UI 快照。所有 SQLite 读取都在 GRDB reader queue 执行，
     /// MainActor 只负责最后一次性提交已完成的值，避免刷新尾部再次阻塞三栏。
     private func reloadStateAsync() async {
+        let sidebarGeneration = beginSidebarCountsRefresh()
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
         let limit = Self.defaultTimelineLimit
@@ -753,7 +765,9 @@ public final class AppStore: ObservableObject {
         foldersByAccount = newFoldersByAccount
         feeds = newFeedsByAccount["local-default"] ?? []
         customFolders = newFoldersByAccount["local-default"] ?? []
-        sidebarCounts = resolvedSidebarCounts ?? SidebarCounts()
+        if sidebarCountsRefreshGeneration == sidebarGeneration {
+            sidebarCounts = resolvedSidebarCounts ?? SidebarCounts()
+        }
         entryListItems = resolvedAllItems ?? []
         todayEntryListItems = resolvedTodayItems ?? []
         unreadEntryListItems = resolvedUnreadItems ?? []
@@ -1055,6 +1069,22 @@ public final class AppStore: ObservableObject {
         )
     }
 
+    public func fetchAdjacentItemAsync(
+        scope: TimelineScope,
+        unreadOnly: Bool = false,
+        currentItemID: String,
+        direction: AdjacentTimelineDirection,
+        retainingIDs: Set<String> = []
+    ) async -> EntryListItem? {
+        try? await localProvider.timelineQueryService.fetchAdjacentItemAsync(
+            scope: scope,
+            unreadOnly: unreadOnly,
+            currentItemID: currentItemID,
+            direction: direction,
+            retainingIDs: retainingIDs
+        )
+    }
+
     public func entryListItems(folder: String) -> [EntryListItem] {
         (try? localProvider.timelineQueryService.fetchListItems(scope: .folder(folderName: folder))) ?? []
     }
@@ -1317,6 +1347,7 @@ public final class AppStore: ObservableObject {
         for feedID in feedIDs {
             nextCounts.unreadByFeed.removeValue(forKey: feedID)
         }
+        beginSidebarCountsRefresh()
         sidebarCounts = nextCounts
         timelineRevision &+= 1
     }
@@ -1648,7 +1679,12 @@ public final class AppStore: ObservableObject {
 
     // MARK: - State Management
 
-    private func updateLocalEntryState(entryID: String, isRead: Bool? = nil, isStarred: Bool? = nil) {
+    private func updateLocalEntryState(
+        entryID: String,
+        isRead: Bool? = nil,
+        isStarred: Bool? = nil,
+        refreshSidebarCountsSynchronously: Bool = true
+    ) {
         func updateList(_ list: inout [EntryListItem]) {
             guard let index = list.firstIndex(where: { $0.id == entryID }) else { return }
             var item = list[index]
@@ -1662,10 +1698,28 @@ public final class AppStore: ObservableObject {
         updateList(&self.unreadEntryListItems)
         updateList(&self.starredEntryListItems)
 
-        // 仅重新统计 Sidebar Counts（纯 SQL 聚合，极快）
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date()).timeIntervalSince1970
-        self.sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(startOfDayTimestamp: startOfDay)) ?? self.sidebarCounts
+        let generation = beginSidebarCountsRefresh()
+        if refreshSidebarCountsSynchronously {
+            let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+            sidebarCounts = (try? localProvider.timelineQueryService.fetchSidebarCounts(
+                startOfDayTimestamp: startOfDay
+            )) ?? sidebarCounts
+        } else {
+            sidebarCountsRefreshTask = Task { @MainActor [weak self] in
+                // A burst of selections only needs the final count snapshot.
+                try? await Task.sleep(for: .milliseconds(16))
+                guard !Task.isCancelled, let self else { return }
+                let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+                let counts = try? await self.localProvider.timelineQueryService.fetchSidebarCountsAsync(
+                    startOfDayTimestamp: startOfDay
+                )
+                guard !Task.isCancelled,
+                      self.sidebarCountsRefreshGeneration == generation,
+                      let counts else { return }
+                self.sidebarCounts = counts
+                self.sidebarCountsRefreshTask = nil
+            }
+        }
 
         // 更新 Entry 单篇缓存（若存在）
         if var cached = cachedEntryLookup[entryID] {
@@ -1679,6 +1733,21 @@ public final class AppStore: ObservableObject {
 
     public func markRead(_ entry: Entry, read: Bool = true) {
         markRead(entryID: entry.id, read: read)
+    }
+
+    /// Reader selection already patches its visible row. Keep the tiny SQLite write
+    /// synchronous, then aggregate sidebar counts on a reader queue so a large
+    /// library cannot hold the next selection frame on the main actor.
+    public func markReadFromReader(_ entry: Entry) {
+        guard (try? localProvider.markRead(entryID: entry.id, read: true)) != nil else { return }
+        updateLocalEntryState(
+            entryID: entry.id,
+            isRead: true,
+            refreshSidebarCountsSynchronously: false
+        )
+        Task { [weak self] in
+            await self?.syncCoordinator.pushAllPendingArticleStates()
+        }
     }
 
     public func markRead(entryID: String, read: Bool = true) {
@@ -1930,6 +1999,7 @@ public final class AppStore: ObservableObject {
            let last = lastRefreshProgressPublishedAt[accountID], now.timeIntervalSince(last) < 0.3 {
             return
         }
+        let sidebarGeneration = beginSidebarCountsRefresh()
         lastRefreshProgressPublishedAt[accountID] = progress == nil ? nil : now
         let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
         if progress?.completed == 0 {
@@ -1947,7 +2017,8 @@ public final class AppStore: ObservableObject {
                 foldersByAccount[accountID] = snapshot.2
             }
         }
-        if let counts = try? await localProvider.timelineQueryService.fetchSidebarCountsAsync(startOfDayTimestamp: startOfDay) {
+        if let counts = try? await localProvider.timelineQueryService.fetchSidebarCountsAsync(startOfDayTimestamp: startOfDay),
+           sidebarCountsRefreshGeneration == sidebarGeneration {
             sidebarCounts = counts
         }
         if progress == nil,
@@ -2072,7 +2143,9 @@ public final class AppStore: ObservableObject {
         scope: TimelineScope,
         unreadOnly: Bool = false,
         currentItemID: String,
-        retainingIDs: Set<String>
+        retainingIDs: Set<String>,
+        loadedNextID: String? = nil,
+        loadedPreviousID: String? = nil
     ) {
         neighborPrefetchTask?.cancel()
         neighborPrefetchTask = Task { @MainActor [weak self] in
@@ -2081,14 +2154,25 @@ public final class AppStore: ObservableObject {
             let directions: [AdjacentTimelineDirection] = [.next, .previous]
             for direction in directions {
                 guard !Task.isCancelled else { return }
-                let adjacent = self.fetchAdjacentItem(
-                    scope: scope,
-                    unreadOnly: unreadOnly,
-                    currentItemID: currentItemID,
-                    direction: direction,
-                    retainingIDs: retainingIDs
-                )
-                guard let neighborID = adjacent?.id,
+                let loadedID: String?
+                switch direction {
+                case .next: loadedID = loadedNextID
+                case .previous: loadedID = loadedPreviousID
+                }
+                let neighborID: String?
+                if let loadedID {
+                    neighborID = loadedID
+                } else {
+                    neighborID = await self.fetchAdjacentItemAsync(
+                        scope: scope,
+                        unreadOnly: unreadOnly,
+                        currentItemID: currentItemID,
+                        direction: direction,
+                        retainingIDs: retainingIDs
+                    )?.id
+                }
+                guard !Task.isCancelled,
+                      let neighborID,
                       !self.preparedArticleMemoryCache.contains(neighborID),
                       let neighbor = self.entry(id: neighborID) else { continue }
                 _ = await self.prepareArticle(for: neighbor, policy: .localOnly)

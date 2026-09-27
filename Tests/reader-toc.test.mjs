@@ -1052,15 +1052,17 @@ test('TOC 音浪按真实能量缩放刻度并保持一条 rail', () => {
 
   fixture.window.paperRssTOCRail.setAudioWave(true, 0.25);
   assert.equal(rail.classList.contains('audio-wave-enabled'), true);
-  assert.equal(lines[0].style.transform, 'scaleX(1.625)');
+  assert.equal(lines[0].style.transform, 'scaleX(1.75)');
   assert.equal(lines.at(-1).style.animationDelay, undefined);
 
   fixture.window.paperRssTOCRail.setAudioWave(true, 0.9);
-  assert.equal(lines[0].style.transform, 'scaleX(3)');
+  assert.equal(lines[0].style.transform, 'scaleX(3.75)');
   assert.equal(fixture.document.querySelectorAll('#paper-rss-toc-rail').length, 1);
 
   fixture.window.paperRssTOCRail.setAudioWave(true, 0, [0, 0.5, 1]);
-  assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(1)', 'scaleX(2.125)', 'scaleX(3.25)']);
+  assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(1)', 'scaleX(2.5)', 'scaleX(4)']);
+  fixture.window.paperRssTOCRail.setAudioWave(true, 0, [0, 1, 0, 0.5, 0, 0]);
+  assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(4)', 'scaleX(2.5)', 'scaleX(1)']);
   fixture.window.paperRssTOCRail.setAudioWave(true, 0, [0, 0, 0]);
   assert.deepEqual(lines.map(line => line.style.transform), ['scaleX(1)', 'scaleX(1)', 'scaleX(1)']);
   assert.doesNotMatch(tocScript(), /@keyframes paper-toc-audio-wave/);
@@ -1082,7 +1084,7 @@ test('TOC 音浪与 hover 局部峰值互不破坏，离开 hover 后恢复音�
   assert.deepEqual(lines.map((line) => line.style.width), ['21px', '29px', '21px']);
   assert.equal(lines.every((line) => line.style.transform === ''), true);
   buttons[1].dispatchEvent({ type: 'mouseleave', relatedTarget: null });
-  assert.deepEqual(lines.map((line) => line.style.transform), ['scaleX(2.125)', 'scaleX(2.125)', 'scaleX(2.125)']);
+  assert.deepEqual(lines.map((line) => line.style.transform), ['scaleX(2.5)', 'scaleX(2.5)', 'scaleX(2.5)']);
 });
 
 test('杂志阅读界面支持触控板手势右滑返回与反向撤销，纵向阅读滚动不误触', () => {
@@ -1186,4 +1188,3 @@ test('杂志阅读界面支持鼠标后退侧键（button 3），就像浏览器
 
   f.window.paperRssTOCRail.destroy();
 });
-

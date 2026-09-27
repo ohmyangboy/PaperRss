@@ -201,7 +201,7 @@ struct MagazinePageRail: View {
                                 reduceMotion: Bool) -> CGFloat {
         let level = min(1, max(0, volume))
         guard level > 0 else { return tickHeight }
-        return reduceMotion ? tickHeight : tickHeight + 16 * level
+        return reduceMotion ? tickHeight : tickHeight + 20 * level
     }
 
     static func previewHeight(titles: [String], width: CGFloat, maximum: CGFloat) -> CGFloat {
@@ -310,8 +310,7 @@ struct MagazinePageRail: View {
         if audioWaveEnabled {
             height = max(height, Self.audioWaveHeight(
                 index: index,
-                volume: outputVolume.levels[min(outputVolume.levels.count - 1,
-                    index * outputVolume.levels.count / max(1, pages.count))],
+                volume: AudioWaveSpectrum.level(outputVolume.levels, slot: slot, slots: tickIndices.count),
                 time: date?.timeIntervalSinceReferenceDate ?? 0,
                 reduceMotion: reduceMotion
             ))

@@ -6,6 +6,61 @@ import PaperRssCore
 
 @MainActor
 final class TimelinePresentationTests: XCTestCase {
+    func testListVisibilityUpdatesWaitForLayoutAndDiscardSupersededFrames() async throws {
+        let memory = TimelinePresentationMemory()
+        var applied: [Int] = []
+        memory.scheduleListVisibilityUpdate { applied.append(1) }
+        memory.scheduleListVisibilityUpdate { applied.append(2) }
+        XCTAssertTrue(applied.isEmpty)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(applied, [2])
+
+        memory.scheduleListVisibilityUpdate { applied.append(3) }
+        memory.resetScope()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(applied, [2])
+
+        memory.scheduleListVisibilityUpdate {
+            applied.append(4)
+            memory.scheduleListVisibilityUpdate { applied.append(5) }
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(applied, [2, 4, 5])
+    }
+
+    func testLoadedTimelineNavigationUsesOnlyMatchingScopeAndRevision() {
+        let memory = TimelinePresentationMemory()
+        let scope = TimelineScope.feed(feedID: UUID().uuidString)
+        memory.setNavigationPage(scope: scope, unreadOnly: false, revision: 7,
+                                 ids: ["new", "middle", "old"])
+        XCTAssertEqual(memory.firstLoadedID(scope: scope, unreadOnly: false, revision: 7), "new")
+        XCTAssertEqual(memory.adjacentLoadedID(to: "middle", direction: .next,
+                                               scope: scope, unreadOnly: false, revision: 7), "old")
+        XCTAssertEqual(memory.adjacentLoadedID(to: "middle", direction: .previous,
+                                               scope: scope, unreadOnly: false, revision: 7), "new")
+        XCTAssertNil(memory.adjacentLoadedID(to: "old", direction: .next,
+                                             scope: scope, unreadOnly: false, revision: 7))
+        XCTAssertNil(memory.adjacentLoadedID(to: "middle", direction: .next,
+                                             scope: .starred, unreadOnly: false, revision: 7))
+        XCTAssertNil(memory.adjacentLoadedID(to: "middle", direction: .next,
+                                             scope: scope, unreadOnly: false, revision: 8))
+        XCTAssertNil(memory.adjacentLoadedID(to: "middle", direction: .next,
+                                             scope: scope, unreadOnly: true, revision: 7))
+
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<1_000 {
+            _ = memory.adjacentLoadedID(to: "middle", direction: .next,
+                                        scope: scope, unreadOnly: false, revision: 7)
+        }
+        print("TIMELINE_INTERACTION_AFTER loadedAdjacent1000LookupsMS=\((CFAbsoluteTimeGetCurrent() - startedAt) * 1_000)")
+        memory.resetScope()
+        XCTAssertNil(memory.firstLoadedID(scope: scope, unreadOnly: false, revision: 7))
+        memory.setNavigationPage(scope: .unread, unreadOnly: false, revision: 7, ids: ["read"])
+        XCTAssertNil(memory.firstLoadedID(scope: .unread, unreadOnly: false, revision: 7))
+        memory.setNavigationPage(scope: scope, unreadOnly: true, revision: 7, ids: ["read"])
+        XCTAssertNil(memory.firstLoadedID(scope: scope, unreadOnly: true, revision: 7))
+    }
+
     func testLayoutSwitchCapturesScrollAnchorBeforeNewViewsAppear() {
         let memory = TimelinePresentationMemory()
         memory.visibleAnchor = "article-40"

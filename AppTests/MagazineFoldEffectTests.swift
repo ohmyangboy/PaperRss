@@ -9,6 +9,9 @@ import PaperRssCore
 private final class MagazineLifecycleInput: ObservableObject {
     @Published var key: TimelineKeyRequest?
     @Published var browsing = true
+    @Published var entries: [EntryListItem] = []
+    @Published var title = ""
+    @Published var loading = false
 }
 private struct MagazineLifecycleDriver<Content: View>: View {
     @ObservedObject var input: MagazineLifecycleInput
@@ -34,6 +37,46 @@ private struct MagazineKeyboardDriver<Content: View>: View {
     @ObservedObject var input: MagazineKeyboardInput
     let content: (TimelineKeyRequest?, String?) -> Content
     var body: some View { content(input.key, input.selection) }
+}
+@MainActor
+private final class MagazineTranslationInput: ObservableObject {
+    @Published var key: TimelineKeyRequest?
+    @Published var translations: [String: TranslatedEntryText] = [:]
+}
+private struct MagazineTranslationDriver<Content: View>: View {
+    @ObservedObject var input: MagazineTranslationInput
+    let content: (TimelineKeyRequest?) -> Content
+    var body: some View {
+        content(input.key).environment(\.entryTranslations, input.translations)
+    }
+}
+@MainActor
+private final class MagazineTranslationPresentationProbe {
+    var shownTitles: [String: String] = [:]
+    var titleHistory: [String: [String]] = [:]
+    var shownSummaries: [String: String] = [:]
+    var summaryHistory: [String: [String]] = [:]
+}
+private struct MagazineTranslationProbeTile: View {
+    @Environment(\.entryTranslations) private var translations
+    let entry: EntryListItem
+    let probe: MagazineTranslationPresentationProbe
+    var body: some View {
+        let title = translations[entry.id]?.title ?? entry.title
+        let summary = translations[entry.id]?.summary ?? entry.summaryPreview
+        return VStack {
+            Text(title)
+            Text(summary)
+        }
+        .onChange(of: title, initial: true) { _, value in
+            probe.shownTitles[entry.id] = value
+            probe.titleHistory[entry.id, default: []].append(value)
+        }
+        .onChange(of: summary, initial: true) { _, value in
+            probe.shownSummaries[entry.id] = value
+            probe.summaryHistory[entry.id, default: []].append(value)
+        }
+    }
 }
 
 @MainActor
@@ -198,6 +241,282 @@ final class MagazineFoldEffectTests: XCTestCase {
             }
             XCTAssertEqual(memory.magazineAnchor, pages[index].page.entries.first?.id)
         }
+    }
+
+    func testTranslationsArrivingDuringTurnDoNotCancelForwardOrBackwardPage() async throws {
+        let feed = UUID()
+        let entries = (0..<100).map { EntryListItem(id: "translation-\($0)", feedID: feed,
+            title: "Original \($0)", summaryPreview: "Summary \($0)", sourceTitle: "Feed") }
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineTranslationInput()
+        let probe = MagazineTranslationPresentationProbe()
+        var scope: [TitleTranslationCandidate] = []
+        let size = CGSize(width: 1450, height: 1000)
+        let pages = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: MagazinePaginator.foldViewport(size), showsImages: false)
+        XCTAssertGreaterThanOrEqual(pages.count, 3)
+        let host = NSHostingView(rootView: MagazineTranslationDriver(input: input) { key in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: size,
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+                onOpen: { _ in }, onNeedMore: {}, onVisibleEntriesChange: { scope = $0 },
+                tile: { entry, _, _ in MagazineTranslationProbeTile(entry: entry, probe: probe) })
+        }.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<15 { try await Task.sleep(for: .milliseconds(30)); host.layoutSubtreeIfNeeded() }
+        func containsMetal(_ view: NSView) -> Bool {
+            view is MTKView || view.subviews.contains(where: containsMetal)
+        }
+        func inputSurface(_ view: NSView) -> MagazineInputRegion.Surface? {
+            if let surface = view as? MagazineInputRegion.Surface { return surface }
+            return view.subviews.compactMap(inputSurface).first
+        }
+        let firstAnchor = memory.magazineAnchor
+        let surface = try XCTUnwrap(inputSurface(host))
+        let point = surface.convert(CGPoint(x: surface.bounds.maxX - 12, y: surface.bounds.midY), to: nil)
+        let screenPoint = window.convertPoint(toScreen: point)
+        let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+            mouseCursorPosition: screenPoint, mouseButton: .left))
+        let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+            mouseCursorPosition: screenPoint, mouseButton: .left))
+        _ = surface.handle(try XCTUnwrap(NSEvent(cgEvent: down)))
+        XCTAssertNil(surface.handle(try XCTUnwrap(NSEvent(cgEvent: up))), "一次纸页边缘点击就应触发翻页")
+        for _ in 0..<20 where !containsMetal(host) {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(containsMetal(host))
+        let neighboringIDs = Set(pages[0...2].flatMap { $0.page.entries.map(\.id) })
+        XCTAssertEqual(Set(scope.map(\.entryID)), neighboringIDs, "当前页须同时预取前后页标题与描述")
+        XCTAssertTrue(scope.allSatisfy { $0.summary != nil }, "可见描述须进入相邻页预译范围")
+
+        input.translations[pages[1].page.entries[0].id] = .init(title: "Translated next")
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(45))
+        XCTAssertTrue(containsMetal(host), "译文到达不得取消进行中的正向翻页")
+        XCTAssertEqual(memory.magazineAnchor, firstAnchor)
+        XCTAssertEqual(probe.shownTitles[pages[1].page.entries[0].id], pages[1].page.entries[0].title,
+            "预取到的译文须等落页后才显示")
+        for _ in 0..<45 where memory.magazineAnchor == firstAnchor {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(memory.magazineAnchor, pages[1].page.entries.first?.id)
+        for _ in 0..<15 where probe.shownTitles[pages[1].page.entries[0].id] != "Translated next" {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(probe.shownTitles[pages[1].page.entries[0].id], "Translated next")
+
+        input.key = TimelineKeyRequest(keyCode: 116)
+        for _ in 0..<20 where !containsMetal(host) {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(containsMetal(host))
+        input.translations[pages[0].page.entries[0].id] = .init(title: "Translated previous")
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(45))
+        XCTAssertTrue(containsMetal(host), "译文到达不得取消进行中的反向翻页")
+        XCTAssertEqual(probe.shownTitles[pages[0].page.entries[0].id], pages[0].page.entries[0].title)
+        for _ in 0..<45 where memory.magazineAnchor != firstAnchor {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(memory.magazineAnchor, firstAnchor)
+        for _ in 0..<15 where probe.shownTitles[pages[0].page.entries[0].id] != "Translated previous" {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(probe.shownTitles[pages[0].page.entries[0].id], "Translated previous")
+
+        let nextID = pages[1].page.entries[0].id
+        probe.titleHistory[nextID] = []
+        input.key = TimelineKeyRequest(keyCode: 121)
+        for _ in 0..<20 where !containsMetal(host) {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(containsMetal(host))
+        XCTAssertEqual(probe.shownTitles[nextID], "Translated next", "再次翻入时应直接保留已显示的译文")
+        for _ in 0..<45 where memory.magazineAnchor == firstAnchor {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(memory.magazineAnchor, nextID)
+        XCTAssertEqual(probe.shownTitles[nextID], "Translated next")
+        XCTAssertFalse(probe.titleHistory[nextID, default: []].contains(pages[1].page.entries[0].title),
+            "已显示过的译文再次翻入时不应回到原文")
+
+        let aheadID = pages[2].page.entries[0].id
+        input.translations[aheadID] = .init(title: "Translated ahead", summary: "Translated ahead summary")
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded() }
+        probe.titleHistory[aheadID] = []
+        input.key = TimelineKeyRequest(keyCode: 121)
+        for _ in 0..<20 where !containsMetal(host) {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(containsMetal(host))
+        XCTAssertEqual(probe.shownTitles[aheadID], "Translated ahead", "预取完成的下一页应在翻页快照里直接显示译文")
+        XCTAssertEqual(probe.shownSummaries[aheadID], "Translated ahead summary", "预取完成的描述应在翻页快照里直接显示译文")
+        for _ in 0..<45 where memory.magazineAnchor != aheadID {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(memory.magazineAnchor, aheadID)
+        XCTAssertFalse(probe.titleHistory[aheadID, default: []].contains(pages[2].page.entries[0].title))
+        XCTAssertFalse(probe.summaryHistory[aheadID, default: []].contains(pages[2].page.entries[0].summaryPreview))
+    }
+
+    func testMagazinePaperStylesRenderDistinctSheets() async throws {
+        let domain = "magazine-paper-style-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let size = CGSize(width: 900, height: 620)
+        let entry = EntryListItem(id: "paper-style", feedID: UUID(), title: "A magazine story", sourceTitle: "Feed")
+        var sampledBlue: [MagazinePaperStyle: CGFloat] = [:]
+        for style in MagazinePaperStyle.allCases {
+            defaults.set(style.rawValue, forKey: "magazine_paper_style")
+            let memory = TimelinePresentationMemory()
+            memory.magazineIsOpen = true
+            let host = NSHostingView(rootView: MagazineBrowserView(entries: [entry], folders: [:], availableSize: size,
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: nil,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+                onOpen: { _ in }, onNeedMore: {}, tile: { item, _, _ in Text(item.title) })
+                .environment(\.paperAppearancePalette, ReaderAppearance(preset: .white).palette(for: .light))
+                .defaultAppStorage(defaults).frame(width: size.width, height: size.height))
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            for _ in 0..<10 {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+            }
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            sampledBlue[style] = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 4,
+                y: bitmap.pixelsHigh / 2))
+                .usingColorSpace(.deviceRGB)?.blueComponent
+            if ProcessInfo.processInfo.environment["PAPERRSS_CAPTURE_MAGAZINE_STYLES"] == "1",
+               let data = bitmap.representation(using: .png, properties: [:]) {
+                try data.write(to: URL(fileURLWithPath: "/tmp/paperrss-magazine-\(style.rawValue).png"))
+            }
+            window.close()
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(sampledBlue[.white]), try XCTUnwrap(sampledBlue[.paper]))
+        XCTAssertGreaterThan(try XCTUnwrap(sampledBlue[.paper]), try XCTUnwrap(sampledBlue[.book]))
+    }
+
+    func testEntryRefreshDuringFoldKeepsSnapshotUntilLanding() async throws {
+        let domain = "magazine-entry-refresh-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let size = CGSize(width: 1200, height: 820)
+        let feedID = UUID()
+        let entries = (0..<80).map { EntryListItem(id: "refresh-\($0)", feedID: feedID,
+            title: "Magazine article \($0)", sourceTitle: "Feed") }
+        let layouts = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: MagazinePaginator.foldViewport(size), showsImages: false)
+        let nextID = try XCTUnwrap(layouts.dropFirst().first?.page.entries.first?.id)
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        let input = MagazineEntriesInput()
+        input.entries = entries
+        let host = NSHostingView(rootView: MagazineEntriesDriver(input: input) { current in
+            MagazineBrowserView(entries: current, folders: [:], availableSize: size,
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: nil,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+                onOpen: { _ in }, onNeedMore: {}, tile: { item, _, _ in Text(item.title) })
+                .defaultAppStorage(defaults)
+        }.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<12 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        func containsMetal(_ view: NSView) -> Bool {
+            view is MTKView || view.subviews.contains(where: containsMetal)
+        }
+        func inputSurface(_ view: NSView) -> MagazineInputRegion.Surface? {
+            if let surface = view as? MagazineInputRegion.Surface { return surface }
+            return view.subviews.compactMap(inputSurface).first
+        }
+        let surface = try XCTUnwrap(inputSurface(host))
+        let point = surface.convert(CGPoint(x: surface.bounds.maxX - 12, y: surface.bounds.midY), to: nil)
+        let screenPoint = window.convertPoint(toScreen: point)
+        let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+            mouseCursorPosition: screenPoint, mouseButton: .left))
+        let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+            mouseCursorPosition: screenPoint, mouseButton: .left))
+        _ = surface.handle(try XCTUnwrap(NSEvent(cgEvent: down)))
+        _ = surface.handle(try XCTUnwrap(NSEvent(cgEvent: up)))
+        for _ in 0..<20 where !containsMetal(host) {
+            try await Task.sleep(for: .milliseconds(10)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(containsMetal(host))
+        let sourceAnchor = memory.magazineAnchor
+        var updated = entries
+        updated[0].isRead = true
+        input.entries = updated
+        try await Task.sleep(for: .milliseconds(40))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(containsMetal(host), "文章状态刷新不能中途取消折页快照")
+        XCTAssertEqual(memory.magazineAnchor, sourceAnchor)
+        for _ in 0..<45 where memory.magazineAnchor == sourceAnchor {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(memory.magazineAnchor, nextID)
+    }
+
+    func testSwitchingToScrollKeepsCurrentMagazinePage() async throws {
+        let domain = "magazine-scroll-switch-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let size = CGSize(width: 1200, height: 820)
+        let feedID = UUID()
+        let entries = (0..<90).map { EntryListItem(id: "scroll-switch-\($0)", feedID: feedID,
+            title: "Magazine article \($0)", sourceTitle: "Feed") }
+        let layouts = MagazinePaginator.pages(entries: entries, folders: [:], arrangement: .balanced,
+            size: MagazinePaginator.foldViewport(size), showsImages: false)
+        let anchor = try XCTUnwrap(layouts.dropFirst().first?.page.entries.first?.id)
+        let memory = TimelinePresentationMemory()
+        memory.magazineIsOpen = true
+        memory.magazineAnchor = anchor
+        let host = NSHostingView(rootView: MagazineBrowserView(entries: entries, folders: [:], availableSize: size,
+            showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: nil,
+            memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+            onOpen: { _ in }, onNeedMore: {}, tile: { item, _, _ in Text(item.title) })
+            .defaultAppStorage(defaults).frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func scrollView(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.compactMap(scrollView).first
+        }
+        for _ in 0..<12 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        XCTAssertEqual(memory.magazineAnchor, anchor)
+        XCTAssertNil(scrollView(host))
+        defaults.set(MagazineTurning.scroll.rawValue, forKey: "magazine_turning")
+        for _ in 0..<18 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        let scroll = try XCTUnwrap(scrollView(host))
+        XCTAssertEqual(memory.magazineAnchor, anchor, "切换滚动浏览不应重排或跳回首页")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY + size.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        for _ in 0..<12 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        XCTAssertNotEqual(memory.magazineAnchor, anchor, "恢复原页后应继续跟踪滚动位置")
+        let scrolledAnchor = memory.magazineAnchor
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        for _ in 0..<12 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        XCTAssertNil(scrollView(host))
+        XCTAssertEqual(memory.magazineAnchor, scrolledAnchor, "切回折页时应保留滚动到达的页")
     }
 
     /// 第一页边缘向左先合上封面；已经在封面时再向左才离开杂志进入侧栏。
@@ -459,8 +778,46 @@ final class MagazineFoldEffectTests: XCTestCase {
         }
     }
 
-    /// 翻动页抬起初期，外缘只应露出目标页空白纸面；过半后正文淡入，且任何进度都不出现黑色缝隙。
-    func testFoldRevealsDestinationPaperBeforeContentWithoutEdgeSeams() throws {
+    func testHalfTurnKeepsAVisibleCurvedBackFace() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let width = 320, height = 200
+        func image(_ left: NSColor, _ right: NSColor) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(left.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+            context.setFillColor(right.cgColor)
+            context.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
+            return try XCTUnwrap(context.makeImage())
+        }
+        let renderer = try XCTUnwrap(MagazineMetalRenderer(
+            before: try image(.red, .green), after: try image(.blue, .yellow),
+            size: CGSize(width: width, height: height), forward: true))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget]
+        descriptor.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+        XCTAssertTrue(renderer.encode(progress: 0.5, target: target, buffer: buffer))
+        buffer.commit(); buffer.waitUntilCompleted()
+        XCTAssertNil(buffer.error)
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        target.getBytes(&bytes, bytesPerRow: width * 4,
+            from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        let fold = (height / 2 * width + 205) * 4
+        let exposedPage = (height / 2 * width + 275) * 4
+        XCTAssertGreaterThan(bytes[fold], 120, "翻到中段仍须看见目标左页的蓝色背面")
+        XCTAssertLessThan(bytes[fold + 1], 60)
+        XCTAssertLessThan(bytes[fold + 2], 60)
+        XCTAssertGreaterThan(bytes[exposedPage + 1], 170, "折页之外露出目标右页")
+        XCTAssertGreaterThan(bytes[exposedPage + 2], 170)
+    }
+
+    /// 翻动页抬起时，露出的目标页须立刻显示完整正文，不能用纸色遮掉字形成空隙。
+    func testFoldRevealsDestinationContentWithoutEdgeSeams() throws {
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let width = 400, height = 240
@@ -494,14 +851,14 @@ final class MagazineFoldEffectTests: XCTestCase {
             return (Int(bytes[o]) + Int(bytes[o + 1]) + Int(bytes[o + 2])) / 3
         }
 
-        // 正文深色、右侧仅 2% 留白：抬起初期外缘条带应被纸面覆盖，而不是露出被裁的正文。
+        // 正文深色、右侧仅 2% 留白：叶片之外一露出目标页，就须显示正文。
         let contrast = try XCTUnwrap(MagazineMetalRenderer(
             before: try image(content: .black, paper: nil),
             after: try image(content: .black, paper: .white),
             size: CGSize(width: width, height: height), forward: true))
         let sampleX = Int(Double(width) * 0.95)
         let early = try frame(contrast, 0.24)
-        XCTAssertGreaterThan(luma(early, sampleX, height / 2), 180, "抬起初期外缘应只露出空白纸面")
+        XCTAssertLessThan(luma(early, sampleX, height / 2), 90, "露出的目标页正文不能被纸色遮掉")
         let late = try frame(contrast, 0.45)
         XCTAssertLessThan(luma(late, sampleX, height / 2), 90, "抬起过半后目标页正文应已显示")
 
@@ -521,7 +878,108 @@ final class MagazineFoldEffectTests: XCTestCase {
         }
     }
 
-    func testRaisedPageFitsInsideStageAndActuallyUsesVerticalClearance() throws {
+    func testFoldMeshHasContinuousRows() throws {
+        let width = 420, height = 780
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        func image(_ color: NSColor) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            return try XCTUnwrap(context.makeImage())
+        }
+        let renderer = try XCTUnwrap(MagazineMetalRenderer(before: try image(.red), after: try image(.white),
+            size: CGSize(width: width, height: height), forward: true, verticalInset: 24, corner: 1,
+            stageBackground: .white))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget]; descriptor.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+        XCTAssertTrue(renderer.encode(progress: 0.38, target: target, buffer: buffer))
+        buffer.commit(); buffer.waitUntilCompleted()
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        target.getBytes(&bytes, bytesPerRow: width * 4,
+            from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        var previousEdge: Int?
+        for y in 35..<(height - 35) {
+            var edge = width / 2
+            while edge < 360 {
+                let pixel = (y * width + edge) * 4
+                guard bytes[pixel + 2] > 180, bytes[pixel + 1] < 80 else { break }
+                edge += 1
+            }
+            if let previousEdge {
+                XCTAssertLessThanOrEqual(abs(edge - previousEdge), 6,
+                    "折页正面在第 \(y) 行不能出现横向断层")
+            }
+            previousEdge = edge
+        }
+        if ProcessInfo.processInfo.environment["PAPERRSS_CAPTURE_FOLD_MESH"] == "1" {
+            let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+            let bitmap = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                .union(.byteOrder32Little)
+            let image = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8,
+                bitsPerPixel: 32, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: bitmap, provider: provider, decode: nil, shouldInterpolate: false,
+                intent: .defaultIntent))
+            try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                .write(to: URL(fileURLWithPath: "/tmp/paperrss-fold-mesh.png"))
+        }
+    }
+
+    func testFlatStoryContentKeepsTheSamePixelsWhileFoldMoves() throws {
+        let width = 420, height = 780
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(NSColor.black.cgColor)
+        for y in stride(from: 80, through: 680, by: 17) {
+            context.fill(CGRect(x: 225, y: y, width: 90, height: 3))
+        }
+        let source = try XCTUnwrap(context.makeImage())
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let destination = try XCTUnwrap(context.makeImage())
+        let renderer = try XCTUnwrap(MagazineMetalRenderer(before: source, after: destination,
+            size: CGSize(width: width, height: height), forward: true, verticalInset: 24, corner: 1,
+            stageBackground: .white))
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+            width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget]; descriptor.storageMode = .shared
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        func frame(_ progress: Double) throws -> [UInt8] {
+            let buffer = try XCTUnwrap(queue.makeCommandBuffer())
+            XCTAssertTrue(renderer.encode(progress: progress, target: target, buffer: buffer))
+            buffer.commit(); buffer.waitUntilCompleted()
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            target.getBytes(&bytes, bytesPerRow: width * 4,
+                from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+            return bytes
+        }
+        let still = try frame(0)
+        for progress in [0.12, 0.23, 0.34] {
+            let moving = try frame(progress)
+            // 折线尚未经过的正文区域必须保持原像素位置；纸张阴影允许 1 级亮度差。
+            for y in stride(from: 100, through: 660, by: 19) {
+                for x in stride(from: 238, through: 258, by: 2) {
+                    let offset = (y * width + x) * 4
+                    for channel in 0..<3 {
+                        XCTAssertLessThanOrEqual(abs(Int(moving[offset + channel]) - Int(still[offset + channel])), 1,
+                            "未弯曲正文不能随翻页进度抖动 p=\(progress) x=\(x) y=\(y)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testFoldKeepsPageHeightAndLeavesStageMarginsUntouched() throws {
         let width = 320, height = 200
         let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
             bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -552,16 +1010,12 @@ final class MagazineFoldEffectTests: XCTestCase {
                 var bytes = [UInt8](repeating: 0, count: width * height * 4)
                 target.getBytes(&bytes, bytesPerRow: width * 4,
                     from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
-                for y in [0, height - 1] {
+                for y in [0, inset - 2, height - inset + 1, height - 1] {
                     for x in 0..<width {
                         let offset = (y * width + x) * 4
                         XCTAssertEqual(Array(bytes[offset..<(offset + 3)]), [255, 0, 0],
-                            "整个翻页过程的上下边缘都应保留舞台背景")
+                            "翻页不能把整页纵向抬起或放大")
                     }
-                }
-                if step == 5 || step == 15 {
-                    XCTAssertTrue((0..<width).contains { bytes[((inset - 2) * width + $0) * 4 + 2] > 100 },
-                        "页片应伸入预留空间，不能只缩小内容后继续裁切")
                 }
             }
             }
@@ -716,14 +1170,19 @@ extension MagazineFoldEffectTests {
         memory.resetScope()
         XCTAssertFalse(memory.magazineIsOpen)
         XCTAssertNil(memory.magazineAnchor)
-        try await Task.sleep(for: .milliseconds(800))
-        XCTAssertFalse(memory.magazineIsOpen, "封面需停留足够时间")
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertFalse(memory.magazineIsOpen, "封面需停留约 700 毫秒")
         try await Task.sleep(for: .milliseconds(400))
-        XCTAssertTrue(memory.magazineIsOpen, "新的来源应在一秒后自动展开")
+        XCTAssertTrue(memory.magazineIsOpen, "新的来源应在缩短后的封面停留时间结束后展开")
         XCTAssertNil(highlighted)
     }
 
     func testCoverOpensAndBackwardTurnTriggersClosingAction() async throws {
+        let domain = "magazine-cover-book-style-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazinePaperStyle.book.rawValue, forKey: "magazine_paper_style")
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
         let memory = TimelinePresentationMemory()
         let input = MagazineLifecycleInput()
         var cleared = 0
@@ -733,7 +1192,7 @@ extension MagazineFoldEffectTests {
                 showsImages: true, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
                 memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in }, onOpen: { _ in },
                 onNeedMore: {}, coverTitle: "测试订阅", onClearSelection: { cleared += 1 },
-                tile: { entry, _, _ in Text(entry.title) })
+                tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
         })
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
             styleMask: [.borderless], backing: .buffered, defer: false)
@@ -752,6 +1211,119 @@ extension MagazineFoldEffectTests {
         try await Task.sleep(for: .milliseconds(800))
         XCTAssertFalse(memory.magazineIsOpen, "反方向合页动作成功合上封面")
         XCTAssertGreaterThan(cleared, 0, "合页时清理选中态")
+    }
+
+    func testSwitchingFeedDuringCoverOpeningCancelsOldLayersAndWaitsOnNewCover() async throws {
+        let domain = "magazine-cover-switch-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(MagazineTurning.fold.rawValue, forKey: "magazine_turning")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let input = MagazineLifecycleInput()
+        input.entries = coverEntries()
+        input.title = "旧订阅"
+        let memory = TimelinePresentationMemory()
+        let size = CGSize(width: 1000, height: 800)
+        let host = NSHostingView(rootView: MagazineLifecycleDriver(input: input) { key in
+            MagazineBrowserView(entries: input.entries, folders: [:], availableSize: size,
+                showsImages: false, isBrowsing: true, hasMore: false,
+                isLoading: input.loading, selectedID: nil, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+                onOpen: { _ in }, onNeedMore: {}, coverTitle: input.title,
+                tile: { entry, _, _ in Text(entry.title) }).defaultAppStorage(defaults)
+        }.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host; window.orderFront(nil)
+        defer { window.close() }
+        func coverLayer(in view: NSView) -> CALayer? {
+            func find(_ layer: CALayer?) -> CALayer? {
+                guard let layer else { return nil }
+                if layer.name == "magazine.cover.leaf" { return layer }
+                return layer.sublayers?.compactMap(find).first
+            }
+            return find(view.layer) ?? view.subviews.compactMap(coverLayer).first
+        }
+        func rightPageLayer(in view: NSView) -> CALayer? {
+            func find(_ layer: CALayer?) -> CALayer? {
+                guard let layer else { return nil }
+                if layer.name == "magazine.cover.rightPage" { return layer }
+                return layer.sublayers?.compactMap(find).first
+            }
+            return find(view.layer) ?? view.subviews.compactMap(rightPageLayer).first
+        }
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        input.key = .init(keyCode: 36)
+        for _ in 0..<10 where coverLayer(in: host) == nil {
+            try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertTrue(memory.magazineIsOpen)
+        XCTAssertEqual(Set(coverLayer(in: host)?.animationKeys() ?? []), ["rotation", "position"],
+                       "开页旋转应交给静态图层，避免逐帧重排第一页")
+        let openingLeaf = try XCTUnwrap(coverLayer(in: host))
+        let openingRightPage = try XCTUnwrap(rightPageLayer(in: host))
+        XCTAssertEqual(openingLeaf.position.x, openingLeaf.bounds.width, accuracy: 1,
+                       "开页图层必须朝左翻开，不能把开页误设为合页")
+        XCTAssertEqual(openingRightPage.position.x, openingLeaf.position.x, accuracy: 0.5,
+                       "右页和封皮必须共用书脊坐标，不能留下开页接缝")
+        XCTAssertEqual(openingRightPage.animation(forKey: "position")?.duration,
+                       openingLeaf.animation(forKey: "position")?.duration)
+        memory.resetScope()
+        input.title = "新订阅"
+        input.loading = true
+        input.entries = []
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(80))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(memory.magazineIsOpen)
+        XCTAssertNil(coverLayer(in: host), "旧 feed 的动画图层应在切换时立即撤掉")
+        XCTAssertNil(rightPageLayer(in: host), "旧 feed 的右页快照也应立即撤掉")
+
+        let newFeed = UUID()
+        input.entries = (0..<6).map { EntryListItem(id: "new-\($0)", feedID: newFeed,
+            title: "新文章 \($0)", sourceTitle: "新订阅") }
+        input.loading = false
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertFalse(memory.magazineIsOpen, "不能让旧 feed 的动画或计时提前打开新杂志")
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(memory.magazineIsOpen, "新 feed 应按自己的 700 毫秒封面停留计时开页")
+    }
+
+    func testCoverKeepsVisibleTextStableUntilOpeningFinishes() async throws {
+        let entries = coverEntries()
+        let input = MagazineTranslationInput()
+        let probe = MagazineTranslationPresentationProbe()
+        let memory = TimelinePresentationMemory()
+        let size = CGSize(width: 1000, height: 800)
+        let host = NSHostingView(rootView: MagazineTranslationDriver(input: input) { key in
+            MagazineBrowserView(entries: entries, folders: [:], availableSize: size,
+                showsImages: false, isBrowsing: true, hasMore: false, selectedID: nil, keyboardRequest: key,
+                memory: memory, thumbnailStore: ArticleThumbnailStore(), onHighlight: { _ in },
+                onOpen: { _ in }, onNeedMore: {}, coverTitle: "测试订阅",
+                tile: { entry, _, _ in MagazineTranslationProbeTile(entry: entry, probe: probe) })
+        }.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)); host.layoutSubtreeIfNeeded() }
+        input.key = .init(keyCode: 36)
+        try await Task.sleep(for: .milliseconds(120))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(memory.magazineIsOpen)
+        input.translations[entries[0].id] = .init(title: "翻译后的标题")
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(probe.shownTitles[entries[0].id], entries[0].title,
+                       "封皮还在翻动时，实时页面不能换成与快照不同的标题")
+        for _ in 0..<30 where probe.shownTitles[entries[0].id] != "翻译后的标题" {
+            try await Task.sleep(for: .milliseconds(25))
+            host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(probe.shownTitles[entries[0].id], "翻译后的标题",
+                       "开页完成后应展示新到达的译文")
     }
 
     /// 封面行为测试统一使用可排版的短文章；空订阅不能再开出一本空书。
@@ -780,11 +1352,11 @@ extension MagazineFoldEffectTests {
         try await Task.sleep(for: .milliseconds(1300))
         XCTAssertFalse(memory.magazineIsOpen, "没有文章时不得自动翻开空书")
 
-        // 文章到达后才按封面停留一拍自动展开。
+        // 文章到达后才按封面停留约 700 毫秒自动展开。
         input.entries = coverEntries()
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(memory.magazineIsOpen, "内容到达后仍需保持封面计时")
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: .milliseconds(800))
         XCTAssertTrue(memory.magazineIsOpen, "有文章后应按一拍封面节奏自动展开")
     }
 }
@@ -1213,10 +1785,3 @@ extension MagazineFoldEffectTests {
         }
     }
 }
-
-
-
-
-
-
-

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
@@ -10,18 +11,27 @@ final class TimelinePresentationMemory: ObservableObject {
     var visibleAnchor: String?
     var visibleRowFrames: [String: CGRect] = [:]
     var viewportFrame: CGRect = .zero
+    private var listVisibilityTask: Task<Void, Never>?
+    private var listVisibilityGeneration: UInt64 = 0
+    private var navigationScope: TimelineScope?
+    private var navigationUnreadOnly = false
+    private var navigationRevision: UInt64 = 0
+    private var navigationIDs: [String] = []
+    private var navigationIndexes: [String: Int] = [:]
     var browseAnchor: String?
     var openingFrameInWindow: CGRect?
     @Published var magazineIsOpen = false
     @Published private(set) var magazineScopeID = UUID()
-    @Published private var storedMagazineAnchor: String?
+    // 页边界只通知杂志本身。共享 memory 被 RootView/EntryListView 订阅，
+    // 在这里广播 objectWillChange 会让跨页滚动重新计算整个三栏窗口。
+    let magazineAnchorUpdates = CurrentValueSubject<String?, Never>(nil)
     var magazineAnchor: String? {
-        get { storedMagazineAnchor }
+        get { magazineAnchorUpdates.value }
         set {
             // Geometry notifications fire for every scroll delta, even when
             // the visible page has not changed. Do not invalidate the timeline.
-            guard storedMagazineAnchor != newValue else { return }
-            storedMagazineAnchor = newValue
+            guard magazineAnchorUpdates.value != newValue else { return }
+            magazineAnchorUpdates.send(newValue)
         }
     }
     private(set) var restoreAnchor: String?
@@ -40,7 +50,72 @@ final class TimelinePresentationMemory: ObservableObject {
         return frame.minY < viewportFrame.minY + margin ||
             frame.maxY > viewportFrame.maxY - margin
     }
+    /// Geometry preferences arrive during layout. Apply only the latest scroll
+    /// snapshot after that layout pass, before changing row images or paging.
+    func scheduleListVisibilityUpdate(_ update: @escaping @MainActor () -> Void) {
+        listVisibilityTask?.cancel()
+        listVisibilityGeneration &+= 1
+        let generation = listVisibilityGeneration
+        listVisibilityTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, self?.listVisibilityGeneration == generation else { return }
+            update()
+            if self?.listVisibilityGeneration == generation { self?.listVisibilityTask = nil }
+        }
+    }
+    func cancelListVisibilityUpdate() {
+        listVisibilityTask?.cancel()
+        listVisibilityGeneration &+= 1
+        listVisibilityTask = nil
+    }
+    func setNavigationPage(scope: TimelineScope, unreadOnly: Bool, revision: UInt64, ids: [String]) {
+        // Read/star changes can alter filtered membership without publishing a
+        // timeline revision. Keep those scopes on the authoritative SQL path.
+        guard !unreadOnly else { clearNavigationPage(); return }
+        switch scope {
+        case .unread, .starred:
+            clearNavigationPage()
+            return
+        default:
+            break
+        }
+        navigationScope = scope
+        navigationUnreadOnly = unreadOnly
+        navigationRevision = revision
+        navigationIDs = ids
+        navigationIndexes = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+    }
+    func firstLoadedID(scope: TimelineScope, unreadOnly: Bool, revision: UInt64) -> String? {
+        guard navigationScope == scope, navigationUnreadOnly == unreadOnly,
+              navigationRevision == revision else { return nil }
+        return navigationIDs.first
+    }
+    func adjacentLoadedID(
+        to currentID: String,
+        direction: AdjacentTimelineDirection,
+        scope: TimelineScope,
+        unreadOnly: Bool,
+        revision: UInt64
+    ) -> String? {
+        guard navigationScope == scope, navigationUnreadOnly == unreadOnly,
+              navigationRevision == revision,
+              let index = navigationIndexes[currentID] else { return nil }
+        let nextIndex: Int
+        switch direction {
+        case .next: nextIndex = index + 1
+        case .previous: nextIndex = index - 1
+        }
+        guard navigationIDs.indices.contains(nextIndex) else { return nil }
+        return navigationIDs[nextIndex]
+    }
+    func clearNavigationPage() {
+        navigationScope = nil
+        navigationIDs = []
+        navigationIndexes = [:]
+    }
     func resetScope() {
+        cancelListVisibilityUpdate()
+        clearNavigationPage()
         magazineIsOpen = false
         magazineScopeID = UUID()
         visibleAnchor = nil
@@ -367,6 +442,7 @@ struct TimelineViewControls: View {
     @State private var showsPopover = false
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
     @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.fold.rawValue
+    @AppStorage("magazine_paper_style") private var paperStyleRaw = MagazinePaperStyle.paper.rawValue
     @AppStorage("magazine_page_sound") private var pageSoundEnabled = true
     @AppStorage("reader_audio_wave_enabled") private var audioWaveEnabled = false
     @ObservedObject private var audioMonitor = SystemOutputVolumeMonitor.shared
@@ -435,6 +511,17 @@ struct TimelineViewControls: View {
                             .pickerStyle(.menu)
                             .controlSize(.small)
                             .labelsHidden()
+                        }
+                        settingRow(title: I18N.localized("纸张质感", englishFallback: "Paper texture")) {
+                            Picker("", selection: $paperStyleRaw) {
+                                ForEach(MagazinePaperStyle.allCases, id: \.rawValue) { option in
+                                    Text(option.title).tag(option.rawValue)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .controlSize(.small)
+                            .labelsHidden()
+                            .accessibilityIdentifier("magazine.paperStyle")
                         }
                         settingRow(title: I18N.localized("打开音效")) {
                             Toggle("", isOn: $pageSoundEnabled)

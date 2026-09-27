@@ -137,12 +137,17 @@ final class MagazinePerformanceTests: XCTestCase {
         let memory = TimelinePresentationMemory()
         var notifications = 0
         let subscription = memory.objectWillChange.sink { notifications += 1 }
+        var anchors: [String?] = []
+        let pageSubscription = memory.magazineAnchorUpdates.sink { anchors.append($0) }
         memory.magazineAnchor = "one"
         for _ in 0..<500 { memory.magazineAnchor = "one" }
-        XCTAssertEqual(notifications, 1)
+        XCTAssertEqual(anchors, [nil, "one"])
         memory.magazineAnchor = "two"
-        XCTAssertEqual(notifications, 2)
+        XCTAssertEqual(anchors, [nil, "one", "two"])
+        XCTAssertEqual(memory.magazineAnchor, "two")
+        XCTAssertEqual(notifications, 0, "跨页不应让共享 memory 的窗口和列表订阅者重新计算")
         withExtendedLifetime(subscription) {}
+        withExtendedLifetime(pageSubscription) {}
     }
 
     func testThousandArticleEditionIsNotRebuiltByPageLookupsOrSameInput() {
@@ -264,42 +269,110 @@ final class MagazinePerformanceTests: XCTestCase {
             MagazinePageRail.audioWaveHeight(index: 0, volume: 4, time: 0, reduceMotion: true),
             MagazinePageRail.audioWaveHeight(index: 0, volume: 1, time: 0, reduceMotion: true)
         )
+        XCTAssertEqual(MagazinePageRail.audioWaveHeight(index: 0, volume: 1, time: 0, reduceMotion: false), 28)
     }
 
-    func testAudioEnergyRespondsToSoundAndSettlesCompletelyAfterSilence() {
-        var wave = AudioWaveEnvelope()
-        XCTAssertTrue(wave.advance(rms: 0).allSatisfy { $0 == 0 })
-        let quiet = wave.advance(rms: 0.01).last!
-        let loud = wave.advance(rms: 0.4).last!
-        XCTAssertGreaterThan(loud, quiet)
-        let released = wave.advance(rms: 0).last!
-        XCTAssertLessThan(released, loud)
-        XCTAssertGreaterThan(released, 0)
-        for _ in 0..<90 { _ = wave.advance(rms: 0) }
-        XCTAssertTrue(wave.advance(rms: 0).allSatisfy { $0 == 0 })
-        XCTAssertTrue(wave.advance(rms: .nan).allSatisfy { $0 == 0 })
+    func testAudioSpectrumPlacesTonesFromLowToHighFrequency() {
+        func dominantBar(frequency: Double) -> Int {
+            let samples = (0..<AudioWaveSpectrum.sampleCount).map { index in
+                Float(0.4 * sin(2 * Double.pi * frequency * Double(index) / 48_000))
+            }
+            var spectrum = AudioWaveSpectrum()
+            let levels = spectrum.advance(frame: AudioSpectrumFrame(channels: [samples], sampleRate: 48_000))
+            let peak = levels.max() ?? 0
+            XCTAssertGreaterThan(peak, 0.4)
+            XCTAssertGreaterThan(peak - (levels.reduce(0, +) / CGFloat(levels.count)), 0.2)
+            return levels.firstIndex(of: peak) ?? -1
+        }
+        let low = dominantBar(frequency: 375)
+        let mid = dominantBar(frequency: 1_875)
+        let high = dominantBar(frequency: 6_000)
+        XCTAssertLessThan(low, mid)
+        XCTAssertLessThan(mid, high)
     }
 
-    func testAudioWaveSeparatesStrongAndWeakBeats() {
-        var wave = AudioWaveEnvelope()
-        for _ in 0..<60 { _ = wave.advance(rms: 0.1) }
-        let strong = wave.advance(rms: 0.1).last!
-        for _ in 0..<5 { _ = wave.advance(rms: 0.03) }
-        let weak = wave.advance(rms: 0.03).last!
-        let nextBeat = wave.advance(rms: 0.1).last!
-        XCTAssertGreaterThan(strong, 0.9)
-        XCTAssertLessThan(weak, 0.15)
-        XCTAssertGreaterThan(nextBeat - weak, 0.7)
+    func testAudioSpectrumKeepsOppositeStereoChannelsAndDecaysAfterSilence() {
+        let left = (0..<AudioWaveSpectrum.sampleCount).map { index in
+            Float(0.4 * sin(2 * Double.pi * 1_875 * Double(index) / 48_000))
+        }
+        var spectrum = AudioWaveSpectrum()
+        let first = spectrum.advance(frame: AudioSpectrumFrame(
+            channels: [left, left.map { -$0 }], sampleRate: 48_000))
+        XCTAssertGreaterThan(first.max() ?? 0, 0.4)
+        let released = spectrum.advance(frame: nil)
+        XCTAssertLessThan(released.max() ?? 0, first.max() ?? 0)
+        for _ in 0..<30 { _ = spectrum.advance(frame: nil) }
+        XCTAssertTrue(spectrum.advance(frame: nil).allSatisfy { $0 == 0 })
     }
 
-    func testAudioWaveDoesNotInventMotionForSteadySoundOrNoise() {
-        var wave = AudioWaveEnvelope()
-        for _ in 0..<120 { _ = wave.advance(rms: 0.1) }
-        let steady = wave.advance(rms: 0.1)
-        XCTAssertLessThan(steady.max()! - steady.min()!, 0.001)
-        var quiet = AudioWaveEnvelope()
-        for _ in 0..<300 { _ = quiet.advance(rms: 0.001) }
-        XCTAssertTrue(quiet.advance(rms: 0.001).allSatisfy { $0 == 0 })
+    func testAudioSpectrumMapsVisibleRailSlotsAcrossAllFrequencyBands() {
+        let levels = (0..<AudioWaveSpectrum.barCount).map(CGFloat.init)
+        XCTAssertEqual(AudioWaveSpectrum.level(levels, slot: 0, slots: 4), 15)
+        XCTAssertEqual(AudioWaveSpectrum.level(levels, slot: 1, slots: 4), 31)
+        XCTAssertEqual(AudioWaveSpectrum.level(levels, slot: 3, slots: 4), 63)
+        XCTAssertEqual(AudioWaveSpectrum.level(levels, slot: 4, slots: 4), 0)
+    }
+
+    func testAudioSpectrumDoesNotAlwaysPutTheLargestVisibleBarFirst() {
+        let samples = (0..<AudioWaveSpectrum.sampleCount).map { index in
+            let time = Double(index) / 48_000
+            return Float(0.2 * sin(2 * Double.pi * 46.875 * time)
+                + 0.1 * sin(2 * Double.pi * 1_875 * time))
+        }
+        var spectrum = AudioWaveSpectrum()
+        let levels = spectrum.advance(frame: AudioSpectrumFrame(channels: [samples], sampleRate: 48_000))
+        let visible = (0..<12).map { AudioWaveSpectrum.level(levels, slot: $0, slots: 12) }
+        XCTAssertGreaterThan(visible[0], 0.4, "低频仍应可见")
+        XCTAssertGreaterThan(visible.dropFirst().max() ?? 0, visible[0], "中频存在时不应总由首根独占峰值")
+    }
+
+    func testAudioSpectrumSteadyInputHasSmallIndependentMotionWithoutMovingItsPeak() {
+        let samples = (0..<AudioWaveSpectrum.sampleCount).map { index in
+            Float(0.1 * sin(2 * Double.pi * 1_875 * Double(index) / 48_000))
+        }
+        let frame = AudioSpectrumFrame(channels: [samples], sampleRate: 48_000)
+        var spectrum = AudioWaveSpectrum()
+        for _ in 0..<40 { _ = spectrum.advance(frame: frame) }
+        var quietBand: [CGFloat] = []
+        var peakIndices: [Int] = []
+        for _ in 0..<30 {
+            let levels = spectrum.advance(frame: frame)
+            quietBand.append(levels[5])
+            peakIndices.append(levels.firstIndex(of: levels.max() ?? 0) ?? -1)
+        }
+        XCTAssertGreaterThan((quietBand.max() ?? 0) - (quietBand.min() ?? 0), 0.02)
+        XCTAssertLessThan((quietBand.max() ?? 0) - (quietBand.min() ?? 0), 0.25)
+        XCTAssertTrue(peakIndices.allSatisfy { (35..<55).contains($0) })
+    }
+
+    func testAudioSpectrumKeepsAShortSoundFromTheEarlierHalfOfARefresh() {
+        let samples = (0..<AudioWaveSpectrum.sampleCount).map { index in
+            index < AudioWaveSpectrum.sampleCount / 2
+                ? Float(0.4 * sin(2 * Double.pi * 1_875 * Double(index) / 48_000)) : 0
+        }
+        var spectrum = AudioWaveSpectrum()
+        let levels = spectrum.advance(frame: AudioSpectrumFrame(channels: [samples], sampleRate: 48_000))
+        XCTAssertGreaterThan(levels.max() ?? 0, 0.5)
+        let peakIndex = levels.firstIndex(of: levels.max() ?? 0) ?? -1
+        XCTAssertTrue((30..<55).contains(peakIndex), "短声的频段峰值应留在声音所属范围，实际为 \(peakIndex)")
+    }
+
+    func testAudioSpectrumStrongBeatClearlySeparatesFromWeakBeat() {
+        func frame(amplitude: Double) -> AudioSpectrumFrame {
+            let samples = (0..<AudioWaveSpectrum.sampleCount).map { index in
+                Float(amplitude * sin(2 * Double.pi * 1_875 * Double(index) / 48_000))
+            }
+            return AudioSpectrumFrame(channels: [samples], sampleRate: 48_000)
+        }
+        let strong = frame(amplitude: 0.2)
+        let weak = frame(amplitude: 0.02)
+        var spectrum = AudioWaveSpectrum()
+        for _ in 0..<5 { _ = spectrum.advance(frame: strong) }
+        let strongHeight = spectrum.advance(frame: strong).max() ?? 0
+        for _ in 0..<3 { _ = spectrum.advance(frame: weak) }
+        let weakHeight = spectrum.advance(frame: weak).max() ?? 0
+        XCTAssertGreaterThan(strongHeight - weakHeight, 0.45)
+        XCTAssertGreaterThan((spectrum.advance(frame: strong).max() ?? 0) - weakHeight, 0.35)
     }
 
     func testMasonryCacheRetainsMeasurementsOnlyForSameGeometry() {

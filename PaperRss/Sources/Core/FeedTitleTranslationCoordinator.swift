@@ -206,46 +206,48 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
             failedAttempts.removeAll()
         }
 
-        // NaturalLanguage may take tens of milliseconds for a visible page.
-        // Snapshot coordinator state, then do language detection off MainActor.
         let candidates = visibleCandidates
-        let translated = translations
-        let failures = failedAttempts
         let probe = languageProbe
         let limit = maximumTextsPerPass
         let failureLimit = maximumFailuresPerText
-        let pending = await Task.detached(priority: .userInitiated) {
-            Self.pendingItems(
-                candidates: candidates, translated: translated, failures: failures,
-                context: context, limit: limit, failureLimit: failureLimit, languageProbe: probe
-            )
-        }.value
-        guard configurationProvider()?.sessionID == context.sessionID else { return }
-        if visibleCandidates != candidates {
-            needsAnotherPass = true
-            return
-        }
-        guard !pending.isEmpty else { return }
-
-        // 批次切分（数量与字符上限）在翻译端口内部完成；这里一次提交本轮
-        // 全部待翻译文本，端口按批串行发送。
-        let result = await translate(Array(pending.keys), context)
-        // 结果即使在新范围到来后也要发布：译文会写入翻译记忆，滚动回去时
-        // 直接命中缓存；丢弃结果会造成"部分行永远没有译文"。
-        for (text, translation) in result.translations {
-            guard !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            for item in pending[text] ?? [] {
-                var value = translations[item.entryID] ?? TranslatedEntryText()
-                switch item.field {
-                case .title: value.title = translation
-                case .summary: value.summary = translation
-                }
-                store(value, for: item.entryID)
-                failedAttempts.removeValue(forKey: text.stableDigest)
+        var attemptedTexts = Set<String>()
+        while !Task.isCancelled {
+            // 标题先于摘要；每轮有上限，剩余相邻页继续串行处理，不并发堆积请求。
+            let translated = translations
+            let failures = failedAttempts
+            let excluded = attemptedTexts
+            let pending = await Task.detached(priority: .userInitiated) {
+                Self.pendingItems(
+                    candidates: candidates, translated: translated, failures: failures,
+                    context: context, limit: limit, failureLimit: failureLimit,
+                    excluding: excluded, languageProbe: probe
+                )
+            }.value
+            guard configurationProvider()?.sessionID == context.sessionID else { return }
+            if visibleCandidates != candidates {
+                needsAnotherPass = true
+                return
             }
-        }
-        for text in result.failedTexts {
-            failedAttempts[text.stableDigest, default: 0] += 1
+            guard !pending.isEmpty else { return }
+            attemptedTexts.formUnion(pending.keys)
+            let result = await translate(Array(pending.keys), context)
+            // 范围变化后仍保存已完成结果；同轮不重试失败文本。
+            for (text, translation) in result.translations {
+                guard !translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                for item in pending[text] ?? [] {
+                    var value = translations[item.entryID] ?? TranslatedEntryText()
+                    switch item.field {
+                    case .title: value.title = translation
+                    case .summary: value.summary = translation
+                    }
+                    store(value, for: item.entryID)
+                    failedAttempts.removeValue(forKey: text.stableDigest)
+                }
+            }
+            for text in result.failedTexts {
+                failedAttempts[text.stableDigest, default: 0] += 1
+            }
+            if pending.count < limit { return }
         }
     }
 
@@ -257,23 +259,19 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
         context: TitleTranslationContext,
         limit: Int,
         failureLimit: Int,
+        excluding attempted: Set<String>,
         languageProbe: LanguageProbe
     ) -> [String: [PendingItem]] {
         var pending: [String: [PendingItem]] = [:]
         var seenEntries = Set<String>()
+        let uniqueCandidates = candidates.filter { seenEntries.insert($0.entryID).inserted }
         var textCount = 0
-        for candidate in candidates {
-            guard textCount < limit else { break }
-            guard seenEntries.insert(candidate.entryID).inserted else { continue }
-            let existing = translated[candidate.entryID]
-            let units: [(TranslatedField, String)] = [
-                (.title, candidate.title),
-                (.summary, candidate.summary ?? "")
-            ]
-            for (field, text) in units {
-                guard textCount < limit else { break }
+        for field in [TranslatedField.title, .summary] {
+            for candidate in uniqueCandidates {
+                let existing = translated[candidate.entryID]
+                let text = field == .title ? candidate.title : (candidate.summary ?? "")
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
+                guard !trimmed.isEmpty, !attempted.contains(text) else { continue }
                 switch field {
                 case .title where existing?.title != nil: continue
                 case .summary where existing?.summary != nil: continue
@@ -288,6 +286,7 @@ public final class FeedTitleTranslationCoordinator: ObservableObject {
                     guard languageProbe(text, context.targetLanguage) else { continue }
                 }
                 if pending[text] == nil {
+                    guard textCount < limit else { continue }
                     textCount += 1
                 }
                 pending[text, default: []].append(PendingItem(entryID: candidate.entryID, field: field))

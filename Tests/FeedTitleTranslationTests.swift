@@ -77,6 +77,36 @@ final class FeedTitleTranslationCoordinatorTests: XCTestCase {
         XCTAssertEqual(Set(recorder.batches[0]), ["Alpha", "Alpha summary", "Beta"])
     }
 
+    func testAdjacentPageTitlesAndSummariesFinishAcrossBoundedBatches() async {
+        let feedID = UUID()
+        let recorder = Recorder()
+        let coordinator = FeedTitleTranslationCoordinator(
+            configurationProvider: {
+                TitleTranslationContext(sessionID: "s1", targetLanguage: "简体中文", feedLists: [feedID: .whitelist])
+            },
+            translate: { texts, _ in
+                recorder.batches.append(texts)
+                return TitleTranslationBatchResult(translations:
+                    Dictionary(uniqueKeysWithValues: texts.map { ($0, "T:" + $0) }))
+            },
+            maximumTextsPerPass: 2
+        )
+        coordinator.updateScope([
+            candidate("current", feedID: feedID, title: "Current", summary: "Current summary"),
+            candidate("previous", feedID: feedID, title: "Previous", summary: "Previous summary"),
+            candidate("next", feedID: feedID, title: "Next", summary: "Next summary")
+        ])
+        await waitFor("相邻页标题和描述全部完成") {
+            coordinator.translations["current"]?.summary != nil
+                && coordinator.translations["previous"]?.summary != nil
+                && coordinator.translations["next"]?.summary != nil
+        }
+        XCTAssertEqual(Set(recorder.batches.first ?? []), ["Current", "Previous"])
+        XCTAssertEqual(recorder.batches.count, 3)
+        XCTAssertEqual(Set(recorder.batches[1]), ["Next", "Current summary"])
+        XCTAssertEqual(Set(recorder.batches[2]), ["Previous summary", "Next summary"])
+    }
+
     func testDeduplicatesRepeatedTextsAcrossEntries() async {
         let feedID = UUID()
         let recorder = Recorder()

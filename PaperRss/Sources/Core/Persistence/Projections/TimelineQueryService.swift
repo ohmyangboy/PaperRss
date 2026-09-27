@@ -298,6 +298,44 @@ public final class TimelineQueryService: Sendable {
                 : "(s.is_read = 0 OR i.id IN (\(placeholders)))")
         }
 
+        // The normal first page of one feed can use the existing published-date
+        // index to choose IDs before building row projections. COALESCE in the
+        // general ORDER BY prevents that index from serving the LIMIT. If this
+        // feed has an undated article, keep the general query: its created_at
+        // must still interleave with published dates exactly as before.
+        if accountID == nil,
+           case let .feed(feedID) = scope,
+           !unreadOnly, retainingIDs.isEmpty,
+           let limit, (1...200).contains(limit), offset == 0 {
+            let hasUndatedArticle = try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(
+                    SELECT 1 FROM articles a INDEXED BY idx_articles_published
+                    CROSS JOIN items i ON i.id = a.item_id
+                    WHERE a.published_at IS NULL AND i.feed_id = ?
+                )
+                """, arguments: [feedID]) ?? false
+            if !hasUndatedArticle {
+                let indexedIDs = try String.fetchAll(db, sql: """
+                    SELECT a.item_id
+                    FROM articles a INDEXED BY idx_articles_published
+                    CROSS JOIN items i ON i.id = a.item_id
+                    INNER JOIN feeds f ON f.id = i.feed_id
+                    LEFT JOIN accounts acc ON acc.id = i.account_id
+                    WHERE i.feed_id = ? AND f.is_deleted = 0
+                      AND (acc.is_enabled = 1 OR acc.id IS NULL)
+                    ORDER BY a.published_at DESC, i.id DESC
+                    LIMIT \(limit)
+                    """, arguments: [feedID])
+                guard !indexedIDs.isEmpty else { return [] }
+                let placeholders = indexedIDs.enumerated().map { index, id -> String in
+                    let key = "indexed_feed_item_\(index)"
+                    arguments[key] = id
+                    return ":\(key)"
+                }.joined(separator: ", ")
+                whereClauses.append("i.id IN (\(placeholders))")
+            }
+        }
+
         var sql = """
         SELECT
             i.id AS entry_id,
@@ -404,6 +442,27 @@ public final class TimelineQueryService: Sendable {
     ) throws -> EntryListItem? {
         try database.read { db in
             try fetchAdjacentItem(
+                accountID: accountID,
+                scope: scope,
+                unreadOnly: unreadOnly,
+                currentItemID: currentItemID,
+                direction: direction,
+                retainingIDs: retainingIDs,
+                in: db
+            )
+        }
+    }
+
+    public func fetchAdjacentItemAsync(
+        accountID: String? = nil,
+        scope: TimelineScope,
+        unreadOnly: Bool = false,
+        currentItemID: String,
+        direction: AdjacentTimelineDirection,
+        retainingIDs: Set<String> = []
+    ) async throws -> EntryListItem? {
+        try await database.readAsync { db in
+            try self.fetchAdjacentItem(
                 accountID: accountID,
                 scope: scope,
                 unreadOnly: unreadOnly,

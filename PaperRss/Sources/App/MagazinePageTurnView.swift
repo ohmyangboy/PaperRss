@@ -94,20 +94,26 @@ struct MagazineTurnGeometry: Sendable {
 @MainActor
 final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     private static let device = MTLCreateSystemDefaultDevice()
-    private static let pipeline: MTLRenderPipelineState? = {
+    private static let textureLoader = device.map { MTKTextureLoader(device: $0) }
+    private static let pipelines: (base: MTLRenderPipelineState, leaf: MTLRenderPipelineState)? = {
         guard let device, let library = try? device.makeLibrary(source: shader, options: nil) else { return nil }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "pageVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "pageFragment")
-        descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-        return try? device.makeRenderPipelineState(descriptor: descriptor)
+        func make(_ vertex: String, _ fragment: String) -> MTLRenderPipelineState? {
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.vertexFunction = library.makeFunction(name: vertex)
+            descriptor.fragmentFunction = library.makeFunction(name: fragment)
+            descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+            return try? device.makeRenderPipelineState(descriptor: descriptor)
+        }
+        guard let base = make("baseVertex", "baseFragment"),
+              let leaf = make("leafVertex", "leafFragment") else { return nil }
+        return (base, leaf)
     }()
-    static func prepare() { _ = pipeline }
+    static func prepare() { _ = pipelines }
 
     var stageBackground: NSColor
     let view: MTKView
     private let queue: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
+    private let pipelines: (base: MTLRenderPipelineState, leaf: MTLRenderPipelineState)
     private var before: MTLTexture
     private var after: MTLTexture
     private var forward: Bool
@@ -118,8 +124,7 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     private var drewFrame = false
 
     static func texture(_ image: CGImage) -> MTLTexture? {
-        guard let device else { return nil }
-        let loader = MTKTextureLoader(device: device)
+        guard let loader = textureLoader else { return nil }
         let options: [MTKTextureLoader.Option: Any] = [.SRGB: false, .origin: MTKTextureLoader.Origin.topLeft]
         if let texture = try? loader.newTexture(cgImage: image, options: options) { return texture }
         // ImageRenderer 会将纯文字页面压成灰度图，MTKTextureLoader 不支持
@@ -138,9 +143,9 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
     }
 
     init?(before: MTLTexture, after: MTLTexture, size: CGSize, forward: Bool, verticalInset: CGFloat = 0, corner: Float = 0, stageBackground: NSColor = .windowBackgroundColor) {
-        guard let device = Self.device, let pipeline = Self.pipeline,
+        guard let device = Self.device, let pipelines = Self.pipelines,
               let queue = device.makeCommandQueue() else { return nil }
-        self.before = before; self.after = after; self.queue = queue; self.pipeline = pipeline; self.forward = forward
+        self.before = before; self.after = after; self.queue = queue; self.pipelines = pipelines; self.forward = forward
         self.corner = min(1, max(-1, corner))
         self.insetFraction = Float(min(0.4, max(0, verticalInset / max(1, size.height))))
         self.stageBackground = stageBackground
@@ -198,84 +203,109 @@ final class MagazineMetalRenderer: NSObject, MTKViewDelegate {
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         var parameters = SIMD4<Float>(Float(progress), forward ? 1 : -1, insetFraction, corner)
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(pipelines.base)
         encoder.setFragmentTexture(before, index: 0)
         encoder.setFragmentTexture(after, index: 1)
         encoder.setFragmentBytes(&parameters, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        if progress > 0.00001 && progress < 0.99999 {
+            encoder.setRenderPipelineState(pipelines.leaf)
+            encoder.setVertexBytes(&parameters, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 81 * 25 * 6)
+        }
         encoder.endEncoding()
         return true
     }
 
-    // 参考 Duo 的核心几何：固定半页不动，另一半围绕中轴旋转。翻动页只在
-    // 自己的投影范围内绘制，避免把整张目标页混成灰色重影。
+    // 底页仍由两张快照合成；折页用小网格在顶点阶段弯曲，每帧只提交两次绘制。
     private static let shader = """
     #include <metal_stdlib>
     using namespace metal;
-    struct Raster { float4 position [[position]]; float2 uv; };
-    vertex Raster pageVertex(uint id [[vertex_id]]) {
+    struct BaseRaster { float4 position [[position]]; float2 uv; };
+    struct LeafRaster { float4 position [[position]]; float2 oldUV; float2 newUV; float facing; };
+    inline float2 safeClamp(float2 coord, texture2d<float> tex) {
+        float2 halfPixel = 0.5 / float2(tex.get_width(), tex.get_height());
+        return clamp(coord, halfPixel, 1.0 - halfPixel);
+    }
+    inline float2 bendPoint(float u, float a, float b) {
+        float width = max(0.0001, b - a);
+        if (u <= a) return float2(u, 0.0);
+        if (u >= b) return float2(a + b - u, 2.0 * width / M_PI_F);
+        float phase = M_PI_F * (u - a) / width;
+        return float2(a + width * sin(phase) / M_PI_F,
+                      width * (1.0 - cos(phase)) / M_PI_F);
+    }
+    vertex BaseRaster baseVertex(uint id [[vertex_id]]) {
         float2 pos[3] = { float2(-1.0, -1.0), float2(7.0, -1.0), float2(-1.0, 7.0) };
         float2 p = pos[id];
-        Raster r;
+        BaseRaster r;
         r.position = float4(p, 0.0, 1.0);
         r.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
         return r;
     }
-    inline float2 safeClamp(float2 coord, texture2d<float> tex) {
-        float2 dims = float2(tex.get_width(), tex.get_height());
-        float2 halfPixel = float2(0.5, 0.5) / dims;
-        return clamp(coord, halfPixel, float2(1.0, 1.0) - halfPixel);
-    }
-    fragment float4 pageFragment(Raster r [[stage_in]], texture2d<float> old [[texture(0)]],
+    fragment float4 baseFragment(BaseRaster r [[stage_in]], texture2d<float> old [[texture(0)]],
         texture2d<float> next [[texture(1)]], constant float4 &params [[buffer(0)]]) {
         constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-        float p = clamp(params.x, 0.0, 1.0), direction = params.y;
+        float p = clamp(params.x, 0.0, 1.0);
         float2 uv = clamp(r.uv, 0.0, 1.0);
         if (p <= 0.00001) return old.sample(s, safeClamp(uv, old));
         if (p >= 0.99999) return next.sample(s, safeClamp(uv, next));
-        float inset = params.z, paperHeight = 1.0 - 2.0 * inset;
-        float paperY = (uv.y - inset) / paperHeight;
-        float x = (uv.x - 0.5) * 2.0;
-        float angle = p * M_PI_F, c = cos(angle), sine = sin(angle);
-        bool stationary = x * direction < 0;
-        // 透视除法随页上位置变化；外缘向观察者抬起，书脊固定。
-        // 边距缩小时同步降低透视深度，保留真实投影并避免页边超出舞台。
-        float maxDepth = inset > 0.0 ? min(0.16, inset * 1.7) : 0.16;
-        // 上下角的抬起位置不同，但深度始终在原有舞台预算以内。
-        float cornerWeight = clamp(0.72 + params.w * (paperY - 0.5) * 0.5, 0.45, 1.0);
-        float depth = maxDepth * sine * (params.w == 0.0 ? 1.0 : cornerWeight);
-        float projectedEdge = direction * c / (1.0 - depth);
-        bool onLeaf = abs(projectedEdge) > 0.0001
-            && x * projectedEdge >= 0.0 && abs(x) <= abs(projectedEdge);
-        // 翻动页抬起前，外缘先只露出目标页的空白纸面；抬起过半后再淡入正文，
-        // 避免纸面外缘出现一条被裁切的下一篇文章正文。纸面色取自目标页右缘留白。
-        // 纸页之外的舞台条带仍直接采样目标页，保持既有留白行为。
-        float coverage = clamp(abs(projectedEdge), 0.0, 1.0);
-        float reveal = p < 0.5 ? (1.0 - smoothstep(0.55, 0.92, coverage)) : 1.0;
-        float4 nextColor = next.sample(s, safeClamp(uv, next));
-        bool onPaper = paperY >= 0.0 && paperY <= 1.0;
-        float4 paper = next.sample(s, safeClamp(float2(0.985, 0.5), next));
-        float4 under = onPaper ? mix(paper, nextColor, reveal) : nextColor;
-        float4 base = stationary ? old.sample(s, safeClamp(uv, old)) : under;
-        float hingeShadow = (paperY >= 0.0 && paperY <= 1.0) ? exp(-abs(x) * 32.0) * sine * 0.05 : 0.0;
-        if (!onLeaf) return float4(base.rgb * (1.0 - hingeShadow), 1);
-        // t=0 为中轴，t=1 为外边缘；正面采旧页，背面采目标页另一半。
-        float localX = x * direction;
-        float t = clamp(localX / (c + localX * depth), 0.0, 1.0);
-        bool front = p < 0.5;
-        float faceDirection = front ? direction : -direction;
-        float sourceX = 0.5 + faceDirection * t * 0.5;
-        float yScale = 1.0 - depth * t;
-        float2 source = float2(sourceX, (paperY - 0.5) * yScale + 0.5);
-        if (source.y < 0.0 || source.y > 1.0) return float4(base.rgb, 1);
-        source.y = inset + source.y * paperHeight;
-        float edge = pow(t, 1.35), motion = sine * sine;
-        // 文字保持清晰，立体感由真实投影和随角度变化的光照承担。
-        float3 color = front ? old.sample(s, safeClamp(source, old)).rgb : next.sample(s, safeClamp(source, next)).rgb;
-        float faceShade = 1.0 - motion * (0.025 + 0.045 * edge);
-        float outerHighlight = smoothstep(0.90, 1.0, t) * sine * 0.035;
-        color = color * faceShade + outerHighlight;
-        return float4(color, 1);
+        bool stationary = (uv.x - 0.5) * params.y < 0.0;
+        float paperY = (uv.y - params.z) / (1.0 - 2.0 * params.z);
+        float width = 0.165, halfWidth = width * 0.5;
+        float center = 1.0 + halfWidth - p * (1.0 + 2.0 * halfWidth);
+        center += params.w * 0.075 * (paperY - 0.5) * sin(M_PI_F * p);
+        float a = center - halfWidth, b = center + halfWidth;
+        // 弯曲带到来前，未动的正文直接由底页固定采样，不再让网格重复栅格化。
+        bool flatSource = paperY >= 0.0 && paperY <= 1.0
+            && abs((uv.x - 0.5) * 2.0) <= a;
+        float3 color = (stationary || flatSource) ? old.sample(s, safeClamp(uv, old)).rgb
+                                                   : next.sample(s, safeClamp(uv, next)).rgb;
+        if (paperY >= 0.0 && paperY <= 1.0) {
+            float spine = exp(-abs(uv.x - 0.5) * 64.0) * sin(M_PI_F * p) * 0.055;
+            float peak = bendPoint(clamp(b, 0.0, 1.0), a, b).x - bendPoint(0.0, a, b).x;
+            float edge = abs((uv.x - 0.5) * 2.0 - params.y * peak);
+            float castShadow = (1.0 - smoothstep(0.0, 0.09, edge)) * sin(M_PI_F * p) * 0.075;
+            color *= 1.0 - spine - castShadow;
+        }
+        return float4(color, 1.0);
+    }
+    vertex LeafRaster leafVertex(uint id [[vertex_id]], constant float4 &params [[buffer(0)]]) {
+        uint cell = id / 6, corner = id % 6;
+        float2 offsets[6] = { float2(0, 0), float2(0, 1), float2(1, 0),
+                              float2(1, 0), float2(0, 1), float2(1, 1) };
+        // Retina 大窗口下保持弯曲带的曲率连续，减少文字经过网格列时的跳变。
+        float u = (float(cell % 81) + offsets[corner].x) / 81.0;
+        float v = (float(cell / 81) + offsets[corner].y) / 25.0;
+        float p = clamp(params.x, 0.0, 1.0);
+        float width = 0.165, halfWidth = width * 0.5;
+        float center = 1.0 + halfWidth - p * (1.0 + 2.0 * halfWidth);
+        center += params.w * 0.075 * (v - 0.5) * sin(M_PI_F * p);
+        float a = center - halfWidth, b = center + halfWidth;
+        float2 point = bendPoint(u, a, b) - bendPoint(0.0, a, b);
+        float phase = u <= a ? 0.0 : (u >= b ? M_PI_F : M_PI_F * (u - a) / width);
+        LeafRaster r;
+        r.position = float4(params.y * point.x, 0.0, 0.0, 1.0);
+        // 纸页只沿翻页方向弯曲；保持上下边缘固定，避免整页被纵向放大。
+        // 与 x 无关的 y 也不会让正反面在网格行间交错、露出横向接缝。
+        r.position.y = 1.0 - 2.0 * (params.z + v * (1.0 - 2.0 * params.z));
+        float y = params.z + v * (1.0 - 2.0 * params.z);
+        r.oldUV = float2(0.5 + params.y * u * 0.5, y);
+        r.newUV = float2(0.5 - params.y * u * 0.5, y);
+        r.facing = cos(phase);
+        return r;
+    }
+    fragment float4 leafFragment(LeafRaster r [[stage_in]], texture2d<float> old [[texture(0)]],
+        texture2d<float> next [[texture(1)]]) {
+        if (r.facing >= 0.99999) discard_fragment();
+        constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+        bool front = r.facing >= 0.0;
+        float3 color = front ? old.sample(s, safeClamp(r.oldUV, old)).rgb
+                             : next.sample(s, safeClamp(r.newUV, next)).rgb;
+        float grazing = 1.0 - abs(r.facing);
+        float lighting = 0.97 + 0.03 * sqrt(max(0.0, 1.0 - grazing * grazing));
+        color = color * lighting + 0.012 * grazing * grazing;
+        return float4(color, 1.0);
     }
     """
 }
@@ -580,7 +610,8 @@ final class MagazineTurnSurface<Content: View>: NSView {
                 self?.tick(timestamp: link.targetTimestamp)
             }
             let clock = displayLink(target: target, selector: #selector(MagazineDisplayLinkTarget.tick(_:)))
-            clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+            let refreshRate = Float(min(120, max(60, window?.screen?.maximumFramesPerSecond ?? 60)))
+            clock.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: refreshRate, preferred: refreshRate)
             displayClock = clock
             clock.add(to: .main, forMode: .common)
         }

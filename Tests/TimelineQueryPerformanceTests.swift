@@ -30,13 +30,13 @@ final class TimelineQueryPerformanceTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testScopedUnreadPaginationRetentionAndNavigation() throws {
-        try provider.addFolder(name: "筛选测试")
+    func testScopedUnreadPaginationRetentionAndNavigation() async throws {
+        _ = try await provider.addFolder(name: "筛选测试")
         let first = try provider.addFeed(title: "源一", feedURL: URL(string: "https://filter.example/one")!, folder: "筛选测试")
         let second = try provider.addFeed(title: "源二", feedURL: URL(string: "https://filter.example/two")!)
         let other = LocalAccountProvider(accountID: "other-account", database: database)
         try other.ensureAccountExists()
-        try other.addFolder(name: "筛选测试")
+        _ = try await other.addFolder(name: "筛选测试")
         let foreign = try other.addFeed(title: "其他账户", feedURL: URL(string: "https://filter.example/foreign")!, folder: "筛选测试")
         for (owner, feed) in [(provider!, first), (provider!, second), (other, foreign)] {
             let entries = (0..<230).map { index in
@@ -69,6 +69,11 @@ final class TimelineQueryPerformanceTests: XCTestCase {
         XCTAssertEqual(try queryService.fetchListItems(scope: folder, unreadOnly: true, retainingIDs: retained).map(\.id), expected.map(\.id))
         let next = try queryService.fetchAdjacentItem(scope: folder, unreadOnly: true, currentItemID: current, direction: .next, retainingIDs: retained)
         XCTAssertEqual(next?.id, expected[1].id)
+        let asyncNext = try await queryService.fetchAdjacentItemAsync(
+            scope: folder, unreadOnly: true, currentItemID: current,
+            direction: .next, retainingIDs: retained
+        )
+        XCTAssertEqual(asyncNext?.id, next?.id)
         XCTAssertEqual(try queryService.fetchAdjacentItem(scope: folder, unreadOnly: true, currentItemID: expected[1].id, direction: .previous, retainingIDs: retained)?.id, current)
         XCTAssertEqual(try queryService.fetchListItems(scope: scope, unreadOnly: true).count, 114)
         try provider.markRead(entryIDs: all.map(\.id), read: true)
@@ -210,5 +215,44 @@ final class TimelineQueryPerformanceTests: XCTestCase {
         XCTAssertEqual(item.sourceTitle, "Stream Feed")
         XCTAssertFalse(item.isRead)
         XCTAssertFalse(item.isStarred)
+
+        // The indexed first-page path must preserve the general query's order,
+        // including published-date ties. An undated item returns to the general
+        // path so created_at can interleave with published_at.
+        let feedScope = TimelineScope.feed(feedID: feed.id.uuidString)
+        let allFeedItems = try queryService.fetchListItems(scope: feedScope)
+        XCTAssertEqual(
+            try queryService.fetchListItems(scope: feedScope, limit: 20).map(\.id),
+            Array(allFeedItems.prefix(20)).map(\.id)
+        )
+        try database.write { db in
+            try ItemRecord(id: "z-tie", accountID: "local-default", externalID: "z-tie",
+                           feedID: feed.id.uuidString, createdAt: now + 101, updatedAt: now + 101).save(db)
+            try ArticleRecord(itemID: "z-tie", title: "Tied date", author: nil, url: nil,
+                              publishedAt: now + 100, summary: "", contentHTML: "",
+                              contentUpdatedAt: now + 101).save(db)
+            try ArticleStateRecord(itemID: "z-tie", isRead: false, isStarred: false,
+                                   dateArrived: now + 101, updatedAt: now + 101).save(db)
+        }
+        let tiedItems = try queryService.fetchListItems(scope: feedScope)
+        XCTAssertEqual(
+            try queryService.fetchListItems(scope: feedScope, limit: 20).map(\.id),
+            Array(tiedItems.prefix(20)).map(\.id)
+        )
+        try database.write { db in
+            try ItemRecord(id: "undated", accountID: "local-default", externalID: "undated",
+                           feedID: feed.id.uuidString, createdAt: now + 200, updatedAt: now + 200).save(db)
+            try ArticleRecord(itemID: "undated", title: "Undated", author: nil, url: nil,
+                              publishedAt: nil, summary: "", contentHTML: "",
+                              contentUpdatedAt: now + 200).save(db)
+            try ArticleStateRecord(itemID: "undated", isRead: false, isStarred: false,
+                                   dateArrived: now + 200, updatedAt: now + 200).save(db)
+        }
+        let mixedItems = try queryService.fetchListItems(scope: feedScope)
+        XCTAssertEqual(mixedItems.first?.id, "undated")
+        XCTAssertEqual(
+            try queryService.fetchListItems(scope: feedScope, limit: 20).map(\.id),
+            Array(mixedItems.prefix(20)).map(\.id)
+        )
     }
 }

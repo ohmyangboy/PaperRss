@@ -1,7 +1,45 @@
 import SwiftUI
+import QuartzCore
 #if SWIFT_PACKAGE
 import PaperRssCore
 #endif
+
+enum MagazinePaperStyle: String, CaseIterable {
+    case paper, white, book
+
+    var title: String {
+        switch self {
+        case .paper: "Paper"
+        case .white: "White"
+        case .book: "Book"
+        }
+    }
+}
+
+/// 小尺寸纹理只生成一次并平铺，避免每页和每帧重复绘制随机颗粒。
+private enum MagazineBookGrain {
+    static let image: NSImage = {
+        let side = 192
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        var seed: UInt32 = 0x72A1_44EF
+        for pixel in 0..<(side * side) {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            let alpha = UInt8((seed >> 27) + 2)
+            let offset = pixel * 4
+            pixels[offset] = alpha / 2
+            pixels[offset + 1] = alpha / 3
+            pixels[offset + 2] = alpha / 5
+            pixels[offset + 3] = alpha
+        }
+        let data = Data(pixels) as CFData
+        let provider = CGDataProvider(data: data)!
+        let image = CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        return NSImage(cgImage: image, size: NSSize(width: side / 2, height: side / 2))
+    }()
+}
 
 private struct MagazineColumnSpan: LayoutValueKey { static let defaultValue = 1 }
 
@@ -96,6 +134,7 @@ final class MagazineEditionCache: ObservableObject {
     }
     @Published private(set) var pages: [MagazinePage] = []
     @Published private(set) var layouts: [String: MagazinePageLayout] = [:]
+    @Published private(set) var activeScopeID: UUID?
     private var input: Input?
     private var entryIndex: [String: Int] = [:]
     private var displayed = Set<String>()
@@ -153,6 +192,7 @@ final class MagazineEditionCache: ObservableObject {
                 folders: next.folders, capacity: next.capacity)
             : updated.map(\.page)
         input = next
+        if activeScopeID != next.scopeID { activeScopeID = next.scopeID }
         entryIndex.removeAll(keepingCapacity: true)
         for (index, page) in nextPages.enumerated() {
             for entry in page.entries { entryIndex[entry.id] = index }
@@ -186,6 +226,7 @@ final class MagazineEditionCache: ObservableObject {
     }
     func pageIndex(containing anchor: String?) -> Int { anchor.flatMap { entryIndex[$0] } ?? 0 }
     func contains(_ anchor: String?) -> Bool { anchor.flatMap { entryIndex[$0] } != nil }
+    func containsScope(_ scopeID: UUID) -> Bool { input?.scopeID == scopeID }
 
     func openingImageRequests(scopeID: UUID, scale: CGFloat) -> [ArticleThumbnailRequest] {
         imageRequests(forPageAt: 0, scopeID: scopeID, scale: scale)
@@ -207,9 +248,19 @@ final class MagazineEditionCache: ObservableObject {
     }
 }
 
-private struct MagazinePageFrames: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+private struct MagazinePageVisibility: Equatable {
+    let isAtTop: Bool
+    let isVisible: Bool
+
+    init(frame: CGRect, viewportHeight: CGFloat) {
+        isAtTop = abs(frame.minY) <= 24
+        isVisible = frame.maxY > 24 && frame.minY < viewportHeight
+    }
+}
+
+private struct MagazinePageVisibilityKey: PreferenceKey {
+    static let defaultValue: [String: MagazinePageVisibility] = [:]
+    static func reduce(value: inout [String: MagazinePageVisibility], nextValue: () -> [String: MagazinePageVisibility]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
@@ -221,6 +272,7 @@ struct MagazineBrowserView<Tile: View>: View {
     let showsImages: Bool
     let isBrowsing: Bool
     let hasMore: Bool
+    var isLoading = false
     let selectedID: String?
     let keyboardRequest: TimelineKeyRequest?
     @ObservedObject var memory: TimelinePresentationMemory
@@ -232,10 +284,11 @@ struct MagazineBrowserView<Tile: View>: View {
     var coverTitle: String = ""
     var onClearSelection: () -> Void = {}
     /// 当前页（含下一页预取）的条目变化回调，用于标题翻译的按需取用。
-    var onVisibleEntriesChange: ([EntryListItem]) -> Void = { _ in }
+    var onVisibleEntriesChange: ([TitleTranslationCandidate]) -> Void = { _ in }
     let tile: (EntryListItem, CGFloat, TimelineTileLayout) -> Tile
     @AppStorage("magazine_arrangement") private var arrangementRaw = MagazineArrangement.balanced.rawValue
     @AppStorage("magazine_turning") private var turningRaw = MagazineTurning.fold.rawValue
+    @AppStorage("magazine_paper_style") private var paperStyleRaw = MagazinePaperStyle.paper.rawValue
     @AppStorage("magazine_page_sound") private var pageSoundEnabled = true
     @Environment(\.paperAppearancePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -245,6 +298,9 @@ struct MagazineBrowserView<Tile: View>: View {
     @Environment(\.entryTranslations) private var entryTranslations
     @StateObject private var edition = MagazineEditionCache()
     @State private var coverAnimating = false
+    @State private var coverOpening = true
+    @State private var coverSnapshots: (front: CGImage, back: CGImage, right: CGImage)?
+    @State private var coverBounds: CGSize = .zero
     @State private var autoOpenedScope: UUID?
     @State private var edge: Int = 0
     @State private var notice: String?
@@ -260,24 +316,48 @@ struct MagazineBrowserView<Tile: View>: View {
     @State private var railScrubPendingIndex: Int?
     @State private var railScrubForward: Bool?
     @State private var railScrubSessionID: UUID?
+    /// 翻页快照存活期间冻结标题显示；新译文先留在上游缓存，落页后再切换。
+    @State private var presentedTranslations: [String: TranslatedEntryText] = [:]
+    @State private var pendingEditionInput: MagazineEditionCache.Input?
+    @State private var scrollTranslationLayoutTask: Task<Void, Never>?
+    @State private var scrollPositionReady = false
+    @State private var observedMagazineAnchor: String?
+    @State private var dragSourcePageIndex: Int?
+    @State private var swipeSourcePageIndex: Int?
     @GestureState private var isDraggingPage = false
     private var isTurning: Bool { turnRequest != nil }
+    private var usesCoverSurface: Bool { coverAnimating && !reduceMotion && coverSnapshots != nil }
     private var paperWidth: CGFloat { MagazinePaginator.pageWidth(availableSize.width) }
     private var turnInset: CGFloat { MagazinePaginator.turnInset(availableSize) }
     private var stageBackground: NSColor {
         NSColor(Color(paperHex: palette.backgroundHex)).blended(withFraction: palette.colorScheme == .dark ? 0.035 : 0.065,
             of: NSColor(Color(paperHex: palette.inkHex))) ?? .windowBackgroundColor
     }
-    // 深色纸面略亮于舞台，并沿用主题墨色混合，保留 Tokyo Night 的蓝灰色相。
+    private var paperStyle: MagazinePaperStyle { .init(rawValue: paperStyleRaw) ?? .paper }
+    // 杂志纸张独立于全局阅读主题；在 White 主题下仍能选回暖色 Paper。
     private var paperBackground: Color {
-        let base = NSColor(Color(paperHex: palette.backgroundHex))
-        guard palette.colorScheme == .dark else { return Color(nsColor: base) }
-        return Color(nsColor: base.blended(withFraction: 0.065,
-            of: NSColor(Color(paperHex: palette.inkHex))) ?? base)
+        switch paperStyle {
+        case .white: return Color(paperHex: palette.colorScheme == .dark ? "1C1C1C" : "FFFFFF")
+        case .book: return Color(paperHex: palette.colorScheme == .dark ? "2D281F" : "EFE2C8")
+        case .paper: return Color(paperHex: palette.colorScheme == .dark ? "211F1A" : "F6F2E7")
+        }
+    }
+    private var paperSheetBackground: some View {
+        paperBackground.overlay {
+            if paperStyle == .book {
+                ZStack {
+                    LinearGradient(colors: [.white.opacity(0.04), .clear, .brown.opacity(0.05)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(nsImage: MagazineBookGrain.image)
+                        .resizable(resizingMode: .tile)
+                }
+                .accessibilityHidden(true)
+            }
+        }
     }
     private var contentWidth: CGFloat { MagazinePaginator.contentWidth(availableSize.width) }
     private func foldSheetBackground(showsFold: Bool) -> some View {
-        paperBackground.overlay {
+        paperSheetBackground.overlay {
             if showsFold {
                 LinearGradient(colors: [.clear, Color(paperHex: palette.inkHex).opacity(0.035), .clear],
                     startPoint: .leading, endPoint: .trailing)
@@ -291,14 +371,14 @@ struct MagazineBrowserView<Tile: View>: View {
     private var turning: MagazineTurning { .init(rawValue: turningRaw) ?? .fold }
     private var editionInput: MagazineEditionCache.Input {
         .init(entries: entries, folders: folders, arrangement: arrangement, capacity: 12,
-              locale: locale.identifier, viewport: turning != .scroll ? MagazinePaginator.foldViewport(availableSize) : availableSize,
+              locale: locale.identifier, viewport: MagazinePaginator.foldViewport(availableSize),
               showsImages: showsImages, hasMore: hasMore, scopeID: memory.magazineScopeID,
-              displayTexts: entryTranslations)
+              displayTexts: presentedTranslations)
     }
     private var pages: [MagazinePage] { edition.pages }
     /// 空杂志不自动开页；内容排出版面后 id 变化会重新计时，避免在“暂无文章”时开出一本空书。
     private var autoOpenID: String {
-        "\(memory.magazineScopeID.uuidString)|\(isBrowsing)|\(pages.isEmpty ? "0" : "1")"
+        "\(memory.magazineScopeID.uuidString)|\(edition.activeScopeID?.uuidString ?? "pending")|\(isBrowsing)|\(isLoading)|\(pages.first?.id ?? "empty")"
     }
     private var openingImageRequests: [ArticleThumbnailRequest] {
         guard isBrowsing, showsImages else { return [] }
@@ -316,26 +396,41 @@ struct MagazineBrowserView<Tile: View>: View {
         if let position = railScrubPosition {
             return MagazineRailScrub.nearestIndex(position: position, count: pages.count)
         }
-        return edition.pageIndex(containing: memory.magazineAnchor)
+        return edition.pageIndex(containing: observedMagazineAnchor ?? memory.magazineAnchor)
     }
     private var railPageIndex: Int {
         guard let position = railScrubPosition else { return pageIndex }
         return MagazineRailScrub.nearestIndex(position: position, count: pages.count)
     }
+    private func translationsForSettledPage(_ translations: [String: TranslatedEntryText]) -> [String: TranslatedEntryText] {
+        guard turning != .scroll else { return translations }
+        let settledIndex = edition.pageIndex(containing: memory.magazineAnchor)
+        guard pages.indices.contains(settledIndex) else { return [:] }
+        // 邻页不在屏幕上，预取译文可先进入快照；翻过去便直接是译文。
+        let nearby = max(0, settledIndex - 1)...min(pages.count - 1, settledIndex + 1)
+        let readyIDs = Set(nearby.flatMap { pages[$0].entries.map(\.id) })
+        return translations.filter { readyIDs.contains($0.key) || presentedTranslations[$0.key] != nil }
+    }
+    private func revealSettledTranslations() {
+        let next = translationsForSettledPage(entryTranslations)
+        if presentedTranslations != next { presentedTranslations = next }
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             magazinePages(proxy: proxy)
+            .environment(\.entryTranslations, presentedTranslations)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .mask(alignment: .trailing) {
-                Rectangle().frame(width: coverAnimating && !reduceMotion ? availableSize.width / 2 : availableSize.width)
-            }
-            .offset(x: !memory.magazineIsOpen && !reduceMotion ? -paperWidth / 4 : 0)
-            .opacity(memory.magazineIsOpen ? 1 : 0)
+            // 封皮与右页快照在同一个合成器时间轴上移动；实时页面等落页后再接管。
+            // 无快照时保留原有 SwiftUI 动画路径。
+            .clipShape(Rectangle().offset(x: coverAnimating && !reduceMotion && !usesCoverSurface
+                                              ? availableSize.width / 2 : 0))
+            .offset(x: !usesCoverSurface && !memory.magazineIsOpen && !reduceMotion ? -paperWidth / 4 : 0)
+            .opacity(usesCoverSurface ? 0 : (memory.magazineIsOpen ? 1 : 0))
             .allowsHitTesting(memory.magazineIsOpen && !coverAnimating)
             .accessibilityHidden(!memory.magazineIsOpen)
             .overlay {
-                if pages.isEmpty {
+                if pages.isEmpty && !isLoading {
                     // 没有文章时不展示可翻开的书；默认给出与列表一致的空态。
                     Text(I18N.shared.localized("暂无文章", "No articles")).foregroundStyle(.secondary)
                 } else {
@@ -373,19 +468,20 @@ struct MagazineBrowserView<Tile: View>: View {
                 withAnimation(.easeOut(duration: 0.18)) { notice = nil }
             }
             .task(id: autoOpenID) {
-                guard isBrowsing, autoOpenedScope != memory.magazineScopeID else { return }
+                guard isBrowsing, !isLoading, autoOpenedScope != memory.magazineScopeID else { return }
                 let scope = memory.magazineScopeID
                 guard !memory.magazineIsOpen else { autoOpenedScope = scope; return }
                 // 暂无文章时保持封面/空态不翻开；排版完成后 autoOpenID 变化会再走一轮。
-                guard !pages.isEmpty else { return }
-                do { try await Task.sleep(for: .milliseconds(1000)) } catch { return }
+                guard !pages.isEmpty, edition.containsScope(scope) else { return }
+                do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
                 guard !Task.isCancelled, scope == memory.magazineScopeID,
-                      autoOpenedScope != scope, !pages.isEmpty else { return }
+                      !isLoading, autoOpenedScope != scope, !pages.isEmpty,
+                      edition.containsScope(scope) else { return }
                 autoOpenedScope = scope
                 openBook()
             }
             .task(id: openingImageRequests) {
-                // 与一秒开页计时独立运行；开页时继续共用在途请求，慢图不阻塞动画。
+                // 与封面计时独立运行；开页时继续共用在途请求，慢图不阻塞动画。
                 // 新订阅、隐藏视图或关闭图片会取消旧订阅者，下载限流与解码沿用共享缓存。
                 let requests = openingImageRequests
                 let store = thumbnailStore
@@ -414,17 +510,51 @@ struct MagazineBrowserView<Tile: View>: View {
                     onClearSelection()
                     cancelTurn()
                 }
+                // 图层动画以自己的完成回调收尾；主线程延迟挂载时不能按固定计时提前撤掉。
+                guard reduceMotion || coverSnapshots == nil else { return }
                 do { try await Task.sleep(for: .milliseconds(670)) } catch { return }
                 coverAnimating = false
+                coverSnapshots = nil
             }
-            .onPreferenceChange(MagazinePageFrames.self) { frames in
+            .onPreferenceChange(MagazinePageVisibilityKey.self) { frames in
                 guard isBrowsing, turning == .scroll, !memory.isRestoring, !railScrubActive else { return }
-                if let page = pages.first(where: { (frames[$0.id]?.maxY ?? -1) > 24 && (frames[$0.id]?.minY ?? .infinity) < availableSize.height }) {
+                if !scrollPositionReady {
+                    let targetIndex = edition.pageIndex(containing: memory.magazineAnchor)
+                    guard pages.indices.contains(targetIndex),
+                          frames[pages[targetIndex].id]?.isAtTop == true else { return }
+                    scrollPositionReady = true
+                    return
+                }
+                if let page = pages.first(where: { frames[$0.id]?.isVisible == true }) {
                     if let anchor = page.entries.first?.id { memory.magazineAnchor = anchor }
                 }
             }
+            .onReceive(memory.magazineAnchorUpdates) { observedMagazineAnchor = $0 }
             .onChange(of: editionInput, initial: true) { old, new in
+                scrollTranslationLayoutTask?.cancel()
+                if turning == .scroll, old.displayTexts != new.displayTexts {
+                    var translatedOld = old
+                    translatedOld.displayTexts = new.displayTexts
+                    if translatedOld == new {
+                        // 译文仅影响排版；长杂志的文字测量不能阻塞滚动帧。
+                        scrollTranslationLayoutTask = Task { await edition.updateAsync(new) }
+                        return
+                    }
+                }
+                scrollTranslationLayoutTask = nil
+                if isTurning, old.scopeID == new.scopeID, old.viewport == new.viewport,
+                   old.arrangement == new.arrangement, old.locale == new.locale,
+                   old.showsImages == new.showsImages {
+                    // 阅读/图片等数据到达时，翻页快照和页内几何保持到落页再更新。
+                    pendingEditionInput = new
+                    return
+                }
                 let hadAnchor = edition.contains(memory.magazineAnchor)
+                if old.scopeID != new.scopeID || old.viewport != new.viewport
+                    || old.arrangement != new.arrangement || old.locale != new.locale {
+                    scrollPositionReady = false
+                }
+                pendingEditionInput = nil
                 cancelTurn()
                 edition.update(new)
                 if let pending = pendingPageIndex, pages.indices.contains(pending) {
@@ -441,35 +571,69 @@ struct MagazineBrowserView<Tile: View>: View {
             .task(id: turningRaw) {
                 // Wait for the destination scroll container to exist before
                 // restoring its anchor when switching reading styles.
+                scrollTranslationLayoutTask?.cancel()
+                scrollTranslationLayoutTask = nil
+                if turning != .scroll { edition.update(editionInput) }
+                scrollPositionReady = false
                 cancelTurn()
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 restore(proxy: proxy)
             }
+            .onChange(of: turningRaw) { _, _ in scrollPositionReady = false }
             .onChange(of: hasMore) { _, value in if !value { pendingPageIndex = nil } }
             .onChange(of: keyboardRequest) { _, request in
                 guard isBrowsing, let request else { return }
                 handle(request, proxy: proxy)
             }
-            .onChange(of: memory.magazineScopeID) { _, _ in lastSelectionByPage.removeAll() }
+            .onChange(of: memory.magazineScopeID) { _, _ in
+                lastSelectionByPage.removeAll()
+                // 切到新来源时直接落回封面，旧开页动画与旧页快照不再参与绘制。
+                cancelCoverAnimation()
+                cancelTurn()
+            }
+            .onChange(of: coverAnimating) { wasAnimating, animating in
+                if wasAnimating && !animating && memory.magazineIsOpen {
+                    revealSettledTranslations()
+                }
+            }
             .task(id: memory.restorationID) {
                 guard isBrowsing else { return }
                 do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
                 restore(proxy: proxy, anchor: memory.restoreAnchor)
                 memory.finishRestoration()
             }
-            .onDisappear { cancelTurn() }
+            .onDisappear {
+                scrollTranslationLayoutTask?.cancel()
+                cancelCoverAnimation()
+                cancelTurn()
+            }
             .onChange(of: isBrowsing) { _, value in
-                if !value { cancelTurn() }
+                if !value {
+                    cancelCoverAnimation()
+                    cancelTurn()
+                }
                 else if memory.isRestoring {
                     restore(proxy: proxy, anchor: memory.restoreAnchor)
                     memory.finishRestoration()
                 }
             }
-            .onChange(of: availableSize) { _, _ in cancelTurn() }
+            .onChange(of: availableSize) { _, _ in
+                cancelCoverAnimation()
+                cancelTurn()
+            }
             .onChange(of: showsImages) { _, _ in cancelTurn() }
-            .onChange(of: pageIndex) { _, index in reportVisibleEntries(around: index) }
-            .onChange(of: pages.map(\.id)) { _, _ in reportVisibleEntries(around: pageIndex) }
+            .onChange(of: entryTranslations, initial: true) { _, _ in
+                if !isTurning && !railScrubActive && !coverAnimating { revealSettledTranslations() }
+            }
+            .onChange(of: pageIndex) { _, index in
+                if !isTurning && !railScrubActive && !coverAnimating { revealSettledTranslations() }
+                reportVisibleEntries(around: index)
+            }
+            .onChange(of: pages.map(\.id)) { _, _ in
+                if !isTurning && !railScrubActive && !coverAnimating { revealSettledTranslations() }
+                reportVisibleEntries(around: pageIndex)
+            }
             .onAppear { reportVisibleEntries(around: pageIndex) }
         }
         .background(turning != .scroll ? Color(nsColor: stageBackground) : Color.clear)
@@ -498,6 +662,11 @@ struct MagazineBrowserView<Tile: View>: View {
         }
         turnRequest = nil
         turnSourceAnchor = nil
+        if let pending = pendingEditionInput {
+            pendingEditionInput = nil
+            edition.update(pending)
+        }
+        revealSettledTranslations()
     }
 
     @ViewBuilder
@@ -596,10 +765,14 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private func magazineScrollPage(page: MagazinePage, index: Int) -> some View {
         pageContent(page, index: index)
+            // 版面尺寸已经由分页器确定，滚动栈不必用文字子树推测页高。
+            .frame(height: (edition.layouts[page.id]?.height ?? 0) + MagazinePaginator.headingHeight, alignment: .top)
+            .background(paperSheetBackground)
             .id(page.id)
             .background(GeometryReader { geometry in
-                Color.clear.preference(key: MagazinePageFrames.self,
-                    value: [page.id: geometry.frame(in: .named("magazine-viewport"))])
+                let frame = geometry.frame(in: .named("magazine-viewport"))
+                Color.clear.preference(key: MagazinePageVisibilityKey.self,
+                    value: [page.id: MagazinePageVisibility(frame: frame, viewportHeight: availableSize.height)])
             })
             .onAppear {
                 let isTail = page.id == pages.last?.id
@@ -613,7 +786,8 @@ struct MagazineBrowserView<Tile: View>: View {
             .updating($isDraggingPage) { _, active, _ in active = true }
             .onChanged { value in
                 guard abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-                if pageIndex == 0 && value.translation.width > 0 {
+                if dragSourcePageIndex == nil { dragSourcePageIndex = pageIndex }
+                if dragSourcePageIndex == 0 && value.translation.width > 0 {
                     if value.translation.width > 36 {
                         closeBook()
                     }
@@ -628,7 +802,9 @@ struct MagazineBrowserView<Tile: View>: View {
                 turnRequest = request
             }
             .onEnded { value in
-                if pageIndex == 0 && value.translation.width > 0 {
+                let sourcePageIndex = dragSourcePageIndex ?? pageIndex
+                dragSourcePageIndex = nil
+                if sourcePageIndex == 0 && value.translation.width > 0 {
                     if value.translation.width > 20 || value.predictedEndTranslation.width > 30 {
                         closeBook()
                     }
@@ -669,6 +845,9 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private func handleMagazineSwipe(distance: CGFloat, velocity: CGFloat, ended: Bool,
                                      cancelled: Bool, proxy: ScrollViewProxy) {
+        if swipeSourcePageIndex == nil { swipeSourcePageIndex = pageIndex }
+        let sourcePageIndex = swipeSourcePageIndex ?? pageIndex
+        if ended || cancelled { swipeSourcePageIndex = nil }
         if !memory.magazineIsOpen {
             if distance < 0 && !cancelled {
                 if abs(distance) > 24 || (ended && (abs(distance) > 12 || velocity < -80)) {
@@ -677,7 +856,7 @@ struct MagazineBrowserView<Tile: View>: View {
             }
             return
         }
-        if pageIndex == 0 && distance > 0 {
+        if sourcePageIndex == 0 && distance > 0 {
             if !cancelled && (distance > 24 || (ended && distance > 12)) {
                 closeBook()
             }
@@ -818,29 +997,34 @@ struct MagazineBrowserView<Tile: View>: View {
         }
         turnRequest = nil
         turnSourceAnchor = nil
+        let pending = pendingEditionInput
+        pendingEditionInput = nil
         railScrubActive = false
         railScrubPendingIndex = nil
         railScrubPosition = nil
         railScrubSourceAnchor = nil
         railScrubForward = nil
         railScrubSessionID = nil
+        if let pending { edition.update(pending) }
     }
 
-    /// 上报当前页与下一页的条目给标题翻译调度器（下一页用于翻页预取）。
+    /// 当前页及前后页的可见标题和描述一并预取；调度器分批并优先处理标题。
     /// 排版尚未完成时不回调，保持上一次的范围。
     private func reportVisibleEntries(around index: Int) {
         guard !pages.isEmpty, pages.indices.contains(index) else { return }
-        var entries: [EntryListItem] = []
+        var candidates: [TitleTranslationCandidate] = []
         var seen = Set<String>()
-        for offset in 0...1 {
+        for offset in [0, 1, -1] {
             let target = index + offset
             guard pages.indices.contains(target) else { continue }
             for entry in pages[target].entries where seen.insert(entry.id).inserted {
-                entries.append(entry)
+                candidates.append(TitleTranslationCandidate(entryID: entry.id, feedID: entry.feedID,
+                    title: entry.title,
+                    summary: entry.isSummaryVisible ? entry.summaryPreview : nil))
             }
         }
-        guard !entries.isEmpty else { return }
-        onVisibleEntriesChange(entries)
+        guard !candidates.isEmpty else { return }
+        onVisibleEntriesChange(candidates)
     }
 
     private func pageContent(_ page: MagazinePage, index: Int) -> some View {
@@ -865,6 +1049,7 @@ struct MagazineBrowserView<Tile: View>: View {
                     ForEach(layout.placements, id: \.entryID) { placement in
                         if let entry = entriesByID[placement.entryID] {
                             tile(entry, placement.frame.width, .gallery)
+                            .environment(\.entryTranslations, presentedTranslations)
                             .environment(\.magazineStoryStyle, placement.style)
                             .frame(width: placement.frame.width, height: placement.frame.height, alignment: .leading)
                             .overlay(alignment: .top) {
@@ -933,7 +1118,8 @@ struct MagazineBrowserView<Tile: View>: View {
 
     private func openBook() {
         // 没有可展示的版面时绝不翻开：保持封面/“暂无文章”，避免空书。
-        guard !memory.magazineIsOpen, !pages.isEmpty else { return }
+        guard !memory.magazineIsOpen, !isLoading, !pages.isEmpty,
+              edition.containsScope(memory.magazineScopeID) else { return }
         autoOpenedScope = memory.magazineScopeID
         onClearSelection()
         cancelTurn()
@@ -941,10 +1127,22 @@ struct MagazineBrowserView<Tile: View>: View {
             memory.magazineAnchor = firstID
             memory.visibleAnchor = firstID
         }
+        prepareCoverSnapshots()
+        coverOpening = true
         coverAnimating = true
         if pageSoundEnabled { MagazinePageSound.play() }
-        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.16) :
+                      .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
             memory.magazineIsOpen = true
+        }
+    }
+
+    private func cancelCoverAnimation() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            coverAnimating = false
+            coverSnapshots = nil
         }
     }
 
@@ -956,9 +1154,12 @@ struct MagazineBrowserView<Tile: View>: View {
             memory.magazineAnchor = firstID
             memory.visibleAnchor = firstID
         }
+        prepareCoverSnapshots()
+        coverOpening = false
         coverAnimating = true
         if pageSoundEnabled { MagazinePageSound.play() }
-        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.16) :
+                      .timingCurve(0.77, 0, 0.175, 1, duration: 0.65)) {
             memory.magazineIsOpen = false
         }
     }
@@ -968,39 +1169,103 @@ struct MagazineBrowserView<Tile: View>: View {
             let width = paperWidth / 2
             // 与翻页宿主使用同一视口，不再次扣除底部导航高度。
             let height = max(1, geometry.size.height - turnInset * 2)
-            Button(action: openBook) {
-                MagazineCoverLeaf(progress: memory.magazineIsOpen ? 1 : 0, reduced: reduceMotion,
-                    width: width, front: coverFace(width: width, height: height),
-                    back: coverInside(width: width, height: height))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(coverTitle)
-            .accessibilityIdentifier("magazine.cover")
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 15)
-                    .onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else { return }
-                        if value.translation.width < -20 || value.predictedEndTranslation.width < -30 {
-                            openBook()
-                        }
+            ZStack {
+                Button(action: openBook) {
+                    if !reduceMotion, coverSnapshots != nil {
+                        coverFace(width: width, height: height)
+                            .opacity(coverAnimating || memory.magazineIsOpen ? 0 : 1)
+                    } else {
+                        MagazineCoverLeaf(progress: memory.magazineIsOpen ? 1 : 0, reduced: reduceMotion,
+                            width: width, front: coverFace(width: width, height: height),
+                            back: coverInside(width: width, height: height))
                     }
-            )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(coverTitle)
+                .accessibilityIdentifier("magazine.cover")
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 15)
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else { return }
+                            if value.translation.width < -20 || value.predictedEndTranslation.width < -30 {
+                                openBook()
+                            }
+                        }
+                )
+                if coverAnimating, !reduceMotion, let coverSnapshots {
+                    let scope = memory.magazineScopeID
+                    MagazineCoverAnimationSurface(front: coverSnapshots.front, back: coverSnapshots.back,
+                                                  right: coverSnapshots.right,
+                                                  opening: coverOpening) {
+                        guard coverAnimating, memory.magazineScopeID == scope else { return }
+                        coverAnimating = false
+                        self.coverSnapshots = nil
+                    }
+                        .frame(width: paperWidth, height: height)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
             .position(x: geometry.size.width / 2, y: turnInset + height / 2)
+            .onChange(of: geometry.size, initial: true) { _, size in
+                if coverBounds != size { coverBounds = size }
+            }
         }
+    }
+
+    private func prepareCoverSnapshots() {
+        guard !reduceMotion, !pages.isEmpty, coverBounds.width > 1, coverBounds.height > 1 else {
+            coverSnapshots = nil
+            return
+        }
+        let size = CGSize(width: paperWidth / 2, height: max(1, coverBounds.height - turnInset * 2))
+        let spreadSize = CGSize(width: paperWidth, height: size.height)
+        guard let page = pages.first,
+              let front = coverImage(coverFace(width: size.width, height: size.height), size: size),
+              let spread = coverImage(pageContent(page, index: 0)
+                .frame(width: paperWidth, height: spreadSize.height, alignment: .topLeading)
+                .background(foldSheetBackground(showsFold: edition.layouts[page.id]?.form == .spread)),
+                size: spreadSize) else {
+            coverSnapshots = nil
+            return
+        }
+        let split = spread.width / 2
+        guard split > 0,
+              let back = spread.cropping(to: CGRect(x: 0, y: 0, width: split, height: spread.height)),
+              let right = spread.cropping(to: CGRect(x: split, y: 0,
+                                                     width: spread.width - split, height: spread.height)) else {
+            coverSnapshots = nil
+            return
+        }
+        coverSnapshots = (front, back, right)
+    }
+
+    private func coverImage<Content: View>(_ content: Content, size: CGSize) -> CGImage? {
+        let renderer = ImageRenderer(content: content
+            .environment(\.paperAppearancePalette, palette)
+            .environment(\.colorScheme, colorScheme)
+            .environment(\.displayScale, displayScale)
+            .environment(\.locale, locale)
+            .environment(\.entryTranslations, presentedTranslations))
+        renderer.proposedSize = ProposedViewSize(size)
+        renderer.scale = min(displayScale, 2, sqrt(2_000_000 / max(1, size.width * size.height)))
+        // 封面是圆角，强制不透明会把透明角落烘成黑色像素。
+        renderer.isOpaque = false
+        return renderer.cgImage
     }
 
     private func coverInside(width: CGFloat, height: CGFloat) -> some View {
         Group {
-            if let page = pages.first {
+            if let page = pages.first, !memory.magazineIsOpen || coverAnimating {
                 pageContent(page, index: 0)
                     .frame(width: paperWidth, height: height, alignment: .topLeading)
                     .frame(width: width, height: height, alignment: .leading)
                     .clipped()
             } else {
-                paperBackground.frame(width: width, height: height)
+                paperSheetBackground.frame(width: width, height: height)
             }
         }
-        .background(paperBackground)
+        .background(paperSheetBackground)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -1009,6 +1274,12 @@ struct MagazineBrowserView<Tile: View>: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(paperBackground)
+                    .overlay {
+                        if paperStyle == .book {
+                            paperSheetBackground
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                    }
                     .overlay {
                         HStack(spacing: 0) {
                             LinearGradient(colors: [.black.opacity(0.035), .clear],
@@ -1205,6 +1476,145 @@ private struct MagazineCoverLeaf<Front: View, Back: View>: View, @MainActor Anim
                 .offset(x: width / 2 * progress)
             }
         }
+    }
+}
+
+/// 封皮旋转只提交两张静态图层，窗口主线程繁忙时仍由合成器继续补帧。
+private struct MagazineCoverAnimationSurface: NSViewRepresentable {
+    let front: CGImage
+    let back: CGImage
+    let right: CGImage
+    let opening: Bool
+    let onComplete: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> MagazineCoverAnimationView {
+        MagazineCoverAnimationView(front: front, back: back, right: right,
+                                   opening: opening, onComplete: onComplete)
+    }
+    func updateNSView(_ view: MagazineCoverAnimationView, context: Context) {}
+    static func dismantleNSView(_ view: MagazineCoverAnimationView, coordinator: ()) {
+        view.cancel()
+    }
+}
+
+@MainActor
+private final class MagazineCoverAnimationView: NSView {
+    private let front: CGImage
+    private let back: CGImage
+    private let rightImage: CGImage
+    private let opening: Bool
+    private let onComplete: @MainActor () -> Void
+    private let leaf = CALayer()
+    private let rightPage = CALayer()
+    private var started = false
+    private var cancelled = false
+
+    init(front: CGImage, back: CGImage, right: CGImage, opening: Bool,
+         onComplete: @escaping @MainActor () -> Void) {
+        self.front = front
+        self.back = back
+        self.rightImage = right
+        self.opening = opening
+        self.onComplete = onComplete
+        super.init(frame: .zero)
+        wantsLayer = true
+    }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        guard !started, bounds.width > 2, bounds.height > 1, let layer else { return }
+        started = true
+        let width = bounds.width / 2
+        let left = width / 2
+        let right = width
+        let closed = CATransform3DIdentity
+        let opened = CATransform3DMakeRotation(-.pi, 0, 1, 0)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        var perspective = CATransform3DIdentity
+        perspective.m34 = -1 / max(1, width * 7)
+        layer.sublayerTransform = perspective
+        // 右页与封皮共用同一书脊坐标和 Core Animation 时间轴，避免两套动画错拍露缝。
+        rightPage.name = "magazine.cover.rightPage"
+        rightPage.bounds = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+        rightPage.anchorPoint = CGPoint(x: 0, y: 0.5)
+        rightPage.position = CGPoint(x: opening ? left : right, y: bounds.midY)
+        rightPage.contents = rightImage
+        rightPage.contentsGravity = .resize
+        rightPage.contentsScale = CGFloat(rightImage.width) / width
+        layer.addSublayer(rightPage)
+        leaf.name = "magazine.cover.leaf"
+        leaf.bounds = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+        leaf.anchorPoint = CGPoint(x: 0, y: 0.5)
+        leaf.position = CGPoint(x: opening ? left : right, y: bounds.midY)
+        leaf.transform = opening ? closed : opened
+        var faces: [CALayer] = []
+        for (image, reversed) in [(front, false), (back, true)] {
+            let face = CALayer()
+            face.frame = leaf.bounds
+            face.contents = image
+            face.contentsGravity = .resize
+            face.contentsScale = CGFloat(image.width) / width
+            // 可见面由 opacity 切换；单面裁剪会在父子层 3D 旋转叠加时误隐藏背面。
+            face.isDoubleSided = true
+            face.masksToBounds = true
+            face.opacity = opening == reversed ? 1 : 0
+            if reversed { face.transform = CATransform3DMakeRotation(.pi, 0, 1, 0) }
+            leaf.addSublayer(face)
+            faces.append(face)
+        }
+        layer.addSublayer(leaf)
+        rightPage.position.x = opening ? right : left
+        leaf.position.x = opening ? right : left
+        leaf.transform = opening ? opened : closed
+        CATransaction.commit()
+
+        let timing = CAMediaTimingFunction(controlPoints: 0.77, 0, 0.175, 1)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.cancelled else { return }
+                self.onComplete()
+            }
+        }
+        let rotation = CABasicAnimation(keyPath: "transform.rotation.y")
+        rotation.fromValue = opening ? 0 : -Double.pi
+        rotation.toValue = opening ? -Double.pi : 0
+        rotation.duration = 0.65
+        rotation.timingFunction = timing
+        leaf.add(rotation, forKey: "rotation")
+        let position = CABasicAnimation(keyPath: "position.x")
+        position.fromValue = opening ? left : right
+        position.toValue = opening ? right : left
+        position.duration = 0.65
+        position.timingFunction = timing
+        leaf.add(position, forKey: "position")
+        let rightPosition = CABasicAnimation(keyPath: "position.x")
+        rightPosition.fromValue = opening ? left : right
+        rightPosition.toValue = opening ? right : left
+        rightPosition.duration = 0.65
+        rightPosition.timingFunction = timing
+        rightPage.add(rightPosition, forKey: "position")
+        for (index, face) in faces.enumerated() {
+            let showsAtStart = opening ? index == 0 : index == 1
+            let visibility = CAKeyframeAnimation(keyPath: "opacity")
+            visibility.values = showsAtStart ? [1, 1, 0, 0] : [0, 0, 1, 1]
+            visibility.keyTimes = [0, 0.48, 0.52, 1]
+            visibility.duration = 0.65
+            face.add(visibility, forKey: "visibility")
+        }
+        CATransaction.commit()
+    }
+
+    func cancel() {
+        cancelled = true
+        leaf.removeAllAnimations()
+        leaf.removeFromSuperlayer()
+        rightPage.removeAllAnimations()
+        rightPage.removeFromSuperlayer()
     }
 }
 
