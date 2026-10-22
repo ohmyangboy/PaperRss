@@ -108,6 +108,49 @@ final class AIReasoningCapabilitiesTests: XCTestCase {
         second.reasoningProtocol = .openAI
         XCTAssertNotEqual(fingerprint(first), fingerprint(second))
     }
+    func testFixedTemperatureModelsOmitTheFieldRegardlessOfAdapterOrProtocol() throws {
+        let fixed = [
+            "kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed",
+            "kimi-k2.5", "Kimi-K2-thinking-turbo", "moonshotai/kimi-k2.6"
+        ]
+        for model in fixed {
+            var value = config("https://api.moonshot.cn/v1", model)
+            value.adaptation = .userMessage
+            value.reasoningProtocol = .openAI
+            value.reasoningMode = "low"
+            let payload = try body(value)
+            XCTAssertNil(payload["temperature"], model)
+            XCTAssertEqual(payload["reasoning_effort"] as? String, "low", model)
+            let overridden = try LLMService().makeRequest(
+                prompt: "Test", system: "Test", configuration: value, apiKey: "", stream: false, overrideTemperature: 1
+            )
+            let overriddenPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(overridden.httpBody)) as? [String: Any])
+            XCTAssertNil(overriddenPayload["temperature"], model)
+        }
+
+        for model in ["moonshot-v1-8k", "kimi-k2-0905-preview", "kimi-latest", "gpt-4o-mini"] {
+            let payload = try body(config("https://api.moonshot.cn/v1", model))
+            XCTAssertEqual((payload["temperature"] as? NSNumber)?.doubleValue ?? -1, 0.2, accuracy: 0.000_001, model)
+            XCTAssertNil(payload["reasoning_effort"], model)
+        }
+
+        var gemini = config("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3-flash")
+        XCTAssertNil(try body(gemini)["temperature"])
+        gemini.model = "gemini-2.5-flash"
+        XCTAssertEqual((try body(gemini)["temperature"] as? NSNumber)?.doubleValue ?? -1, 0.2, accuracy: 0.000_001)
+    }
+
+    func testUnusedKimiTemperatureDoesNotSplitCacheIdentity() {
+        func fingerprint(_ model: String, _ temperature: Double) -> String {
+            var value = config("https://api.moonshot.cn/v1", model)
+            value.temperature = temperature
+            return AIExecutionContext(providerID: "custom", providerKind: .customOpenAICompatible, configuration: value)
+                .fingerprint(for: .summary, promptVersion: 1)
+        }
+        XCTAssertEqual(fingerprint("kimi-k2.6", 0.2), fingerprint("kimi-k2.6", 0.9))
+        XCTAssertNotEqual(fingerprint("moonshot-v1-8k", 0.2), fingerprint("moonshot-v1-8k", 0.9))
+    }
+
     func testOfficialLanguageAliasesAndLiteSubset() throws {
         XCTAssertEqual(try LLMService.translationLanguage("zh_tw"), "Traditional Chinese")
         XCTAssertEqual(try LLMService.translationLanguage("繁体中文"), "Traditional Chinese")

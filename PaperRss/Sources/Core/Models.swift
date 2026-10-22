@@ -609,6 +609,19 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var usesGeminiAPI: Bool { reasoningCapabilities.wireProtocol == .gemini }
     public var supportsDisablingReasoning: Bool { reasoningCapabilities.canDisable }
 
+    /// 这些模型的采样温度由服务端固定。显式传入配置里的 0.2 会得到 HTTP 400
+    ///（`invalid temperature: only 1 is allowed for this model`）。
+    /// kimi-k2.6 在思考开启时固定为 1.0、关闭时固定为 0.6，所以也不能改写成写死 1。
+    /// 官方要求不要传 `temperature`。模型适配和思考协议都不决定这个字段。
+    /// https://platform.kimi.ai/docs/api/models-overview
+    static func omitsSamplingTemperature(modelID: String, usesGeminiAPI: Bool) -> Bool {
+        let id = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if usesGeminiAPI && id.hasPrefix("gemini-3") { return true }
+        let leaf = id.split(separator: "/").last.map(String.init) ?? id
+        let fixedFamilies = ["kimi-k2.5", "kimi-k2.6", "kimi-k2.7", "kimi-k2-thinking", "kimi-k3"]
+        return fixedFamilies.contains { leaf == $0 || leaf.hasPrefix($0 + "-") }
+    }
+
     public init(providerName: String = "OpenAI 兼容接口", providerDescription: String = "用于翻译、总结和解读文章", baseURL: String, model: String, reasoningMode: String = "自动", temperature: Double, targetLanguage: String, allowInsecureLocalEndpoint: Bool, showsAISummary: Bool = true, automaticallyGenerateSummary: Bool = false, showsSelectionExplanation: Bool = true, showsSelectionAsk: Bool = true, showsSelectionTranslation: Bool = true, customPrompt: String = "", providerKind: AIProviderKind? = nil, adaptation: AIModelAdaptation = .automatic) {
         self.providerName = providerName
         self.providerDescription = providerDescription

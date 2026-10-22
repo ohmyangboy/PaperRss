@@ -476,7 +476,7 @@ public struct LLMService: Sendable {
             "messages": configuration.resolvedAdaptation == .userMessage
                 ? [["role": "user", "content": system + "\n\n" + prompt]]
                 : [["role": "system", "content": system], ["role": "user", "content": prompt]]]
-        if !(configuration.usesGeminiAPI && normalizedModel.lowercased().hasPrefix("gemini-3")) {
+        if !LLMConfiguration.omitsSamplingTemperature(modelID: normalizedModel, usesGeminiAPI: configuration.usesGeminiAPI) {
             body["temperature"] = overrideTemperature ?? configuration.temperature
         }
         let capability = configuration.reasoningCapabilities

@@ -156,6 +156,7 @@ Swift Package 的部署目标是 macOS 14。Xcode 工程另有 macOS 14 与 iOS 
 - 翻译记忆按标准化文本、Base URL、模型、目标语言和 Prompt 版本寻址，跨文章复用，并限制为最多 2,000 条。
 - 思考深度属于功能配置并实际进入每个请求；Provider adapter 只执行协议能力限制，设置界面不暴露 temperature。
 - Google Gemini 通过官方 OpenAI-compatible 根地址（`/v1beta/openai`）复用同一消息与 SSE 解析；Gemini 3.x 映射 `reasoning_effort`，并省略已废弃的 `temperature` 参数。
+- Kimi 固定温度的模型（`kimi-k3`、`kimi-k2.6`、`kimi-k2.7-code` 及其高速版，以及 `kimi-k2.5`、`kimi-k2-thinking`）在聊天请求中省略 `temperature`，由服务端使用固定值。`kimi-k2.6` 的固定值随思考开关在 1.0 与 0.6 之间变化，因此不能改写成写死 `1`。模型适配与思考协议不改这个字段；`moonshot-v1` 和仍接受自定义温度的旧 Kimi 模型继续发送配置中的 temperature。
 - 供应商详情支持 `GET /models` 拉取候选目录；只有用户确认添加并保存草稿后模型才进入已配置目录，失败时不覆盖已有目录。
 - 切换 Provider 或模型不隐藏已有摘要、译文和划词标注；摘要重生成成功后事务替换，失败时保留旧摘要。
 ### 打开文章时自动翻译（Beta）
