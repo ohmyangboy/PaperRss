@@ -609,10 +609,12 @@ public struct LLMConfiguration: Codable, Hashable, Sendable {
     public var usesGeminiAPI: Bool { reasoningCapabilities.wireProtocol == .gemini }
     public var supportsDisablingReasoning: Bool { reasoningCapabilities.canDisable }
 
-    /// 这些模型的采样温度由服务端固定。显式传入配置里的 0.2 会得到 HTTP 400
-    ///（`invalid temperature: only 1 is allowed for this model`）。
-    /// kimi-k2.6 在思考开启时固定为 1.0、关闭时固定为 0.6，所以也不能改写成写死 1。
-    /// 官方要求不要传 `temperature`。模型适配和思考协议都不决定这个字段。
+    /// 聊天请求是否省略 `temperature`。默认仍发送配置值（0.2）。
+    /// 这里只列传上去会 400，或官方要求不要传该字段的模型：
+    /// 官方 Gemini 且 id 以 `gemini-3` 开头（字段已废弃）；
+    /// `kimi-k2.5`、`kimi-k2.6`、`kimi-k2.7`、`kimi-k2-thinking`、`kimi-k3`
+    ///（温度由服务端固定；`kimi-k2.6` 思考开启为 1.0、关闭为 0.6，不能写死 1）。
+    /// 名单随模型 API 变化，改约束时同步更新本函数、architecture.md 的温度说明和对应测试。
     /// https://platform.kimi.ai/docs/api/models-overview
     static func omitsSamplingTemperature(modelID: String, usesGeminiAPI: Bool) -> Bool {
         let id = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
