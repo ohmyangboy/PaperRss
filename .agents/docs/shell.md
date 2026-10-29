@@ -49,6 +49,7 @@
 | `scripts/sparkle/validate_artifacts.sh` | 产物与 manifest 一致性校验 | `artifact_manifest.mjs` | 经 `build_artifacts.sh` |
 | `scripts/sparkle/artifact_manifest.mjs` | manifest 生成与校验（架构名归一化、签名、摘要） | `lipo`、`plutil`、`unzip`、`hdiutil` | 经上游脚本 |
 | `scripts/sparkle/make_release_dmg.sh` | 从已 Staple 的 App 制作美化发布 DMG | Xcode | 经 `release.sh` |
+| `scripts/sparkle/changelog.mjs` | 按版本精确抽取 CHANGELOG 中英文整节；Release/appcast 共用，缺段失败 | Node | `node scripts/sparkle/changelog.mjs CHANGELOG.md v1.5.1` |
 | `scripts/sparkle/appcast.mjs` | stable / beta appcast 契约 | — | 经发布与升级脚本 |
 | `scripts/sparkle/publish_release.sh` | 正式 Sparkle Release 编排；默认本地 dry-run，远程需双重确认 | `publish_release_dry_run.sh`、`publish_appcast_github.mjs`、`publish_homebrew.mjs` | 手动（维护者） |
 | `scripts/sparkle/publish_release_dry_run.sh`、`scripts/sparkle/publish_release_dry_run.mjs` | 只读发布计划器 | — | 经 `publish_release.sh` |

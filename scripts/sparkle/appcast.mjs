@@ -10,6 +10,8 @@ import { createHash, createPublicKey, verify as verifySignature } from 'node:cry
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
+import { defaultChangelogPath, extractChangelog } from './changelog.mjs';
+
 const fail = (message) => { throw new Error(`appcast contract failed: ${message}`); };
 
 const option = (args, name, { required = true, multiple = false } = {}) => {
@@ -140,11 +142,12 @@ const orderedManifests = (manifests, options) => {
   return selected;
 };
 
-export const generateAppcast = (manifests, { channel, assetRoot, publicKeyPath } = {}) => {
+export const generateAppcast = (manifests, { channel, assetRoot, publicKeyPath, changelogPath = defaultChangelogPath } = {}) => {
   if (!['stable', 'beta'].includes(channel)) fail('channel must be stable or beta');
   const selected = orderedManifests(manifests, { channel, assetRoot, publicKeyPath, requireAsset: true });
   const items = selected.map((manifest) => `    <item>
       <title>PaperRss ${xmlEscape(manifest.displayVersion)}</title>
+      <description><![CDATA[${extractChangelog(changelogPath, manifest.displayVersion).replaceAll(']]>', ']]]]><![CDATA[>')}]]></description>
       <sparkle:version>${xmlEscape(manifest.build)}</sparkle:version>
       <sparkle:shortVersionString>${xmlEscape(manifest.displayVersion)}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>${xmlEscape(manifest.minimumMacOS)}</sparkle:minimumSystemVersion>
@@ -171,6 +174,10 @@ export const validateAppcast = (xml, { channel, assetRoot, publicKeyPath } = {})
   if (itemTexts.length === 0) return { channel, itemCount: 0, highestBuild: 0 };
   let previous = 0;
   for (const item of itemTexts) {
+    const description = item.match(/<description>([\s\S]*?)<\/description>/)?.[1];
+    if (!description?.replaceAll('<![CDATA[', '').replaceAll(']]>', '').trim()) {
+      fail('appcast item description is missing or empty');
+    }
     const version = item.match(/<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/)?.[1];
     const build = item.match(/<sparkle:version>([^<]+)<\/sparkle:version>/)?.[1];
     const minimumMacOS = item.match(/<sparkle:minimumSystemVersion>([^<]+)<\/sparkle:minimumSystemVersion>/)?.[1]
@@ -210,6 +217,7 @@ const parseArgs = (args) => ({
   action: args[0],
   channel: option(args, '--channel'),
   manifests: option(args, '--manifest', { required: false, multiple: true }),
+  changelogPath: option(args, '--changelog', { required: false }),
   appcast: option(args, '--appcast', { required: false }),
   output: option(args, '--output', { required: false }),
   assetRoot: option(args, '--asset-root', { required: false }),

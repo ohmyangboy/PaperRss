@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { chmod, cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import test from 'node:test';
+import test, { after } from 'node:test';
+import { defaultChangelogPath, extractChangelog } from '../scripts/sparkle/changelog.mjs';
+import { generateAppcast, validateAppcast } from '../scripts/sparkle/appcast.mjs';
 
 const exec = promisify(execFile);
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -14,6 +16,13 @@ const appcastScript = join(root, 'scripts/sparkle/appcast.mjs');
 const appcastPublisher = join(root, 'scripts/sparkle/publish_appcast_github.mjs');
 const publishScript = join(root, 'scripts/sparkle/publish_release_dry_run.mjs');
 const releasePublisher = join(root, 'scripts/sparkle/publish_release.sh');
+
+const notesRoot = await mkdtemp(join(tmpdir(), 'paperrss-changelog-'));
+const fixtureChangelog = join(notesRoot, 'CHANGELOG.md');
+await writeFile(fixtureChangelog, ['1.9.0', '2.0.0', '2.0.1', '2.1.0-beta.1', '2.1.0'].map(
+  (version) => `## v${version} · Build 999 · arbitrary date\n\n本地 MCP ${version}\n\n---\n\nLocal MCP ${version}\n`,
+).join('\n'));
+after(() => rm(notesRoot, { recursive: true, force: true }));
 
 const plist = ({ version, build }) => `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -57,7 +66,7 @@ async function manifestFixture(parent, { version, build, channel = 'stable', fil
 }
 
 async function run(script, args, env = {}) {
-  return exec(process.execPath, [script, ...args], {
+  return exec(process.execPath, [script, ...args, '--changelog', fixtureChangelog], {
     cwd: root,
     env: { ...process.env, ...env },
     maxBuffer: 1024 * 1024,
@@ -65,7 +74,7 @@ async function run(script, args, env = {}) {
 }
 
 async function runShell(script, args, env = {}) {
-  return exec('/bin/bash', [script, ...args], {
+  return exec('/bin/bash', [script, ...args, '--changelog', fixtureChangelog], {
     cwd: root,
     env: { ...process.env, ...env },
     maxBuffer: 1024 * 1024,
@@ -257,7 +266,7 @@ test('正式发布绑定 target commit，并支持只核验资产后恢复 appca
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.GH_LOG, args.join(' ') + '\\n');
+fs.appendFileSync(process.env.GH_LOG, args.map((arg) => arg.replaceAll('\\n', ' ')).join(' ') + '\\n');
 const releaseState = process.env.GH_RELEASE_STATE;
 const state = fs.existsSync(releaseState) ? fs.readFileSync(releaseState, 'utf8').trim() : 'absent';
 const target = process.env.GH_TARGET_COMMIT;
@@ -305,6 +314,8 @@ if (args[0] === 'release' && args[1] === 'view') {
   process.exit(0);
 }
 if (args[0] === 'release' && args[1] === 'create') {
+  const notes = args.includes('--notes-file') ? fs.readFileSync(args[args.indexOf('--notes-file') + 1], 'utf8') : args[args.indexOf('--notes') + 1];
+  fs.writeFileSync(process.env.GH_NOTES, notes);
   fs.writeFileSync(releaseState, 'draft'); process.exit(0);
 }
 if (args[0] === 'release' && args[1] === 'edit') {
@@ -337,6 +348,7 @@ process.exit(9);
     PATH: `${parent}:${process.env.PATH}`,
     GH_LOG: log,
     GH_RELEASE_STATE: releaseState,
+    GH_NOTES: join(parent, 'notes.txt'),
     GH_APPCAST_STATE: appcastState,
     GH_CASK_STATE: caskState,
     GH_ASSET_ROOT: parent,
@@ -367,6 +379,7 @@ process.exit(9);
 
   const executeOutput = join(parent, 'execute-output');
   const execute = await runShell(releasePublisher, [...formalArgs, '--output-dir', executeOutput], environment);
+  assert.equal(await readFile(environment.GH_NOTES, 'utf8'), extractChangelog(fixtureChangelog, 'v2.0.0'));
   assert.match(execute.stdout, /draft.*upload-all.*publish.*appcast|正式发布顺序/i);
   const commands = (await readFile(log, 'utf8')).trim().split('\n');
   assert.match(commands[0], new RegExp(`api repos/example/PaperRss/commits/${fixture.sourceCommit}`));
@@ -402,6 +415,8 @@ process.exit(9);
 
   // beta 必须在首次公开前标记为预发布，不能触发稳定版镜像同步。
   const beta = await manifestFixture(parent, { version: '2.1.0-beta.1', build: 21, channel: 'beta' });
+  const override = join(parent, 'override.md');
+  await writeFile(override, 'Explicit notes override');
   await writeFile(releaseState, 'absent');
   await writeFile(log, '');
   await runShell(releasePublisher, [
@@ -409,8 +424,10 @@ process.exit(9);
     '--manifest', beta.manifest, '--public-key', beta.publicKeyPath,
     '--target-commit', beta.sourceCommit, '--appcast-repo', 'example/PaperRss',
     '--appcast-branch', 'main', '--appcast-path', 'website/appcast/beta.xml',
-    '--output-dir', join(parent, 'beta-output'),
+    '--output-dir', join(parent, 'beta-output'), '--notes-file', override,
   ], { ...environment, PAPERRSS_RELEASE_CONFIRM: 'PUBLISH v2.1.0-beta.1' });
+  assert.equal(await readFile(environment.GH_NOTES, 'utf8'), 'Explicit notes override');
+  assert.match(await readFile(appcastState, 'utf8'), /本地 MCP 2.1.0-beta.1/);
   const betaCommands = (await readFile(log, 'utf8')).trim().split('\n');
   assert.doesNotMatch(betaCommands.join('\n'), /homebrew-tap|Casks/);
   const createBeta = betaCommands.find((command) => command.startsWith('release create '));
@@ -418,4 +435,44 @@ process.exit(9);
   assert.match(createBeta, /--latest=false(?:\s|$)/);
   assert.match(betaCommands.find((command) => command.startsWith('release edit ')), /--latest=false/);
   assert.doesNotMatch(betaCommands.join('\n'), /contents\/website\/appcast\/stable\.xml/);
+});
+
+test('v1.5.1 默认抽取整节中英文，appcast description 与 Release helper 同源', async () => {
+  const notes = extractChangelog(defaultChangelogPath, 'v1.5.1');
+  assert.equal(extractChangelog(defaultChangelogPath, '1.5.1'), notes);
+  assert.match(notes, /本地 MCP/);
+  assert.match(notes, /Local MCP/);
+  assert.match(notes, /\n---\n/);
+  assert.doesNotMatch(notes, /^## v1\.5\.0-beta\.4/m);
+  const { stdout } = await exec(process.execPath, [join(root, 'scripts/sparkle/changelog.mjs'), defaultChangelogPath, 'v1.5.1']);
+  assert.equal(stdout, notes);
+  const parent = await mkdtemp(join(tmpdir(), 'paperrss-notes-default-'));
+  try {
+    const fixture = await manifestFixture(parent, { version: '1.5.1', build: 46 });
+    const output = join(parent, 'stable.xml');
+    await exec(process.execPath, [appcastScript, 'generate', '--channel', 'stable', '--manifest', fixture.manifest, '--output', output], { cwd: parent });
+    const xml = await readFile(output, 'utf8');
+    assert.ok(xml.includes(`<description><![CDATA[${notes}]]></description>`));
+    assert.equal(validateAppcast(xml, { channel: 'stable' }).itemCount, 1);
+    for (const replacement of ['', '<description> </description>', '<description><![CDATA[ \n]]></description>']) {
+      assert.throws(() => validateAppcast(xml.replace(/<description><!\[CDATA\[[\s\S]*?\]\]><\/description>/, replacement)), /description/);
+    }
+    const custom = join(parent, 'custom.md');
+    await writeFile(custom, '## v1.5.10 · Build 1\n\nWrong prefix\n');
+    await assert.rejects(exec(process.execPath, [appcastScript, 'generate', '--channel', 'stable', '--manifest', fixture.manifest, '--output', join(parent, 'missing.xml'), '--changelog', custom]), /CHANGELOG.*v1\.5\.1.*found 0/);
+    await assert.rejects(readFile(join(parent, 'missing.xml')), { code: 'ENOENT' });
+    await writeFile(custom, '## v1.5.1 · Build 999 · arbitrary date\n\n中文 ]]> & <tag>\n---\nEnglish\n');
+    const manifest = { ...JSON.parse(await readFile(fixture.manifest, 'utf8')), __path: fixture.manifest };
+    const escaped = generateAppcast([manifest], { channel: 'stable', changelogPath: custom });
+    assert.ok(escaped.includes(']]]]><![CDATA[>'));
+    assert.equal(validateAppcast(escaped).itemCount, 1);
+    assert.equal(validateAppcast(generateAppcast([], { channel: 'stable', changelogPath: '/missing' })).itemCount, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('共享抽取缺段明确失败；publish 在 gh 之前拒绝默认缺段', async () => {
+  await assert.rejects(exec(process.execPath, [join(root, 'scripts/sparkle/changelog.mjs'), defaultChangelogPath, 'v999.0.0']), /CHANGELOG.*v999\.0\.0.*found 0/);
+  await assert.rejects(runShell(releasePublisher, ['--channel', 'beta', '--tag', 'v999.0.0', '--manifest', '/missing', '--output-dir', '/missing']), /CHANGELOG.*v999\.0\.0.*found 0/);
 });

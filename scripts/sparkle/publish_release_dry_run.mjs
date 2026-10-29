@@ -143,6 +143,7 @@ const main = () => {
     mkdirSync(outputDir, { recursive: true });
     const xml = generateAppcast(manifests, {
       channel,
+      changelogPath: option(args, '--changelog', { required: false }),
       publicKeyPath,
     });
     const appcastPath = join(outputDir, `${channel}.xml`);

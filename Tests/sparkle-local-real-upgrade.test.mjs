@@ -192,9 +192,11 @@ test('appcast 生成器接受 Sparkle Info.plist 使用的 raw base64 公钥', a
     minimumMacOS: '14.0',
     downloadURL: `https://127.0.0.1:12345/releases/${archive.split('/').pop()}`,
   }, null, 2)}\n`);
+  const changelog = join(parent, 'CHANGELOG.md');
+  await writeFile(changelog, '## v1.3.0-beta.2 · Build 11\n\nLocal upgrade fixture notes\n');
   const output = join(parent, 'beta.xml');
   await run(process.execPath, [appcastScript, 'generate', '--channel', 'beta', '--manifest', manifestPath,
-    '--output', output, '--public-key', publicKeyPath]);
+    '--output', output, '--public-key', publicKeyPath, '--changelog', changelog]);
   assert.match(await readFile(output, 'utf8'), /1\.3\.0-beta\.2/);
 });
 

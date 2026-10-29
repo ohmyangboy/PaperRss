@@ -21,6 +21,8 @@ APPCAST_REPO=""
 APPCAST_BRANCH=""
 APPCAST_REMOTE_PATH=""
 NOTES_FILE=""
+CHANGELOG="$ROOT_DIR/CHANGELOG.md"
+RELEASE_NOTES=""
 TITLE=""
 
 usage() {
@@ -28,6 +30,7 @@ usage() {
 用法:
   publish_release.sh [--dry-run] --channel <stable|beta> --tag <vX.Y.Z>
     --manifest <manifest.json> --output-dir <目录> [--public-key <文件>]
+    [--changelog <文件，默认仓库根 CHANGELOG.md>] [--notes-file <Release 说明覆盖文件>]
 
 未来正式发布（必须得到单独授权）额外需要：
   --execute --repo <owner/repository> --target-commit <40位 SHA>
@@ -60,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --appcast-repo) APPCAST_REPO="${2:-}"; shift 2 ;;
     --appcast-branch) APPCAST_BRANCH="${2:-}"; shift 2 ;;
     --appcast-path) APPCAST_REMOTE_PATH="${2:-}"; shift 2 ;;
+    --changelog) CHANGELOG="${2:-}"; shift 2 ;;
     --notes-file) NOTES_FILE="${2:-}"; shift 2 ;;
     --title) TITLE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -72,6 +76,13 @@ if [[ -z "$CHANNEL" || -z "$TAG" || -z "$MANIFEST" || -z "$OUTPUT_DIR" ]]; then
   exit 2
 fi
 
+# 在任何远程访问前解析默认说明；显式 notes-file 仅覆盖 GitHub Release。
+if [[ -n "$NOTES_FILE" ]]; then
+  [[ -f "$NOTES_FILE" ]] || { echo "错误: notes 文件不存在: $NOTES_FILE" >&2; exit 1; }
+else
+  RELEASE_NOTES=$(node "$ROOT_DIR/scripts/sparkle/changelog.mjs" "$CHANGELOG" "$TAG")
+fi
+
 # 稳定版在创建任何远端资产之前，先验证 Homebrew 产物约束。
 if [[ "$CHANNEL" == "stable" ]]; then
   node "$HOMEBREW_TOOL" --manifest "$MANIFEST" --tag "$TAG" --repo "${REPO:-ohmyangboy/PaperRss}"
@@ -82,7 +93,7 @@ if [[ "$EXECUTE" != true ]]; then
     echo "错误: --resume-appcast 只能与经过授权的 --execute 一起使用。" >&2
     exit 2
   fi
-  DRY_ARGS=(--channel "$CHANNEL" --tag "$TAG" --manifest "$MANIFEST" --output-dir "$OUTPUT_DIR")
+  DRY_ARGS=(--changelog "$CHANGELOG" --channel "$CHANNEL" --tag "$TAG" --manifest "$MANIFEST" --output-dir "$OUTPUT_DIR")
   [[ -n "$PUBLIC_KEY" ]] && DRY_ARGS+=(--public-key "$PUBLIC_KEY")
   exec "$DRY_RUN" "${DRY_ARGS[@]}"
 fi
@@ -151,7 +162,7 @@ fi
 
 EXPECTED_WORK=$(mktemp -d "${TMPDIR:-/tmp}/paperrss-expected-appcast.XXXXXX")
 trap 'rm -rf "$EXPECTED_WORK"' EXIT
-"$DRY_RUN" --channel "$CHANNEL" --tag "$TAG" --manifest "$MANIFEST" \
+"$DRY_RUN" --changelog "$CHANGELOG" --channel "$CHANNEL" --tag "$TAG" --manifest "$MANIFEST" \
   --output-dir "$EXPECTED_WORK/generated" --public-key "$PUBLIC_KEY"
 EXPECTED_APPCAST="$EXPECTED_WORK/generated/$CHANNEL.xml"
 if [[ -e "$APPCAST_PATH" ]]; then
@@ -241,7 +252,7 @@ else
     [[ -f "$NOTES_FILE" ]] || { echo "错误: notes 文件不存在: $NOTES_FILE" >&2; exit 1; }
     CREATE_ARGS+=(--notes-file "$NOTES_FILE")
   else
-    CREATE_ARGS+=(--notes "PaperRss $TAG")
+    CREATE_ARGS+=(--notes "$RELEASE_NOTES")
   fi
   gh "${CREATE_ARGS[@]}"
   gh release upload "$TAG" "$ZIP_PATH" "$DMG_PATH" --repo "$REPO"
@@ -262,7 +273,7 @@ PAPERRSS_APPCAST_CONFIRM="PUBLISH $APPCAST_TARGET" \
 if [[ "$CHANNEL" == "stable" ]]; then
   BETA_REMOTE_PATH="${APPCAST_REMOTE_PATH%/*}/beta.xml"
   BETA_WORK=$(mktemp -d "${TMPDIR:-/tmp}/paperrss-beta-appcast.XXXXXX")
-  "$DRY_RUN" --channel beta --tag "$TAG" --manifest "$MANIFEST" \
+  "$DRY_RUN" --changelog "$CHANGELOG" --channel beta --tag "$TAG" --manifest "$MANIFEST" \
     --output-dir "$BETA_WORK/generated" --public-key "$PUBLIC_KEY" >/dev/null
   BETA_TARGET="$APPCAST_REPO:$APPCAST_BRANCH:$BETA_REMOTE_PATH"
   PAPERRSS_APPCAST_AUTHORIZED=YES \
