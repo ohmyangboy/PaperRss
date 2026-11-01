@@ -879,6 +879,51 @@ public final class AppStore: ObservableObject {
         }
     }
 
+    private final class IconProbeDelayGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = continuation }
+        func resume() {
+            lock.lock()
+            let continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume()
+        }
+    }
+
+    private final class IconProbeDelaySlot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var gate: IconProbeDelayGate?
+        func store(_ gate: IconProbeDelayGate) {
+            lock.lock()
+            self.gate = gate
+            lock.unlock()
+        }
+        func resume() {
+            lock.lock()
+            let gate = self.gate
+            lock.unlock()
+            gate?.resume()
+        }
+    }
+
+    /// 图标探测的等待不能抛出 `CancellationError`。测试会把被取消的 `Task.sleep` 记成失败。
+    private func waitForIconProbeDelay(_ delay: TimeInterval) async {
+        let slot = IconProbeDelaySlot()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let pending = IconProbeDelayGate(continuation)
+                slot.store(pending)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+                    pending.resume()
+                }
+            }
+        } onCancel: {
+            slot.resume()
+        }
+    }
+
     /// 调度后台无图源真实图标探测（带防抖与延时保护，避免与主线程渲染和启动刷新争抢系统资源）
     public func scheduleMissingIconProbe(delay: TimeInterval = 1.0, force: Bool = false) {
         missingIconProbeTask?.cancel()
@@ -886,7 +931,7 @@ public final class AppStore: ObservableObject {
         let iconStore = self.iconStore
         missingIconProbeTask = Task { @MainActor [weak self] in
             if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await self?.waitForIconProbeDelay(delay)
             }
             guard !Task.isCancelled, let self else { return }
             // 若当前仍处于全量/增量刷新流程中，延后重试，绝不与核心文章抓取争抢线程与网络资源
