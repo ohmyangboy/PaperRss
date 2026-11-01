@@ -332,6 +332,7 @@ public final class AppStore: ObservableObject {
             englishFallback: "Remote iCloud updates are unavailable. You can still sync manually.")
     }
     private var lastRefreshProgressPublishedAt: [String: Date] = [:]
+    private var lastRefreshProgressPublishedCount: [String: Int] = [:]
     @Published public private(set) var accountRefreshProgress: [String: AccountRefreshProgress] = [:]
     @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
     @Published public private(set) var reloadingFeedIDs: Set<UUID> = []
@@ -2641,15 +2642,27 @@ public final class AppStore: ObservableObject {
 
     /// 批次落库后仅更新侧边栏投影，不在同步中重新注册 Provider。
     private func receiveRefreshProgress(_ progress: AccountRefreshProgress?, accountID: String) async {
-        // 快速连续完成的 Feed／批次合并发布，避免全局 ObservableObject 高频重绘。
+        // 合并进度发布，避免全局 ObservableObject 高频重绘。
+        // 仅用 0.3 秒会让慢速完成的大批次按墙钟时间拆成上百次刷新；再按总量约 1/15 合并，发布次数不随机器变慢而增加。
         let now = Date()
         if let progress, progress.completed > 0, progress.completed != progress.total,
-           accountRefreshProgress[accountID]?.phase == progress.phase,
-           let last = lastRefreshProgressPublishedAt[accountID], now.timeIntervalSince(last) < 0.3 {
-            return
+           accountRefreshProgress[accountID]?.phase == progress.phase {
+            let dueByCount: Bool
+            if let total = progress.total {
+                let minimumStep = max(total / 15, 1)
+                let publishedCount = lastRefreshProgressPublishedCount[accountID] ?? 0
+                dueByCount = progress.completed - publishedCount >= minimumStep
+            } else {
+                dueByCount = true
+            }
+            let tooSoon = lastRefreshProgressPublishedAt[accountID].map { now.timeIntervalSince($0) < 0.3 } ?? false
+            if !dueByCount || tooSoon {
+                return
+            }
         }
         let sidebarGeneration = beginSidebarCountsRefresh()
         lastRefreshProgressPublishedAt[accountID] = progress == nil ? nil : now
+        lastRefreshProgressPublishedCount[accountID] = progress?.completed
         let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
         if progress?.completed == 0 {
             let repository = localProvider.feedRepository
