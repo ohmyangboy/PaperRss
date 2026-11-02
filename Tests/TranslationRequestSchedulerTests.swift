@@ -24,6 +24,7 @@ private actor TranslationAttemptRecorder {
     var starts: [ContinuousClock.Instant] = []
     var active = 0
     var peak = 0
+
     func attempt(rateLimited: Bool = false) async throws -> String {
         starts.append(.now)
         if rateLimited { throw LLMServiceError.rateLimitedWithRetryAfter(0.04) }
@@ -33,23 +34,26 @@ private actor TranslationAttemptRecorder {
         active -= 1
         return "译文"
     }
+
     func snapshot() -> (starts: [ContinuousClock.Instant], peak: Int) { (starts, peak) }
 
-    /// 停在请求里，直到另一个模型也进入。固定睡眠会在慢速调度下先结束，peak 只能记到 1。
-    func holdUntilPeerArrives() async -> String {
+    /// 停在请求里，直到同时有 `expectedPeers` 个调用在里面。
+    /// 固定睡眠会让先到的一方在慢 runner 上先结束，peak 只能记到 1——那测的是机器速度，不是调度器。
+    /// 末批可能只有一个调用（并发上限的余数），用 `grace` 让它在没有对端时也能返回；
+    /// `peak` 断言仍然是真正的判据：串行调度器不会因为放宽等待就变成 2。
+    func rendezvous(peers expectedPeers: Int, grace: Duration = .seconds(1)) async -> String {
+        starts.append(.now)
         active += 1
         peak = max(peak, active)
-        if let waitingForPeer {
-            self.waitingForPeer = nil
-            peerWaitID = nil
-            waitingForPeer.resume()
+        if active >= expectedPeers {
+            releaseAll()
         } else {
             let id = UUID()
-            peerWaitID = id
             await withCheckedContinuation { continuation in
-                waitingForPeer = continuation
-                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                    Task { await self.abandonPeerWait(id) }
+                waiters[id] = continuation
+                let seconds = Double(grace.components.seconds) + Double(grace.components.attoseconds) / 1e18
+                DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [self] in
+                    Task { await release(id: id) }
                 }
             }
         }
@@ -57,14 +61,17 @@ private actor TranslationAttemptRecorder {
         return "译文"
     }
 
-    private var waitingForPeer: CheckedContinuation<Void, Never>?
-    private var peerWaitID: UUID?
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-    private func abandonPeerWait(_ id: UUID) {
-        guard peerWaitID == id, let waitingForPeer else { return }
-        self.waitingForPeer = nil
-        peerWaitID = nil
-        waitingForPeer.resume()
+    private func releaseAll() {
+        let pending = waiters
+        waiters.removeAll()
+        pending.values.forEach { $0.resume() }
+    }
+
+    private func release(id: UUID) {
+        guard let continuation = waiters.removeValue(forKey: id) else { return }
+        continuation.resume()
     }
 }
 
@@ -124,7 +131,7 @@ final class TranslationRequestSchedulerTests: XCTestCase {
             for _ in 0..<5 {
                 group.addTask {
                     try await scheduler.run(key: "same-model", minimumInterval: .milliseconds(20)) {
-                        try await recorder.attempt()
+                        await recorder.rendezvous(peers: 2)
                     }
                 }
             }
@@ -132,16 +139,16 @@ final class TranslationRequestSchedulerTests: XCTestCase {
         }
         let sameModel = await recorder.snapshot()
         XCTAssertEqual(sameModel.starts.count, 5)
-        XCTAssertEqual(sameModel.peak, 2)
+        XCTAssertEqual(sameModel.peak, 2, "同模型并发上限应为 2")
         for (a, b) in zip(sameModel.starts, sameModel.starts.dropFirst()) {
             XCTAssertGreaterThanOrEqual(a.duration(to: b), .milliseconds(18))
         }
         let independent = TranslationAttemptRecorder()
-        async let first = scheduler.run(key: "model-A", minimumInterval: .seconds(10)) { await independent.holdUntilPeerArrives() }
-        async let second = scheduler.run(key: "model-B", minimumInterval: .seconds(10)) { await independent.holdUntilPeerArrives() }
+        async let first = scheduler.run(key: "model-A", minimumInterval: .seconds(10)) { await independent.rendezvous(peers: 2) }
+        async let second = scheduler.run(key: "model-B", minimumInterval: .seconds(10)) { await independent.rendezvous(peers: 2) }
         _ = try await (first, second)
         let differentModels = await independent.snapshot()
-        XCTAssertEqual(differentModels.peak, 2)
+        XCTAssertEqual(differentModels.peak, 2, "不同模型之间不应互相串行")
     }
 
     func testRateLimitPausesSiblingsAndStopsTheRetryStorm() async throws {
