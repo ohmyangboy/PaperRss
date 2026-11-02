@@ -34,6 +34,38 @@ private actor TranslationAttemptRecorder {
         return "译文"
     }
     func snapshot() -> (starts: [ContinuousClock.Instant], peak: Int) { (starts, peak) }
+
+    /// 停在请求里，直到另一个模型也进入。固定睡眠会在慢速调度下先结束，peak 只能记到 1。
+    func holdUntilPeerArrives() async -> String {
+        active += 1
+        peak = max(peak, active)
+        if let waitingForPeer {
+            self.waitingForPeer = nil
+            peerWaitID = nil
+            waitingForPeer.resume()
+        } else {
+            let id = UUID()
+            peerWaitID = id
+            await withCheckedContinuation { continuation in
+                waitingForPeer = continuation
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    Task { await self.abandonPeerWait(id) }
+                }
+            }
+        }
+        active -= 1
+        return "译文"
+    }
+
+    private var waitingForPeer: CheckedContinuation<Void, Never>?
+    private var peerWaitID: UUID?
+
+    private func abandonPeerWait(_ id: UUID) {
+        guard peerWaitID == id, let waitingForPeer else { return }
+        self.waitingForPeer = nil
+        peerWaitID = nil
+        waitingForPeer.resume()
+    }
 }
 
 final class TranslationRequestSchedulerTests: XCTestCase {
@@ -105,8 +137,8 @@ final class TranslationRequestSchedulerTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(a.duration(to: b), .milliseconds(18))
         }
         let independent = TranslationAttemptRecorder()
-        async let first = scheduler.run(key: "model-A", minimumInterval: .seconds(10)) { try await independent.attempt() }
-        async let second = scheduler.run(key: "model-B", minimumInterval: .seconds(10)) { try await independent.attempt() }
+        async let first = scheduler.run(key: "model-A", minimumInterval: .seconds(10)) { await independent.holdUntilPeerArrives() }
+        async let second = scheduler.run(key: "model-B", minimumInterval: .seconds(10)) { await independent.holdUntilPeerArrives() }
         _ = try await (first, second)
         let differentModels = await independent.snapshot()
         XCTAssertEqual(differentModels.peak, 2)
