@@ -475,8 +475,9 @@ public actor AgentLibraryService: AgentBridge {
                 """, arguments: StatementArguments([account, account] + ids))
             return rows.map { AgentFeedPreview(id: $0["id"], title: String(($0["title"] as String).plainText.prefix(200))) }
         }
-        try charge(summary.count + summaryEnglish.count + titles.reduce(0) { $0 + $1.count }
-            + feeds.reduce(0) { $0 + $1.id.count + $1.title.count })
+        let titleCharacters: Int = titles.reduce(0) { $0 + $1.count }
+        let feedCharacters: Int = feeds.reduce(0) { $0 + $1.id.count + $1.title.count }
+        try charge(summary.count + summaryEnglish.count + titleCharacters + feedCharacters)
         var dto = AgentStatePlan(plan_id: UUID().uuidString, account_id: account, article_ids: ids,
             field: field, value: value, expires_at: clock().addingTimeInterval(900),
             retention_notice: "Marking read or removing a star may make articles eligible for retention cleanup. Changes to synced accounts are queued for sync. No undo is provided.",
