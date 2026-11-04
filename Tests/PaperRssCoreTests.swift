@@ -963,8 +963,20 @@ final class PaperRssCoreTests: XCTestCase {
         }
 
         let store = AppStore(testDatabase: .empty) { _ in fatalError("Unused in test") }
-        let config = LLMConfiguration.deepSeek
-        _ = store.saveLLMConfiguration(config, apiKey: "")
+        // Legacy configurations migrate to custom providers, which may use a
+        // local service without a key. Exercise the built-in missing-key gate
+        // with an isolated provider ID instead of depending on a live endpoint.
+        let provider = AIProviderProfile(
+            id: "missing-key-\(UUID().uuidString)", kind: .deepSeek,
+            name: "Missing key fixture", description: "", baseURL: "https://example.test/v1",
+            selectedModelID: "fixture-model"
+        )
+        store.addAIProvider(provider, apiKey: "")
+        defer { LocalAPIKeyStore.saveAPIKey("", for: provider.id) }
+        store.saveAISettings(store.aiSettings.updatingFeature(
+            .summary, configuration: AIFeatureConfiguration(isEnabled: true,
+                model: AIModelReference(providerID: provider.id, modelID: provider.selectedModelID))
+        ))
 
         let entry = Entry(id: "test-entry-1", feedID: UUID(), title: "Test Title", summary: "Test Content")
         
