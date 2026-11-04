@@ -2728,7 +2728,7 @@ private struct FolderRowView: View {
     }
 }
 
-private struct EntryListView: View {
+struct EntryListView: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: AppStore
@@ -2749,11 +2749,9 @@ private struct EntryListView: View {
     @ObservedObject var presentation = TimelinePresentationMemory()
     var onOpenEntry: () -> Void = {}
     @State private var visualSelectionID: String?
-    @State private var listSelectionScrollID: String?
     @State private var visibleImageIDs: Set<String> = []
     @FocusState private var visualHasFocus: Bool
 
-    @State private var isScrolled = false
     @State private var loadedEntries: [EntryListItem] = []
     @State private var loadedEntryIndexes: [String: Int] = [:]
     @State private var hasMore: Bool = true
@@ -3051,7 +3049,6 @@ private struct EntryListView: View {
                     retainedUnreadIDs.removeAll()
                 }
                 selectedEntryID = newID
-                if viewStyle == .list { listSelectionScrollID = newID }
             }
         )
     }
@@ -3060,7 +3057,8 @@ private struct EntryListView: View {
     private func entryRowView(for entry: EntryListItem) -> some View {
         let isSelected = selectedEntryID == entry.id
         EntryRow(entry: entry, isSelected: isSelected, isFocused: isListFocused,
-                 showsImages: showsImages && visibleImageIDs.contains(entry.id), thumbnailStore: store.thumbnailStore,
+                 showsImages: showsImages, loadsThumbnail: visibleImageIDs.contains(entry.id),
+                 thumbnailStore: store.thumbnailStore,
                  palette: appearancePalette, displayScale: displayScale,
                  translation: titleTranslator.translations[entry.id], appLanguage: store.appLanguage)
             .equatable()
@@ -3164,8 +3162,11 @@ private struct EntryListView: View {
                 visibleIndexes.append(index)
             }
         }
-        if viewStyle == .list {
-            let imageIDs = Set(visibleIndexes.map { loadedEntries[$0].id })
+        if viewStyle == .list, showsImages {
+            let imageIDs = Set(visibleIndexes.compactMap { index -> String? in
+                let entry = loadedEntries[index]
+                return entry.previewImageURL == nil ? nil : entry.id
+            })
             if imageIDs != visibleImageIDs { visibleImageIDs = imageIDs }
         }
         guard !visibleIndexes.isEmpty else { return (firstVisible?.id, lastVisibleIndex) }
@@ -3283,7 +3284,9 @@ private struct EntryListView: View {
             let next = current.map { $0 + (request.keyCode == 125 ? step : -step) } ?? 0
             let index = min(loadedEntries.count - 1, max(0, next))
             visualSelectionID = loadedEntries[index].id
-            proxy.scrollTo(loadedEntries[index].id, anchor: .center)
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
+                proxy.scrollTo(loadedEntries[index].id, anchor: .center)
+            }
             if index >= loadedEntries.count - step { loadNextPage() }
         } else if [36, 49, 76].contains(request.keyCode) {
             let target = id.flatMap { id in loadedEntries.first { $0.id == id } } ?? loadedEntries[0]
@@ -3406,19 +3409,7 @@ private struct EntryListView: View {
                       loadedEntryIndexes[targetID] != nil else { return }
                 if viewStyle == .list, !presentation.shouldCenterSelection(targetID) { return }
                 ArticleSwitchTrace.mark("scroll requested", entryID: targetID)
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
-            }
-            .task(id: listSelectionScrollID) {
-                guard let targetID = listSelectionScrollID else { return }
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                guard !Task.isCancelled, listSelectionScrollID == targetID,
-                      selectedEntryID == targetID,
-                      loadedEntryIndexes[targetID] != nil else { return }
-                guard presentation.shouldCenterSelection(targetID) else { return }
-                ArticleSwitchTrace.mark("list scroll requested", entryID: targetID)
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
                     proxy.scrollTo(targetID, anchor: .center)
                 }
             }
@@ -3436,26 +3427,8 @@ private struct EntryListView: View {
             }
             #endif
             #if os(macOS)
-            .background {
-                ScrollOffsetObserver { offset in
-                    let shouldBlur = offset > 1
-                    if isScrolled != shouldBlur {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isScrolled = shouldBlur
-                        }
-                    }
-                }
-            }
             .safeAreaInset(edge: .top, spacing: 0) {
-                Color.clear.frame(height: 52)
-                    .background {
-                        PaperTopBarBlur(
-                            appearance: store.readerAppearance,
-                            appearanceMode: appearanceMode,
-                            height: 52,
-                            opacity: isScrolled ? 1 : 0
-                        )
-                    }
+                TimelineScrollHeader(appearance: store.readerAppearance, appearanceMode: appearanceMode)
             }
             #endif
             .overlay {
@@ -3481,6 +3454,27 @@ private struct EntryListView: View {
 }
 
 #if os(macOS)
+private struct TimelineScrollHeader: View {
+    let appearance: ReaderAppearance
+    let appearanceMode: ReaderAppearanceMode
+    @State private var showsBlur = false
+
+    var body: some View {
+        Color.clear.frame(height: 52)
+            .background {
+                PaperTopBarBlur(appearance: appearance, appearanceMode: appearanceMode, height: 52,
+                                opacity: showsBlur ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.2), value: showsBlur)
+            }
+            .background {
+                ScrollOffsetObserver { offset in
+                    let next = offset > 1
+                    if next != showsBlur { showsBlur = next }
+                }
+            }
+    }
+}
+
 /// 观察文章列表 NSScrollView 的垂直偏移，用于驱动顶部导航的模糊层。
 ///
 /// SwiftUI 重建宿主视图时，一次性查找滚动视图可能发生在 NSTableView 尚未创建的时刻，
@@ -3760,11 +3754,12 @@ private struct EntryRowSelectionSurface: View {
     }
 }
 
-private struct EntryRow: View, Equatable {
+struct EntryRow: View, Equatable {
     let entry: EntryListItem
     let isSelected: Bool
     let isFocused: Bool
     var showsImages = false
+    var loadsThumbnail = false
     var thumbnailStore: ArticleThumbnailStore?
     let palette: ReaderAppearancePalette
     let displayScale: CGFloat
@@ -3777,7 +3772,7 @@ private struct EntryRow: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.entry == rhs.entry && lhs.isSelected == rhs.isSelected &&
             lhs.isFocused == rhs.isFocused && lhs.showsImages == rhs.showsImages &&
-            lhs.thumbnailStore === rhs.thumbnailStore && lhs.palette == rhs.palette &&
+            lhs.loadsThumbnail == rhs.loadsThumbnail && lhs.thumbnailStore === rhs.thumbnailStore && lhs.palette == rhs.palette &&
             lhs.displayScale == rhs.displayScale && lhs.translation == rhs.translation &&
             lhs.appLanguage == rhs.appLanguage
     }
@@ -3864,8 +3859,13 @@ private struct EntryRow: View, Equatable {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     if showsImages, let thumbnailStore, let url = entry.previewImageURL {
-                        ArticleThumbnailView(request: .init(accountID: entry.accountID, url: url, pixelSize: Int(68 * displayScale)),
-                            store: thumbnailStore, width: 68, height: 54)
+                        Color.clear.frame(width: 68, height: 54)
+                            .overlay {
+                                if loadsThumbnail {
+                                    ArticleThumbnailView(request: .init(accountID: entry.accountID, url: url, pixelSize: Int(68 * displayScale)),
+                                                         store: thumbnailStore, width: 68, height: 54)
+                                }
+                            }
                             .padding(.top, 2)
                     }
                 }

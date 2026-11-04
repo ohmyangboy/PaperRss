@@ -408,9 +408,7 @@ struct ArticleReaderView: View {
             let requestedEntry = entry
             articleLoadSession += 1
             let requestedLoadSession = articleLoadSession
-            let requestedAIGeneration = aiWorkspace.attach(
-                ReaderAIDocument(entryID: requestedEntry.id, text: requestedEntry.sourceText)
-            )
+            let requestedAIGeneration = aiWorkspace.attach(entryID: requestedEntry.id)
             activeAIGeneration = requestedAIGeneration
             activeLoadEntryID = requestedEntry.id
             // 内存命中时短暂保留旧页；其他情况立即显示进度环。

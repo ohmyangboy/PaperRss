@@ -88,7 +88,7 @@ final class TimelinePresentationTests: XCTestCase {
         XCTAssertFalse(memory.isRestoring)
     }
 
-    func testKeyboardSelectionCentersOnlyWhenItReachesViewportEdge() {
+    func testReaderSelectionCentersOnlyWhenItReachesViewportEdge() {
         let memory = TimelinePresentationMemory()
         memory.viewportFrame = CGRect(x: 0, y: 52, width: 400, height: 600)
         memory.visibleRowFrames = [
@@ -176,6 +176,24 @@ final class TimelinePresentationTests: XCTestCase {
             Color.gray
         }, width: 500)
         XCTAssertEqual(height, 48, accuracy: 1)
+    }
+
+    func testArticleRowKeepsItsHeightWhenThumbnailLoadingBecomesEligible() {
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let icons = FeedIconStore(directory: cache)
+        let thumbnails = ArticleThumbnailStore(directory: cache) { _ in throw URLError(.notConnectedToInternet) }
+        let entry = EntryListItem(id: "image", feedID: UUID(), title: "Short title", sourceTitle: "Feed",
+                                  previewImageURL: URL(string: "https://example.invalid/image.jpg"))
+        func height(showsImages: Bool, loadsThumbnail: Bool) -> CGFloat {
+            measuredHeight(EntryRow(entry: entry, isSelected: false, isFocused: true,
+                showsImages: showsImages, loadsThumbnail: loadsThumbnail, thumbnailStore: thumbnails,
+                palette: ReaderAppearance.default.palette(for: .light), displayScale: 2,
+                translation: nil, appLanguage: .system).environmentObject(icons), width: 280)
+        }
+        let reserved = height(showsImages: true, loadsThumbnail: false)
+        XCTAssertEqual(reserved, height(showsImages: true, loadsThumbnail: true), accuracy: 0.5)
+        XCTAssertGreaterThan(reserved, height(showsImages: false, loadsThumbnail: false))
     }
 
     func testTextOnlyTilesHaveNoReservedImageOrMinimumHeight() {

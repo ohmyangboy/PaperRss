@@ -174,13 +174,18 @@ public final class ArticleAIWorkspace: ObservableObject {
 
     @discardableResult
     public func attach(_ document: ReaderAIDocument) -> AIDocumentGeneration {
+        attach(entryID: document.entryID)
+    }
+
+    @discardableResult
+    public func attach(entryID: String) -> AIDocumentGeneration {
         cancelDocumentWork(in: projection.generation)
-        let generation = AIDocumentGeneration(entryID: document.entryID)
+        let generation = AIDocumentGeneration(entryID: entryID)
         projection = ArticleAIProjection(
-            entryID: document.entryID,
+            entryID: entryID,
             generation: generation,
-            summary: summaryBufferByEntryID[document.entryID],
-            bilingualTranslations: bilingualBufferByEntryID[document.entryID] ?? [:]
+            summary: summaryBufferByEntryID[entryID],
+            bilingualTranslations: bilingualBufferByEntryID[entryID] ?? [:]
         )
         return generation
     }

@@ -1160,18 +1160,59 @@ final class ThreeColumnSplitViewCoordinator: NSObject, NSToolbarDelegate {
         /// keep their events, and arrow-key numericPad/function flags are allowed.
         private func consumeTimelineKey(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
             let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-            guard actions.usesVisualTimeline, activeColumnIndex == 1,
+            guard activeColumnIndex == 1,
                   flags.intersection(disallowed).isEmpty,
                   ([UInt16(125), 126, 36, 49, 76].contains(event.keyCode)
                     || (actions.usesMagazineTimeline && [UInt16(53), 116, 121, 123, 124].contains(event.keyCode))),
                   let splitVC = splitViewController, splitVC.splitViewItems.count == 3,
-                  let window = splitVC.view.window, window.attachedSheet == nil,
-                  NSApp.modalWindow == nil,
+                  let window = splitVC.view.window, (event.window ?? NSApp.keyWindow) === window,
+                  window.attachedSheet == nil, NSApp.modalWindow == nil,
                   let responder = window.firstResponder as? NSView,
                   !(responder is NSTextView), !(responder is NSTextField),
                   responder.isDescendant(of: splitVC.splitViewItems[1].viewController.view)
             else { return false }
+            if !actions.usesVisualTimeline {
+                guard let table = responder as? NSTableView else { return false }
+                return Self.moveArticleSelection(in: table, keyCode: event.keyCode, isRepeat: event.isARepeat,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            }
             actions.onTimelineKey(event.keyCode)
+            return true
+        }
+
+        static func moveArticleSelection(in table: NSTableView, keyCode: UInt16, isRepeat: Bool = false, reduceMotion: Bool) -> Bool {
+            guard keyCode == 125 || keyCode == 126, table.selectedRow >= 0,
+                  let scroll = table.enclosingScrollView else { return false }
+            let step = keyCode == 125 ? 1 : -1
+            let row = table.selectedRow + step
+            guard (0..<table.numberOfRows).contains(row) else { return true }
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+
+            // Look one article ahead, as NetNewsWire does for next/previous navigation.
+            let following = min(max(row + step, 0), table.numberOfRows - 1)
+            let visible = scroll.documentVisibleRect
+            let selected = table.rect(ofRow: row)
+            let next = table.rect(ofRow: following)
+            guard !visible.contains(selected) || !visible.intersects(next) else { return true }
+            let clip = scroll.contentView
+            var bounds = clip.bounds
+            bounds.origin.y += floor(next.midY - visible.midY)
+            let destination = clip.constrainBoundsRect(bounds)
+            if reduceMotion {
+                clip.scroll(to: destination.origin)
+                scroll.reflectScrolledClipView(clip)
+            } else if isRepeat {
+                // Keep up with key repeat; a new slow ease-in on every repeat would fall behind.
+                clip.animator().bounds = destination
+            } else {
+                // Give a half-viewport move time to accelerate as well as settle.
+                let distance = abs(destination.origin.y - clip.bounds.origin.y)
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = min(0.46, max(0.24, 0.20 + distance / 2100))
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    clip.animator().bounds = destination
+                }
+            }
             return true
         }
 
