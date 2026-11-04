@@ -165,11 +165,126 @@ final class AgentIPCTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(result, before)
         await client.disconnect()
     }
+    func testDisconnectCanReconnectButShutdownIsPermanent() async throws {
+        let dir = directory()
+        let server = AgentIPCServer(directory: dir) { session, _, _ in .string(session) }
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        try server.start()
+        let client = AgentIPCClientBridge(enabled: true, directory: dir)
+        let first = try await client.call(tool: "paperrss_status", arguments: [:])
+        await client.disconnect()
+        let second = try await client.call(tool: "paperrss_status", arguments: [:])
+        XCTAssertNotEqual(first, second)
+        async let firstShutdown: Void = client.shutdown()
+        async let repeatedShutdown: Void = client.shutdown()
+        _ = await (firstShutdown, repeatedShutdown)
+        await client.disconnect()
+        await expect("SESSION_CLOSED") { _ = try await client.call(tool: "paperrss_status", arguments: [:]) }
+    }
+    func testShutdownInterruptsHandshake() async throws {
+        let dir = directory()
+        XCTAssertEqual(mkdir(dir.path, 0o700), 0)
+        let listener = try boundSocket(dir)
+        defer { close(listener); try? FileManager.default.removeItem(at: dir) }
+        XCTAssertEqual(chmod(dir.appendingPathComponent("bridge.sock").path, 0o600), 0)
+        XCTAssertEqual(listen(listener, 4), 0)
+        let token = dir.appendingPathComponent("token")
+        try Data("isolated-test-token".utf8).write(to: token)
+        XCTAssertEqual(chmod(token.path, 0o600), 0)
+        let accepted = XCTestExpectation(description: "Raw peer received handshake")
+        let release = DispatchSemaphore(value: 0)
+        let peerDone = XCTestExpectation(description: "Raw peer finished")
+        DispatchQueue.global(qos: .utility).async {
+            defer { peerDone.fulfill() }
+            var ready = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+            guard poll(&ready, 1, 3_000) > 0 else { return }
+            let peer = accept(listener, nil, nil)
+            guard peer >= 0 else { return }
+            defer { close(peer) }
+            var dataReady = pollfd(fd: peer, events: Int16(POLLIN), revents: 0)
+            guard poll(&dataReady, 1, 3_000) > 0 else { return }
+            accepted.fulfill()
+            // Deliberately never send the handshake reply. The client must wake
+            // itself rather than waiting for the peer or its 15-second timeout.
+            _ = release.wait(timeout: .now() + 5)
+        }
+        let client = AgentIPCClientBridge(enabled: true, directory: dir)
+        let call = Task { try await client.call(tool: "paperrss_status", arguments: [:]) }
+        await fulfillment(of: [accepted], timeout: 3)
+        let stopped = XCTestExpectation(description: "Handshake shutdown completed")
+        let start = ContinuousClock.now
+        let shutdown = Task { await client.shutdown(); stopped.fulfill() }
+        await fulfillment(of: [stopped], timeout: 3)
+        XCTAssertLessThan(start.duration(to: .now), .seconds(3))
+        release.signal()
+        await shutdown.value
+        do { _ = try await call.value; XCTFail("A stalled handshake cannot succeed") }
+        catch { /* A closed handshake has no business operation to complete. */ }
+        await expect("SESSION_CLOSED") { _ = try await client.call(tool: "paperrss_status", arguments: [:]) }
+        await fulfillment(of: [peerDone], timeout: 3)
+    }
+    func testShutdownInterruptsResponseAndDoesNotDispatchQueuedCalls() async throws {
+        let dir = directory()
+        let gate = IPCRequestGate()
+        let started = XCTestExpectation(description: "First request reached App")
+        let server = AgentIPCServer(directory: dir) { _, _, _ in
+            await gate.recordCall()
+            started.fulfill()
+            await gate.wait()
+            return .object(["receipt": .string("already-owned-by-app")])
+        }
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        try server.start()
+        let client = AgentIPCClientBridge(enabled: true, directory: dir)
+        let first = Task { try await client.call(tool: "paperrss_status", arguments: [:]) }
+        await fulfillment(of: [started], timeout: 3)
+        let queued = Task { try await client.call(tool: "paperrss_status", arguments: [:]) }
+        let stopped = XCTestExpectation(description: "Blocked response shutdown completed")
+        let start = ContinuousClock.now
+        let shutdown = Task { await client.shutdown(); stopped.fulfill() }
+        await fulfillment(of: [stopped], timeout: 3)
+        XCTAssertLessThan(start.duration(to: .now), .seconds(3))
+        await gate.release()
+        await shutdown.value
+        do { _ = try await first.value; XCTFail("Closed response pipe must fail") }
+        catch { /* Transport closure does not claim the App operation rolled back. */ }
+        do { _ = try await queued.value; XCTFail("Queued request must not dispatch after shutdown") }
+        catch { }
+        let count = await gate.count
+        XCTAssertEqual(count, 1)
+        await expect("SESSION_CLOSED") { _ = try await client.call(tool: "paperrss_status", arguments: [:]) }
+    }
+    func testIndividualCancellationPreservesReceiptAndSession() async throws {
+        let dir = directory()
+        let gate = IPCRequestGate()
+        let committing = XCTestExpectation(description: "App owns the in-flight operation")
+        let server = AgentIPCServer(directory: dir) { session, tool, _ in
+            if tool == "commit_fixture" {
+                committing.fulfill()
+                await gate.wait()
+                return .object(["session": .string(session), "receipt": .string("committed")])
+            }
+            return .object(["session": .string(session)])
+        }
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        try server.start()
+        let client = AgentIPCClientBridge(enabled: true, directory: dir)
+        let call = Task { try await client.call(tool: "commit_fixture", arguments: [:]) }
+        await fulfillment(of: [committing], timeout: 3)
+        call.cancel()
+        await gate.release()
+        let receipt = try await call.value
+        XCTAssertEqual(receipt["receipt"], .string("committed"))
+        let next = try await client.call(tool: "paperrss_status", arguments: [:])
+        XCTAssertEqual(next["session"], receipt["session"])
+        await client.shutdown()
+    }
     func testHelperProductWithoutFixture() async throws {
-        let helper = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".build/debug/paperrss-agent")
+        let helper = ProcessInfo.processInfo.environment["PAPERRSS_AGENT_TEST_HELPER_PATH"]
+            .map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/debug/paperrss-agent")
         guard FileManager.default.isExecutableFile(atPath: helper.path) else {
-            throw XCTSkip("Build paperrss-agent before product smoke")
+            throw AgentFailure("TEST_HELPER_MISSING", "Build paperrss-agent before product smoke, or set PAPERRSS_AGENT_TEST_HELPER_PATH")
         }
         let dir = directory()
         let labels = DiagnosticLabels()
@@ -192,11 +307,7 @@ final class AgentIPCTests: XCTestCase, @unchecked Sendable {
         process.environment = environment
         process.standardInput = input; process.standardOutput = output; process.standardError = errors
         try process.run()
-        defer {
-            try? input.fileHandleForWriting.close()
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
-        }
+        defer { assertProductHelperExitAndCleanup(process, input: input.fileHandleForWriting) }
         func exchange(_ json: AgentJSON) throws -> AgentJSON {
             var bytes = try JSONEncoder().encode(json); bytes.append(10)
             try input.fileHandleForWriting.write(contentsOf: bytes)
@@ -227,6 +338,28 @@ final class AgentIPCTests: XCTestCase, @unchecked Sendable {
                 XCTAssertEqual(result["result"]?["structuredContent"]?["data"]?["real_ipc"], .bool(true))
                 XCTAssertEqual(result["result"]?["structuredContent"]?["data"]?["client_label"], .string("ipc-product-test"))
             }
+        }
+    }
+    private func assertProductHelperExitAndCleanup(_ process: Process, input: FileHandle,
+                                                 file: StaticString = #filePath, line: UInt = #line) {
+        try? input.close()
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while process.isRunning && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTAssertFalse(process.isRunning, "Helper PID \(process.processIdentifier) failed to exit naturally after EOF", file: file, line: line)
+        if process.isRunning {
+            process.terminate()
+            let cleanupDeadline = ProcessInfo.processInfo.systemUptime + 0.25
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < cleanupDeadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+            let killDeadline = ProcessInfo.processInfo.systemUptime + 1
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < killDeadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            XCTAssertFalse(process.isRunning, "Product helper PID \(process.processIdentifier) survived emergency cleanup", file: file, line: line)
         }
     }
     private func address(_ dir: URL) -> sockaddr_un {
@@ -284,4 +417,21 @@ private actor DiagnosticLabels {
     private var labels: [String: String] = [:]
     func set(_ session: String, _ label: String?) { labels[session] = label }
     func value(_ session: String) -> String? { labels[session] }
+}
+
+private actor IPCRequestGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var count = 0
+    func recordCall() { count += 1 }
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() {
+        released = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
 }

@@ -370,6 +370,28 @@ final class AgentMCPTests: XCTestCase {
         XCTAssertEqual(reply?["result"]?["structuredContent"]?["error"]?["code"], .string("CANCELLED"))
     }
 
+    func testShutdownIsTerminalAndPreservesCommittedReceipt() async throws {
+        let bridge = ReceiptOnShutdownBridge()
+        let server = AgentMCPServer(bridge: bridge)
+        await initialize(server)
+        let pending = Task { await server.handle(call("paperrss_apply_plan", arguments: [
+            "plan_id": .string("plan"), "approval_id": .string("approved"), "idempotency_key": .string("once")
+        ], id: 42)) }
+        await bridge.waitUntilStarted()
+        await server.shutdown()
+        await server.shutdown()
+        let reply = await pending.value
+        XCTAssertEqual(reply?["result"]?["isError"], .bool(false))
+        XCTAssertEqual(reply?["result"]?["structuredContent"]?["data"]?["committed"], .bool(true))
+        let after = await server.handle(call("paperrss_status"))
+        XCTAssertNil(after)
+        let afterRaw = await server.handle(data: Data("{}".utf8))
+        XCTAssertNil(afterRaw)
+        let counts = await bridge.counts()
+        XCTAssertEqual(counts.calls, 1)
+        XCTAssertEqual(counts.shutdowns, 1)
+    }
+
     func testFixtureNeverIssuesContentOrWriteApproval() async throws {
         let server = AgentMCPServer(bridge: AgentFixtureBridge(enabled: true))
         await initialize(server)
@@ -430,6 +452,31 @@ private actor WaitingBridge: AgentBridge {
         try await Task.sleep(for: .seconds(30))
         return .null
     }
+}
+
+/// Models a write that crossed the App commit boundary before its session closed.
+/// The successful receipt must survive the helper's cancellation flag.
+private actor ReceiptOnShutdownBridge: AgentBridge {
+    private var calls = 0, shutdowns = 0
+    private var started: CheckedContinuation<Void, Never>?
+    private var completion: CheckedContinuation<AgentJSON, Never>?
+    func waitUntilStarted() async {
+        if calls > 0 { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func call(tool: String, arguments: [String: AgentJSON]) async throws -> AgentJSON {
+        calls += 1
+        return await withCheckedContinuation {
+            completion = $0
+            started?.resume(); started = nil
+        }
+    }
+    func shutdown() async {
+        shutdowns += 1
+        completion?.resume(returning: .object(["committed": .bool(true)]))
+        completion = nil
+    }
+    func counts() -> (calls: Int, shutdowns: Int) { (calls, shutdowns) }
 }
 
 private actor ResourceBridge: AgentBridge {

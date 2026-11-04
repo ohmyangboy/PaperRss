@@ -9,11 +9,14 @@ public actor AgentMCPServer {
     public static let maximumRequestBytes = 65_536
     private let bridge: any AgentBridge
     private var initialized = false
+    private var closing = false
+    private var shutdownTask: Task<Void, Never>?
     private var inFlight: [String: Task<AgentJSON, Error>] = [:]
 
     public init(bridge: any AgentBridge) { self.bridge = bridge }
 
     public func handle(data: Data) async -> Data? {
+        guard !closing else { return nil }
         let response: AgentJSON?
         if data.count > Self.maximumRequestBytes {
             response = rpcError(id: .null, code: -32600, message: "Request exceeds byte limit.")
@@ -30,6 +33,7 @@ public actor AgentMCPServer {
     }
 
     public func handle(_ request: AgentJSON) async -> AgentJSON? {
+        guard !closing else { return nil }
         guard request.objectValue != nil, request["jsonrpc"]?.stringValue == "2.0",
               let method = request["method"]?.stringValue else {
             return rpcError(id: .null, code: -32600, message: "Invalid JSON-RPC request.")
@@ -151,6 +155,18 @@ public actor AgentMCPServer {
 
     public func cancelAll() {
         for task in inFlight.values { task.cancel() }
+    }
+
+    /// Terminal session shutdown, distinct from cancelling an individual RPC.
+    /// Set the gate before awaiting the bridge so queued handlers cannot reconnect.
+    public func shutdown() async {
+        if let shutdownTask { await shutdownTask.value; return }
+        closing = true
+        cancelAll()
+        let bridge = self.bridge
+        let task = Task { await bridge.shutdown() }
+        shutdownTask = task
+        await task.value
     }
 
     private func validID(_ id: AgentJSON) -> Bool {

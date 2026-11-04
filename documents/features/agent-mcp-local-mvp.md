@@ -340,3 +340,30 @@ Verification:
 本批测试使用隔离 SQLite fixture 与 fake executor/provider，覆盖计划校验、App 批准、回执、跨账户路由及 prompts/resources 协议；不访问真实阅读库或网络，不启动真实 PaperRss，不修改客户端配置。完整 Xcode 构建、真实服务端行为和客户端入口由用户补验；本节不借用前两批测试数字宣称本批通过。
 
 本批自动化结果（2026-10-28）：仓库内缓存配合 `--disable-sandbox` 的 `swift build` 通过；最终非 socket 筛选共 58 项通过（AgentLibraryServiceTests 31、AgentMCPTests 17、AgentApprovalCenterTests 6、AgentBridgeControllerTests 4）。首轮附带的 IPC 测试有 2 项通过、10 项因 Unix socket bind 被沙箱拒绝而失败，未宣称 IPC 验收通过。日志：`build/reports/agent-batch3-build-final.log`、`build/reports/agent-batch3-tests-final.log`、`build/reports/agent-batch3-tests.log`。全部修改位于现有 Swift 文件；Package.swift 目录 target、Xcode filesystem-synchronized group 与现有 helper 显式引用已覆盖，无新增源文件需注册。
+
+## helper 退出与宿主回收（2026-11-04）
+
+保留 stdio：每条有效 MCP 连接有一个轻量 helper，App 仍是唯一数据所有者。已初始化的连接可以长期空闲；不根据空闲时长或同名进程数量推断连接已废弃，也不自动修改 Codex 配置或结束用户现有进程。
+
+stdin EOF、父进程退出、SIGTERM/SIGINT、stdio 读写失败进入同一关闭流程：停止接收新请求，永久关闭 helper 的 IPC bridge，取消未完成请求，并由独立 watchdog 保证两秒内结束进程。`shutdown()` 永久关闭 bridge，原有 `disconnect()` 仍允许后续重连；单个 RPC 取消不销毁其他请求的会话。已经交给 App 的写操作仍按原有提交边界处理，断连不代表回滚，已有成功回执不能被取消覆盖。
+
+macOS 管道在仍有未读数据时，`poll` 的 HUP 可能不足以观测写端关闭。helper 对管道/socket stdin 另用 `kqueue` 的 `EV_EOF` 监测，输出回压和请求槽占满时也保持启用；它不消费或丢弃积压请求，输入缓冲仍有界。进程回归使用 96 个请求覆盖这一组合场景。
+
+stderr 仅以最佳努力输出固定生命周期记录（PID、父 PID、启动/退出原因），不包含文章、请求参数、路径或 token；stderr 无人消费不能阻塞退出。新行为只存在于重建后的 helper。SwiftPM 验证先构建 `paperrss-agent`，再运行 `AgentHelperLifecycleTests` / `AgentIPCTests`；测试默认使用 `.build/debug/paperrss-agent`，可通过 `PAPERRSS_AGENT_TEST_HELPER_PATH` 指定产物，缺少产物必须失败而非跳过。安装版需更新包含新版 helper 的 App，已有客户端连接需重新建立才使用新代码。
+
+自动化使用合成 fixture 和隔离 UDS：初始化前后 EOF、初始化后正常空闲超过两秒仍可 ping、启动时 stdin 描述符无效、真实 IPC 断开、IPC 阻塞时 EOF、父进程死亡但 stdin 写端仍被持有、SIGTERM/SIGINT、stdout 关闭或 96 个 catalog 请求形成回压、stderr 填满，以及两 helper 互不影响。先断言三秒测试容差内自然退出，失败后才清理测试创建的进程；不能用主动 terminate 代替退出断言。
+
+本次自动化结果：SwiftPM helper 构建通过（`build/reports/run-k2hfbxjv.log`），`PAPERRSS_AGENT_NATIVE` 原生 helper 编译通过（`build/reports/run-vg23v6fv.log`）。相关回归 71 项全部通过：helper 生命周期 12、IPC 16、MCP 19、App 审批/会话 14、隔离 App IPC 集成 10；最终日志 `build/reports/run-qotoc61b.log`。这不代表完整原生 App 打包、签名、安装或真实 Codex 聊天卸载验收已完成；未替换 `/Applications/PaperRss.app`，未修改 Codex 全局配置。
+
+### 真实 Codex 宿主验收（待用户操作，尚未完成）
+
+使用一个隔离聊天建立 PaperRss MCP 连接，记录 Codex 版本、helper 的 PID/父 PID、时间及脱敏生命周期日志；由用户结束该聊天或退出持有连接的宿主，再观察管道与 helper。聊天卸载与 MCP 管道关闭分别记录，不能假定前者必然触发后者：
+
+| 观察结果 | 归属与后续 |
+| --- | --- |
+| stdin 已关闭，helper 超过三秒仍存在 | PaperRss 退出缺陷；保留日志和复现步骤，修复 helper。 |
+| 已确认聊天卸载，但 Codex 仍持有 stdin 管道 | 宿主连接回收问题；记录版本、PID、时间和操作步骤，单独报告，不通过误杀 helper 掩盖。 |
+| 聊天仍加载，管道保持连接 | 有效连接可以空闲等待，不作为残留。 |
+| 持有连接的宿主退出后，helper 及时退出 | 证明父进程退出路径有效，不能代替聊天卸载回收验收。 |
+
+本节的自动化结果与真实 Codex 回收结果分别报告；前者通过不能把本节手动验收标成已完成。

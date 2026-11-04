@@ -55,6 +55,12 @@ public struct AgentFailure: Error, Sendable, Equatable {
 /// Only the app-side implementation may own library services. Helpers receive DTOs.
 public protocol AgentBridge: Sendable {
     func call(tool: String, arguments: [String: AgentJSON]) async throws -> AgentJSON
+    /// Permanently end this helper session. This is separate from cancelling one request.
+    func shutdown() async
+}
+
+public extension AgentBridge {
+    func shutdown() async {}
 }
 
 /// Shared discovery names keep the App status and helper tools/list aligned.

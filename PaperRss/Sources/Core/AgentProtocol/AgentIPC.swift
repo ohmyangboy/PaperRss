@@ -76,19 +76,44 @@ private enum IPC {
             throw AgentFailure("UNAUTHORIZED", "IPC peer must belong to the current user.")
         }
     }
-    static func connect(_ path: String) throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw failure("Cannot create local socket.") }
-        configure(fd)
-        do {
-            var address = try address(path)
-            let result = withUnsafePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    /// The client registers the descriptor before connecting so shutdown can reach
+    /// it during the handshake. A nonblocking connect also covers shutdown before
+    /// connect begins, when shutdown(2) on an unconnected socket cannot wake it.
+    static func connect(_ fd: Int32, to path: String, checkOpen: () throws -> Void) throws {
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw failure("Cannot configure local connection.")
+        }
+        defer { _ = fcntl(fd, F_SETFL, flags) }
+        try checkOpen()
+        var address = try address(path)
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        if result != 0 {
+            guard errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK else {
+                throw failure("Open PaperRss with Agent MCP enabled.")
             }
-            guard result == 0 else { throw failure("Open PaperRss with Agent MCP enabled.") }
-            try peer(fd)
-            return fd
-        } catch { close(fd); throw error }
+            let deadline = DispatchTime.now().uptimeNanoseconds + 15_000_000_000
+            while true {
+                try checkOpen()
+                guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                    throw failure("App connection closed or timed out.")
+                }
+                var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                let ready = poll(&descriptor, 1, 50)
+                if ready < 0 && errno == EINTR { continue }
+                guard ready >= 0 else { throw failure("Cannot connect to App bridge.") }
+                if ready == 0 { continue }
+                var error: Int32 = 0, size = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0, error == 0 else {
+                    throw failure("Open PaperRss with Agent MCP enabled.")
+                }
+                break
+            }
+        }
+        try checkOpen()
+        try peer(fd)
     }
     static func write(_ fd: Int32, _ bytes: Data) throws {
         try bytes.withUnsafeBytes { raw in
@@ -331,25 +356,34 @@ public final class AgentIPCClientBridge: AgentBridge, @unchecked Sendable {
     private let directory: URL
     private let clientLabel: String?
     private let queue = DispatchQueue(label: "PaperRss.AgentIPC.client")
+    // Only queue closes sockets. This short lock protects publication, shutdown,
+    // and close together so an externally initiated shutdown cannot hit a reused fd.
+    private let stateLock = NSLock()
+    private var closing = false
     private var fd: Int32 = -1
     public init(enabled: Bool = false, directory: URL = AgentIPCPaths.defaultDirectory, clientLabel: String? = nil) {
         self.enabled = enabled; self.directory = directory; self.clientLabel = clientLabel
     }
     public func call(tool: String, arguments: [String: AgentJSON]) async throws -> AgentJSON {
+        try checkOpen()
         guard enabled else { throw AgentFailure("NOT_ENABLED", "Set PAPERRSS_AGENT_ENABLED=1 in the helper configuration.") }
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
                 continuation.resume(with: Result {
+                    try checkOpen()
                     let response: AgentJSON
                     do {
-                        try connectIfNeeded()
-                        try IPC.send(fd, .object(["tool": .string(tool), "arguments": .object(arguments)]))
-                        response = try IPC.receive(fd)
+                        let socket = try connectIfNeeded()
+                        try checkOpen()
+                        try IPC.send(socket, .object(["tool": .string(tool), "arguments": .object(arguments)]))
+                        response = try IPC.receive(socket)
                     } catch {
-                        if fd >= 0 { close(fd); fd = -1 }
+                        closeConnection()
                         if IPC.disabledOwner(directory) { throw AgentFailure("NOT_ENABLED", "Agent MCP is disabled in the running PaperRss App.") }
                         throw error
                     }
+                    // A response may carry an already committed write receipt.
+                    // Never turn it into cancellation/closure after receiving it.
                     let checked = try IPC.checked(response)
                     guard let result = checked["result"] else { throw IPC.failure("Invalid App response.") }
                     return result
@@ -357,8 +391,15 @@ public final class AgentIPCClientBridge: AgentBridge, @unchecked Sendable {
             }
         }
     }
-    private func connectIfNeeded() throws {
-        guard fd < 0 else { return }
+    private func checkOpen() throws {
+        guard stateLock.withLock({ !closing }) else {
+            throw AgentFailure("SESSION_CLOSED", "Helper session has shut down.")
+        }
+    }
+    private func connectIfNeeded() throws -> Int32 {
+        try checkOpen()
+        let existing = stateLock.withLock { fd }
+        if existing >= 0 { return existing }
         try IPC.secureDirectory(directory, create: false)
         if IPC.disabledOwner(directory) { throw AgentFailure("NOT_ENABLED", "Agent MCP is disabled in the running PaperRss App.") }
         let token = try IPC.readFile(directory.appendingPathComponent("token"))
@@ -370,8 +411,21 @@ public final class AgentIPCClientBridge: AgentBridge, @unchecked Sendable {
               socketInfo.st_mode & 0o777 == 0o600 else {
             throw AgentFailure("UNAUTHORIZED", "Unsafe IPC socket permissions or owner.")
         }
-        let connected = try IPC.connect(directory.appendingPathComponent("bridge.sock").path)
+        let connected = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard connected >= 0 else { throw IPC.failure("Cannot create local socket.") }
+        IPC.configure(connected)
+        let registered = stateLock.withLock {
+            guard !closing else { return false }
+            fd = connected
+            return true
+        }
+        guard registered else {
+            close(connected)
+            try checkOpen()
+            throw IPC.failure("Cannot register local connection.")
+        }
         do {
+            try IPC.connect(connected, to: directory.appendingPathComponent("bridge.sock").path, checkOpen: checkOpen)
             var hello: [String: AgentJSON] = ["version": .number(Double(IPC.version)), "token": .string(token)]
             if let clientLabel { hello["client_label"] = .string(clientLabel) }
             try IPC.send(connected, .object(hello))
@@ -379,18 +433,45 @@ public final class AgentIPCClientBridge: AgentBridge, @unchecked Sendable {
             guard response["version"]?.intValue == IPC.version, response["instance_id"]?.stringValue?.isEmpty == false else {
                 throw AgentFailure("VERSION_MISMATCH", "Invalid App bridge handshake.")
             }
-            fd = connected
-        } catch { close(connected); throw error }
+            return connected
+        } catch { closeConnection(); throw error }
     }
+    private func closeConnection() {
+        stateLock.withLock {
+            if fd >= 0 {
+                Darwin.shutdown(fd, SHUT_RDWR)
+                close(fd)
+                fd = -1
+            }
+        }
+    }
+    /// Temporary disconnect, retained for callers that intentionally reconnect.
     public func disconnect() async {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
-                if fd >= 0 { shutdown(fd, SHUT_RDWR); close(fd); fd = -1 }
+                closeConnection()
                 continuation.resume()
             }
         }
     }
-    deinit { if fd >= 0 { close(fd) } }
+    public func shutdown() async {
+        beginShutdown()
+        // Shutdown must not be enqueued behind a blocked receive. beginShutdown
+        // wakes it first; the queue then finishes queued failures and owns close.
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                closeConnection()
+                continuation.resume()
+            }
+        }
+    }
+    private func beginShutdown() {
+        stateLock.withLock {
+            closing = true
+            if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) }
+        }
+    }
+    deinit { closeConnection() }
 }
 
 #endif
