@@ -508,7 +508,7 @@ final class AppFeatureRegressionTests: XCTestCase {
         XCTAssertEqual(try retryingStore.localProvider.fetchCache(entryID: entryID)?.normalizationRevision, 0)
     }
 
-    func testSuccessfulStaleMathRecoveryInvalidatesMemoryAndPublishesRefreshSignal() async throws {
+    func testSuccessfulStaleMathRecoveryReplacesMemoryWithoutReloadingReader() async throws {
         let loader = MockPageLoader()
         let articleURL = URL(string: "https://read.com/article/recovered-math")!
         let recoveredBody = String(repeating: "恢复后的完整正文保留公式结构。", count: 50)
@@ -558,8 +558,11 @@ final class AppFeatureRegressionTests: XCTestCase {
 
         XCTAssertEqual(loader.requestCount, 1)
         XCTAssertTrue(prepared.html.contains("c_s^*=x"))
-        XCTAssertNil(recoveryStore.memoizedPreparedArticle(for: entry))
-        XCTAssertEqual(recoveryStore.articleRefreshSignal?.entryID, entryID)
+        let memoized = try XCTUnwrap(recoveryStore.memoizedPreparedArticle(for: entry))
+        XCTAssertEqual(memoized, prepared, "Only the repaired, fully prepared article may replace stale memory")
+        XCTAssertNotNil(memoized.readerParagraphs)
+        XCTAssertNotNil(memoized.annotatedHTML)
+        XCTAssertNil(recoveryStore.articleRefreshSignal, "Cache repair must not interrupt an already displayed document")
         XCTAssertEqual(
             try recoveryStore.localProvider.fetchCache(entryID: entryID)?.normalizationRevision,
             ArticleCache.currentNormalizationRevision

@@ -2,6 +2,8 @@ import Foundation
 
 public enum ArticlePreparationPolicy: Sendable {
     case foregroundRefresh
+    /// 首次显示只评估已有内容；需要网页升级时由阅读器在首帧之后启动。
+    case initialDisplay
     case localOnly
     /// 用户关闭自动抓取：使用最佳已有正文，不升级或回写磁盘缓存。
     case storedContent
@@ -21,19 +23,23 @@ public struct ArticlePreparationResult: Sendable {
     /// 摘要（不含完整正文）。此类结果不得进入内存缓存，否则正式打开会命中它
     /// 并跳过网页抓取升级。
     public let isProvisionalLocal: Bool
+    /// 这次产物可以先显示，但不能据此跳过后续的网页升级。
+    public let needsBackgroundRefresh: Bool
 
     init(
         prepared: PreparedArticle,
         updatedCache: ArticleCache?,
         cacheState: ArticlePreparationCacheState,
         didRefreshCache: Bool = false,
-        isProvisionalLocal: Bool = false
+        isProvisionalLocal: Bool = false,
+        needsBackgroundRefresh: Bool = false
     ) {
         self.prepared = prepared
         self.updatedCache = updatedCache
         self.cacheState = cacheState
         self.didRefreshCache = didRefreshCache
         self.isProvisionalLocal = isProvisionalLocal
+        self.needsBackgroundRefresh = needsBackgroundRefresh
     }
 }
 
@@ -75,8 +81,8 @@ public final class ArticlePreparationEngine: Sendable {
         let feedCandidate = prepareFeedCandidate(for: entry, feed: feed, hints: feedLanguageHints)
 
         // 2. 准备 Cache 候选
-        let cacheCandidate = prepareCacheCandidate(cached, entry: entry)
         let cacheNeedsRefresh = cached.map(cacheRequiresRefresh) ?? false
+        let cacheCandidate = prepareCacheCandidate(cached, entry: entry, requiresRefresh: cacheNeedsRefresh)
 
         if policy == .storedContent {
             let candidate = pickBestLocal(feedCandidate, cacheCandidate)
@@ -94,7 +100,8 @@ public final class ArticlePreparationEngine: Sendable {
                 return ArticlePreparationResult(
                     prepared: cacheCandidate.toPreparedArticle(),
                     updatedCache: nil,
-                    cacheState: cacheNeedsRefresh ? .staleFallback : .current
+                    cacheState: cacheNeedsRefresh ? .staleFallback : .current,
+                    isProvisionalLocal: entry.url != nil && !cacheCandidate.quality.isUsableCache
                 )
             }
             if let feedCandidate {
@@ -138,6 +145,16 @@ public final class ArticlePreparationEngine: Sendable {
                     ),
                     cacheState: .current,
                     didRefreshCache: true
+                )
+            }
+
+            if policy == .initialDisplay {
+                return ArticlePreparationResult(
+                    prepared: bestLocal?.toPreparedArticle() ?? makeFallbackArticle(for: entry),
+                    updatedCache: nil,
+                    cacheState: .staleFallback,
+                    isProvisionalLocal: entry.url != nil,
+                    needsBackgroundRefresh: entry.url != nil
                 )
             }
 
@@ -208,6 +225,19 @@ public final class ArticlePreparationEngine: Sendable {
         // 选取当前最佳本地候选
         let bestLocal = pickBestLocal(feedCandidate, cacheCandidate)
 
+        if policy == .initialDisplay {
+            let needsRefresh = entry.url != nil
+            let prepared = bestLocal?.toPreparedArticle() ?? makeFallbackArticle(for: entry)
+            return ArticlePreparationResult(
+                prepared: prepared,
+                updatedCache: needsRefresh || prepared.source == .fallback
+                    ? nil : computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id),
+                cacheState: .current,
+                isProvisionalLocal: needsRefresh,
+                needsBackgroundRefresh: needsRefresh
+            )
+        }
+
         // 5. 本地候选较弱，若存在目标 URL 则尝试最多抓取 1 次网页
         if let entryURL = entry.url {
             if Task.isCancelled {
@@ -263,7 +293,11 @@ public final class ArticlePreparationEngine: Sendable {
             let cacheUpdate = cacheable
                 ? computeCacheUpdate(existing: cached, prepared: prepared, entryID: entry.id)
                 : nil
-            return ArticlePreparationResult(prepared: prepared, updatedCache: cacheUpdate, cacheState: .current)
+            return ArticlePreparationResult(
+                prepared: prepared, updatedCache: cacheUpdate, cacheState: .current,
+                isProvisionalLocal: entry.url != nil && (bestLocal.source == .feed
+                    ? !bestLocal.quality.isStrong : !bestLocal.quality.isUsableCache)
+            )
         }
 
         return ArticlePreparationResult(
@@ -348,7 +382,7 @@ public final class ArticlePreparationEngine: Sendable {
         )
     }
 
-    private func prepareCacheCandidate(_ cache: ArticleCache?, entry: Entry) -> ArticleCandidate? {
+    private func prepareCacheCandidate(_ cache: ArticleCache?, entry: Entry, requiresRefresh: Bool) -> ArticleCandidate? {
         guard let cache else {
             return nil
         }
@@ -364,6 +398,23 @@ public final class ArticlePreparationEngine: Sendable {
         guard !sourceMarkup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
         let sourceURL = cache.sourceURL ?? entry.url
+        // 当前管线已经清洗过的正文是持久化产物，不能每次打开再抽取一遍。
+        // 旧版本、未清洗或公式损坏的缓存仍经过下方完整修复路径。
+        if cache.isSanitized,
+           cache.normalizationRevision == ArticleCache.currentNormalizationRevision,
+           !requiresRefresh,
+           let cachedHTML, !cachedHTML.isEmpty {
+            let text = cache.text.isEmpty ? cachedHTML.plainText : cache.text
+            return ArticleCandidate(
+                text: text,
+                html: cachedHTML,
+                imageURLs: cache.imageURLs,
+                baseURL: sourceURL,
+                source: .cache,
+                quality: evaluateQuality(text: text, html: cachedHTML, imageCount: cache.imageURLs.count, isSpecialSelfContained: false),
+                languageHints: cache.languageHints
+            )
+        }
         let content = ArticleExtractor.content(from: sourceMarkup, baseURL: sourceURL)
         let quality = evaluateQuality(text: content.text, html: content.html, imageCount: content.imageURLs.count, isSpecialSelfContained: false)
 

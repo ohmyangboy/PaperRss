@@ -61,11 +61,16 @@ public enum ReaderDocumentRenderer: Sendable {
         let csp = resourcePolicy == .localArchive ? localArchiveCSP : standardCSP
         let signature = renderSignature(for: article, documentIdentity: documentIdentity)
         let renderSignature = resourcePolicy == .localArchive ? [signature, csp].joined(separator: "|").stableDigest : signature
-        let renderedBodyHTML = ArticleExtractor.insertingInlineTranslations(
-            into: article.html,
-            segments: translations,
-            pendingIDs: pendingTranslationIDs
-        )
+        let renderedBodyHTML: String
+        if translations.isEmpty, pendingTranslationIDs.isEmpty, let annotatedHTML = article.annotatedHTML {
+            renderedBodyHTML = annotatedHTML
+        } else {
+            renderedBodyHTML = ArticleExtractor.insertingInlineTranslations(
+                into: article.html,
+                segments: translations,
+                pendingIDs: pendingTranslationIDs
+            )
+        }
 
         let html = """
         <!doctype html>

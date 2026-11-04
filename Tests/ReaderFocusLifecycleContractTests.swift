@@ -23,9 +23,12 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         XCTAssertTrue(articleReader.contains("let wasWaitingForDocument = isLoading && activeLoadEntryID != nil"))
         XCTAssertTrue(articleReader.contains("showsLoadingIndicator = wasWaitingForDocument"))
         XCTAssertTrue(articleReader.contains("let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)"))
-        XCTAssertTrue(articleReader.contains("displaysMemoizedArticle = (memoizedPrepared != nil)"))
-        XCTAssertTrue(articleReader.contains("if let memoizedPrepared {"))
+        XCTAssertTrue(articleReader.contains("displaysMemoizedArticle = (memoizedPrepared != nil || approvedFullContent != nil)"))
+        XCTAssertTrue(articleReader.contains("else if let memoizedPrepared {"))
         XCTAssertTrue(articleReader.contains("prepared = await store.prepareArticle(for: requestedEntry)"))
+        XCTAssertTrue(articleReader.contains("let initial = await store.prepareInitialArticle(for: requestedEntry)"))
+        XCTAssertTrue(articleReader.contains("preparedArticle = prepared"))
+        XCTAssertFalse(articleReader.contains("ArticleExtractor.readerParagraphs(in: html, title: entry.title)"))
         // 连击合并与 markRead 延迟（macOS/iOS 双 coordinator 对称）
         XCTAssertTrue(articleReader.contains("private var scheduledNavigationEntryID: String?"))
         XCTAssertEqual(articleReader.components(separatedBy: "performDocumentLoad(entryID: requestedEntryID, in: webView)").count - 1, 2)
@@ -52,7 +55,6 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
         let identityCheck = try XCTUnwrap(articleReader.range(of: "if loadedDocumentIdentity == parent.entry.id")?.lowerBound)
         let translationInsertion = try XCTUnwrap(articleReader.range(of: "ReaderDocumentRenderer.renderDocument(", range: identityCheck..<articleReader.endIndex)?.lowerBound)
         XCTAssertLessThan(identityCheck, translationInsertion)
-        XCTAssertTrue(articleReader.contains("loadedText.htmlEscaped"))
         XCTAssertTrue(articleReader.contains("private var hasReaderContent: Bool { preparedArticle != nil }"))
     }
 
@@ -102,10 +104,8 @@ final class ReaderFocusLifecycleContractTests: XCTestCase {
             contentsOf: repositoryRoot.appendingPathComponent("PaperRss/Sources/Core/AppStore.swift"),
             encoding: .utf8
         )
-        // prepareArticle 必须先查内存 LRU；取消的任务不写入缓存；
-        // 重抓与清空磁盘缓存时同步失效内存结果。
-        XCTAssertTrue(appStore.contains("if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint)"))
-        XCTAssertTrue(appStore.contains("if !Task.isCancelled,\n           permitsMemoryCaching,\n           prepared.source != .fallback,\n           result.cacheState == .current,\n           !result.isProvisionalLocal,\n           generationAtStart == preparedArticleMemoryCache.generation {\n            preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)\n        }"))
+        // 缓存取消、预览升级和失效的行为由 ArticleFetchPreferenceTests 覆盖。
+        // 此处只保留跨模块的预取及主动失效接线契约。
         XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.invalidate(entryID: entry.id)"))
         XCTAssertTrue(appStore.contains("preparedArticleMemoryCache.removeAll()"))
         XCTAssertTrue(appStore.contains("public func scheduleNeighborPrefetch("))

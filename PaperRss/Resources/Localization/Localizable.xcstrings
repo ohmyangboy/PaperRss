@@ -1,6 +1,26 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+  "全文已就绪": {
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Full article ready"
+        }
+      }
+    }
+  },
+  "显示全文并回到文章开头": {
+    "localizations": {
+      "en": {
+        "stringUnit": {
+          "state": "translated",
+          "value": "Show the full article and return to the beginning"
+        }
+      }
+    }
+  },
   "文章正文": {
     "localizations": {
       "en": {

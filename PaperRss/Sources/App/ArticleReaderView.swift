@@ -53,6 +53,46 @@ private struct ReaderHeaderHeightPreferenceKey: PreferenceKey {
     }
 }
 
+/// Background content may become available without replacing the document the
+/// user is reading. A request belongs to one load, including same-article reloads.
+struct ReaderContentUpgradeState {
+    struct Request: Hashable {
+        let entryID: String
+        let loadSession: Int
+    }
+
+    private var current: Request?
+    private var needsRefresh = false
+    private var hasPainted = false
+    private(set) var readyArticle: PreparedArticle?
+
+    var refreshRequest: Request? {
+        needsRefresh && hasPainted ? current : nil
+    }
+
+    mutating func begin(entryID: String, loadSession: Int) {
+        current = Request(entryID: entryID, loadSession: loadSession)
+        needsRefresh = false
+        hasPainted = false
+        readyArticle = nil
+    }
+
+    mutating func setNeedsRefresh(_ value: Bool) { needsRefresh = value }
+
+    mutating func documentPainted(entryID: String) {
+        guard current?.entryID == entryID else { return }
+        hasPainted = true
+    }
+
+    @discardableResult
+    mutating func finish(_ article: PreparedArticle?, for request: Request) -> Bool {
+        guard refreshRequest == request else { return false }
+        needsRefresh = false
+        readyArticle = article
+        return true
+    }
+}
+
 /// 旧版 AppKit toolbar 会把真正的 material 放在 NSToolbarItem 容器层。
 /// 这样 NSVisualEffectView 才能以 withinWindow 采样下方的阅读内容，SwiftUI
 /// 只保留按钮布局，避免它在 NSHostingView 内把 material 扁平化为实色。
@@ -112,11 +152,8 @@ struct ArticleReaderView: View {
     @State private var translationDocumentReady = false
     @State private var preparedArticle: PreparedArticle?
     @State private var displayedEntry: Entry?
-    /// Parsing a long document's paragraph structure is deliberately done once
-    /// per article. The same stable index drives viewport translation requests
-    /// and validation of returned translations.
-    @State private var parsedReaderParagraphs: [ReaderParagraph] = []
-    @State private var parsedReaderEntryID: String?
+    @State private var contentUpgrade = ReaderContentUpgradeState()
+    @State private var requestedFullContent: (entryID: String, article: PreparedArticle)?
     @State private var isLoading = true
     @State private var showsLoadingIndicator = false
     /// 命中内存缓存时先保留旧文档；没有旧文档或等待较久时再显示加载遮罩。
@@ -274,11 +311,7 @@ struct ArticleReaderView: View {
     }
 
     private var readerParagraphs: [ReaderParagraph] {
-        if parsedReaderEntryID == displayedEntry?.id {
-            return parsedReaderParagraphs
-        }
-        guard let html, !html.isEmpty else { return [] }
-        return ArticleExtractor.readerParagraphs(in: html, title: entry.title)
+        preparedArticle?.readerParagraphs ?? []
     }
 
     private var savedSelectionAnnotations: [ReaderSelectionAnnotation] {
@@ -320,6 +353,24 @@ struct ArticleReaderView: View {
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottomTrailing) {
+            if let fullArticle = contentUpgrade.readyArticle,
+               isDisplayedDocumentInteractive, !isReaderCollapsed {
+                Button {
+                    requestedFullContent = (entry.id, fullArticle)
+                    articleReloadToken += 1
+                } label: {
+                    Label(I18N.localized("全文已就绪"), systemImage: "doc.text")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .background(.regularMaterial, in: Capsule())
+                .help(I18N.localized("显示全文并回到文章开头"))
+                .accessibilityHint(I18N.localized("显示全文并回到文章开头"))
+                .accessibilityIdentifier("reader.fullContentReady")
+                .padding(16)
+            }
+        }
         .background {
             AppearanceSurface(
                 role: .reader,
@@ -408,13 +459,18 @@ struct ArticleReaderView: View {
             let requestedEntry = entry
             articleLoadSession += 1
             let requestedLoadSession = articleLoadSession
+            let approvedFullContent = requestedFullContent.flatMap {
+                $0.entryID == requestedEntry.id ? $0.article : nil
+            }
+            requestedFullContent = nil
+            contentUpgrade.begin(entryID: requestedEntry.id, loadSession: requestedLoadSession)
             let requestedAIGeneration = aiWorkspace.attach(entryID: requestedEntry.id)
             activeAIGeneration = requestedAIGeneration
             activeLoadEntryID = requestedEntry.id
             // 内存命中时短暂保留旧页；其他情况立即显示进度环。
             // 连续切换时延续加载提示，避免每篇重置后长期只见空白背景。
             let memoizedPrepared = store.memoizedPreparedArticle(for: requestedEntry)
-            displaysMemoizedArticle = (memoizedPrepared != nil)
+            displaysMemoizedArticle = (memoizedPrepared != nil || approvedFullContent != nil)
             isLoading = true
             showsLoadingIndicator = wasWaitingForDocument
             documentLoadFailed = false
@@ -441,43 +497,31 @@ struct ArticleReaderView: View {
             }
 
             let prepared: PreparedArticle
-            if let memoizedPrepared {
+            let needsBackgroundRefresh: Bool
+            if let approvedFullContent {
+                prepared = approvedFullContent
+                needsBackgroundRefresh = false
+            } else if let memoizedPrepared {
                 prepared = memoizedPrepared
+                needsBackgroundRefresh = false
             } else {
+                #if os(macOS)
+                let initial = await store.prepareInitialArticle(for: requestedEntry)
+                prepared = initial.prepared
+                needsBackgroundRefresh = initial.needsBackgroundRefresh
+                #else
                 prepared = await store.prepareArticle(for: requestedEntry)
+                needsBackgroundRefresh = false
+                #endif
             }
-            guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
+            guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id,
+                  articleLoadSession == requestedLoadSession else { return }
             ArticleSwitchTrace.mark("article prepared", entryID: requestedEntry.id)
-
-            let loadedText = prepared.text.isEmpty ? requestedEntry.sourceText : prepared.text
-            let sourceHTML = prepared.html
-            let articleTitle = requestedEntry.title
-            let (loadedHTML, parsedParagraphs) = await Task.detached(priority: .userInitiated) { () -> (String, [ReaderParagraph]) in
-                let html: String
-                if sourceHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !loadedText.isEmpty {
-                    html = "<p>\(loadedText.htmlEscaped.replacingOccurrences(of: "\n", with: "<br>"))</p>"
-                } else {
-                    html = sourceHTML
-                }
-                let loadedHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: html, articleTitle: articleTitle) ?? ""
-                guard !loadedHTML.isEmpty else { return (loadedHTML, []) }
-                return (loadedHTML, ArticleExtractor.readerParagraphs(in: loadedHTML, title: articleTitle))
-            }.value
-            guard !Task.isCancelled, activeLoadEntryID == requestedEntry.id else { return }
             ArticleSwitchTrace.mark("content indexed", entryID: requestedEntry.id)
 
             displayedEntry = requestedEntry
-            preparedArticle = PreparedArticle(
-                text: loadedText,
-                html: loadedHTML,
-                imageURLs: prepared.imageURLs,
-                baseURL: prepared.baseURL,
-                source: prepared.source,
-                features: prepared.features,
-                languageHints: prepared.languageHints
-            )
-            parsedReaderParagraphs = parsedParagraphs
-            parsedReaderEntryID = requestedEntry.id
+            preparedArticle = prepared
+            contentUpgrade.setNeedsRefresh(needsBackgroundRefresh)
             translationDocumentReady = true
             if store.llmConfiguration.showsAISummary,
                store.llmConfiguration.automaticallyGenerateSummary,
@@ -491,6 +535,16 @@ struct ArticleReaderView: View {
                     generation: requestedAIGeneration
                 )
             }
+        }
+        .task(id: isReaderCollapsed ? nil : contentUpgrade.refreshRequest) {
+            guard !isReaderCollapsed, let request = contentUpgrade.refreshRequest,
+                  store.automaticallyFetchArticleContent else { return }
+            let requestedEntry = entry
+            guard requestedEntry.id == request.entryID else { return }
+            let fullArticle = await store.refreshArticleInBackground(for: requestedEntry)
+            guard !Task.isCancelled, activeLoadEntryID == request.entryID,
+                  articleLoadSession == request.loadSession else { return }
+            contentUpgrade.finish(fullArticle, for: request)
         }
     }
 
@@ -581,6 +635,7 @@ struct ArticleReaderView: View {
                     ArticleSwitchTrace.mark("first document paint", entryID: paintedEntryID)
                     onScreenDocumentEntryID = paintedEntryID
                     coversStaleDocument = false
+                    contentUpgrade.documentPainted(entryID: paintedEntryID)
                 },
                 onDocumentLoadFailed: { loadedEntryID in
                     guard activeLoadEntryID == loadedEntryID else { return }

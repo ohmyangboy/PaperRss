@@ -26,6 +26,9 @@ public struct PreparedArticle: Sendable, Equatable {
     public let source: ArticleSource
     public let languageHints: [ArticleLanguageHint]
     public let features: ArticleFeatures
+    /// 与 html 同源的 Reader 索引与无译文标记产物；只在进程内缓存，不落盘。
+    public let readerParagraphs: [ReaderParagraph]?
+    public let annotatedHTML: String?
 
     public init(
         text: String,
@@ -34,7 +37,9 @@ public struct PreparedArticle: Sendable, Equatable {
         baseURL: URL?,
         source: ArticleSource,
         features: ArticleFeatures = ArticleFeatures(),
-        languageHints: [ArticleLanguageHint] = []
+        languageHints: [ArticleLanguageHint] = [],
+        readerParagraphs: [ReaderParagraph]? = nil,
+        annotatedHTML: String? = nil
     ) {
         self.text = text
         self.html = html
@@ -43,6 +48,32 @@ public struct PreparedArticle: Sendable, Equatable {
         self.source = source
         self.features = features
         self.languageHints = languageHints
+        self.readerParagraphs = readerParagraphs
+        self.annotatedHTML = annotatedHTML
+    }
+
+    /// 在后台完成一次正文结构分析，热打开只需套入当前排版模板。
+    public func preparedForReader(title: String) -> PreparedArticle {
+        if readerParagraphs != nil, annotatedHTML != nil { return self }
+        let sourceHTML: String
+        if html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !text.isEmpty {
+            sourceHTML = "<p>\(ArticleMarkupNormalizer.escapeHTML(text).replacingOccurrences(of: "\n", with: "<br>"))</p>"
+        } else {
+            sourceHTML = html
+        }
+        let bodyHTML = ArticleExtractor.removingDuplicateLeadingHeading(from: sourceHTML, articleTitle: title) ?? ""
+        let content = ArticleExtractor.readerContent(in: bodyHTML, title: title)
+        return PreparedArticle(
+            text: text,
+            html: bodyHTML,
+            imageURLs: imageURLs,
+            baseURL: baseURL,
+            source: source,
+            features: features,
+            languageHints: languageHints,
+            readerParagraphs: content.paragraphs,
+            annotatedHTML: content.annotatedHTML
+        )
     }
 }
 

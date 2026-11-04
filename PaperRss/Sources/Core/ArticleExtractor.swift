@@ -252,7 +252,7 @@ public enum ArticleExtractor {
             return html
         }
 
-        var removals: [(start: Int, end: Int)] = []
+        var removals: [Range<String.Index>] = []
         for candidate in candidates {
             let attrMap = parseAttributesMap(from: candidate.attributes)
             let classAndID = "\(attrMap["class"] ?? "") \(attrMap["id"] ?? "")"
@@ -261,23 +261,29 @@ public enum ArticleExtractor {
                       in: candidate.fullHTML,
                       range: NSRange(candidate.fullHTML.startIndex..., in: candidate.fullHTML)
                   ) != nil else { continue }
-            removals.append((candidate.startOffset, candidate.endOffset))
+            removals.append(candidate.range)
         }
         guard !removals.isEmpty else { return html }
 
         // 嵌套命中时只保留最外层，避免重复删除导致位移错乱。
-        var merged: [(start: Int, end: Int)] = []
-        for removal in removals.sorted(by: { $0.start < $1.start }) {
-            if let last = merged.last, removal.start >= last.start, removal.end <= last.end { continue }
+        var merged: [Range<String.Index>] = []
+        for removal in removals.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = merged.last, removal.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, removal.upperBound)
+                continue
+            }
             merged.append(removal)
         }
 
-        var result = html
-        for removal in merged.reversed() {
-            guard let startIndex = result.index(result.startIndex, offsetBy: removal.start, limitedBy: result.endIndex),
-                  let endIndex = result.index(result.startIndex, offsetBy: removal.end, limitedBy: result.endIndex) else { continue }
-            result.replaceSubrange(startIndex..<endIndex, with: "")
+        // 所有范围都属于原始字符串。按顺序拼接保留片段，既不重复从头寻址，
+        // 也不把正则的 UTF-16 offset 当成 Character offset 用于中文/emoji。
+        var result = ""
+        var cursor = html.startIndex
+        for removal in merged {
+            result += html[cursor..<removal.lowerBound]
+            cursor = removal.upperBound
         }
+        result += html[cursor...]
         return result
     }
 
@@ -333,6 +339,8 @@ public enum ArticleExtractor {
         let attributes: String
         let innerHTML: String
         let fullHTML: String
+        let range: Range<String.Index>
+        /// 正则 token 的 UTF-16 位置，仅用于容器包含与大小比较。
         let startOffset: Int
         let endOffset: Int
     }
@@ -446,7 +454,7 @@ public enum ArticleExtractor {
     }
 
     /// 使用标签栈扫描平衡容器，天然安全支持同名与多级嵌套
-    private static func scanBalancedContainers(
+    static func scanBalancedContainers(
         from html: String,
         targetTags: Set<String> = ["article", "main", "section", "div"]
     ) -> [ScannedContainer] {
@@ -460,6 +468,7 @@ public enum ArticleExtractor {
             let attributes: String
             let tagStart: String.Index
             let innerStart: String.Index
+            let startOffset: Int
         }
 
         var stacks: [String: [OpenTag]] = Dictionary(uniqueKeysWithValues: targetTags.map { ($0, []) })
@@ -481,21 +490,21 @@ public enum ArticleExtractor {
                     stacks[tagName] = tagStack
                     let inner = String(html[opened.innerStart..<fullRange.lowerBound])
                     let full = String(html[opened.tagStart..<fullRange.upperBound])
-                    let startOffset = html.distance(from: html.startIndex, to: opened.tagStart)
-                    let endOffset = html.distance(from: html.startIndex, to: fullRange.upperBound)
                     candidates.append(
                         ScannedContainer(
                             tag: tagName,
                             attributes: opened.attributes,
                             innerHTML: inner,
                             fullHTML: full,
-                            startOffset: startOffset,
-                            endOffset: endOffset
+                            range: opened.tagStart..<fullRange.upperBound,
+                            startOffset: opened.startOffset,
+                            endOffset: NSMaxRange(match.range)
                         )
                     )
                 }
             } else {
-                let opened = OpenTag(name: tagName, attributes: attrString, tagStart: fullRange.lowerBound, innerStart: fullRange.upperBound)
+                let opened = OpenTag(name: tagName, attributes: attrString, tagStart: fullRange.lowerBound,
+                                     innerStart: fullRange.upperBound, startOffset: match.range.location)
                 stacks[tagName, default: []].append(opened)
             }
         }
@@ -1190,26 +1199,18 @@ public enum ArticleExtractor {
     }
 
     public static func readerParagraphs(in html: String, title: String? = nil) -> [ReaderParagraph] {
-        var paragraphs: [ReaderParagraph] = []
-        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            paragraphs.append(ReaderParagraph(id: "title", original: title))
-        }
-        var paragraphIndex = 0
-        for match in readerBlockMatches(in: html) {
-            let block = String(html[match.range])
-            let original = block.plainText
-            guard !original.isEmpty else { continue }
+        processReaderContent(in: html, title: title, segments: [], pendingIDs: [],
+                             collectsParagraphs: true, rendersHTML: false).paragraphs
+    }
 
-            let plan = readerBlockFragmentPlan(block, match: match)
-            guard !plan.isPreformatted else { continue }
-            let fragments = plan.fragments
-            for (index, fragment) in fragments.enumerated() {
-                let id = fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
-                paragraphs.append(ReaderParagraph(id: id, original: fragment.plainText))
-            }
-            paragraphIndex += 1
-        }
-        return paragraphs
+    /// 首次准备时共用一次块扫描与拆分计划，同时产生索引及无译文 HTML。
+    /// 标题只进入索引，正文 HTML 仍由阅读器外层头部负责显示标题。
+    public static func readerContent(
+        in html: String,
+        title: String? = nil
+    ) -> (paragraphs: [ReaderParagraph], annotatedHTML: String) {
+        processReaderContent(in: html, title: title, segments: [], pendingIDs: [],
+                             collectsParagraphs: true, rendersHTML: true)
     }
 
     /// Annotates every source paragraph for viewport observation and adds any
@@ -1221,26 +1222,53 @@ public enum ArticleExtractor {
         segments: [BilingualSegment],
         pendingIDs: Set<String> = []
     ) -> String {
+        processReaderContent(in: html, title: nil, segments: segments, pendingIDs: pendingIDs,
+                             collectsParagraphs: false, rendersHTML: true).annotatedHTML
+    }
+
+    private static func processReaderContent(
+        in html: String,
+        title: String?,
+        segments: [BilingualSegment],
+        pendingIDs: Set<String>,
+        collectsParagraphs: Bool,
+        rendersHTML: Bool
+    ) -> (paragraphs: [ReaderParagraph], annotatedHTML: String) {
+        var paragraphs: [ReaderParagraph] = []
+        if collectsParagraphs,
+           let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            paragraphs.append(ReaderParagraph(id: "title", original: title))
+        }
         var rendered = ""
         var cursor = html.startIndex
         var paragraphIndex = 0
         let segmentsByID = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
 
         for match in readerBlockMatches(in: html) {
-            rendered += html[cursor..<match.range.lowerBound]
+            if rendersHTML { rendered += html[cursor..<match.range.lowerBound] }
             let block = String(html[match.range])
             cursor = match.range.upperBound
 
             let original = block.plainText
             if original.isEmpty {
-                rendered += block
+                if rendersHTML { rendered += block }
                 continue
             }
 
             let plan = readerBlockFragmentPlan(block, match: match)
             if plan.isPreformatted {
                 // 代码禁区：完整保留渲染与选择解释，绝不注解、绝不翻译。
-                rendered += block
+                if rendersHTML { rendered += block }
+                continue
+            }
+            if collectsParagraphs {
+                for (index, fragment) in plan.fragments.enumerated() {
+                    let id = plan.fragments.count > 1 ? "p\(paragraphIndex)_\(index)" : "p\(paragraphIndex)"
+                    paragraphs.append(ReaderParagraph(id: id, original: fragment.plainText))
+                }
+            }
+            if !rendersHTML {
+                paragraphIndex += 1
                 continue
             }
             if let tablePlan = plan.tablePlan {
@@ -1310,8 +1338,8 @@ public enum ArticleExtractor {
             }
             paragraphIndex += 1
         }
-        rendered += html[cursor...]
-        return rendered
+        if rendersHTML { rendered += html[cursor...] }
+        return (paragraphs, rendered)
     }
 
     private static func annotatedReaderBlock(_ block: String, id: String) -> String {

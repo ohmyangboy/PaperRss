@@ -255,4 +255,55 @@ final class TimelineQueryPerformanceTests: XCTestCase {
             Array(mixedItems.prefix(20)).map(\.id)
         )
     }
+    /// Keep both feed distributions visible in performance evidence. A global
+    /// date-index scan favors a large recent feed but can penalize sparse old feeds.
+    /// These baselines deliberately do not change or prescribe a query strategy.
+    func testFeedFirstPageBaselinesAcrossDenseAndSparseDistributions() throws {
+        let dense = try provider.addFeed(title: "Dense", feedURL: URL(string: "https://distribution.invalid/dense")!)
+        let smallFeeds = try (0..<100).map { index in
+            try provider.addFeed(title: "Small \(index)", feedURL: URL(string: "https://distribution.invalid/\(index)")!)
+        }
+        let sparse = try provider.addFeed(title: "Sparse old", feedURL: URL(string: "https://distribution.invalid/sparse")!)
+        let now = 1_700_000_000.0
+        try database.write { db in
+            func insert(_ feed: Feed, prefix: String, count: Int, age: Double) throws {
+                for index in 0..<count {
+                    let id = "\(prefix)-\(index)"
+                    let published = now - age - Double(index)
+                    try ItemRecord(id: id, accountID: "local-default", externalID: id,
+                                   feedID: feed.id.uuidString, createdAt: published, updatedAt: published).save(db)
+                    try ArticleRecord(itemID: id, title: id, publishedAt: published,
+                                      summary: "preview", contentHTML: "<p>body</p>", contentUpdatedAt: published).save(db)
+                    try ArticleStateRecord(itemID: id, isRead: false, isStarred: false,
+                                           dateArrived: published, updatedAt: published).save(db)
+                }
+            }
+            try insert(dense, prefix: "dense", count: 10_000, age: 0)
+            for (index, feed) in smallFeeds.enumerated() {
+                try insert(feed, prefix: "small-\(index)", count: 100, age: 100_000 + Double(index * 200))
+            }
+            try insert(sparse, prefix: "sparse", count: 10, age: 1_000_000)
+        }
+        for (label, feed, expectedCount, expectedFirst) in [
+            ("dense10000", dense, 100, "dense-0"),
+            ("smallRecent100", smallFeeds[0], 100, "small-0-0"),
+            ("smallOld100", smallFeeds[99], 100, "small-99-0"),
+            ("sparseOld10", sparse, 10, "sparse-0")
+        ] {
+            let scope = TimelineScope.feed(feedID: feed.id.uuidString)
+            var samples: [Double] = []
+            var page: [EntryListItem] = []
+            for _ in 0..<3 {
+                let start = CFAbsoluteTimeGetCurrent()
+                page = try queryService.fetchListItems(scope: scope, limit: 100)
+                samples.append((CFAbsoluteTimeGetCurrent() - start) * 1_000)
+            }
+            XCTAssertEqual(page.count, expectedCount)
+            XCTAssertEqual(page.first?.id, expectedFirst)
+            XCTAssertTrue(page.allSatisfy { $0.feedID == feed.id })
+            XCTAssertEqual(page.map(\.id), Array(try queryService.fetchListItems(scope: scope).prefix(100)).map(\.id))
+            print("TIMELINE_DISTRIBUTION_BASELINE \(label) firstPage100MedianMS=\(samples.sorted()[1])")
+        }
+    }
+
 }

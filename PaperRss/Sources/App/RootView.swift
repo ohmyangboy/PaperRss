@@ -348,7 +348,7 @@ struct RootView: View {
                 AddFeedSheet(
                     store: store,
                     initialDestination: initialFeedDestination,
-                    selection: $selection
+                    selection: sidebarSelection
                 )
                 .id(initialFeedDestination)
             }
@@ -374,6 +374,7 @@ struct RootView: View {
                     // 重命名当前选中的文件夹后，侧栏选择与中间栏内容应跟随，
                     // 否则高亮消失、文章列表显示"没有文章"。
                     if case let .folder(acc, current) = selection, acc == folder.accountID && current == folder.name {
+                        timelineMemory.requestSwitch()
                         selection = .folder(accountID: folder.accountID, folderName: newName)
                     }
                 }
@@ -512,8 +513,8 @@ struct RootView: View {
                 selectionTitle: headerTitle,
                 hasUnread: currentHasUnread,
                 onMarkAllRead: { markCurrentAllRead() },
-                showsUnreadFilter: supportsUnreadFilter,
-                unreadOnly: effectiveUnreadOnly,
+                showsUnreadFilter: displayedSupportsUnreadFilter,
+                unreadOnly: timelineMemory.displayedContext?.unreadOnly ?? effectiveUnreadOnly,
                 onToggleUnreadFilter: toggleUnreadFilter,
                 onFocusAndScrollArticle: { focusAndScrollArticle() },
                 isZenMode: isZenMode,
@@ -577,7 +578,8 @@ struct RootView: View {
                 columnFocusState: columnFocusState,
                 titleTranslator: store.titleTranslator,
                 autoScrollTrigger: autoScrollTrigger,
-                onFeedback: { showToast($0) }
+                onFeedback: { showToast($0) },
+                presentation: timelineMemory
             )
         } detail: {
             detailContent
@@ -623,6 +625,7 @@ struct RootView: View {
     #endif
 
     private func openTimelineArticle(anchor: String? = nil) {
+        guard timelineAllowsInteraction else { return }
         if isTimelineBrowsing {
             timelineMemory.browseAnchor = timelineStyle == .magazine
                 ? (timelineMemory.magazineAnchor ?? timelineMemory.visibleAnchor ?? anchor)
@@ -665,22 +668,38 @@ struct RootView: View {
         Color(paperHex: appearancePalette.accentHex)
     }
 
+    private var displayedTimelineSelection: SidebarSelection {
+        timelineMemory.displayedContext?.selection ?? currentSelection
+    }
+
+    private var timelineAllowsInteraction: Bool {
+        timelineMemory.allowsInteraction(selection: currentSelection, unreadOnly: effectiveUnreadOnly, scope: currentTimelineScope)
+    }
+
+    private var displayedSupportsUnreadFilter: Bool {
+        switch displayedTimelineSelection {
+        case .account, .folder, .feed, .feeds: return true
+        default: return false
+        }
+    }
+
     private var headerTitle: String {
-        if !isTimelineBrowsing, let selectedEntryID,
+        if timelineAllowsInteraction, !isTimelineBrowsing, let selectedEntryID,
            let entry = store.entry(id: selectedEntryID),
            let feed = store.feed(for: entry) {
             return feed.title
         }
-        if case let .account(id) = currentSelection {
-            return store.accounts.first(where: { $0.id == id })?.displayName ?? currentSelection.title
+        if case let .account(id) = displayedTimelineSelection {
+            return store.accounts.first(where: { $0.id == id })?.displayName ?? displayedTimelineSelection.title
         }
-        if timelineStyle == .magazine, case let .feed(id) = currentSelection {
-            return store.feeds.first(where: { $0.id == id })?.title ?? currentSelection.title
+        if case let .feed(id) = displayedTimelineSelection {
+            return store.feeds.first(where: { $0.id == id })?.title ?? displayedTimelineSelection.title
         }
-        return currentSelection.title
+        return displayedTimelineSelection.title
     }
 
     private var currentHasUnread: Bool {
+        guard timelineAllowsInteraction else { return false }
         switch currentSelection {
         case .today:
             return store.sidebarCounts.todayUnread > 0
@@ -700,6 +719,7 @@ struct RootView: View {
     }
 
     private func markCurrentAllRead() {
+        guard timelineAllowsInteraction else { return }
         retainedEntryListIDs = selectedEntryID.map { [$0] } ?? []
         switch currentSelection {
         case .today:
@@ -812,6 +832,7 @@ struct RootView: View {
     }
 
     private func selectNextEntry() {
+        guard timelineAllowsInteraction else { return }
         guard let selectedEntryID else {
             // 没有选中项时，拉取当前时间线第一篇
             if let firstID = firstTimelineEntryID() {
@@ -868,7 +889,8 @@ struct RootView: View {
     }
 
     private func firstTimelineEntryID() -> String? {
-        timelineMemory.firstLoadedID(
+        guard timelineAllowsInteraction else { return nil }
+        return timelineMemory.firstLoadedID(
             scope: currentTimelineScope,
             unreadOnly: effectiveUnreadOnly,
             revision: store.timelineRevision
@@ -881,6 +903,7 @@ struct RootView: View {
     }
 
     private func adjacentEntryID(to currentID: String, direction: AdjacentTimelineDirection) -> String? {
+        guard timelineAllowsInteraction else { return nil }
         let scope = currentTimelineScope
         let unreadOnly = effectiveUnreadOnly
         return timelineMemory.adjacentLoadedID(
@@ -900,6 +923,7 @@ struct RootView: View {
 
     /// 选中稳定后预取相邻文章，使 Space/nn/bb 切换始终命中内存缓存。
     private func scheduleNeighborPrefetch(from entryID: String) {
+        guard timelineAllowsInteraction else { return }
         let scope = currentTimelineScope
         let unreadOnly = effectiveUnreadOnly
         let revision = store.timelineRevision
@@ -919,6 +943,7 @@ struct RootView: View {
     }
 
     private func requestAdjacentArticle(_ direction: AdjacentArticleDirection) {
+        guard timelineAllowsInteraction else { return }
         guard let selectedEntryID else {
             cancelNavigationConfirmation(dismissToast: true)
             return
@@ -1006,6 +1031,7 @@ struct RootView: View {
     }
 
     private func dispatchReaderShortcut(_ action: ReaderShortcutAction) {
+        guard timelineAllowsInteraction else { return }
         guard let entryID = selectedEntryID else { return }
         switch action {
         case .previousArticle:
@@ -1071,8 +1097,9 @@ struct RootView: View {
     }
 
     private func toggleUnreadFilter() {
+        guard timelineAllowsInteraction, supportsUnreadFilter else { return }
+        timelineMemory.requestSwitch()
         cancelNavigationConfirmation(dismissToast: true)
-        guard supportsUnreadFilter else { return }
         retainedEntryListIDs.removeAll()
         var scopes = articleFilteredScopes
         let enabling: Bool
@@ -1167,6 +1194,7 @@ struct RootView: View {
     }
 
     private func focusAndScrollArticle() {
+        guard timelineAllowsInteraction else { return }
         openTimelineArticle()
         if selectedEntryID == nil {
             selectedEntryID = firstTimelineEntryID()
@@ -1219,6 +1247,7 @@ struct RootView: View {
     }
 
     private func selectFirstEntryIfNeeded() {
+        guard timelineAllowsInteraction else { return }
         if selectedEntryID == nil, let firstID = firstTimelineEntryID() {
             selectedEntryID = firstID
         }
@@ -1292,7 +1321,7 @@ struct RootView: View {
                 cancelNavigationConfirmation(dismissToast: true)
                 selectedEntryID = nil
                 retainedEntryListIDs.removeAll()
-                timelineMemory.resetScope()
+                timelineMemory.requestSwitch()
                 isTimelineBrowsing = timelineStyle != .list
                 selection = newSelection
                 SidebarSwitchTrace.mark("selection state updated")
@@ -2761,15 +2790,38 @@ struct EntryListView: View {
     // Advance only after a complete preview batch. A cancelled batch is retried.
     @State private var previewPreparedCount = 0
     @State private var previewPreparationID = UUID()
+    @State private var lastScrolledPageGeneration: UInt64?
     private let pageSize = 100
 
     private struct InitialPageRequest: Hashable {
         let selection: SidebarSelection
         let unreadOnly: Bool
+        let scope: TimelineScope
+        let requestRevision: UInt64
+    }
+
+    private struct SelectionScrollRequest: Equatable {
+        let trigger: UUID
+        let pageGeneration: UInt64
+        let allowsInteraction: Bool
+    }
+
+    private var selectionScrollRequest: SelectionScrollRequest {
+        .init(trigger: autoScrollTrigger, pageGeneration: presentation.pageGeneration,
+              allowsInteraction: allowsInteraction)
     }
 
     private var initialPageRequest: InitialPageRequest {
-        InitialPageRequest(selection: selection, unreadOnly: unreadOnly)
+        InitialPageRequest(selection: selection, unreadOnly: unreadOnly, scope: timelineScope,
+                           requestRevision: presentation.requestRevision)
+    }
+
+    private var allowsInteraction: Bool {
+        presentation.allowsInteraction(selection: selection, unreadOnly: unreadOnly, scope: timelineScope)
+    }
+
+    private var displayedSelection: SidebarSelection {
+        presentation.displayedContext?.selection ?? selection
     }
 
     private var appearancePalette: ReaderAppearancePalette {
@@ -2777,9 +2829,9 @@ struct EntryListView: View {
     }
 
     private var magazineScopeTitle: String {
-        if case let .feed(id) = selection { return store.feeds.first { $0.id == id }?.title ?? selection.title }
-        if case let .account(id) = selection { return store.accounts.first { $0.id == id }?.displayName ?? selection.title }
-        return selection.title
+        if case let .feed(id) = displayedSelection { return store.feeds.first { $0.id == id }?.title ?? displayedSelection.title }
+        if case let .account(id) = displayedSelection { return store.accounts.first { $0.id == id }?.displayName ?? displayedSelection.title }
+        return displayedSelection.title
     }
 
     private var isListFocused: Bool {
@@ -2810,124 +2862,91 @@ struct EntryListView: View {
         loadedEntries.contains { !$0.isRead }
     }
 
-    private func clearInitialPage() {
+    private func loadInitialPage(for request: InitialPageRequest) async {
         nextPageTask?.cancel()
         nextPageTask = nil
         currentPagesReloadTask?.cancel()
         currentPagesReloadTask = nil
-        presentation.cancelListVisibilityUpdate()
-        loadedEntries = []
-        loadedEntryIndexes = [:]
-        presentation.clearNavigationPage()
-        visibleImageIDs.removeAll()
-        hasMore = false
         isLoadingPage = true
-        previewPreparedCount = 0
-        previewPreparationID = UUID()
-    }
-
-    private func loadInitialPage(for request: InitialPageRequest) async {
-        let scope = timelineScope
-        let retainedIDs = retainedUnreadIDs
-        let revisionAtStart = store.timelineRevision
-        SidebarSwitchTrace.mark("first page query started")
-        var firstPage = await store.fetchTimelinePageAsync(
-            scope: scope,
-            unreadOnly: request.unreadOnly,
-            retainingIDs: retainedIDs,
-            limit: pageSize,
-            offset: 0
-        )
-        guard !Task.isCancelled, initialPageRequest == request else { return }
-        // A refresh may publish a new timeline while this query is in flight.
-        // Re-read off the main thread so an older snapshot cannot replace it.
-        if store.timelineRevision != revisionAtStart {
-            firstPage = await store.fetchTimelinePageAsync(
-                scope: scope,
-                unreadOnly: request.unreadOnly,
-                retainingIDs: retainedIDs,
-                limit: pageSize,
-                offset: 0
-            )
-            guard !Task.isCancelled, initialPageRequest == request else { return }
+        if presentation.displayedContext?.selection != request.selection {
+            retainedUnreadIDs = selectedEntryID.map { [$0] } ?? []
         }
-        loadedEntries = firstPage
-        loadedEntryIndexes = Dictionary(uniqueKeysWithValues: firstPage.enumerated().map { ($0.element.id, $0.offset) })
-        presentation.setNavigationPage(
-            scope: scope,
-            unreadOnly: request.unreadOnly,
-            revision: store.timelineRevision,
-            ids: firstPage.map(\.id)
+        SidebarSwitchTrace.mark("first page query started")
+        let committed = await presentation.loadFirstPage(
+            context: .init(selection: request.selection, unreadOnly: request.unreadOnly, scope: request.scope),
+            snapshot: { .init(timelineRevision: store.timelineRevision, retainedIDs: retainedUnreadIDs) },
+            isRequested: { initialPageRequest == request },
+            fetch: { inputs in
+                await store.fetchTimelinePageAsync(scope: request.scope, unreadOnly: request.unreadOnly,
+                    retainingIDs: inputs.retainedIDs, limit: pageSize, offset: 0)
+            },
+            commit: { firstPage, inputs in
+                presentation.resetScope()
+                visualSelectionID = nil
+                titleTranslator.resetScope()
+                loadedEntries = firstPage
+                loadedEntryIndexes = Dictionary(uniqueKeysWithValues: firstPage.enumerated().map { ($0.element.id, $0.offset) })
+                presentation.setNavigationPage(scope: request.scope, unreadOnly: request.unreadOnly,
+                                               revision: inputs.timelineRevision, ids: firstPage.map(\.id))
+                visibleImageIDs.removeAll()
+                hasMore = firstPage.count == pageSize
+                isLoadingPage = false
+                previewPreparedCount = 0
+                previewPreparationID = UUID()
+                store.iconStore.warmUp(items: firstPage)
+            }
         )
-        hasMore = (firstPage.count == pageSize)
-        isLoadingPage = false
+        guard committed else { return }
+        if let selectedEntryID {
+            if request.scope == .unread || request.unreadOnly { retainedUnreadIDs.insert(selectedEntryID) }
+            if viewStyle != .magazine { visualSelectionID = selectedEntryID }
+            loadPageForSelectedEntryIfNeeded(selectedEntryID)
+        }
         SidebarSwitchTrace.finish()
-        // 切换订阅源后首屏预热：行渲染前图标已就绪，避免整列闪兜底徽章。
-        store.iconStore.warmUp(items: firstPage)
     }
 
     private func loadNextPage() {
-        guard !isLoadingPage, hasMore else { return }
+        guard allowsInteraction, !isLoadingPage, hasMore else { return }
         isLoadingPage = true
         let request = initialPageRequest
-        let scope = timelineScope
-        let retainingIDs = retainedUnreadIDs
+        let generation = presentation.pageGeneration
         let offset = loadedEntries.count
         nextPageTask = Task {
-            var revision = store.timelineRevision
-            var page = await store.fetchTimelinePageAsync(
-                scope: scope,
-                unreadOnly: request.unreadOnly,
-                retainingIDs: retainingIDs,
-                limit: pageSize,
-                offset: offset
-            )
-            guard !Task.isCancelled, initialPageRequest == request,
-                  loadedEntries.count == offset else { return }
-            if store.timelineRevision != revision {
-                revision = store.timelineRevision
-                page = await store.fetchTimelinePageAsync(
-                    scope: scope,
+            while !Task.isCancelled, allowsInteraction, presentation.pageGeneration == generation {
+                let revision = store.timelineRevision
+                let retainingIDs = retainedUnreadIDs
+                let page = await store.fetchTimelinePageAsync(
+                    scope: request.scope,
                     unreadOnly: request.unreadOnly,
-                    retainingIDs: retainedUnreadIDs,
+                    retainingIDs: retainingIDs,
                     limit: pageSize,
                     offset: offset
                 )
-                guard !Task.isCancelled, initialPageRequest == request,
-                      loadedEntries.count == offset else { return }
-            }
-            if store.timelineRevision != revision {
+                guard !Task.isCancelled, allowsInteraction, presentation.pageGeneration == generation,
+                      initialPageRequest == request, loadedEntries.count == offset else { return }
+                guard store.timelineRevision == revision, retainedUnreadIDs == retainingIDs else { continue }
+                let freshItems = page.filter { loadedEntryIndexes[$0.id] == nil }
+                if freshItems.isEmpty {
+                    hasMore = false
+                } else {
+                    var indexes = loadedEntryIndexes
+                    for (index, item) in freshItems.enumerated() { indexes[item.id] = offset + index }
+                    loadedEntries.append(contentsOf: freshItems)
+                    loadedEntryIndexes = indexes
+                    presentation.setNavigationPage(scope: request.scope, unreadOnly: request.unreadOnly,
+                                                   revision: revision, ids: loadedEntries.map(\.id))
+                    hasMore = page.count == pageSize
+                    previewPreparationID = UUID()
+                    store.iconStore.warmUp(items: freshItems)
+                }
                 isLoadingPage = false
-                scheduleCurrentPagesReload()
                 return
             }
-            let freshItems = page.filter { loadedEntryIndexes[$0.id] == nil }
-            if freshItems.isEmpty {
-                hasMore = false
-            } else {
-                var indexes = loadedEntryIndexes
-                let firstIndex = loadedEntries.count
-                for (index, item) in freshItems.enumerated() {
-                    indexes[item.id] = firstIndex + index
-                }
-                loadedEntries.append(contentsOf: freshItems)
-                loadedEntryIndexes = indexes
-                presentation.setNavigationPage(
-                    scope: scope,
-                    unreadOnly: request.unreadOnly,
-                    revision: store.timelineRevision,
-                    ids: loadedEntries.map(\.id)
-                )
-                hasMore = (page.count == pageSize)
-                previewPreparationID = UUID()
-                // 滚动加载下一页时预热新页涉及的 feed。
-                store.iconStore.warmUp(items: freshItems)
-            }
-            isLoadingPage = false
         }
     }
 
     private func reloadCurrentPages() {
+        guard allowsInteraction else { return }
         currentPagesReloadTask?.cancel()
         currentPagesReloadTask = nil
         let totalCount = max(pageSize, loadedEntries.count)
@@ -2942,12 +2961,14 @@ struct EntryListView: View {
     }
 
     private func scheduleCurrentPagesReload() {
+        guard allowsInteraction else { return }
         currentPagesReloadTask?.cancel()
         let request = initialPageRequest
         let scope = timelineScope
         let retainedIDs = retainedUnreadIDs
         let totalCount = max(pageSize, loadedEntries.count)
         let revision = store.timelineRevision
+        let generation = presentation.pageGeneration
         currentPagesReloadTask = Task {
             let startedAt = ProcessInfo.processInfo.systemUptime
             let refreshed = await store.fetchTimelinePageAsync(
@@ -2957,7 +2978,8 @@ struct EntryListView: View {
                 limit: totalCount,
                 offset: 0
             )
-            guard !Task.isCancelled, initialPageRequest == request else { return }
+            guard !Task.isCancelled, allowsInteraction, presentation.pageGeneration == generation,
+                  initialPageRequest == request else { return }
             // A read-state change can add a retained unread ID without changing
             // the timeline revision. Never commit a page built for older inputs.
             guard store.timelineRevision == revision,
@@ -2995,6 +3017,7 @@ struct EntryListView: View {
     /// Keep the next page ready before keyboard navigation reaches the boundary.
     /// Reader shortcuts can also select a row before its page has been mounted.
     private func loadPageForSelectedEntryIfNeeded(_ entryID: String) {
+        guard allowsInteraction else { return }
         guard viewStyle == .list else { return }
         if let index = loadedEntryIndexes[entryID] {
             if index >= loadedEntries.count - 20 { loadNextPage() }
@@ -3006,6 +3029,7 @@ struct EntryListView: View {
 
     /// 将当前选择范围在数据库中的全部未读文章标记为已读。
     private func markAllRead() {
+        guard allowsInteraction else { return }
         switch selection {
         case .today:
             let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
@@ -3039,7 +3063,8 @@ struct EntryListView: View {
             set: { newID in
                 // 原生 List 在自身结构调和、局部刷新或状态变化时可能会发出瞬态 nil。
                 // 严禁让原生 List 决定应用层选择状态，忽略此类瞬态 nil 以免清空 selectedEntryID 或 retainedUnreadIDs。
-                guard let newID else { return }
+                guard allowsInteraction, let newID, newID != selectedEntryID,
+                      loadedEntryIndexes[newID] != nil else { return }
                 ArticleSwitchTrace.begin(newID)
 
                 // 在未读浏览会话中，累积保留所有在当前会话中被阅读过的条目
@@ -3076,17 +3101,19 @@ struct EntryListView: View {
                 )
             )
             .background(rowFrame(entry.id))
-            .contextMenu { entryContextMenu(entry) }
+            .contextMenu { if allowsInteraction { entryContextMenu(entry) } }
     }
 
     @ViewBuilder
     private func entryContextMenu(_ entry: EntryListItem) -> some View {
         Button(I18N.shared.localized(entry.isRead ? "标为未读" : "标为已读")) {
+            guard allowsInteraction else { return }
             let nextRead = !entry.isRead
             store.markRead(entryID: entry.id, read: nextRead)
             patchEntryState(entryID: entry.id, isRead: nextRead)
         }
         Button(I18N.shared.localized(entry.isStarred ? "取消收藏" : "收藏")) {
+            guard allowsInteraction else { return }
             let nextStarred = !entry.isStarred
             store.toggleStar(entryID: entry.id)
             patchEntryState(entryID: entry.id, isStarred: nextStarred)
@@ -3097,12 +3124,14 @@ struct EntryListView: View {
                 Label(I18N.shared.localized("共享...", "Share..."), systemImage: "square.and.arrow.up")
             }
             Button {
+                guard allowsInteraction else { return }
                 AppInfo.copyToClipboard(url.absoluteString)
                 onFeedback(I18N.shared.localized("已复制文章链接", "Article link copied"))
             } label: {
                 Label(I18N.shared.localized("拷贝链接", "Copy Link"), systemImage: "link")
             }
             Button {
+                guard allowsInteraction else { return }
                 AppInfo.openURL(url)
             } label: {
                 Label(I18N.shared.localized("在浏览器中打开", "Open in Browser"), systemImage: "safari")
@@ -3110,6 +3139,7 @@ struct EntryListView: View {
         }
         Divider()
         Button {
+            guard allowsInteraction else { return }
             Task {
                 let ok = await store.refetchArticle(entryID: entry.id)
                 onFeedback(I18N.shared.localized(ok ? "正文已更新" : "拉取失败，已保留原内容"))
@@ -3120,6 +3150,7 @@ struct EntryListView: View {
         .disabled(store.activeRefetchEntryIDs.contains(entry.id))
         Divider()
         Button {
+            guard allowsInteraction else { return }
             AppInfo.copyToClipboard(entry.id)
             onFeedback(I18N.shared.localized("已复制文章 ID"))
         } label: {
@@ -3190,6 +3221,7 @@ struct EntryListView: View {
 
     private func visualEntry(_ entry: EntryListItem, width: CGFloat, layout: TimelineTileLayout) -> some View {
         Button {
+            guard allowsInteraction else { return }
             onOpenEntry()
             if viewStyle != .magazine { visualSelectionID = entry.id }
             entryListSelection.wrappedValue = entry.id
@@ -3204,7 +3236,7 @@ struct EntryListView: View {
             // Magazine tracks one frame per bounded page, not every story.
             if viewStyle != .magazine { rowFrame(entry.id) }
         }
-        .contextMenu { entryContextMenu(entry) }
+        .contextMenu { if allowsInteraction { entryContextMenu(entry) } }
         .onAppear { if viewStyle != .magazine && entry.id == loadedEntries.last?.id { loadNextPage() } }
     }
 
@@ -3240,12 +3272,15 @@ struct EntryListView: View {
             MagazineBrowserView(entries: loadedEntries,
                 folders: Dictionary(store.feeds.map { ($0.id, $0.folder ?? "") }, uniquingKeysWith: { first, _ in first }),
                 availableSize: CGSize(width: width, height: max(0, height - 52)),
-                showsImages: showsImages, isBrowsing: isBrowsing, hasMore: hasMore,
+                showsImages: showsImages, isBrowsing: isBrowsing && allowsInteraction, hasMore: hasMore,
                 isLoading: isLoadingPage && loadedEntries.isEmpty,
                 selectedID: visualSelectionID, keyboardRequest: keyboardRequest,
                 memory: presentation, thumbnailStore: store.thumbnailStore,
-                onHighlight: { visualSelectionID = $0 },
-                onOpen: { entry in onOpenEntry(); entryListSelection.wrappedValue = entry.id },
+                onHighlight: { if allowsInteraction { visualSelectionID = $0 } },
+                onOpen: { entry in
+                    guard allowsInteraction else { return }
+                    onOpenEntry(); entryListSelection.wrappedValue = entry.id
+                },
                 onNeedMore: loadNextPage,
                 onFocusSidebar: { ThreeColumnSplitViewCoordinator.current?.setActiveColumn(0) },
                 coverTitle: magazineScopeTitle, onClearSelection: { visualSelectionID = nil },
@@ -3276,7 +3311,7 @@ struct EntryListView: View {
     }
 
     private func handleTimelineKey(_ request: TimelineKeyRequest, proxy: ScrollViewProxy, width: CGFloat) {
-        guard viewStyle == .cards, !loadedEntries.isEmpty else { return }
+        guard allowsInteraction, viewStyle == .cards, !loadedEntries.isEmpty else { return }
         let id = visualSelectionID ?? selectedEntryID
         if request.keyCode == 125 || request.keyCode == 126 {
             let step = viewStyle == .cards ? cardColumnCount(width) : 1
@@ -3299,6 +3334,7 @@ struct EntryListView: View {
         GeometryReader { geometry in
         ScrollViewReader { proxy in
             timelineContent(width: geometry.size.width, height: geometry.size.height)
+            .allowsHitTesting(allowsInteraction)
             // 空杂志没有页面子视图，也必须占满正文视口，提示才能居中。
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background {
@@ -3314,13 +3350,13 @@ struct EntryListView: View {
             .environment(\.paperAppearancePalette, store.readerAppearance.palette(for: appearanceMode))
             .environment(\.entryTranslations, titleTranslator.translations)
             #if os(iOS)
-            .navigationTitle(selection.title)
+            .navigationTitle(displayedSelection.title)
             #endif
             .onPreferenceChange(TimelineRowFrames.self) { frames in
                 let viewport = CGRect(x: 0, y: 52, width: geometry.size.width, height: max(0, geometry.size.height - 52))
                 let request = initialPageRequest
                 presentation.scheduleListVisibilityUpdate {
-                    guard initialPageRequest == request else { return }
+                    guard allowsInteraction, initialPageRequest == request else { return }
                     if viewStyle == .list {
                         presentation.visibleRowFrames = frames
                         presentation.viewportFrame = viewport
@@ -3350,7 +3386,7 @@ struct EntryListView: View {
                 presentation.finishRestoration()
             }
             .task(id: previewPreparationID) {
-                guard showsImages, previewPreparedCount < loadedEntries.count else { return }
+                guard allowsInteraction, showsImages, previewPreparedCount < loadedEntries.count else { return }
                 let end = loadedEntries.count
                 let ids = loadedEntries[previewPreparedCount..<end].map(\.id)
                 // AppStore batches its SQL work and publishes one timeline revision
@@ -3369,17 +3405,8 @@ struct EntryListView: View {
             .task(id: initialPageRequest) {
                 await loadInitialPage(for: initialPageRequest)
             }
-            .onChange(of: selection) { _, _ in
-                presentation.resetScope()
-                visualSelectionID = nil
-                retainedUnreadIDs.removeAll()
-                titleTranslator.resetScope()
-                clearInitialPage()
-            }
-            .onChange(of: unreadOnly) { _, _ in
-                clearInitialPage()
-            }
             .onChange(of: selectedEntryID) { _, newID in
+                guard allowsInteraction else { return }
                 if let newID {
                     if timelineScope == .unread || unreadOnly {
                         retainedUnreadIDs.insert(newID)
@@ -3400,17 +3427,31 @@ struct EntryListView: View {
             .onChange(of: store.autoTranslationRevision) { _, _ in
                 titleTranslator.refresh()
             }
-            .task(id: autoScrollTrigger) {
-                guard let targetID = selectedEntryID else { return }
-                // Wait one display interval for a newly appended page to join the List.
-                // SwiftUI cancels this task when rapid navigation supersedes the target.
+            .task(id: selectionScrollRequest) {
+                let scrollRequest = selectionScrollRequest
+                guard allowsInteraction, !loadedEntries.isEmpty, viewStyle != .magazine else { return }
+                let targetID = selectedEntryID
+                // Wait one display interval for committed rows to join the List.
+                // The generation also survives A → B → A coalescing into one frame.
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                guard !Task.isCancelled, selectedEntryID == targetID,
-                      loadedEntryIndexes[targetID] != nil else { return }
-                if viewStyle == .list, !presentation.shouldCenterSelection(targetID) { return }
-                ArticleSwitchTrace.mark("scroll requested", entryID: targetID)
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
-                    proxy.scrollTo(targetID, anchor: .center)
+                guard !Task.isCancelled, selectionScrollRequest == scrollRequest,
+                      allowsInteraction, selectedEntryID == targetID else { return }
+                let isNewPage = lastScrolledPageGeneration != scrollRequest.pageGeneration
+                lastScrolledPageGeneration = scrollRequest.pageGeneration
+                if let targetID, loadedEntryIndexes[targetID] != nil {
+                    // Old viewport geometry cannot decide visibility in a newly
+                    // committed feed. Center pending programmatic selections once.
+                    if !isNewPage, viewStyle == .list, !presentation.shouldCenterSelection(targetID) { return }
+                    ArticleSwitchTrace.mark("scroll requested", entryID: targetID)
+                    withAnimation(isNewPage || reduceMotion ? nil : .smooth(duration: 0.22)) {
+                        proxy.scrollTo(targetID, anchor: .center)
+                    }
+                } else if isNewPage, let firstID = loadedEntries.first?.id {
+                    // Clearing the old page previously reset the native offset.
+                    // Keep that start-at-top behavior without exposing an empty page.
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { proxy.scrollTo(firstID, anchor: .top) }
                 }
             }
             #if os(iOS)
@@ -3422,7 +3463,7 @@ struct EntryListView: View {
                         Label(I18N.localized("全部标为已读"), systemImage: "envelope.open")
                     }
                     .help(I18N.localized("将当前列表全部标为已读"))
-                    .disabled(!hasUnread)
+                    .disabled(!allowsInteraction || !hasUnread)
                 }
             }
             #endif
@@ -3434,7 +3475,7 @@ struct EntryListView: View {
             .overlay {
                 if loadedEntries.isEmpty && !isLoadingPage && viewStyle != .magazine {
                     ColumnEmptyPrompt(
-                        title: unreadOnly
+                        title: (presentation.displayedContext?.unreadOnly ?? unreadOnly)
                             ? I18N.localized("暂无未读文章")
                             : I18N.shared.localized("暂无文章", "No articles"),
                         isFeed: false
@@ -3469,7 +3510,12 @@ private struct TimelineScrollHeader: View {
             .background {
                 ScrollOffsetObserver { offset in
                     let next = offset > 1
-                    if next != showsBlur { showsBlur = next }
+                    // Rebinding and programmatic scrolling can report inside
+                    // NSViewRepresentable.updateNSView. Update this leaf only
+                    // after that pass; FIFO delivery preserves the latest offset.
+                    DispatchQueue.main.async {
+                        if next != showsBlur { showsBlur = next }
+                    }
                 }
             }
     }

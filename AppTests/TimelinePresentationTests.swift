@@ -6,6 +6,179 @@ import PaperRssCore
 
 @MainActor
 final class TimelinePresentationTests: XCTestCase {
+    func testScopeSwitchKeepsRowsAndHeaderUntilLatestPageCommits() async throws {
+        let memory = TimelinePresentationMemory()
+        let a = TimelinePresentationMemory.DisplayContext(selection: .folder(accountID: "one", folderName: "A"),
+            unreadOnly: false, scope: .folder(accountID: "one", folderName: "A"))
+        let b = TimelinePresentationMemory.DisplayContext(selection: .folder(accountID: "one", folderName: "B"),
+            unreadOnly: true, scope: .folder(accountID: "one", folderName: "B"))
+        var visibleIDs = ["a"]
+        memory.commitSwitch(memory.beginSwitch(), context: a) { visibleIDs = ["a"] }
+        let bGeneration = memory.beginSwitch()
+        let delayedPage = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(30))
+            return memory.commitSwitch(bGeneration, context: b) { visibleIDs = ["b"] }
+        }
+        XCTAssertEqual(visibleIDs, ["a"])
+        XCTAssertEqual(memory.displayedContext, a)
+        XCTAssertFalse(memory.allowsInteraction(selection: b.selection, unreadOnly: b.unreadOnly, scope: b.scope))
+        XCTAssertFalse(memory.allowsInteraction(selection: a.selection, unreadOnly: a.unreadOnly, scope: a.scope))
+        let committed = try await delayedPage.value
+        XCTAssertTrue(committed)
+        XCTAssertEqual(visibleIDs, ["b"])
+        XCTAssertEqual(memory.displayedContext, b)
+        XCTAssertTrue(memory.allowsInteraction(selection: b.selection, unreadOnly: b.unreadOnly, scope: b.scope))
+    }
+
+    func testRapidScopeSwitchRejectsOldResultsIncludingReturnToSameScope() {
+        let memory = TimelinePresentationMemory()
+        let a = TimelinePresentationMemory.DisplayContext(selection: .today, unreadOnly: false,
+                                                           scope: .today(startOfDayTimestamp: 100))
+        let b = TimelinePresentationMemory.DisplayContext(selection: .unread, unreadOnly: false, scope: .unread)
+        let c = TimelinePresentationMemory.DisplayContext(selection: .starred, unreadOnly: false, scope: .starred)
+        var ids = ["initial"]
+        let firstA = memory.beginSwitch()
+        let requestB = memory.beginSwitch()
+        let requestC = memory.beginSwitch()
+        XCTAssertFalse(memory.commitSwitch(firstA, context: a) { ids = ["old-a"] })
+        XCTAssertFalse(memory.commitSwitch(requestB, context: b) { ids = ["b"] })
+        XCTAssertEqual(ids, ["initial"])
+        XCTAssertTrue(memory.commitSwitch(requestC, context: c) { ids = ["c"] })
+        let latestA = memory.beginSwitch()
+        XCTAssertTrue(memory.commitSwitch(latestA, context: a) { ids = ["new-a"] })
+        XCTAssertFalse(memory.commitSwitch(firstA, context: a) { ids = ["old-a"] })
+        XCTAssertEqual(ids, ["new-a"])
+        XCTAssertEqual(memory.displayedContext, a)
+    }
+
+    func testPendingScopeRejectsActionsAndEmptyPageCommitsOnlyWhenReady() {
+        let memory = TimelinePresentationMemory()
+        let feed = UUID()
+        let context = TimelinePresentationMemory.DisplayContext(selection: .feed(feed), unreadOnly: false,
+                                                                  scope: .feed(feedID: feed.uuidString))
+        var ids = ["article"]
+        memory.commitSwitch(memory.beginSwitch(), context: context) { ids = ["article"] }
+        var writes = 0
+        func markRead() {
+            guard memory.allowsInteraction(selection: context.selection, unreadOnly: false, scope: context.scope) else { return }
+            writes += 1
+        }
+        markRead()
+        XCTAssertEqual(writes, 1)
+        let generation = memory.beginSwitch()
+        markRead()
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(ids, ["article"])
+        XCTAssertFalse(memory.allowsInteraction(selection: context.selection, unreadOnly: true, scope: context.scope))
+        memory.commitSwitch(generation, context: context) { ids = [] }
+        XCTAssertTrue(ids.isEmpty)
+        XCTAssertFalse(memory.isSwitching)
+        XCTAssertTrue(memory.allowsInteraction(selection: context.selection, unreadOnly: false, scope: context.scope))
+        // Folder names do not merge scopes across accounts.
+        XCTAssertFalse(memory.allowsInteraction(selection: .folder(accountID: "other", folderName: "A"),
+            unreadOnly: false, scope: .folder(accountID: "other", folderName: "A")))
+    }
+
+    func testFirstPageRetriesEveryRevisionAndRetentionChangeBeforePublishing() async throws {
+        let memory = TimelinePresentationMemory()
+        let context = TimelinePresentationMemory.DisplayContext(selection: .unread, unreadOnly: false, scope: .unread)
+        var inputs = TimelinePresentationMemory.QuerySnapshot(timelineRevision: 1, retainedIDs: [])
+        var queries: [TimelinePresentationMemory.QuerySnapshot] = []
+        var waits: [CheckedContinuation<Void, Never>] = []
+        var committedIDs = ["old-visible"]
+        var committedInputs: TimelinePresentationMemory.QuerySnapshot?
+        let work = Task { @MainActor in
+            await memory.loadFirstPage(context: context, snapshot: { inputs }, isRequested: { true },
+                fetch: { snapshot in
+                    queries.append(snapshot)
+                    let attempt = queries.count
+                    if attempt <= 2 {
+                        await withCheckedContinuation { waits.append($0) }
+                    }
+                    return [EntryListItem(id: "attempt-\(attempt)", feedID: UUID(), title: "fixture", sourceTitle: "fixture")]
+                }, commit: { rows, snapshot in
+                    committedIDs = rows.map(\.id)
+                    committedInputs = snapshot
+                })
+        }
+        func waitForQuery(_ count: Int) async throws {
+            for _ in 0..<100 {
+                if queries.count >= count { return }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            XCTFail("Missing query attempt \(count)")
+        }
+        try await waitForQuery(1)
+        XCTAssertEqual(committedIDs, ["old-visible"])
+        inputs = .init(timelineRevision: 2, retainedIDs: [])
+        waits[0].resume()
+        try await waitForQuery(2)
+        XCTAssertEqual(committedIDs, ["old-visible"])
+        // A second revision and an independently changed retained-read session
+        // invalidate the retry too, rather than letting stale rows leak through.
+        inputs = .init(timelineRevision: 3, retainedIDs: ["read-but-retained"])
+        waits[1].resume()
+        let committed = await work.value
+        XCTAssertTrue(committed)
+        XCTAssertEqual(queries.count, 3)
+        XCTAssertEqual(committedIDs, ["attempt-3"])
+        XCTAssertEqual(committedInputs, inputs)
+        XCTAssertEqual(memory.displayedContext, context)
+    }
+
+    func testSupersededFirstPageCannotPublishEvenWhenQueryStillCompletes() async throws {
+        let memory = TimelinePresentationMemory()
+        let a = TimelinePresentationMemory.DisplayContext(selection: .today, unreadOnly: false,
+                                                           scope: .today(startOfDayTimestamp: 100))
+        let b = TimelinePresentationMemory.DisplayContext(selection: .starred, unreadOnly: false, scope: .starred)
+        var oldQuery: CheckedContinuation<[EntryListItem], Never>?
+        var rows = ["old-visible"]
+        let oldWork = Task { @MainActor in
+            await memory.loadFirstPage(context: a,
+                snapshot: { .init(timelineRevision: 1, retainedIDs: []) }, isRequested: { true },
+                fetch: { _ in await withCheckedContinuation { oldQuery = $0 } },
+                commit: { items, _ in rows = items.map(\.id) })
+        }
+        for _ in 0..<100 where oldQuery == nil { try await Task.sleep(for: .milliseconds(1)) }
+        let continuation = try XCTUnwrap(oldQuery)
+        XCTAssertEqual(rows, ["old-visible"])
+        memory.requestSwitch()
+        let newCommitted = await memory.loadFirstPage(context: b,
+            snapshot: { .init(timelineRevision: 1, retainedIDs: []) }, isRequested: { true },
+            fetch: { _ in [EntryListItem(id: "b", feedID: UUID(), title: "B", sourceTitle: "B")] },
+            commit: { items, _ in rows = items.map(\.id) })
+        XCTAssertTrue(newCommitted)
+        continuation.resume(returning: [EntryListItem(id: "late-a", feedID: UUID(), title: "A", sourceTitle: "A")])
+        let oldCommitted = await oldWork.value
+        XCTAssertFalse(oldCommitted)
+        XCTAssertEqual(rows, ["b"])
+        XCTAssertEqual(memory.displayedContext, b)
+    }
+
+    func testCoalescedReturnToSameScopeStillReloadsWithoutRestartLoop() async {
+        let memory = TimelinePresentationMemory()
+        let a = TimelinePresentationMemory.DisplayContext(selection: .today, unreadOnly: false,
+                                                           scope: .today(startOfDayTimestamp: 100))
+        memory.commitSwitch(memory.beginSwitch(), context: a) {}
+        let originalTaskIdentity = memory.requestRevision
+        // Sidebar A → B → A may be coalesced into one SwiftUI render. The final
+        // context equals A, but the external request nonce still changes.
+        memory.requestSwitch()
+        memory.requestSwitch()
+        XCTAssertNotEqual(memory.requestRevision, originalTaskIdentity)
+        let taskIdentity = memory.requestRevision
+        var queries = 0
+        let committed = await memory.loadFirstPage(context: a,
+            snapshot: { .init(timelineRevision: 1, retainedIDs: []) },
+            isRequested: { memory.requestRevision == taskIdentity },
+            fetch: { _ in queries += 1; return [] }, commit: { _, _ in })
+        XCTAssertTrue(committed)
+        XCTAssertEqual(queries, 1)
+        XCTAssertEqual(memory.requestRevision, taskIdentity, "Internal begin must not change the task identity")
+        XCTAssertFalse(memory.isSwitching)
+        XCTAssertTrue(memory.allowsInteraction(selection: a.selection, unreadOnly: false, scope: a.scope))
+    }
+
     func testListVisibilityUpdatesWaitForLayoutAndDiscardSupersededFrames() async throws {
         let memory = TimelinePresentationMemory()
         var applied: [Int] = []

@@ -8,6 +8,79 @@ import PaperRssCore
 /// Tracking the visible anchor does not publish an update on every scroll frame.
 @MainActor
 final class TimelinePresentationMemory: ObservableObject {
+    struct DisplayContext: Equatable {
+        let selection: SidebarSelection
+        let unreadOnly: Bool
+        let scope: TimelineScope
+    }
+
+    @Published private(set) var displayedContext: DisplayContext?
+    @Published private(set) var isSwitching = false
+    // Only external selections/filters advance the task identity. Beginning the
+    // async task itself must not restart that same task.
+    @Published private(set) var requestRevision: UInt64 = 0
+    private var switchGeneration: UInt64 = 0
+    var pageGeneration: UInt64 { switchGeneration }
+
+    struct QuerySnapshot: Equatable {
+        let timelineRevision: UInt64
+        let retainedIDs: Set<String>
+    }
+
+    func requestSwitch() {
+        requestRevision &+= 1
+        _ = beginSwitch()
+    }
+
+    /// The injected query seam keeps scope, revision and retention validation on
+    /// the exact production path used by both UI and deterministic async tests.
+    @discardableResult
+    func loadFirstPage(
+        context: DisplayContext,
+        snapshot: () -> QuerySnapshot,
+        isRequested: () -> Bool,
+        fetch: (QuerySnapshot) async -> [EntryListItem],
+        commit: ([EntryListItem], QuerySnapshot) -> Void
+    ) async -> Bool {
+        let generation = beginSwitch()
+        while !Task.isCancelled, isRequested(), isCurrentSwitch(generation) {
+            let inputs = snapshot()
+            let page = await fetch(inputs)
+            guard !Task.isCancelled, isRequested(), isCurrentSwitch(generation) else { return false }
+            // Retention may change without a database revision. Revalidate on
+            // every attempt, including another revision change during a retry.
+            guard snapshot() == inputs else { continue }
+            return commitSwitch(generation, context: context) { commit(page, inputs) }
+        }
+        return false
+    }
+
+    /// Keep the committed page visible while a newer scope is being queried.
+    /// This token also distinguishes A → B → A from the first A request.
+    func beginSwitch() -> UInt64 {
+        switchGeneration &+= 1
+        isSwitching = true
+        cancelListVisibilityUpdate()
+        return switchGeneration
+    }
+
+    func isCurrentSwitch(_ generation: UInt64) -> Bool {
+        switchGeneration == generation
+    }
+
+    @discardableResult
+    func commitSwitch(_ generation: UInt64, context: DisplayContext, updatePage: () -> Void) -> Bool {
+        guard isSwitching, isCurrentSwitch(generation) else { return false }
+        // No suspension between page, navigation and header publication.
+        updatePage()
+        displayedContext = context
+        isSwitching = false
+        return true
+    }
+
+    func allowsInteraction(selection: SidebarSelection, unreadOnly: Bool, scope: TimelineScope) -> Bool {
+        !isSwitching && displayedContext == DisplayContext(selection: selection, unreadOnly: unreadOnly, scope: scope)
+    }
     var visibleAnchor: String?
     var visibleRowFrames: [String: CGRect] = [:]
     var viewportFrame: CGRect = .zero
@@ -86,7 +159,7 @@ final class TimelinePresentationMemory: ObservableObject {
         navigationIndexes = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
     }
     func firstLoadedID(scope: TimelineScope, unreadOnly: Bool, revision: UInt64) -> String? {
-        guard navigationScope == scope, navigationUnreadOnly == unreadOnly,
+        guard !isSwitching, navigationScope == scope, navigationUnreadOnly == unreadOnly,
               navigationRevision == revision else { return nil }
         return navigationIDs.first
     }
@@ -97,7 +170,7 @@ final class TimelinePresentationMemory: ObservableObject {
         unreadOnly: Bool,
         revision: UInt64
     ) -> String? {
-        guard navigationScope == scope, navigationUnreadOnly == unreadOnly,
+        guard !isSwitching, navigationScope == scope, navigationUnreadOnly == unreadOnly,
               navigationRevision == revision,
               let index = navigationIndexes[currentID] else { return nil }
         let nextIndex: Int

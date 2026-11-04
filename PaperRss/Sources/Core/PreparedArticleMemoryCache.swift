@@ -10,12 +10,16 @@ import Foundation
 public final class PreparedArticleMemoryCache {
 
     /// 参与决定 PreparedArticle 结果的条目输入指纹。
-    /// contentHTML 或标题变化（Feed 刷新等）会使指纹失配，缓存自动失效；
-    /// hashValue 按进程随机化，仅用于进程内比较，满足本缓存的用途。
+    /// 正文、标题、摘要、URL 或处理版本变化会使指纹失配，缓存自动失效；
+    /// Hasher 按进程随机化，仅用于进程内比较，满足本缓存的用途。
     public static func contentFingerprint(for entry: Entry) -> String {
-        let contentHash = entry.contentHTML?.hashValue ?? 0
-        let titleHash = entry.title.hashValue
-        return "\(contentHash)-\(titleHash)"
+        var hasher = Hasher()
+        hasher.combine(entry.contentHTML)
+        hasher.combine(entry.title)
+        hasher.combine(entry.summary)
+        hasher.combine(entry.url)
+        hasher.combine(ArticleCache.currentNormalizationRevision)
+        return String(hasher.finalize())
     }
 
     private struct Value {

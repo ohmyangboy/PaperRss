@@ -2745,11 +2745,43 @@ public final class AppStore: ObservableObject {
         for entry: Entry,
         policy: ArticlePreparationPolicy = .foregroundRefresh
     ) async -> PreparedArticle {
+        await prepareArticleResult(for: entry, policy: policy).prepared
+    }
+
+    /// 先准备当前已有内容。此入口不等待网页，也不会通知阅读器重载自身。
+    public func prepareInitialArticle(for entry: Entry) async -> ArticlePreparationResult {
+        await prepareArticleResult(for: entry, policy: .initialDisplay)
+    }
+
+    /// 在本地首帧之后升级全文。完成只更新缓存，当前阅读器是否换页由用户决定。
+    public func refreshArticleInBackground(for entry: Entry) async -> PreparedArticle? {
+        guard automaticallyFetchArticleContent, !Task.isCancelled else { return nil }
+        let result = await prepareArticleResult(
+            for: entry, policy: .foregroundRefresh, usesMemoryCache: false
+        )
+        guard !Task.isCancelled, automaticallyFetchArticleContent,
+              result.cacheState == .current, !result.isProvisionalLocal else { return nil }
+        // Another consumer may have completed the same article after this
+        // reader displayed its preview. A complete current disk cache is also
+        // a ready offer, even when this call required no fetch or cache write.
+        let isCompleteCachedContent = result.prepared.source == .cache
+        let didUpgradeContent = result.updatedCache != nil &&
+            (result.prepared.source == .web || result.didRefreshCache)
+        guard isCompleteCachedContent || didUpgradeContent else { return nil }
+        return result.prepared
+    }
+
+    private func prepareArticleResult(
+        for entry: Entry,
+        policy: ArticlePreparationPolicy,
+        usesMemoryCache: Bool = true
+    ) async -> ArticlePreparationResult {
         let allowsAutomaticFetch = automaticallyFetchArticleContent
         let effectivePolicy: ArticlePreparationPolicy = allowsAutomaticFetch ? policy : .storedContent
         let fingerprint = PreparedArticleMemoryCache.contentFingerprint(for: entry)
-        if let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
-            return memoized
+        if usesMemoryCache,
+           let memoized = preparedArticleMemoryCache.article(for: entry.id, contentFingerprint: fingerprint) {
+            return ArticlePreparationResult(prepared: memoized, updatedCache: nil, cacheState: .current)
         }
         // 注：预取与阅读加载可能对同一 entry 并发准备（罕见且良性，后写者胜出）。
         // 刻意不做共享去重任务：非结构化 Task 会切断视图
@@ -2767,18 +2799,45 @@ public final class AppStore: ObservableObject {
             policy: effectivePolicy,
             feedLanguageHints: (try? autoTranslationRepository.languageHints(entry: entry)) ?? []
         )
+        // A cancelled selection does not need a reader document, even if the
+        // engine produced local fallback content while cancelling its request.
+        guard !Task.isCancelled else {
+            return ArticlePreparationResult(
+                prepared: result.prepared, updatedCache: nil,
+                cacheState: .staleFallback, isProvisionalLocal: true
+            )
+        }
         // 设置切换期间的旧请求不得写回或展示其结果；按最新策略重新准备。
         if allowsAutomaticFetch != automaticallyFetchArticleContent {
-            return await prepareArticle(for: entry, policy: policy)
+            return await prepareArticleResult(
+                for: entry, policy: policy, usesMemoryCache: usesMemoryCache
+            )
         }
-        let prepared = result.prepared
+        let prepared = await Task.detached(priority: .userInitiated) {
+            result.prepared.preparedForReader(title: entry.title)
+        }.value
+        if allowsAutomaticFetch != automaticallyFetchArticleContent {
+            return await prepareArticleResult(
+                for: entry, policy: policy, usesMemoryCache: usesMemoryCache
+            )
+        }
+        // Settings changes, a manual refetch, or an invalidation during CPU work
+        // must not write an older article back to either cache.
+        guard !Task.isCancelled,
+              allowsAutomaticFetch == automaticallyFetchArticleContent,
+              generationAtStart == preparedArticleMemoryCache.generation else {
+            return ArticlePreparationResult(
+                prepared: prepared, updatedCache: nil, cacheState: .staleFallback,
+                isProvisionalLocal: true,
+                needsBackgroundRefresh: result.needsBackgroundRefresh && automaticallyFetchArticleContent
+            )
+        }
         var permitsMemoryCaching = true
         if let updatedCache = result.updatedCache, !Task.isCancelled {
             do {
                 try localProvider.saveCache(updatedCache)
                 if result.didRefreshCache {
                     preparedArticleMemoryCache.invalidate(entryID: entry.id)
-                    articleRefreshSignal = ArticleRefreshSignal(entryID: entry.id, token: UUID())
                 }
             } catch {
                 // 保留本次已准备正文供前台显示；磁盘未升级时下次打开仍会重试。
@@ -2798,10 +2857,17 @@ public final class AppStore: ObservableObject {
            prepared.source != .fallback,
            result.cacheState == .current,
            !result.isProvisionalLocal,
-           generationAtStart == preparedArticleMemoryCache.generation {
+           !result.needsBackgroundRefresh {
             preparedArticleMemoryCache.store(prepared, entryID: entry.id, contentFingerprint: fingerprint)
         }
-        return prepared
+        return ArticlePreparationResult(
+            prepared: prepared,
+            updatedCache: result.updatedCache,
+            cacheState: result.cacheState,
+            didRefreshCache: result.didRefreshCache,
+            isProvisionalLocal: result.isProvisionalLocal,
+            needsBackgroundRefresh: result.needsBackgroundRefresh
+        )
     }
 
     /// 内存中是否已有该条目可立即展示的准备结果（仅查进程内缓存，不触发任何 IO）。

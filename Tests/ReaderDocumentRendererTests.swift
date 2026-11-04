@@ -4,6 +4,27 @@ import Foundation
 
 final class ReaderDocumentRendererTests: XCTestCase {
 
+    func testCachedParagraphHTMLIsReusedUntilDynamicTranslationsArePresent() {
+        let prepared = PreparedArticle(
+            text: "正文", html: "<p>正文</p>", imageURLs: [], baseURL: nil, source: .feed,
+            readerParagraphs: [ReaderParagraph(id: "p0", original: "正文")],
+            annotatedHTML: "<p data-paper-rss-id=\"p0\" data-cached=\"true\">正文</p>"
+        )
+        let plain = ReaderDocumentRenderer.renderDocument(article: prepared, documentIdentity: "entry")
+        XCTAssertTrue(plain.html.contains("data-cached=\"true\""))
+        let translated = ReaderDocumentRenderer.renderDocument(
+            article: prepared, documentIdentity: "entry",
+            translations: [BilingualSegment(id: "p0", original: "正文", translation: "Body")]
+        )
+        XCTAssertTrue(translated.html.contains("Body"))
+        XCTAssertFalse(translated.html.contains("data-cached"))
+        let pending = ReaderDocumentRenderer.renderDocument(
+            article: prepared, documentIdentity: "entry", pendingTranslationIDs: ["p0"]
+        )
+        XCTAssertTrue(pending.html.contains("paper-rss-translation-p0"))
+        XCTAssertFalse(pending.html.contains("data-cached"))
+    }
+
     private func article(
         _ html: String,
         baseURL: URL? = nil,

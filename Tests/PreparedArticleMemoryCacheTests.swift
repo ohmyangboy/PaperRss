@@ -96,4 +96,18 @@ final class PreparedArticleMemoryCacheTests: XCTestCase {
             PreparedArticleMemoryCache.contentFingerprint(for: changedTitle)
         )
     }
+
+    func testContentFingerprintTracksSummaryAndSourceURLChanges() {
+        let feedID = UUID()
+        let original = Entry(id: "e1", feedID: feedID, title: "标题",
+                             url: URL(string: "https://example.test/one"), summary: "原摘要")
+        let changedSummary = Entry(id: "e1", feedID: feedID, title: "标题",
+                                   url: original.url, summary: "新摘要")
+        let changedURL = Entry(id: "e1", feedID: feedID, title: "标题",
+                               url: URL(string: "https://example.test/two"), summary: original.summary)
+        XCTAssertNotEqual(PreparedArticleMemoryCache.contentFingerprint(for: original),
+                          PreparedArticleMemoryCache.contentFingerprint(for: changedSummary))
+        XCTAssertNotEqual(PreparedArticleMemoryCache.contentFingerprint(for: original),
+                          PreparedArticleMemoryCache.contentFingerprint(for: changedURL))
+    }
 }

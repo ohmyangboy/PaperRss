@@ -28,6 +28,60 @@ final class ArticlePreparationEngineTests: XCTestCase {
 
     let defaultFeedID = UUID()
 
+    func testInitialDisplayStrongFeedIsFinalWithoutWebRequest() async {
+        let loader = MockPageLoader()
+        let body = String(repeating: "<p>完整正文包含丰富的背景、证据、分析和结论。</p>", count: 45)
+        let entry = Entry(id: "initial-strong", feedID: defaultFeedID, title: "完整正文",
+                          url: URL(string: "https://example.test/strong"), contentHTML: body)
+
+        let result = await ArticlePreparationEngine(pageLoader: loader).prepare(
+            entry: entry, cached: nil, policy: .initialDisplay)
+
+        XCTAssertEqual(loader.requestCount, 0)
+        XCTAssertEqual(result.prepared.source, .feed)
+        XCTAssertFalse(result.needsBackgroundRefresh)
+        XCTAssertFalse(result.isProvisionalLocal)
+        XCTAssertNotNil(result.updatedCache)
+    }
+
+    func testInitialDisplayCurrentCompleteCacheIsFinalAndPreservesPreparedHTML() async {
+        let loader = MockPageLoader()
+        let text = String(repeating: "有效缓存中的完整正文无需重新提取。", count: 45)
+        let html = "<article><p>\(text)</p></article>"
+        let entry = Entry(id: "initial-cache", feedID: defaultFeedID, title: "缓存正文",
+                          url: URL(string: "https://example.test/cache"), contentHTML: "<p>短摘要……</p>")
+        let cache = ArticleCache(entryID: entry.id, text: text, html: html,
+                                 sourceURL: entry.url, isSanitized: true)
+
+        let result = await ArticlePreparationEngine(pageLoader: loader).prepare(
+            entry: entry, cached: cache, policy: .initialDisplay)
+
+        XCTAssertEqual(loader.requestCount, 0)
+        XCTAssertEqual(result.prepared.source, .cache)
+        XCTAssertEqual(result.prepared.html, html, "当前清洗版本直接复用已有HTML，不再抽取容器")
+        XCTAssertFalse(result.needsBackgroundRefresh)
+        XCTAssertNil(result.updatedCache)
+    }
+
+    func testInitialDisplayWeakCacheIsPreviewRatherThanFinalMemoryCandidate() async {
+        let loader = MockPageLoader()
+        let entry = Entry(id: "initial-weak-cache", feedID: defaultFeedID, title: "短缓存",
+                          url: URL(string: "https://example.test/weak"), contentHTML: "<p>短摘要</p>")
+        let cache = ArticleCache(entryID: entry.id, text: "只有几句的缓存……", html: "<p>只有几句的缓存……</p>",
+                                 sourceURL: entry.url, isSanitized: true)
+
+        let result = await ArticlePreparationEngine(pageLoader: loader).prepare(
+            entry: entry, cached: cache, policy: .initialDisplay)
+        let prefetched = await ArticlePreparationEngine(pageLoader: loader).prepare(
+            entry: entry, cached: cache, policy: .localOnly)
+
+        XCTAssertEqual(loader.requestCount, 0)
+        XCTAssertTrue(result.needsBackgroundRefresh)
+        XCTAssertTrue(result.isProvisionalLocal)
+        XCTAssertTrue(prefetched.isProvisionalLocal)
+        XCTAssertNil(result.updatedCache)
+    }
+
     private func legacyCorruptedMathCache(entryID: String, url: URL, revision: Int = 0) -> ArticleCache {
         let prose = String(repeating: "旧缓存正文包含完整背景、实验过程与结论，用于确保它会被判断为高质量缓存。", count: 25)
         let html = """
