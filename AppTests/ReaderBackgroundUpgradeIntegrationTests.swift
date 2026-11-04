@@ -228,7 +228,7 @@ final class ReaderBackgroundUpgradeIntegrationTests: XCTestCase {
         defer {
             NSApp.setActivationPolicy(previousPolicy)
             if previousApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                previousApplication?.activate(options: [])
+                VisibleWindowTestSupport.restoreApplication(previousApplication)
             }
         }
         let loader = GatedReaderPageLoader()
@@ -260,7 +260,7 @@ final class ReaderBackgroundUpgradeIntegrationTests: XCTestCase {
         window.level = .floating
         window.contentView = host
         try VisibleWindowTestSupport.show(window: window, makeKey: true)
-        NSApp.activate(ignoringOtherApps: true)
+        try VisibleWindowTestSupport.bringForward(window: window)
         window.display()
         NSApp.updateWindows()
         defer {

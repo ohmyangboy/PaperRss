@@ -147,7 +147,7 @@ final class ReaderResponsivenessTests: XCTestCase {
         defer {
             NSApp.setActivationPolicy(previousActivationPolicy)
             if previousApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                previousApplication?.activate(options: [])
+                VisibleWindowTestSupport.restoreApplication(previousApplication)
             }
         }
         let state = ReaderPerfLoopState()
@@ -230,8 +230,7 @@ final class ReaderResponsivenessTests: XCTestCase {
         window.level = .floating
         window.contentView = host
         try VisibleWindowTestSupport.show(window: window, makeKey: true)
-        NSApp.activate(ignoringOtherApps: true)
-        window.orderFrontRegardless()
+        try VisibleWindowTestSupport.bringForward(window: window)
         window.displayIfNeeded()
         NSApp.updateWindows()
         defer { window.close() }

@@ -20,6 +20,19 @@ enum VisibleWindowTestSupport {
         }
     }
 
+    @MainActor
+    static func bringForward(window: NSWindow) throws {
+        try requireGUI()
+        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
+    }
+
+    @MainActor
+    static func restoreApplication(_ application: NSRunningApplication?) {
+        guard ProcessInfo.processInfo.environment["PAPERRSS_RUN_GUI_TESTS"] == "1" else { return }
+        application?.activate(options: [])
+    }
+
     static func requireMagazineDiagnostics() throws {
         try requireGUI()
         guard ProcessInfo.processInfo.environment["PAPERRSS_RUN_MAGAZINE_DIAGNOSTICS"] == "1" else {

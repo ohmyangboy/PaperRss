@@ -114,7 +114,7 @@ final class TimelineSwitchingIntegrationTests: XCTestCase {
         defer {
             NSApp.setActivationPolicy(previousActivationPolicy)
             if previousApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                previousApplication?.activate(options: [])
+                VisibleWindowTestSupport.restoreApplication(previousApplication)
             }
         }
         let a = Feed(title: "Switch A", feedURL: URL(string: "https://switch.invalid/a")!)
@@ -138,8 +138,7 @@ final class TimelineSwitchingIntegrationTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentViewController = host
         try VisibleWindowTestSupport.show(window: window, makeKey: true)
-        NSApp.activate(ignoringOtherApps: true)
-        window.orderFrontRegardless()
+        try VisibleWindowTestSupport.bringForward(window: window)
         defer { window.close() }
         let activationDeadline = ProcessInfo.processInfo.systemUptime + 3
         while (!NSApp.isActive || !window.isKeyWindow || !window.isOnActiveSpace || !window.occlusionState.contains(.visible)),
