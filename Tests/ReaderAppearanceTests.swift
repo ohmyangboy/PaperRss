@@ -433,7 +433,11 @@ final class ReaderAppearanceTests: XCTestCase {
         // 解析必须限定在当前栏目的宿主视图内，且每次 update 重新解析目标，
         // 否则列表 ↔ 杂志切换后误绑相邻栏目会让模糊失效。
         XCTAssertTrue(rootView.contains("PaperTopBarBlur("))
-        XCTAssertTrue(rootView.contains("opacity: isScrolled ? 1 : 0"))
+        let headerStart = try XCTUnwrap(rootView.range(of: "private struct TimelineScrollHeader: View"))
+        let headerEnd = try XCTUnwrap(rootView.range(of: "struct ScrollOffsetObserver:", range: headerStart.lowerBound..<rootView.endIndex))
+        let header = rootView[headerStart.lowerBound..<headerEnd.lowerBound]
+        XCTAssertTrue(header.contains("opacity: showsBlur ? 1 : 0"))
+        XCTAssertTrue(header.contains("ScrollOffsetObserver { offset in"))
         XCTAssertTrue(rootView.contains("ScrollOffsetObserver"))
         XCTAssertTrue(rootView.contains("maximumAttachmentAttempts"))
         XCTAssertTrue(rootView.contains("table.enclosingScrollView"))
