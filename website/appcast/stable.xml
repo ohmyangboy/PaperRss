@@ -5,11 +5,11 @@
     <link>https://github.com/ohmyangboy/PaperRss/releases</link>
     <description>PaperRss stable updates</description>
     <item>
-      <title>PaperRss 1.4.5</title>
-      <sparkle:version>41</sparkle:version>
-      <sparkle:shortVersionString>1.4.5</sparkle:shortVersionString>
+      <title>PaperRss 1.5.1</title>
+      <sparkle:version>46</sparkle:version>
+      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.4.5/PaperRss-v1.4.5.zip" length="13869725" type="application/octet-stream" sparkle:edSignature="fSkHaxyGuUBU5D1hs3TYuuBrQrJZNnCCIjlVO8UflzV31hP+EocmlkwwchiEpjmYcGOJbOQx6mcF0GeS47qFCQ==" paperrss:sha256="1d6b8a02b1fefe346e851dae9d6c23129ec7f284e17182fee29205f880976d1f" sparkle:minimumSystemVersion="14.0" />
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.5.1/PaperRss-v1.5.1.zip" length="17537379" type="application/octet-stream" sparkle:edSignature="ljdSajxUM5cDalw862u47Pkh/tgdU3SaM8Ay3yGNQIhRbiPAs6WhGZV5N8SpFqZMIspkVI+zbY1gB/95tOPWCg==" paperrss:sha256="950c3b00a361f4b2160cbaff4ecfa2a44634d34929ba1097999d06e12c4c8096" sparkle:minimumSystemVersion="14.0" />
     </item>
   </channel>
 </rss>

@@ -31,16 +31,27 @@ public final class LibraryDatabase: Sendable {
         defaultDirectoryURL.appendingPathComponent("library.sqlite")
     }
 
+    /// 生产与测试共用的连接池配置。
+    ///
+    /// GRDB 的默认 `busyMode` 是 `.immediateError`：同一进程内两个连接撞上写锁时立刻抛
+    /// `database is locked`，而不是等待。同一账号的刷新、outbox 与全量快照本来就会并发写，
+    /// 默认值把正常并发变成随机失败。这里改成带超时的等待，超时仍然显式报错。
+    public static func defaultConfiguration() -> Configuration {
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5)
+        return configuration
+    }
+
     /// 初始化 LibraryDatabase 并自动执行迁移。
     ///
     /// - Parameters:
     ///   - databaseURL: 数据库文件路径，默认使用生产路径 `defaultDatabaseURL`。测试时可传入独立临时路径。
     ///   - migrator: 数据库迁移器，默认使用 `DatabaseMigrations.migrator`。
-    ///   - configuration: GRDB 数据库连接池配置，默认使用推荐配置（自动开启外键支持等）。
+    ///   - configuration: GRDB 数据库连接池配置，默认等待写锁而不是立刻报错。
     public init(
         databaseURL: URL = defaultDatabaseURL,
         migrator: DatabaseMigrator = DatabaseMigrations.migrator,
-        configuration: Configuration = Configuration()
+        configuration: Configuration = LibraryDatabase.defaultConfiguration()
     ) throws {
         let directory = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

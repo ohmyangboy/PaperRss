@@ -175,6 +175,8 @@ Core ✕ SwiftUI / AppKit / UIKit / WebKit
 - 初始文章加载每个 entry 只允许一次完整文档装载；主题或字号优先使用现有增量更新路径。
 - 在正文块上注入段落注解时，`blockquote`、`pre`、标题、列表与表格等结构块必须作为单一可观测、可翻译单元保留，不得因按换行拆分成多个子段而被展平为无语义 `<p>`（否则引用条、代码块、表格与标题语义丢失）。
 - MathJax user scripts 按当前 `PreparedArticle.features.containsMath` 在每次文章导航前同步安装或移除；复用 WebView 不得冻结上一篇文章的公式状态。
+- 图片灯箱的布局由 App 层 `paperArticleStyle` 统一负责：初次打开按扣除顶部预留、关闭操作区及边距后的视口等比适配，小图不强制放大；关闭按钮固定在顶部预留下方的右侧，不随图片尺寸、缩放或拖动移动。
+- `PaperReaderBridge.mediaFullscreenScript` 继续复用正文图片 URL，负责现有缩放、拖动以及按钮、背景和 Esc 关闭；不新增原生预览状态或 Bridge 消息。`ReaderImageLightboxTests` 使用真实 WKWebView 验证默认边界、按钮命中及缩放、拖动、调整窗口后的关闭能力。
 
 ### 6.5 公式
 
