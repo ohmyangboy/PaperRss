@@ -206,11 +206,13 @@ final class TranslationRequestSchedulerTests: XCTestCase {
     func testCancelledWaiterNeverMakesAnHTTPCallAndReleasesQueue() async throws {
         let scheduler = TranslationRequestScheduler()
         let recorder = TranslationAttemptRecorder()
-        _ = try await scheduler.run(key: "model", minimumInterval: .milliseconds(200)) { try await recorder.attempt() }
+        // 间隔必须远大于取消前的等待：旧值 200ms 在慢 runner 上会被睡眠追平，
+        // 第二个请求抢在取消前放行，测到的就是机器速度而不是取消语义。
+        _ = try await scheduler.run(key: "model", minimumInterval: .seconds(1)) { try await recorder.attempt() }
         let waiting = Task {
-            try await scheduler.run(key: "model", minimumInterval: .milliseconds(10)) { try await recorder.attempt() }
+            try await scheduler.run(key: "model", minimumInterval: .seconds(1)) { try await recorder.attempt() }
         }
-        try await Task.sleep(for: .milliseconds(20))
+        try? await Task.sleep(for: .milliseconds(20))
         waiting.cancel()
         do { _ = try await waiting.value; XCTFail("取消后不能发请求") }
         catch is CancellationError {} catch { XCTFail("\(error)") }

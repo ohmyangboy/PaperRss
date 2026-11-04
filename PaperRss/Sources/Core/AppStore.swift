@@ -331,7 +331,8 @@ public final class AppStore: ObservableObject {
             "iCloud 远程更新通知暂未连接，仍可手动同步。",
             englishFallback: "Remote iCloud updates are unavailable. You can still sync manually.")
     }
-    private var lastRefreshProgressPublishedAt: [String: Date] = [:]
+    /// 每个账号的进度发布节流状态。随该账号的一轮刷新创建和结束，不跨轮残留。
+    private var refreshProgressPublishers: [String: RefreshProgressPublishPolicy] = [:]
     @Published public private(set) var accountRefreshProgress: [String: AccountRefreshProgress] = [:]
     @Published public private(set) var accountSyncStates: [String: AccountSyncStateRecord] = [:]
     @Published public private(set) var reloadingFeedIDs: Set<UUID> = []
@@ -884,9 +885,7 @@ public final class AppStore: ObservableObject {
         let database = self.libraryDatabase
         let iconStore = self.iconStore
         missingIconProbeTask = Task { @MainActor [weak self] in
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
+            await CancellableDelayGate().wait(delay)
             guard !Task.isCancelled, let self else { return }
             // 若当前仍处于全量/增量刷新流程中，延后重试，绝不与核心文章抓取争抢线程与网络资源
             if self.isRefreshing {
@@ -1982,7 +1981,7 @@ public final class AppStore: ObservableObject {
         } else {
             accountRefreshProgress[account.id] = AccountRefreshProgress()
             Task { [self] in
-                defer { accountRefreshProgress.removeValue(forKey: account.id) }
+                defer { endRefreshProgress(accountID: account.id) }
                 do { _ = try await provider.refresh(reason: .launch) }
                 catch {
                     reportErrorMessage(ICloudSyncFailure.message(for: error), module: .settings)
@@ -2067,7 +2066,7 @@ public final class AppStore: ObservableObject {
         }
         defer {
             for accountID in queuedAccountIDs {
-                accountRefreshProgress.removeValue(forKey: accountID)
+                endRefreshProgress(accountID: accountID)
             }
         }
 
@@ -2092,7 +2091,7 @@ public final class AppStore: ObservableObject {
         if !targetFeeds.isEmpty {
             accountRefreshProgress["local-default"] = AccountRefreshProgress(completed: 0, total: targetFeeds.count)
         }
-        defer { accountRefreshProgress.removeValue(forKey: "local-default") }
+        defer { endRefreshProgress(accountID: "local-default") }
         let maxConcurrency = 6
         let provider = self.localProvider
 
@@ -2153,7 +2152,7 @@ public final class AppStore: ObservableObject {
             }
         }
 
-        accountRefreshProgress.removeValue(forKey: "local-default")
+        endRefreshProgress(accountID: "local-default")
 
         if let feedIDs {
             let selected = Set(feedIDs)
@@ -2259,7 +2258,7 @@ public final class AppStore: ObservableObject {
         accountRefreshProgress[accID] = AccountRefreshProgress(completed: 0, total: 1)
         defer {
             reloadingFeedIDs.remove(feedID)
-            accountRefreshProgress.removeValue(forKey: accID)
+            endRefreshProgress(accountID: accID)
             isRefreshing = false
         }
 
@@ -2623,7 +2622,7 @@ public final class AppStore: ObservableObject {
             accountRefreshProgress[accountID] = AccountRefreshProgress()
             Task { [self] in
                 defer {
-                    accountRefreshProgress.removeValue(forKey: accountID)
+                    endRefreshProgress(accountID: accountID)
                     reloadState()
                     scheduleMissingIconProbe(delay: 0.5)
                 }
@@ -2642,14 +2641,21 @@ public final class AppStore: ObservableObject {
     /// 批次落库后仅更新侧边栏投影，不在同步中重新注册 Provider。
     private func receiveRefreshProgress(_ progress: AccountRefreshProgress?, accountID: String) async {
         // 快速连续完成的 Feed／批次合并发布，避免全局 ObservableObject 高频重绘。
-        let now = Date()
-        if let progress, progress.completed > 0, progress.completed != progress.total,
-           accountRefreshProgress[accountID]?.phase == progress.phase,
-           let last = lastRefreshProgressPublishedAt[accountID], now.timeIntervalSince(last) < 0.3 {
+        guard let progress else {
+            // 一轮结束：清掉节流状态，下一轮从零重新计数。
+            refreshProgressPublishers.removeValue(forKey: accountID)
+            await publishRefreshProgress(nil, accountID: accountID)
             return
         }
+        var publisher = refreshProgressPublishers[accountID] ?? RefreshProgressPublishPolicy()
+        guard publisher.shouldPublish(progress, at: Date()) else { return }
+        refreshProgressPublishers[accountID] = publisher
+        await publishRefreshProgress(progress, accountID: accountID)
+    }
+
+    /// 真正落地一次进度发布：刷新侧边栏投影并更新全局进度。
+    private func publishRefreshProgress(_ progress: AccountRefreshProgress?, accountID: String) async {
         let sidebarGeneration = beginSidebarCountsRefresh()
-        lastRefreshProgressPublishedAt[accountID] = progress == nil ? nil : now
         let startOfDay = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
         if progress?.completed == 0 {
             let repository = localProvider.feedRepository
@@ -2681,6 +2687,13 @@ public final class AppStore: ObservableObject {
         timelineRevision &+= 1
     }
 
+    /// 一轮刷新的终止点：清掉节流状态并撤下进度，下一轮从 0 重新计数。
+    /// 节流状态属于这一轮，不能留在账号上跨轮复用。
+    private func endRefreshProgress(accountID: String) {
+        refreshProgressPublishers.removeValue(forKey: accountID)
+        accountRefreshProgress.removeValue(forKey: accountID)
+    }
+
     public func removeAccount(accountID: String) async throws {
         guard accountID != "local-default" else {
             throw LocalAccountError.feedNotFound
@@ -2701,7 +2714,7 @@ public final class AppStore: ObservableObject {
 
     public func syncAccount(accountID: String) async {
         defer {
-            accountRefreshProgress.removeValue(forKey: accountID)
+            endRefreshProgress(accountID: accountID)
             reloadState()
         }
         do {
