@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.5.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
+  [Website](https://ohmyangboy.github.io/PaperRss/) · [Stable v1.5.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [Feedback](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -82,7 +82,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 ## Download and Installation
 
-**Stable v1.5.1 (Build 46)** is recommended for all users. It adds local MCP external assistants and iCloud sync, and includes bilingual translation, AI summary and feed-management improvements since v1.4.5. See the [changelog](CHANGELOG.md).
+**Stable v1.5.2 (Build 47)** is recommended for all users. It improves article loading, feed switching and keyboard reading, and fixes image previews and local assistant connections. See the [changelog](CHANGELOG.md).
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

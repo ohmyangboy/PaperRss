@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPLv3-c92a2a?style=flat-square)](LICENSE)
 [![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdownload.1leaf.cc%2Fdownload-stats.json&query=%24.downloads&label=downloads&color=brightgreen)](https://github.com/ohmyangboy/PaperRss/releases)
 
-  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.5.1](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
+  [官方网站](https://ohmyangboy.github.io/PaperRss/) · [稳定版 v1.5.2](https://github.com/ohmyangboy/PaperRss/releases/latest) · [问题反馈](https://github.com/ohmyangboy/PaperRss/issues)
 
 </div>
 
@@ -84,7 +84,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 ## 下载与安装
 
-**稳定版 v1.5.1（Build 46）** 推荐所有用户升级：新增本地 MCP 外部助手与 iCloud 同步，并纳入自 v1.4.5 以来的双语翻译、AI 摘要与订阅管理改进。详情见 [更新记录](CHANGELOG.md)。
+**稳定版 v1.5.2（Build 47）** 推荐所有用户升级：优化长文加载、订阅切换与键盘阅读，并修复图片预览和本地助手连接问题。详情见 [更新记录](CHANGELOG.md)。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 

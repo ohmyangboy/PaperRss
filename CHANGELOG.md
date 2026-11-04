@@ -1,5 +1,25 @@
 # 更新记录 / Changelog
 
+## v1.5.2 · Build 47 · 2026-11-04
+
+本次稳定版优化正文加载、订阅切换和键盘阅读体验，并修复图片预览及本地助手连接问题；推荐所有用户升级。
+
+- **正文更快显示**：优化长文处理与阅读缓存，先显示已有正文，后台补齐全文；全文就绪后由你点击查看，避免打断阅读位置和文字选择。
+- **订阅切换更平稳**：新列表就绪后整体替换，减少中间空白；快速切换时忽略过期结果，保持标题、筛选与列表一致。
+- **键盘阅读更顺畅**：改善方向键选文、视口边缘滚动和跨页定位，保留缩略图位置，减少列表跳动。
+- **图片预览与刷新**：放大图片避开关闭按钮；大批量订阅刷新时减少不必要的界面更新。
+- **本地 MCP 更稳定**：改进助手进程退出与连接关闭，减少断开连接后的残留进程。
+
+---
+
+This stable release improves article loading, feed switching and keyboard reading, with fixes for image previews and local assistant connections. Recommended for all users.
+
+- **Faster article display**: Improve long-article processing and reading caches. Show available content first and fetch the full article in the background; choose when to open it without interrupting your reading position or text selection.
+- **Smoother feed switching**: Replace the list once results are ready, reducing blank flashes. Ignore outdated results during rapid switching and keep titles, filters and articles in sync.
+- **Better keyboard reading**: Improve arrow-key selection, scrolling near viewport edges and cross-page navigation. Preserve thumbnail space to reduce layout shifts.
+- **Image previews and refresh**: Keep enlarged images clear of the close button and reduce unnecessary interface updates during large feed refreshes.
+- **More reliable local MCP**: Improve helper shutdown and connection cleanup to reduce lingering processes after disconnection.
+
 ## v1.5.1 · Build 46 · 2026-10-28
 
 本次稳定版带来本地 MCP 外部助手、iCloud 同步，以及自 v1.4.5 以来 Beta 通道的阅读与翻译改进；推荐所有用户升级。
