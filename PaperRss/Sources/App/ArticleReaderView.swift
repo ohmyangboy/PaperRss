@@ -1600,7 +1600,7 @@ private func readerAppearanceJavaScript(
     """
 }
 
-private let paperArticleStyle = """
+let paperArticleStyle = """
 :root {
   color-scheme: light dark;
   --paper-ink: #302d27;
@@ -2040,6 +2040,10 @@ figcaption {
   left: 0;
   width: 100vw;
   height: 100vh;
+  box-sizing: border-box;
+  /* 为原生顶栏和固定关闭按钮留出空间，避免图片尺寸影响操作区。 */
+  padding: calc(var(--paper-reader-top-inset, 84px) + 48px) 24px 24px;
+  overflow: hidden;
   z-index: 999999;
   display: flex;
   align-items: center;
@@ -2064,30 +2068,33 @@ figcaption {
 }
 .paper-rss-lightbox-content {
   position: relative;
-  max-width: 92vw;
-  max-height: 92vh;
+  max-width: 100%;
+  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2;
 }
 .paper-rss-lightbox-img {
-  max-width: 92vw;
-  max-height: 92vh;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - var(--paper-reader-top-inset, 84px) - 72px);
+  margin: 0;
+  border: 0;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
   cursor: zoom-out;
 }
 .paper-rss-lightbox-close {
-  position: absolute;
-  top: -44px;
-  right: -8px;
+  position: fixed;
+  top: calc(var(--paper-reader-top-inset, 84px) + 8px);
+  right: 16px;
+  z-index: 3;
   background: rgba(255, 255, 255, 0.22);
   border: none;
   color: #ffffff;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;

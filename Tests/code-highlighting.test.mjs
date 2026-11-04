@@ -103,7 +103,7 @@ describe("highlight.js 11.11.2 Offline Runtime Integrity and Wiring", () => {
 
   it("Paper theme defines highlight token colors for light and dark palettes", () => {
     const source = fs.readFileSync(readerSourcePath, "utf8");
-    const styleStart = source.indexOf("private let paperArticleStyle");
+    const styleStart = source.indexOf("let paperArticleStyle");
     const styleEnd = source.indexOf("private func readerAppearanceStyle", styleStart);
     const style = source.slice(styleStart, styleEnd);
 
