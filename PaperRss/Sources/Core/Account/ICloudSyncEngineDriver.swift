@@ -288,13 +288,15 @@ actor ICloudSyncEngineDriver: CKSyncEngineDelegate, ICloudAccountSyncing {
     }
 
     private func fetch(on engine: CKSyncEngine) async throws {
-        try await engine.fetchChanges()
+        let epoch = try boundGeneration(on: engine)
+        let options = try ICloudGenerationZone.fetchOptions(.init(), generation: epoch)
+        try await engine.fetchChanges(options)
         guard self.engine === engine else { throw CancellationError() }
         try throwEventFailure()
         if let fetchFailure { throw fetchFailure }
         // A serialization may be emitted before zones exist. Track zone
         // creation separately, including crashes between the two zone saves.
-        let epoch = try boundGeneration(on: engine)
+        guard try boundGeneration(on: engine) == epoch else { throw CancellationError() }
         engine.state.add(pendingDatabaseChanges: try repository.missingZones().map {
             .saveZone(CKRecordZone(zoneID: try ICloudGenerationZone.id($0, generation: epoch)))
         })

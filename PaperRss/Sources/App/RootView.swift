@@ -1753,6 +1753,7 @@ private struct SidebarView: View {
             }
         }
     }
+
     @ViewBuilder
     private var settingsFooter: some View {
         VStack(spacing: 0) {

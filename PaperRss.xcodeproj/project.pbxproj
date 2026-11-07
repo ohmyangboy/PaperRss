@@ -19,6 +19,8 @@
 		A40000000000000000000204 /* AgentIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000104 /* AgentIPC.swift */; };
 		A40000000000000000000205 /* AgentProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000105 /* AgentProtocol.swift */; };
 		A40000000000000000000002 /* paperrss-agent in Embed Helper */ = {isa = PBXBuildFile; fileRef = A40000000000000000000001 /* paperrss-agent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A50000000000000000000002 /* PaperRssAITransfer in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* PaperRssAITransfer */; };
+		A50000000000000000000003 /* PaperRssAITransfer in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* PaperRssAITransfer */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -79,6 +81,7 @@
 			files = (
 				A10000000000000000000032 /* GRDB in Frameworks */,
 				A10000000000000000000042 /* Markdown in Frameworks */,
+				A50000000000000000000002 /* PaperRssAITransfer in Frameworks */,
 				A20000000000000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -89,6 +92,7 @@
 			files = (
 				A10000000000000000000033 /* GRDB in Frameworks */,
 				A10000000000000000000043 /* Markdown in Frameworks */,
+				A50000000000000000000003 /* PaperRssAITransfer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,6 +150,7 @@
 			packageProductDependencies = (
 				A10000000000000000000031 /* GRDB */,
 				A10000000000000000000041 /* Markdown */,
+				A50000000000000000000001 /* PaperRssAITransfer */,
 				A20000000000000000000051 /* Sparkle */,
 			);
 			productName = PaperRss;
@@ -171,6 +176,7 @@
 			packageProductDependencies = (
 				A10000000000000000000031 /* GRDB */,
 				A10000000000000000000041 /* Markdown */,
+				A50000000000000000000001 /* PaperRssAITransfer */,
 			);
 			productName = PaperRss;
 			productReference = A10000000000000000000004 /* PaperRss.app */;
@@ -219,6 +225,7 @@
 			);
 			mainGroup = A10000000000000000000005;
 			packageReferences = (
+				A50000000000000000000000 /* XCLocalSwiftPackageReference "PaperRssAITransfer" */,
 				A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				A10000000000000000000040 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				A20000000000000000000050 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -545,6 +552,13 @@
 		A40000000000000000000006 = {isa = XCConfigurationList; buildConfigurations = (A40000000000000000000010, A40000000000000000000011, A40000000000000000000012, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A50000000000000000000000 /* XCLocalSwiftPackageReference "PaperRssAITransfer" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/PaperRssAITransfer;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -573,6 +587,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A50000000000000000000001 /* PaperRssAITransfer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A50000000000000000000000 /* XCLocalSwiftPackageReference "PaperRssAITransfer" */;
+			productName = PaperRssAITransfer;
+		};
 		A10000000000000000000031 /* GRDB */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000030 /* XCRemoteSwiftPackageReference "GRDB.swift" */;

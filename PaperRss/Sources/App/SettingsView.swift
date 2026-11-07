@@ -19,6 +19,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case appearance
     case accounts
     case aiService
+    #if os(macOS)
+    case mobile
+    #endif
     case about
 
     var id: Self { self }
@@ -30,6 +33,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: I18N.shared.localized("外观", "Appearance")
         case .accounts: I18N.shared.localized("账号", "Accounts")
         case .aiService: I18N.shared.localized("AI", "AI")
+        #if os(macOS)
+        case .mobile: I18N.shared.localized("移动端", "Mobile")
+        #endif
         case .about: I18N.shared.localized("关于", "About")
         }
     }
@@ -40,6 +46,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .appearance: "paintpalette"
         case .accounts: "person.crop.circle"
         case .aiService: "sparkles"
+        #if os(macOS)
+        case .mobile: "iphone"
+        #endif
         case .about: "info.circle"
         }
     }
@@ -195,6 +204,9 @@ struct SettingsView: View {
     var onReturn: (() -> Void)?
     @FocusState private var isProviderNameFocused: Bool
     @State private var showsCompactProviderDetail = false
+    #if os(macOS)
+    @State private var showsIPhoneImport = false
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var accessibilityContrast
@@ -358,6 +370,11 @@ struct SettingsView: View {
         } message: { model in
             Text(modelDeletionMessage(model))
         }
+        #if os(macOS)
+        .sheet(isPresented: $showsIPhoneImport) {
+            IPhoneImportSheet(store: store)
+        }
+        #endif
         .sheet(isPresented: $isShowingAddModelsSheet) {
             addModelsSheet
         }
@@ -599,6 +616,33 @@ struct SettingsView: View {
     private var settingsPage: some View {
         VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             switch selectedSection {
+            #if os(macOS)
+            case .mobile:
+                Text(I18N.shared.localized("移动端", "Mobile"))
+                    .font(.system(size: 26, weight: .bold))
+                settingsGroup("") {
+                    HStack(spacing: 16) {
+                        Image(systemName: "iphone")
+                            .font(.system(size: 28))
+                            .foregroundStyle(settingsAccentColor)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text("Papery").font(.headline)
+                                BetaBadge()
+                            }
+                            Text(I18N.shared.localized("iOS 正在开发中", "iOS in development"))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(I18N.shared.localized("导入到 Papery", "Import into Papery")) {
+                            showsIPhoneImport = true
+                        }
+                        .accessibilityIdentifier("settings.mobile.import")
+                        .focused($firstContentSection, equals: .mobile)
+                    }
+                    .padding(18)
+                }
+            #endif
             case .accounts:
                 Text(I18N.shared.localized("账号", "Accounts")).font(.system(size: 26, weight: .bold))
                 accountsSettings
@@ -617,200 +661,116 @@ struct SettingsView: View {
 
     private var accountsSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            settingsGroup(
-                I18N.shared.localized("当前账号", "Current Accounts"),
-                info: I18N.shared.localized(
-                    "本地订阅与远端订阅相互隔离；禁用账号不会删除本地数据或凭据。",
-                    "Local and remote subscriptions stay separate. Disabling an account does not delete its data or credentials."
-                )
-            ) {
-                // 本地账号
+            settingsGroup("") {
                 HStack(spacing: 12) {
                     AccountProviderIcon(type: .local)
                         .frame(width: 28)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(I18N.shared.localized("我的 Mac (本地账号)"))
-                            .font(.system(size: 14, weight: .semibold))
-                        if store.accounts.contains(where: { $0.type == AccountType.iCloud.rawValue }) {
-                            Menu {
-                                Button(I18N.localized("选择并复制到 iCloud…", englishFallback: "Select and Copy to iCloud…")) {
-                                    accountSettingsSheet = .localCopy
-                                }
-                                .accessibilityIdentifier("icloud.localCopy")
-                                Button(I18N.localized("查看 iCloud 复制预览", englishFallback: "Preview Copy to iCloud")) {
-                                    accountSettingsSheet = .migrationPreview
-                                }
-                                .accessibilityIdentifier("icloud.localMigrationPreview")
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.triangle.2.circlepath.icloud")
-                                    Text(I18N.localized("复制订阅到 iCloud…", englishFallback: "Copy Subscriptions to iCloud…"))
-                                }
-                                .font(.caption)
-                                .foregroundStyle(settingsAccentColor)
-                            }
-                            .menuStyle(.borderlessButton)
-                        }
-                    }
-
+                    Text(I18N.shared.localized("我的 Mac", "My Mac"))
+                        .font(.system(size: 14, weight: .semibold))
                     Spacer()
-
-                    Toggle(
-                        "",
-                        isOn: Binding(
-                            get: { store.isAccountEnabled("local-default") },
-                            set: { newValue in
-                                Task {
-                                    try? await store.setAccountEnabled(accountID: "local-default", isEnabled: newValue)
-                                }
+                    if store.accounts.contains(where: { $0.type == AccountType.iCloud.rawValue }) {
+                        Menu {
+                            Button(I18N.localized("选择并复制到 iCloud…", englishFallback: "Select and Copy to iCloud…")) {
+                                accountSettingsSheet = .localCopy
                             }
-                        )
-                    )
-                    .toggleStyle(.switch)
+                            .accessibilityIdentifier("icloud.localCopy")
+                            Button(I18N.localized("查看 iCloud 复制预览", englishFallback: "Preview Copy to iCloud")) {
+                                accountSettingsSheet = .migrationPreview
+                            }
+                            .accessibilityIdentifier("icloud.localMigrationPreview")
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .frame(width: 24, height: 24)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .accessibilityLabel(I18N.shared.localized("本地账号操作", "Local account actions"))
+                    }
+                    Toggle("", isOn: Binding(
+                        get: { store.isAccountEnabled("local-default") },
+                        set: { newValue in
+                            Task { try? await store.setAccountEnabled(accountID: "local-default", isEnabled: newValue) }
+                        }
+                    ))
                     .labelsHidden()
+                    .accessibilityLabel(I18N.shared.localized("启用本地账号", "Enable local account"))
                     #if os(macOS)
                     .focusable()
                     .focused($firstContentSection, equals: .accounts)
                     #endif
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(16)
 
-                // 同步账号列表（iCloud / FreshRSS / Miniflux）
                 let remoteAccounts = store.accounts.filter { AccountType(rawValue: $0.type)?.isRemote == true }
                 ForEach(remoteAccounts, id: \.id) { account in
                     Divider().padding(.horizontal, 18).opacity(0.18)
-
                     if account.isArchived {
                         ICloudLocalArchiveSettingsRow(store: store, account: account)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                            .padding(16)
                     } else {
-                        VStack(alignment: .leading, spacing: 10) {
-                            // 主行：图标 + 标题与端点 + Toggle
+                        VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 12) {
                                 AccountProviderIcon(type: AccountType(rawValue: account.type) ?? .local)
                                     .frame(width: 28)
-
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 5) {
                                     HStack(spacing: 6) {
                                         Text(account.displayName)
                                             .font(.system(size: 14, weight: .semibold))
                                         #if os(macOS)
-                                        if account.type == AccountType.iCloud.rawValue {
-                                            BetaBadge()
-                                        }
+                                        if account.type == AccountType.iCloud.rawValue { BetaBadge() }
                                         #endif
                                     }
-                                    #if os(macOS)
-                                    if account.type == AccountType.iCloud.rawValue {
-                                        Text(I18N.localized("当前为开发者调试模式，后续再迭代 UI。", englishFallback: "Currently in developer debugging mode. The UI will be refined in future updates."))
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                    #endif
-                                    if let user = account.username, let url = account.endpointURL {
-                                        Text("\(user) @ \(url)")
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
+                                    .help([account.username, account.endpointURL].compactMap { $0 }.joined(separator: " @ "))
+                                    if account.isEnabled {
+                                        accountSyncStatus(account)
                                     }
                                 }
-
-                                Spacer()
-
-                                Toggle(
-                                    "",
-                                    isOn: Binding(
-                                        get: { account.isEnabled },
-                                        set: { newValue in
-                                            Task {
-                                                try? await store.setAccountEnabled(accountID: account.id, isEnabled: newValue)
-                                            }
-                                        }
-                                    )
-                                )
-                                .toggleStyle(.switch)
+                                Spacer(minLength: 12)
+                                Menu {
+                                    if let endpoint = account.endpointURL {
+                                        Text([account.username, endpoint].compactMap { $0 }.joined(separator: " @ "))
+                                        Divider()
+                                    }
+                                    Button(I18N.shared.localized("立即同步"), systemImage: "arrow.clockwise") {
+                                        Task { await store.syncAccount(accountID: account.id) }
+                                    }
+                                    .disabled(!account.isEnabled || store.accountRefreshProgress[account.id] != nil ||
+                                              (account.type == AccountType.iCloud.rawValue && !store.supportsICloudSync))
+                                    Divider()
+                                    Button(role: .destructive) {
+                                        accountPendingDeletion = account
+                                        isShowingDeleteAccountAlert = true
+                                    } label: {
+                                        Label(I18N.shared.localized("移除账号", "Remove Account"), systemImage: "trash")
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .frame(width: 24, height: 24)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .accessibilityLabel(I18N.shared.localized("账号操作", "Account actions") + ": " + account.displayName)
+                                .accessibilityIdentifier("settings.account.actions.\(account.id)")
+                                Toggle("", isOn: Binding(
+                                    get: { account.isEnabled },
+                                    set: { newValue in
+                                        Task { try? await store.setAccountEnabled(accountID: account.id, isEnabled: newValue) }
+                                    }
+                                ))
                                 .labelsHidden()
                                 .accessibilityLabel(I18N.shared.localizedFormat("启用账号：%@", account.displayName))
                             }
-
-                            // 次行：左侧同步状态，右侧操作（立即同步 + 删除）
-                            HStack(spacing: 8) {
-                                if store.accountRefreshProgress[account.id] != nil {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .tint(settingsAccentColor)
-                                } else if let syncState = store.accountSyncStates[account.id] {
-                                    HStack(spacing: 6) {
-                                        if let lastSync = syncState.lastSyncCompletedAt {
-                                            let date = Date(timeIntervalSince1970: lastSync)
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.green)
-                                            Text(I18N.shared.localizedFormat("上次同步：%@", DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)))
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        if let error = syncState.lastError, !error.isEmpty {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.orange)
-                                            Text(error)
-                                                .font(.caption2)
-                                                .foregroundStyle(.orange)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                }
-
-                                Spacer()
-
-                                Button(I18N.shared.localized("立即同步")) {
-                                    Task {
-                                        await store.syncAccount(accountID: account.id)
-                                    }
-                                }
-                                .controlSize(.small)
-                                .disabled(!account.isEnabled || store.accountRefreshProgress[account.id] != nil ||
-                                          (account.type == AccountType.iCloud.rawValue && !store.supportsICloudSync))
-
-                                Button(role: .destructive) {
-                                    accountPendingDeletion = account
-                                    isShowingDeleteAccountAlert = true
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .foregroundStyle(.red)
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.leading, 4)
-                            }
-                            .padding(.leading, 40)
                             if account.type == AccountType.iCloud.rawValue {
                                 ICloudAccountSettingsRow(store: store, account: account, isActive: isActive)
                                     .padding(.leading, 40)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .padding(16)
                     }
                 }
             }
-
-            #if os(macOS)
-            if store.accounts.contains(where: { AccountType(rawValue: $0.type)?.syncsRemoteArticleStates == true }) {
-                Text(I18N.shared.localized(
-                    "同步时，macOS 可能请求访问已保存的账号密码。请在系统弹窗中输入 Mac 登录密码，并选择“始终允许”，方便后续自动同步。",
-                    "When syncing, macOS may ask to access your saved account passwords. Enter your Mac login password in the system dialog and choose “Always Allow” for future automatic syncing."
-                ))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
-            }
-            #endif
 
             if let deleteError = deleteAccountError {
                 HStack(spacing: 6) {
@@ -869,6 +829,32 @@ struct SettingsView: View {
                 account.displayName
             )) }
         }
+    }
+
+    @ViewBuilder
+    private func accountSyncStatus(_ account: AccountRecord) -> some View {
+        Group {
+            if account.type == AccountType.iCloud.rawValue && !store.supportsICloudSync {
+                Label(I18N.shared.localized("此版本无法连接 iCloud", "iCloud is unavailable in this build"), systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+            } else if store.accountRefreshProgress[account.id] != nil {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(I18N.shared.localized("正在同步", "Syncing"))
+                }
+            } else if let error = store.accountSyncStates[account.id]?.lastError, !error.isEmpty {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(error)
+            } else if let lastSync = store.accountSyncStates[account.id]?.lastSyncCompletedAt {
+                Text(I18N.shared.localizedFormat("上次同步：%@", DateFormatter.localizedString(from: Date(timeIntervalSince1970: lastSync), dateStyle: .none, timeStyle: .short)))
+            } else {
+                Text(I18N.shared.localized("尚未同步", "Not synced yet"))
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 
     private var feedbackSettings: some View {
@@ -1498,12 +1484,6 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(I18N.shared.localized("供应商与模型", "Providers & Models"))
                         .font(.system(size: 27, weight: .bold))
-                    Text(I18N.shared.localized(
-                        "管理模型连接。只有已启用供应商的模型会出现在功能配置中。",
-                        "Manage model connections. Only enabled providers appear in feature routing."
-                    ))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
                 }
                 .padding(.top, 2)
 
@@ -2197,12 +2177,6 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(I18N.shared.localized("基础配置", "Connection"))
                     .font(.system(size: 17, weight: .semibold))
-                Text(I18N.shared.localized(
-                    "配置供应商连接，保存后即可添加和使用模型。",
-                    "Configure the provider connection before adding and using models."
-                ))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 11) {
@@ -2341,12 +2315,6 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(I18N.shared.localized("模型管理", "Models"))
                         .font(.system(size: 17, weight: .semibold))
-                    Text(I18N.shared.localized(
-                        "添加后，模型即可在各项 AI 功能中选择。",
-                        "Added models become available to individual AI features."
-                    ))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
@@ -3412,18 +3380,20 @@ struct SettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(LocalizedStringKey(title))
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.primary.opacity(0.82))
+            if !title.isEmpty {
+                HStack(spacing: 6) {
+                    Text(LocalizedStringKey(title))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.82))
 
-                if let info, !info.isEmpty {
-                    SettingsInfoButton(message: info)
+                    if let info, !info.isEmpty {
+                        SettingsInfoButton(message: info)
+                    }
+
+                    Spacer(minLength: 0)
                 }
-
-                Spacer(minLength: 0)
+                .padding(.horizontal, 3)
             }
-            .padding(.horizontal, 3)
 
             VStack(alignment: .leading, spacing: 0) {
                 content()
@@ -4331,14 +4301,6 @@ private struct AddAccountSheet: View {
                             Text(provider.subtitle)
                                 .font(.footnote)
                                 .foregroundStyle(Color.secondary)
-                            #if os(macOS)
-                            if provider == .iCloud {
-                                Text(I18N.localized("当前为开发者调试模式，后续再迭代 UI。", englishFallback: "Currently in developer debugging mode. The UI will be refined in future updates."))
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            #endif
                         }
 
                         Spacer()

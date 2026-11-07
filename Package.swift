@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "paperrss-agent", targets: ["PaperRssAgentHelper"])
     ],
     dependencies: [
+        .package(path: "Packages/PaperRssAITransfer"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
         .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.9.6")
@@ -24,6 +25,7 @@ let package = Package(
             name: "PaperRssCore",
             dependencies: [
                 "PaperRssAgentProtocol",
+                .product(name: "PaperRssAITransfer", package: "PaperRssAITransfer"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Markdown", package: "swift-markdown")
             ],
@@ -41,6 +43,7 @@ let package = Package(
                 "PaperRssCore",
                 "PaperRssUpdateSupport",
                 "PaperRssAgentProtocol",
+                .product(name: "PaperRssAITransfer", package: "PaperRssAITransfer"),
                 .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "PaperRss/Sources/App",
@@ -58,6 +61,7 @@ let package = Package(
             dependencies: [
                 "PaperRssCore",
                 "PaperRssAgentProtocol",
+                .product(name: "PaperRssAITransfer", package: "PaperRssAITransfer"),
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
             path: "Tests",
