@@ -227,7 +227,7 @@ final class AgentBridgeController: AgentBridge {
               sessions[sessionID] === service else {
             throw AgentFailure("NOT_ENABLED", "Local agent access was revoked during the request.")
         }
-        if ["paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_plan_add_feed", "paperrss_plan_rename_feed", "paperrss_plan_remove_feed", "paperrss_add_feed", "paperrss_rename_feed", "paperrss_remove_feed"].contains(tool) {
+        if ["paperrss_plan_manage_feeds", "paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_plan_add_feed", "paperrss_plan_rename_feed", "paperrss_plan_remove_feed", "paperrss_add_feed", "paperrss_rename_feed", "paperrss_remove_feed"].contains(tool) {
             try await registerApproval(response, sessionID: sessionID)
             guard defaults.bool(forKey: Self.enableKey), requestGeneration == generation,
                   sessions[sessionID] === service else {
@@ -330,6 +330,11 @@ final class AgentBridgeController: AgentBridge {
             sampleTitles: plan["sample_titles"]?.arrayValue?.compactMap(\.stringValue) ?? [],
             notice: plan["retention_notice"]?.stringValue ?? "", expiresAt: expiresAt,
             summaryEnglish: plan["summary_en"]?.stringValue,
+            destructiveHint: plan["destructive_hint"]?.boolValue ?? false,
+            feedChanges: plan["feed_changes"]?.arrayValue?.compactMap { change in
+                guard let summary = change["summary"]?.stringValue, let english = change["summary_en"]?.stringValue else { return nil }
+                return (summary, english)
+            } ?? [],
             affectedFeeds: plan["affected_feeds"]?.arrayValue?.compactMap { feed in
                 guard let id = feed["id"]?.stringValue, let title = feed["title"]?.stringValue else { return nil }
                 return AgentFeedPreview(id: id, title: title)

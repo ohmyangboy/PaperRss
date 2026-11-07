@@ -60,6 +60,14 @@ public enum AgentMCPTools {
                  ["account_id": account, "article_id": article, "selection_id": string(),
                   "max_chars": integer(maximum: 20_000, default: 8_000)],
                  required: ["account_id", "article_id", "selection_id"]),
+            tool("plan_manage_feeds", "Plan 1–50 additions, renames or removals in one exact account. Each operation uses action add_feed (url, optional title/folder), rename_feed (feed_id, title), or remove_feed (feed_id). Each existing feed or new URL may occur once. Ask/Auto require approval in PaperRss; Full applies automatically. Removal deletes history including starred articles with no undo. Execution is not atomic: receipt.results reports each index as applied/failed, and failed_count must be checked. Replaying apply_plan never repeats completed operations; create a new plan only for failed items after checking account state. Client cannot approve.",
+                 ["account_id": account, "operations": .object([
+                    "type": .string("array"), "minItems": .number(1), "maxItems": .number(50),
+                    "items": .object(["type": .string("object"), "additionalProperties": .bool(false),
+                        "required": .array([.string("action")]),
+                        "properties": .object(["action": enumeration(["add_feed", "rename_feed", "remove_feed"]),
+                            "url": string(2048), "feed_id": feed, "title": string(200), "folder": string(200)])])])],
+                 required: ["account_id", "operations"], readOnly: false, destructive: true, openWorld: true),
             tool("plan_state_change", "Plan a change to 1–50 exact articles; Auto/Full may apply immediately. If pending, ask the user to click Approve in PaperRss; App applies immediately. Poll paperrss_status with plan_id for committed/receipt or denied/expired. Clients cannot approve.",
                  ["account_id": account,
                   "article_ids": .object(["type": .string("array"), "items": article,
@@ -100,6 +108,16 @@ public enum AgentMCPTools {
             throw AgentFailure("INVALID_ARGUMENT", "Unknown tool.")
         }
         try validate(value: .object(arguments), schema: schema)
+        if name == "paperrss_plan_manage_feeds" {
+            for operation in arguments["operations"]?.arrayValue ?? [] {
+                guard var item = operation.objectValue, let action = item.removeValue(forKey: "action")?.stringValue,
+                      ["add_feed", "rename_feed", "remove_feed"].contains(action) else {
+                    throw AgentFailure("INVALID_ARGUMENT", "Invalid feed operation.")
+                }
+                item["account_id"] = arguments["account_id"]
+                try validate(name: "paperrss_plan_" + action, arguments: item)
+            }
+        }
         if name == "paperrss_open", (arguments["article_id"] != nil) == (arguments["feed_id"] != nil) {
             throw AgentFailure("INVALID_ARGUMENT", "Choose exactly one article_id or feed_id.")
         }

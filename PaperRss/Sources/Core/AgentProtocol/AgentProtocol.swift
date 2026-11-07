@@ -66,7 +66,7 @@ public extension AgentBridge {
 /// Shared discovery names keep the App status and helper tools/list aligned.
 public enum AgentToolCatalog {
     public static let names = ["status", "list_feeds", "list_articles", "get_article", "get_content", "open",
-                               "plan_state_change", "plan_mark_read", "apply_plan", "apply_state_change", "plan_add_feed", "plan_rename_feed", "plan_remove_feed", "add_feed", "rename_feed", "remove_feed"]
+                               "plan_manage_feeds", "plan_state_change", "plan_mark_read", "apply_plan", "apply_state_change", "plan_add_feed", "plan_rename_feed", "plan_remove_feed", "add_feed", "rename_feed", "remove_feed"]
         .map { "paperrss_" + $0 }
 }
 
@@ -185,6 +185,14 @@ public enum AgentMCPToolCatalog {
               }
               """,
               aliases: ["apply_state_change"]),
+        Entry("plan_manage_feeds", .approvalGated, "批量添加、重命名或删除指定账号的 1–50 个订阅；逐项返回结果。",
+              "Plan 1–50 feed additions, renames or removals in one account; returns per-item results.",
+              """
+              {
+                "account_id": "account-id",
+                "operations": [{"action": "add_feed", "url": "https://example.org/feed.xml"}]
+              }
+              """),
         Entry("plan_add_feed", .approvalGated, "计划添加订阅源；按审批模式执行。",
               "Plan adding a feed under the current approval mode.",
               """

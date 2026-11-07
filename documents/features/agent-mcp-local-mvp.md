@@ -367,3 +367,25 @@ stderr 仅以最佳努力输出固定生命周期记录（PID、父 PID、启动
 | 持有连接的宿主退出后，helper 及时退出 | 证明父进程退出路径有效，不能代替聊天卸载回收验收。 |
 
 本节的自动化结果与真实 Codex 回收结果分别报告；前者通过不能把本节手动验收标成已完成。
+
+## 批量订阅管理（2026-11-07）
+
+`paperrss_plan_manage_feeds` 为同一明确账号创建包含 1–50 项操作的不可变计划；原有单条 `plan_add_feed` / `plan_rename_feed` / `plan_remove_feed` 及兼容别名保持可用。“修改”指重命名；添加时可指定文件夹。既有订阅由 `list_feeds` 返回的 ID 精确定位，不按模糊名称删除。
+
+```json
+{
+  "account_id": "account-id",
+  "operations": [
+    {"action": "add_feed", "url": "https://example.org/rss", "title": "News", "folder": "Tech"},
+    {"action": "rename_feed", "feed_id": "existing-feed-id", "title": "New title"},
+    {"action": "remove_feed", "feed_id": "another-feed-id"}
+  ]
+}
+```
+
+- 同一个现有 Feed ID / 新 URL 在一批中只能出现一次。整批参数及归属验证完成后才生成计划；无效批次不会留下子计划。
+- Ask / Auto 模式仍需 App 批准一次，Full 自动执行。面板逐项展示动作、来源订阅和目标名称；包含删除时标红，并明确文章及收藏也会删除。
+- 执行前逐项重新校验账号、归属、重复 URL 和到期时间，使用账号 Provider。批量不保证原子性；单项失败后其余项继续执行。
+- `receipt.results` 按输入顺序返回 `index`（从 0 开始）、`action`、`status`（`applied` / `failed`）、`feed_id`、`feed_title`、`error_code`、`sync`；不会回传任意服务器错误文本。
+- 必须检查 `failed_count` 与 `local_commit`（`committed` / `partial` / `failed`）。`plan_state=committed` 只表示已产生终态回执，不等于整批成功。
+- 无论相同还是新的幂等键，重放已执行计划只返回原回执，不重做其中的成功或失败项。核对目标账号实际状态后，仅为失败项创建新计划；服务器可能在网络报错前已完成部分动作。

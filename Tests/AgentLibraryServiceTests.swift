@@ -621,6 +621,104 @@ final class AgentLibraryServiceTests: XCTestCase {
         }
     }
 
+    func testMixedBatchRequiresApprovalAndReplaysEveryResult() async throws {
+        let fixture = try Fixture(); defer { try? fixture.remove() }
+        let renamed = try fixture.provider.addFeed(title: "Old", feedURL: URL(string: "https://example.org/rename")!)
+        let service = fixture.service()
+        let plan = try await service.call(tool: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array([
+            .object(["action": .string("add_feed"), "url": .string("https://example.org/new"), "title": .string("New"), "folder": .string("Tech")]),
+            .object(["action": .string("rename_feed"), "feed_id": .string(renamed.id.uuidString), "title": .string("Renamed")]),
+            .object(["action": .string("remove_feed"), "feed_id": .string(fixture.feed.id.uuidString)])])])
+        let id = try XCTUnwrap(plan["plan_id"]?.stringValue)
+        XCTAssertEqual(plan["destructive_hint"], .bool(true))
+        XCTAssertEqual(plan["affected_count"], .number(3))
+        XCTAssertEqual(plan["feed_changes"]?.arrayValue?.count, 3)
+        XCTAssertEqual(try fixture.provider.fetchFeeds().count, 2)
+        await expectFailure("CONFIRMATION_REQUIRED") {
+            _ = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: "forged"))
+        }
+        let approval = try await service.approve(planID: id)
+        let receipt = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval))
+        XCTAssertEqual(receipt["applied_count"], .number(3))
+        XCTAssertEqual(receipt["failed_count"], .number(0))
+        XCTAssertEqual(receipt["results"]?.arrayValue?.count, 3)
+        let replay = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval, key: "another-key"))
+        XCTAssertEqual(receipt, replay)
+        let feeds = try fixture.provider.fetchFeeds()
+        XCTAssertEqual(feeds.count, 2)
+        XCTAssertEqual(feeds.first { $0.id == renamed.id }?.title, "Renamed")
+        XCTAssertEqual(feeds.first { $0.title == "New" }?.folder, "Tech")
+        XCTAssertFalse(feeds.contains { $0.id == fixture.feed.id })
+    }
+
+    func testBatchRevalidatesAtApplyAndRecordsPartialFailureWithoutRepeatingSuccess() async throws {
+        let fixture = try Fixture(); defer { try? fixture.remove() }
+        let service = fixture.service()
+        let plan = try await service.call(tool: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array([
+            .object(["action": .string("add_feed"), "url": .string("https://example.org/concurrent")]),
+            .object(["action": .string("rename_feed"), "feed_id": .string(fixture.feed.id.uuidString), "title": .string("Renamed")])])])
+        _ = try fixture.provider.addFeed(title: "Concurrent", feedURL: URL(string: "https://example.org/concurrent")!)
+        let id = try XCTUnwrap(plan["plan_id"]?.stringValue)
+        let approval = try await service.approve(planID: id)
+        let receipt = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval))
+        XCTAssertEqual(receipt["local_commit"], .string("partial"))
+        XCTAssertEqual(receipt["applied_count"], .number(1))
+        XCTAssertEqual(receipt["failed_count"], .number(1))
+        XCTAssertEqual(receipt["results"]?.arrayValue?.first?["error_code"], .string("CONFLICT"))
+        let replay = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval))
+        XCTAssertEqual(receipt, replay)
+        XCTAssertEqual(try fixture.provider.fetchFeeds().count, 2)
+    }
+
+    private actor PartiallyFailingFeedExecutor: AgentWriteExecutor {
+        private(set) var count = 0
+        func execute(accountID: String, articleIDs: [String], field: AgentStateField, value: Bool, expiresAt: Date) async throws -> AgentWriteResult {
+            throw AgentFailure("UNSUPPORTED", "Feed-only fixture")
+        }
+        func executeFeed(_ mutation: AgentFeedMutation, expiresAt: Date) async throws -> AgentFeedWriteResult {
+            count += 1
+            if mutation.url?.contains("/fail") == true {
+                throw NSError(domain: "private", code: 1, userInfo: [NSLocalizedDescriptionKey: "SECRET_SENTINEL"])
+            }
+            return AgentFeedWriteResult(feedID: "created", title: mutation.title, sync: "server_committed")
+        }
+    }
+
+    func testBatchProviderFailureIsRedactedAndReplayDoesNotExecuteAgain() async throws {
+        let fixture = try Fixture(); defer { try? fixture.remove() }
+        let executor = PartiallyFailingFeedExecutor()
+        let service = AgentLibraryService(database: fixture.database,
+            policy: AgentAccessPolicy(enabled: true, accountIDs: ["local-default"], allowStateChanges: true), writeExecutor: executor)
+        let plan = try await service.call(tool: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array([
+            .object(["action": .string("add_feed"), "url": .string("https://example.org/ok")]),
+            .object(["action": .string("add_feed"), "url": .string("https://example.org/fail")])])])
+        let id = try XCTUnwrap(plan["plan_id"]?.stringValue)
+        let approval = try await service.approve(planID: id)
+        let receipt = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval))
+        XCTAssertEqual(receipt["failed_count"], .number(1))
+        XCTAssertEqual(receipt["results"]?.arrayValue?.last?["error_code"], .string("INTERNAL_ERROR"))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self).contains("SECRET_SENTINEL"))
+        _ = try await service.call(tool: "paperrss_apply_plan", arguments: applyArguments(plan: id, approval: approval, key: "new-key"))
+        let count = await executor.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func testInvalidBatchDoesNotLeavePlansOrWriteOtherOperations() async throws {
+        let fixture = try Fixture(); defer { try? fixture.remove() }
+        let service = fixture.service()
+        let valid: AgentJSON = .object(["action": .string("add_feed"), "url": .string("https://example.org/new")])
+        for bad in [valid, .object(["action": .string("remove_feed"), "feed_id": .string(UUID().uuidString)]),
+                    .object(["action": .string("remove_feed"), "feed_id": .string(fixture.feed.id.uuidString), "account_id": .string("other")])] {
+            do {
+                _ = try await service.call(tool: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array([valid, bad])])
+                XCTFail("Invalid batch should fail before creating a plan")
+            } catch is AgentFailure {}
+        }
+        let status = try await service.call(tool: "paperrss_status", arguments: [:])
+        XCTAssertEqual(status["pending_approvals"], .number(0))
+        XCTAssertEqual(try fixture.provider.fetchFeeds().count, 1)
+    }
+
     func testFeedAliasesCreatePlansWithoutWritesAndRemovalWarnsAboutStarredHistory() async throws {
         let fixture = try Fixture(); defer { try? fixture.remove() }
         let service = fixture.service()

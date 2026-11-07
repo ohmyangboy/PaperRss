@@ -20,6 +20,8 @@ final class AgentApprovalCenter: ObservableObject {
         let summary: String
         let affectedCount: Int
         let sampleTitles: [String]
+        let destructiveHint: Bool
+        let feedChanges: [(String, String)]
         let affectedFeeds: [AgentFeedPreview]
         let notice: String
         let expiresAt: Date
@@ -27,6 +29,7 @@ final class AgentApprovalCenter: ObservableObject {
         init(sessionID: String, planID: String, clientLabel: String?, actionKind: String,
              accountName: String, accountType: String, summary: String, affectedCount: Int,
              sampleTitles: [String], notice: String, expiresAt: Date, summaryEnglish: String? = nil,
+             destructiveHint: Bool = false, feedChanges: [(String, String)] = [],
              affectedFeeds: [AgentFeedPreview] = []) {
             self.sessionID = sessionID
             self.planID = planID
@@ -40,11 +43,13 @@ final class AgentApprovalCenter: ObservableObject {
             self.notice = notice
             self.expiresAt = expiresAt
             self.summaryEnglish = summaryEnglish
+            self.destructiveHint = destructiveHint
+            self.feedChanges = feedChanges
             self.affectedFeeds = affectedFeeds
         }
         var id: Key { Key(sessionID: sessionID, planID: planID) }
-        var isDestructive: Bool { actionKind == "remove_feed" }
-        var isFeedManagement: Bool { ["add_feed", "rename_feed", "remove_feed"].contains(actionKind) }
+        var isDestructive: Bool { destructiveHint || actionKind == "remove_feed" }
+        var isFeedManagement: Bool { ["add_feed", "rename_feed", "remove_feed", "manage_feeds"].contains(actionKind) }
         @MainActor var warning: String {
             if isDestructive {
                 return I18N.shared.localized("删除订阅源会移除其中的文章（包括收藏），并同步到该账号。此操作不可撤销。",
@@ -205,6 +210,11 @@ struct AgentApprovalList: View {
                         Text(verbatim: shortSummary(request))
                             .font(.system(size: 13))
                             .fixedSize(horizontal: false, vertical: true)
+                        ForEach(request.feedChanges.indices, id: \.self) { index in
+                            Text(verbatim: "\(index + 1). " + i18n.localized(request.feedChanges[index].0, request.feedChanges[index].1))
+                                .font(.system(size: 12))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if request.isDestructive {
                             Text(verbatim: request.warning)
                                 .font(.system(size: 13)).foregroundStyle(.red)
@@ -296,6 +306,7 @@ struct AgentApprovalList: View {
 
     private func actionTitle(_ kind: String) -> String {
         switch kind {
+        case "manage_feeds": return i18n.localized("批量管理订阅源", "Manage Feeds")
         case "add_feed": return i18n.localized("添加订阅源", "Add Feed")
         case "rename_feed": return i18n.localized("重命名订阅源", "Rename Feed")
         case "remove_feed": return i18n.localized("删除订阅源", "Remove Feed")
