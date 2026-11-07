@@ -385,12 +385,8 @@ struct RootView: View {
             #if os(iOS)
             .sheet(isPresented: $showsSettings) { NavigationStack { SettingsView(store: store).navigationTitle(I18N.localized("设置")) } }
             #endif
-            .fileImporter(isPresented: $showsImporter, allowedContentTypes: OPMLExportDocument.readableContentTypes) { result in
-                guard case let .success(url) = result else { return }
-                let didAccess = url.startAccessingSecurityScopedResource()
-                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-                guard let data = try? Data(contentsOf: url) else { return }
-                Task { await store.importOPML(data) }
+            .sheet(isPresented: $showsImporter) {
+                OPMLImportSheet(store: store)
             }
             .fileExporter(isPresented: $showsExporter, document: OPMLExportDocument(data: store.exportOPML()), contentType: .xml, defaultFilename: "PaperRss-Subscriptions") { _ in }
             .alert("PaperRss", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.dismissError() } })) {
@@ -1911,6 +1907,8 @@ private struct SidebarView: View {
         }
     }
 
+    @State private var targetedAccountIDs: Set<String> = []
+
     private func accountRow(_ title: String, accountID: String) -> some View {
         let isCloud = store.accounts.contains { $0.id == accountID && $0.type == AccountType.iCloud.rawValue }
         var counted = Set<UUID>()
@@ -1919,7 +1917,7 @@ private struct SidebarView: View {
         }
         return SidebarRow(title, systemImage: isCloud ? "icloud" : "desktopcomputer",
                    count: count,
-                   syncProgress: store.accountRefreshProgress[accountID], pulsesWhileSyncing: true, isSelected: selection == .account(accountID),
+                   syncProgress: store.accountRefreshProgress[accountID] ?? (store.importingAccountIDs.contains(accountID) ? AccountRefreshProgress() : nil), pulsesWhileSyncing: true, isSelected: selection == .account(accountID),
                    isFiltered: unreadFilteredGroups.contains(.account(accountID)), onToggleFilter: filterAction(for: .account(accountID)))
             .equatable()
             .padding(.horizontal, 4)
@@ -1927,9 +1925,14 @@ private struct SidebarView: View {
             .contentShape(Rectangle())
             .tag(SidebarSelection.account(accountID))
             .onTapGesture { selectAccount(accountID) }
+            .background(RoundedRectangle(cornerRadius: 6).fill(targetedAccountIDs.contains(accountID) ? Color.accentColor.opacity(0.18) : Color.clear))
+            .help(I18N.shared.localized("拖入其他账号的订阅以添加副本，来源订阅会保留。", "Drop feeds from another account to add copies and keep the originals."))
             .dropDestination(for: String.self) { items, _ in
                 let ids = Set(items.flatMap { $0.split(separator: ",").compactMap { UUID(uuidString: String($0)) } })
-                return store.moveFeeds(ids, toFolder: nil, accountID: accountID)
+                return store.acceptFeedDrop(ids, toFolder: nil, accountID: accountID)
+            } isTargeted: { targeted in
+                if targeted { targetedAccountIDs.insert(accountID) }
+                else { targetedAccountIDs.remove(accountID) }
             }
             .contextMenu {
                 Button {
@@ -1955,8 +1958,12 @@ private struct SidebarView: View {
         let count = store.unreadCount(folder: folder, accountID: accountID)
         let key = "\(accountID)::\(folder)"
         let isDeleting = deletingFolderKeys.contains(key)
-        SidebarRow(folder, systemImage: isFolderExpandedBinding(key: key).wrappedValue ? "folder.fill" : "folder", count: count, isSyncing: (store.accountRefreshProgress[accountID] != nil) || isDeleting, pulsesWhileSyncing: true, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder)))
-            .equatable()
+        FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue,
+            unreadCount: count, isSyncing: store.accountRefreshProgress[accountID] != nil || isDeleting || store.importingAccountIDs.contains(accountID),
+            isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)),
+            onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { ids in
+                store.acceptFeedDrop(ids, toFolder: folder, accountID: accountID)
+            }
             .contentShape(Rectangle())
             .tag(SidebarSelection.folder(accountID: accountID, folderName: folder))
             .onTapGesture {
@@ -1998,12 +2005,8 @@ private struct SidebarView: View {
 
     @ViewBuilder
     private func remoteFeedRow(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
-        if store.accounts.contains(where: { $0.id == accountID && $0.type == AccountType.iCloud.rawValue }) {
-            remoteFeedRowContent(feed, accountID: accountID, inFolder: inFolder)
-                .draggable(selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 ? selectedFeedIDs.map(\.uuidString).joined(separator: ",") : feed.id.uuidString)
-        } else {
-            remoteFeedRowContent(feed, accountID: accountID, inFolder: inFolder)
-        }
+        remoteFeedRowContent(feed, accountID: accountID, inFolder: inFolder)
+            .draggable(selectedFeedIDs.contains(feed.id) && selectedFeedIDs.count > 1 ? selectedFeedIDs.map(\.uuidString).joined(separator: ",") : feed.id.uuidString)
     }
 
     private func remoteFeedRowContent(_ feed: Feed, accountID: String, inFolder: Bool = false) -> some View {
@@ -2176,7 +2179,7 @@ private struct SidebarView: View {
         let key = "\(accountID)::\(folder)"
         let isDeleting = deletingFolderKeys.contains(key)
         FolderRowView(folder: folder, isExpanded: isFolderExpandedBinding(key: key).wrappedValue, unreadCount: store.unreadCount(folder: folder, accountID: accountID), isSyncing: (store.accountRefreshProgress[accountID] != nil) || isDeleting, isFiltered: unreadFilteredGroups.contains(.folder(accountID: accountID, folderName: folder)), onToggleFilter: filterAction(for: .folder(accountID: accountID, folderName: folder))) { feedIDs in
-            guard store.moveFeeds(feedIDs, toFolder: folder, accountID: accountID) else { return false }
+            guard store.acceptFeedDrop(feedIDs, toFolder: folder, accountID: accountID) else { return false }
             var current = collapsedFolders
             current.remove(key)
             current.remove(folder)
@@ -4161,7 +4164,7 @@ extension UTType {
     }
 }
 
-private struct OPMLExportDocument: FileDocument {
+struct OPMLExportDocument: FileDocument {
     static var readableContentTypes: [UTType] {
         var types: [UTType] = [.xml, .opml]
         if let extType = UTType(filenameExtension: "opml") { types.append(extType) }

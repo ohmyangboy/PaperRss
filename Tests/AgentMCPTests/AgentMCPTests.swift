@@ -191,7 +191,7 @@ final class AgentMCPTests: XCTestCase {
         let reply = await server.handle(request("tools/list"))
         let tools = try XCTUnwrap(reply?["result"]?["tools"]?.arrayValue)
         XCTAssertEqual(Set(tools.compactMap { $0["name"]?.stringValue }), Set([
-            "paperrss_status", "paperrss_open", "paperrss_list_feeds", "paperrss_list_articles", "paperrss_get_article",
+            "paperrss_plan_manage_feeds", "paperrss_status", "paperrss_open", "paperrss_list_feeds", "paperrss_list_articles", "paperrss_get_article",
             "paperrss_get_content", "paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_apply_plan", "paperrss_apply_state_change",
             "paperrss_add_feed", "paperrss_rename_feed", "paperrss_remove_feed",
             "paperrss_plan_add_feed", "paperrss_plan_rename_feed", "paperrss_plan_remove_feed"
@@ -207,6 +207,22 @@ final class AgentMCPTests: XCTestCase {
         let apply = try XCTUnwrap(tools.first { $0["name"]?.stringValue == "paperrss_apply_state_change" })
         XCTAssertEqual(apply["annotations"]?["destructiveHint"], .bool(true))
         XCTAssertEqual(apply["annotations"]?["idempotentHint"], .bool(true))
+    }
+
+    func testBatchFeedSchemaValidatesEachOperationAndBounds() throws {
+        let account: AgentJSON = .string("account")
+        let valid: [AgentJSON] = [
+            .object(["action": .string("add_feed"), "url": .string("https://example.org/rss"), "folder": .string("News")]),
+            .object(["action": .string("rename_feed"), "feed_id": .string("id"), "title": .string("New title")]),
+            .object(["action": .string("remove_feed"), "feed_id": .string("other")])]
+        try AgentMCPTools.validate(name: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array(valid)])
+        for operations in [[], Array(repeating: valid[0], count: 51),
+            [.object(["action": .string("remove_feed"), "feed_id": .string("id"), "title": .string("unexpected")])],
+            [.object(["action": .string("rename_feed"), "feed_id": .string("id")])],
+            [.object(["action": .string("add_feed"), "url": .string("https://user:secret@example.org/rss")])],
+            [.object(["action": .string("remove_feed"), "feed_id": .string("id"), "account_id": .string("other")])]] {
+            XCTAssertThrowsError(try AgentMCPTools.validate(name: "paperrss_plan_manage_feeds", arguments: ["account_id": account, "operations": .array(operations)]))
+        }
     }
 
     func testMarkReadScopesAndGenericApplySchema() async throws {

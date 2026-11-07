@@ -19,6 +19,22 @@ public enum OPMLImportError: LocalizedError, Sendable {
     }
 }
 
+public struct SubscriptionImportResult: Sendable, Equatable {
+    public var movedCount = 0
+    public var addedCount = 0
+    public var skippedCount = 0
+    public var failedTitles: [String] = []
+
+    @MainActor public var summary: String {
+        if movedCount > 0 {
+            return I18N.shared.localized("已移动 \(movedCount) 个；已添加 \(addedCount) 个，已存在 \(skippedCount) 个，失败 \(failedTitles.count) 个。",
+                "Moved \(movedCount); added \(addedCount), already subscribed \(skippedCount), failed \(failedTitles.count).")
+        }
+        return I18N.shared.localized("已添加 \(addedCount) 个，已存在 \(skippedCount) 个，失败 \(failedTitles.count) 个。",
+                              "Added \(addedCount), already subscribed \(skippedCount), failed \(failedTitles.count).")
+    }
+}
+
 public enum OPMLService {
     /// Parse the whole document before making any database changes. DTDs and
     /// external entities are unnecessary for OPML and must never read files.

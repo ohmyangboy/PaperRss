@@ -73,6 +73,21 @@ public struct AgentFeedPreview: Codable, Sendable, Equatable {
     }
 }
 
+public struct AgentFeedChangePreview: Codable, Sendable, Equatable {
+    public let summary: String
+    public let summary_en: String
+}
+
+public struct AgentFeedOperationResult: Codable, Sendable, Equatable {
+    public let index: Int
+    public let action: String
+    public let feed_id: String?
+    public let feed_title: String?
+    public let status: String
+    public let error_code: String?
+    public let sync: String?
+}
+
 public struct AgentStatePlan: Codable, Sendable {
     public let plan_id: String
     public let account_id: String
@@ -88,6 +103,7 @@ public struct AgentStatePlan: Codable, Sendable {
     public let sample_titles: [String]
     public let approval: String
     public let next_step: String
+    public var feed_changes: [AgentFeedChangePreview] = []
     public var affected_feeds: [AgentFeedPreview] = []
     public var destructive_hint: Bool = false
     public var untrusted: Bool = true
@@ -110,6 +126,7 @@ extension AgentStatePlan {
         sample_titles = try values.decode([String].self, forKey: .sample_titles)
         approval = try values.decode(String.self, forKey: .approval)
         next_step = try values.decode(String.self, forKey: .next_step)
+        feed_changes = try values.decodeIfPresent([AgentFeedChangePreview].self, forKey: .feed_changes) ?? []
         affected_feeds = try values.decodeIfPresent([AgentFeedPreview].self, forKey: .affected_feeds) ?? []
         destructive_hint = try values.decode(Bool.self, forKey: .destructive_hint)
         untrusted = try values.decode(Bool.self, forKey: .untrusted)
@@ -120,6 +137,8 @@ public struct AgentStateReceipt: Codable, Sendable, Equatable {
     public let operation_id: String
     public let applied_count: Int
     public let skipped_count: Int
+    public var results: [AgentFeedOperationResult]? = nil
+    public var failed_count: Int? = nil
     public var feed_id: String? = nil
     public var feed_title: String? = nil
     public var untrusted: Bool = true

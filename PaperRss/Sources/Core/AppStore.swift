@@ -1283,6 +1283,10 @@ public final class AppStore: ObservableObject {
 
         let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let accID = targetAccountID ?? defaultSubscriptionAccountID
+        guard (try? subscriptionAccount(accID)) != nil else {
+            lastError = I18N.shared.localized("目标账号不可用。", "The target account is unavailable.")
+            return nil
+        }
 
         if accID == "local-default" {
             let feed: Feed
@@ -1336,7 +1340,7 @@ public final class AppStore: ObservableObject {
             try Task.checkCancellation()
             guard expiresAt > Date() else { throw AgentFailure("CONFLICT", "Plan expired before execution.") }
             return try libraryDatabase.read { db in
-                guard let account = try AccountRecord.fetchOne(db, key: mutation.accountID), account.isEnabled,
+                guard let account = try AccountRecord.fetchOne(db, key: mutation.accountID), account.isEnabled, !account.isArchived,
                       AccountType(rawValue: account.type) != nil else {
                     throw AgentFailure("NOT_FOUND", "Enabled account not found.")
                 }
@@ -1577,12 +1581,13 @@ public final class AppStore: ObservableObject {
         reloadState()
     }
 
-    /// Dragging organizes one account; it never copies historical data between
-    /// accounts or creates a same-named folder in an unintended account.
+    /// Organize folders inside one direct-fetch account. Cross-account additions
+    /// go through copyOrMoveFeeds and never reuse source IDs or article history.
     @discardableResult
     public func moveFeeds(_ feedIDs: Set<UUID>, toFolder folder: String?, accountID: String) -> Bool {
         guard !feedIDs.isEmpty,
-              accountID == "local-default" || accounts.contains(where: { $0.id == accountID && $0.type == AccountType.iCloud.rawValue })
+              let target = try? subscriptionAccount(accountID),
+              AccountType(rawValue: target.type)?.fetchesRSSDirectly == true
         else { return false }
         let owned = (try? libraryDatabase.read { db in
             for id in feedIDs {
@@ -1992,23 +1997,148 @@ public final class AppStore: ObservableObject {
         return account
     }
 
-    public func importOPML(_ data: Data, targetAccountID: String? = nil) async {
-        let accountID = targetAccountID ?? defaultSubscriptionAccountID
-        guard let account = accounts.first(where: { $0.id == accountID }),
-              AccountType(rawValue: account.type)?.fetchesRSSDirectly == true else {
-            let message = I18N.localized("请选择本地或 iCloud 账号导入 OPML。", englishFallback: "Choose a local or iCloud account to import OPML.")
-            reportErrorMessage(message, module: .settings)
-            lastError = message
-            return
+    @Published public private(set) var importingAccountIDs: Set<String> = []
+
+    public var subscriptionAccounts: [AccountRecord] {
+        accounts.filter { $0.isEnabled && !$0.isArchived && AccountType(rawValue: $0.type) != nil }
+    }
+
+    private func subscriptionAccount(_ accountID: String) throws -> AccountRecord {
+        try libraryDatabase.read { db in
+            guard let account = try AccountRecord.fetchOne(db, key: accountID), account.isEnabled,
+                  !account.isArchived, AccountType(rawValue: account.type) != nil else {
+                throw AgentFailure("NOT_FOUND", "Enabled account not found.")
+            }
+            return account
         }
+    }
+
+    @discardableResult
+    public func importOPML(_ data: Data, targetAccountID: String? = nil) async -> SubscriptionImportResult? {
+        let accountID = targetAccountID ?? defaultSubscriptionAccountID
+        guard !importingAccountIDs.contains(accountID) else {
+            lastError = I18N.shared.localized("该账号正在导入订阅，请稍后再试。", "This account is importing subscriptions. Try again shortly.")
+            return nil
+        }
+        importingAccountIDs.insert(accountID)
+        defer { importingAccountIDs.remove(accountID) }
         do {
-            let newFeedIDs = try await directProvider(for: accountID).importOPMLAsync(data)
+            let account = try subscriptionAccount(accountID)
+            let document = try OPMLService.parse(data: data)
+            let uniqueCount = Set(document.subscriptions.map(\.feedURL)).count
+            if AccountType(rawValue: account.type)?.fetchesRSSDirectly == true {
+                let newFeedIDs = try await directProvider(for: accountID).importOPMLAsync(data)
+                await reloadStateAsync()
+                if !newFeedIDs.isEmpty { await refresh(feedIDs: newFeedIDs, origin: .subscriptionManagement) }
+                return SubscriptionImportResult(addedCount: newFeedIDs.count, skippedCount: uniqueCount - newFeedIDs.count)
+            }
+            guard let provider = await syncCoordinator.provider(for: accountID) else {
+                throw AgentFailure("UNSUPPORTED", "The account provider is unavailable.")
+            }
+            var result = SubscriptionImportResult()
+            var seen = Set<URL>()
+            for subscription in document.subscriptions where seen.insert(subscription.feedURL).inserted {
+                do {
+                    try Task.checkCancellation()
+                    _ = try subscriptionAccount(accountID)
+                    let exists = try libraryDatabase.read { db in
+                        try localProvider.feedRepository.fetchFeedByURL(accountID: accountID,
+                            feedURL: subscription.feedURL.absoluteString, includeDeleted: false, in: db) != nil
+                    }
+                    if exists { result.skippedCount += 1; continue }
+                    _ = try await provider.addFeed(url: subscription.feedURL, title: subscription.title, folder: subscription.folder)
+                    result.addedCount += 1
+                } catch {
+                    result.failedTitles.append(subscription.title ?? subscription.feedURL.host ?? I18N.localized("订阅源"))
+                }
+            }
             await reloadStateAsync()
-            if !newFeedIDs.isEmpty { await refresh(feedIDs: newFeedIDs, origin: .subscriptionManagement) }
+            scheduleMissingIconProbe(delay: 0.5)
+            return result
         } catch {
-            let message = I18N.localized("无法读取 OPML 文件，请检查文件格式。", englishFallback: "Unable to read the OPML file. Check its format.")
+            let message = error is OPMLImportError
+                ? I18N.localized("无法读取 OPML 文件，请检查文件格式。", englishFallback: "Unable to read the OPML file. Check its format.")
+                : I18N.shared.localized("无法导入到目标账号，请检查账号是否启用且连接正常。", "Could not import into this account. Check that it is enabled and connected.")
             reportErrorMessage(message, module: .settings)
             lastError = message
+            return nil
+        }
+    }
+
+    /// Resolve IDs from our database; external text never supplies URLs or account ownership.
+    public func canDropFeeds(_ feedIDs: Set<UUID>, targetAccountID: String) -> Bool {
+        guard !feedIDs.isEmpty, !importingAccountIDs.contains(targetAccountID),
+              let account = try? subscriptionAccount(targetAccountID) else { return false }
+        return (try? libraryDatabase.read { db in
+            var crossesAccounts = false
+            for id in feedIDs {
+                guard let feed = try FeedRecord.fetchOne(db, key: id.uuidString), !feed.isDeleted,
+                      let source = try AccountRecord.fetchOne(db, key: feed.accountID),
+                      source.isEnabled, !source.isArchived else { return false }
+                crossesAccounts = crossesAccounts || feed.accountID != targetAccountID
+            }
+            return crossesAccounts || AccountType(rawValue: account.type)?.fetchesRSSDirectly == true
+        }) ?? false
+    }
+
+    @discardableResult
+    public func acceptFeedDrop(_ feedIDs: Set<UUID>, toFolder folder: String?, accountID: String) -> Bool {
+        guard canDropFeeds(feedIDs, targetAccountID: accountID) else { return false }
+        Task {
+            if let result = await copyOrMoveFeeds(feedIDs, toFolder: folder, accountID: accountID) {
+                emitTransientNotice(result.summary)
+            }
+        }
+        return true
+    }
+
+    /// Same-account drops organize folders. Cross-account drops add subscriptions only,
+    /// preserving all source articles/state and leaving existing target subscriptions intact.
+    @discardableResult
+    public func copyOrMoveFeeds(_ feedIDs: Set<UUID>, toFolder folder: String?, accountID: String) async -> SubscriptionImportResult? {
+        guard canDropFeeds(feedIDs, targetAccountID: accountID) else { return nil }
+        do {
+            let (same, copies, duplicates): (Set<UUID>, [Feed], Int) = try libraryDatabase.read { db in
+                var same = Set<UUID>(), copies: [Feed] = [], duplicates = 0
+                var urls = Set<String>()
+                for id in feedIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+                    guard let record = try FeedRecord.fetchOne(db, key: id.uuidString), !record.isDeleted,
+                          var feed = try localProvider.feedRepository.fetchFeedModel(id: id.uuidString, in: db) else {
+                        throw LocalAccountError.feedNotFound
+                    }
+                    if record.accountID == accountID { same.insert(id); continue }
+                    guard urls.insert(record.feedURL).inserted,
+                          try localProvider.feedRepository.fetchFeedByURL(accountID: accountID, feedURL: record.feedURL, includeDeleted: false, in: db) == nil else {
+                        duplicates += 1
+                        continue
+                    }
+                    feed.folder = folder
+                    copies.append(feed)
+                }
+                return (same, copies, duplicates)
+            }
+            var moved = 0
+            var skipped = duplicates
+            if !same.isEmpty {
+                let target = try subscriptionAccount(accountID)
+                if AccountType(rawValue: target.type)?.fetchesRSSDirectly == true {
+                    guard moveFeeds(same, toFolder: folder, accountID: accountID) else { return nil }
+                    moved = same.count
+                } else {
+                    skipped += same.count
+                }
+            }
+            guard !copies.isEmpty else {
+                return SubscriptionImportResult(movedCount: moved, skippedCount: skipped)
+            }
+            var result = await importOPML(OPMLService.export(feeds: copies), targetAccountID: accountID)
+            result?.movedCount = moved
+            result?.skippedCount += skipped
+            return result
+        } catch {
+            lastError = I18N.shared.localized("无法添加这些订阅，来源账号的内容已保留。", "Could not add these feeds. The source account is unchanged.")
+            reportErrorMessage(lastError ?? "", module: .settings)
+            return nil
         }
     }
 
@@ -2028,7 +2158,8 @@ public final class AppStore: ObservableObject {
         if let account = accounts.first(where: { $0.id == accountID && $0.type == AccountType.iCloud.rawValue }) {
             return iCloudProvider(for: account).local
         }
-        return localProvider
+        return accountID == localProvider.accountID ? localProvider
+            : LocalAccountProvider(accountID: accountID, database: libraryDatabase, customFeedFetcher: directFeedFetcher)
     }
 
     // MARK: - Feed Refreshing

@@ -229,12 +229,21 @@ extension AgentBridgeControllerTests {
         })
         for mode in ["auto", "full"] {
             defaults.mode = mode
-            for kind in ["add_feed", "rename_feed", "remove_feed"] {
+            for kind in ["add_feed", "rename_feed", "remove_feed", "manage_feeds"] {
                 var args: [String: AgentJSON] = ["account_id": .string("local-default")]
                 if kind == "add_feed" { args["url"] = .string("https://example.org/new") }
                 else { args["feed_id"] = .string(feed.id.uuidString) }
                 if kind == "rename_feed" { args["title"] = .string("Renamed") }
+                if kind == "manage_feeds" {
+                    args = ["account_id": .string("local-default"), "operations": .array([
+                        .object(["action": .string("remove_feed"), "feed_id": .string(feed.id.uuidString)])])]
+                }
                 let plan = try await bridge.call(tool: "paperrss_plan_\(kind)", arguments: args)
+                if kind == "manage_feeds", mode == "auto" {
+                    let request = try XCTUnwrap(center.pending.first)
+                    XCTAssertTrue(request.isDestructive)
+                    XCTAssertEqual(request.feedChanges.count, 1)
+                }
                 let status = try await bridge.call(tool: "paperrss_status", arguments: ["plan_id": plan["plan_id"]!])
                 XCTAssertEqual(status["plan_state"], .string(mode == "full" ? "committed" : "pending"))
                 XCTAssertEqual(status["receipt"] != nil, mode == "full")
@@ -248,7 +257,7 @@ extension AgentBridgeControllerTests {
                 }
             }
         }
-        XCTAssertEqual(executed, 3)
+        XCTAssertEqual(executed, 4)
         await bridge.stop()
     }
 }

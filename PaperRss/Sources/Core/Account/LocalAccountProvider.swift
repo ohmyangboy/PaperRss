@@ -507,6 +507,9 @@ public final class LocalAccountProvider: AccountProvider, Sendable {
     }
 
     private func importOPMLDocument(_ document: OPMLDocument, in db: Database) throws -> [UUID] {
+        guard let account = try AccountRecord.fetchOne(db, key: accountID), account.isEnabled, !account.isArchived else {
+            throw LocalAccountError.feedNotFound
+        }
         var newFeedIDs: [UUID] = []
         for folder in document.folders { try feedRepository.addFolder(name: folder, accountID: accountID, in: db) }
         let folders = try feedRepository.fetchAllFolders(accountID: accountID, in: db)
