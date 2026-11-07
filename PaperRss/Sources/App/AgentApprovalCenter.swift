@@ -226,17 +226,30 @@ struct AgentApprovalList: View {
                                 .font(.system(size: 13)).foregroundStyle(.red)
                         }
                         HStack(spacing: 8) {
+                            if center.busy.contains(request.id) {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text(i18n.localized("正在处理…", "Processing…"))
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(i18n.localized("正在处理", "Processing"))
+                                .accessibilityIdentifier("agent.approval.processing.\(request.planID)")
+                            }
                             Spacer()
                             Button(i18n.localized("拒绝", "Deny")) { Task { await center.deny(request) } }
                                 .buttonStyle(.bordered)
+                                .disabled(center.busy.contains(request.id))
                                 .accessibilityIdentifier("agent.approval.deny.\(request.planID)")
                             Button(i18n.localized("批准", "Approve")) { Task { await center.approve(request) } }
                                 .buttonStyle(.borderedProminent)
                                 .tint(request.isDestructive ? Color.red : Color.accentColor)
+                                .disabled(center.busy.contains(request.id))
                                 .accessibilityIdentifier("agent.approval.approve.\(request.planID)")
                             // Deliberately no defaultAction / Return keyboard shortcut.
                         }
-                        .disabled(center.busy.contains(request.id))
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)

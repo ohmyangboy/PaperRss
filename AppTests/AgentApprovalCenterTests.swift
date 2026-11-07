@@ -78,6 +78,34 @@ final class AgentApprovalCenterTests: XCTestCase {
         XCTAssertTrue(center.pending.isEmpty)
         XCTAssertTrue(center.failed.isEmpty)
     }
+
+    func testDecisionRemainsBusyAndRejectsDuplicateClicksUntilCompletion() async {
+        let center = AgentApprovalCenter(showPanel: false)
+        let item = request()
+        let started = expectation(description: "approval started")
+        var continuation: CheckedContinuation<Void, Never>?
+        var attempts = 0
+        center.register(item, approve: {
+            attempts += 1
+            await withCheckedContinuation { (resume: CheckedContinuation<Void, Never>) in
+                continuation = resume
+                started.fulfill()
+            }
+        }, deny: { XCTFail("Cannot deny while approval is running") })
+
+        let task = Task { await center.approve(item) }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(center.busy.contains(item.id))
+        XCTAssertEqual(center.pending.count, 1)
+        await center.approve(item)
+        await center.deny(item)
+        XCTAssertEqual(attempts, 1)
+
+        continuation?.resume()
+        await task.value
+        XCTAssertTrue(center.busy.isEmpty)
+        XCTAssertTrue(center.pending.isEmpty)
+    }
 }
 
 extension AgentApprovalCenterTests {
