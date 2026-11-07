@@ -21,7 +21,7 @@ private func parameters(secret: Data, identity: String) -> NWParameters {
     }
     sec_protocol_options_set_min_tls_protocol_version(options, .TLSv12)
     sec_protocol_options_set_max_tls_protocol_version(options, .TLSv12)
-    sec_protocol_options_append_tls_ciphersuite(options, tls_ciphersuite_t(rawValue: TLS_PSK_WITH_AES_128_GCM_SHA256)!)
+    sec_protocol_options_append_tls_ciphersuite(options, tls_ciphersuite_t(rawValue: UInt16(TLS_PSK_WITH_AES_128_GCM_SHA256))!)
     sec_protocol_options_set_tls_tickets_enabled(options, false)
     sec_protocol_options_set_tls_resumption_enabled(options, false)
     let result = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
