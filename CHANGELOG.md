@@ -1,5 +1,21 @@
 # 更新记录 / Changelog
 
+## v1.5.3-beta.1 · Build 48 · 2026-11-07
+
+本次 Beta 增加与 iPhone 上 Papery 的配对导入，并更新 MCP 和订阅管理；欢迎 Beta 通道用户测试，稳定版仍为 v1.5.2。
+
+- **iPhone 兼容**：在同一局域网通过二维码配对，将所选账号的订阅或 AI 配置导入 Papery；iOS 版仍在开发中。
+- **MCP 批量订阅管理**：外部助手可为指定账号规划批量添加、重命名和删除订阅，按设置的审批模式执行。
+- **订阅管理**：导入 OPML 时可选择目标账号，也可将订阅拖到其他账号复制；导入结果显示成功、已存在和失败数量。
+
+---
+
+This Beta adds pairing with Papery on iPhone and updates MCP and subscription management. Beta channel users are invited to test it; the stable release remains v1.5.2.
+
+- **iPhone compatibility**: Pair over the same local network with a QR code to import subscriptions from a selected account or AI configuration into Papery. The iOS app is still in development.
+- **MCP batch feed management**: External assistants can plan additions, renames and removals for a selected account, with execution governed by the configured approval mode.
+- **Subscription management**: Choose a destination account when importing OPML or drag feeds to another account to copy them. Import results show added, existing and failed counts.
+
 ## v1.5.2 · Build 47 · 2026-11-04
 
 本次稳定版优化正文加载、订阅切换和键盘阅读体验，并修复图片预览及本地助手连接问题；推荐所有用户升级。
