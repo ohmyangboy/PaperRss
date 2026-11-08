@@ -332,7 +332,7 @@ struct ArticleReaderView: View {
         }
     }
 
-    var body: some View {
+    private var readerSurface: some View {
         ZStack(alignment: .top) {
             if hasReaderContent {
                 readerBody
@@ -383,6 +383,10 @@ struct ArticleReaderView: View {
         .navigationTitle(entry.title)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+    }
+
+    var body: some View {
+        readerSurface
         .task(id: automationIdentity) {
             guard translationDocumentReady, displayedEntry?.id == entry.id,
                   let article = preparedArticle else { return }
