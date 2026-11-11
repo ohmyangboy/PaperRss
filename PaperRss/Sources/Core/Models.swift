@@ -51,6 +51,7 @@ public enum FeedRefreshOrigin: String, CaseIterable, Hashable, Sendable {
     case launch
     case scheduled
     case manual
+    case agent
     case subscriptionManagement
     case systemBackground
 }

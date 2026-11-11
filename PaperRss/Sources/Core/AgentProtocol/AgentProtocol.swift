@@ -65,7 +65,7 @@ public extension AgentBridge {
 
 /// Shared discovery names keep the App status and helper tools/list aligned.
 public enum AgentToolCatalog {
-    public static let names = ["status", "list_feeds", "list_articles", "get_article", "get_content", "open",
+    public static let names = ["status", "list_feeds", "list_articles", "get_article", "get_content", "open", "refresh_feeds",
                                "plan_manage_feeds", "plan_state_change", "plan_mark_read", "apply_plan", "apply_state_change", "plan_add_feed", "plan_rename_feed", "plan_remove_feed", "add_feed", "rename_feed", "remove_feed"]
         .map { "paperrss_" + $0 }
 }
@@ -76,11 +76,12 @@ public enum AgentToolCatalog {
 /// get_content remains available at runtime for QA but is hidden until content authorization UI ships.
 public enum AgentMCPToolCatalog {
     public enum Group: String, CaseIterable, Sendable {
-        case readOnly, approvalGated
+        case readOnly, refresh, approvalGated
 
         public var zhTitle: String {
             switch self {
             case .readOnly: "只读"
+            case .refresh: "刷新"
             case .approvalGated: "需审批写入"
             }
         }
@@ -88,6 +89,7 @@ public enum AgentMCPToolCatalog {
         public var enTitle: String {
             switch self {
             case .readOnly: "Read-only"
+            case .refresh: "Refresh"
             case .approvalGated: "Approval-gated writes"
             }
         }
@@ -144,6 +146,13 @@ public enum AgentMCPToolCatalog {
               {
                 "account_id": "account-id",
                 "scope": "unread"
+              }
+              """),
+        Entry("refresh_feeds", .refresh, "拉取已有订阅的最新文章，无需批准；不标记已读。",
+              "Refresh subscribed feeds without approval, and do not mark articles read.",
+              """
+              {
+                "scope": "all"
               }
               """),
         Entry("get_article", .readOnly, "查看文章元数据与本地正文可用性，不返回正文。",

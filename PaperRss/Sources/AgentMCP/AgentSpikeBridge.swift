@@ -34,11 +34,11 @@ public struct AgentFixtureBridge: AgentBridge {
                             "paired": .bool(false), "pair_state": .string("fixture_only"),
                             "transport": .string("fixture"), "fixture": .bool(true),
                             "tools": .array(AgentToolCatalog.names.map(AgentJSON.string)),
-                            "capabilities": .array([.string("metadata.read")]),
+                            "capabilities": .array([.string("metadata.read"), .string("feeds.refresh")]),
                             "allowed_accounts": .array([.object(["account_id": .string("fixture-local"),
-                                "capabilities": .array([.string("metadata.read")])])]),
+                                "capabilities": .array([.string("metadata.read"), .string("feeds.refresh")])])]),
                             "accounts": .array([.object(["account_id": .string("fixture-local"),
-                                "capabilities": .array([.string("metadata.read")])])]),
+                                "capabilities": .array([.string("metadata.read"), .string("feeds.refresh")])])]),
                             "selections": .array([]), "selection_ids": .array([])])
         }
         if let account = arguments["account_id"]?.stringValue, account != "fixture-local" {
@@ -80,6 +80,18 @@ public struct AgentFixtureBridge: AgentBridge {
             return Self.article
         case "paperrss_get_content":
             throw AgentFailure("UNAUTHORIZED", "Fixture has no approved content selection. A client cannot issue its own approval.")
+        case "paperrss_refresh_feeds":
+            let scope = arguments["scope"]?.stringValue ?? ""
+            if scope == "feeds" {
+                let ids = arguments["feed_ids"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                guard ids.allSatisfy({ $0 == "fixture-feed" }) else {
+                    throw AgentFailure("NOT_FOUND", "Fixture feed not found.")
+                }
+            }
+            let snapshot = AgentRefreshSnapshot(operationID: "refresh-fixture", state: "completed", scope: scope,
+                accountID: arguments["account_id"]?.stringValue,
+                feedCount: scope == "feeds" ? (arguments["feed_ids"]?.arrayValue?.count ?? 0) : 0, joined: false)
+            return .object(snapshot.fields())
         case "paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_apply_plan", "paperrss_apply_state_change",
              "paperrss_plan_add_feed", "paperrss_plan_rename_feed", "paperrss_plan_remove_feed",
              "paperrss_add_feed", "paperrss_rename_feed", "paperrss_remove_feed":

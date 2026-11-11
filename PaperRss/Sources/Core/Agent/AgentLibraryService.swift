@@ -4,8 +4,8 @@ import GRDB
 import PaperRssAgentProtocol
 #endif
 
-/// One app-owned authorization session. No database creation, refresh or network commands.
-/// The App creates one service per authenticated IPC connection and revokes it on disconnect.
+/// One app-owned authorization session. No database creation or network commands.
+/// Refresh is delegated to the App. The App creates one service per authenticated IPC connection and revokes it on disconnect.
 public actor AgentLibraryService: AgentBridge {
     private let database: LibraryDatabase
     private let provider: LocalAccountProvider
@@ -13,6 +13,7 @@ public actor AgentLibraryService: AgentBridge {
     private let clock: @Sendable () -> Date
     private let opener: (@MainActor @Sendable (AgentOpenRequest) throws -> Void)?
     private let writeExecutor: (any AgentWriteExecutor)?
+    private let refreshStarter: (@Sendable (AgentRefreshRequest) async throws -> AgentJSON)?
     private var applying = false
     private var policy: AgentAccessPolicy
     private var remainingCharacters: Int
@@ -51,6 +52,7 @@ public actor AgentLibraryService: AgentBridge {
                 engine: ArticlePreparationEngine = ArticlePreparationEngine(),
                 clock: @escaping @Sendable () -> Date = { Date() },
                 writeExecutor: (any AgentWriteExecutor)? = nil,
+                refreshStarter: (@Sendable (AgentRefreshRequest) async throws -> AgentJSON)? = nil,
                 opener: (@MainActor @Sendable (AgentOpenRequest) throws -> Void)? = nil) {
         self.database = database
         self.provider = LocalAccountProvider(accountID: accountID, database: database)
@@ -59,6 +61,7 @@ public actor AgentLibraryService: AgentBridge {
         self.clock = clock
         self.opener = opener
         self.writeExecutor = writeExecutor
+        self.refreshStarter = refreshStarter
         self.remainingCharacters = policy.outputCharacterBudget
     }
 
@@ -154,6 +157,7 @@ public actor AgentLibraryService: AgentBridge {
             try charge(metadata)
             return try .encoding(metadata)
         case "paperrss_get_content": return try await content(a)
+        case "paperrss_refresh_feeds": return try await refreshFeeds(a)
         case "paperrss_plan_manage_feeds": return try planFeeds(a)
         case "paperrss_plan_state_change": return try plan(a)
         case "paperrss_plan_mark_read": return try planMarkRead(a)
@@ -175,9 +179,12 @@ public actor AgentLibraryService: AgentBridge {
             "approval_mode": .string("ask"), "version": .string("agent-spike-1"), "enabled": .bool(true), "paired": .bool(false),
             "pair_state": .string("app_internal"),
             "transport": .string("in_process_spike"),
-            "accounts": .array(policy.accountIDs.sorted().map { .object([
-                "account_id": .string($0), "capabilities": .array(
-                    (["metadata.read", "content.read.selection"] + (policy.allowStateChanges ? ["state.write.approval", "feeds.manage.approval"] : [])).map { .string($0) })]) }),
+            "accounts": .array(policy.accountIDs.sorted().map { accountID in
+                var capabilities = ["metadata.read", "content.read.selection"]
+                if policy.allowStateChanges { capabilities += ["state.write.approval", "feeds.manage.approval"] }
+                if refreshStarter != nil { capabilities.append("feeds.refresh") }
+                return .object(["account_id": .string(accountID), "capabilities": .array(capabilities.map(AgentJSON.string))])
+            }),
             "selection_ids": .array(selections.filter { $0.value.expires > clock() }.keys.sorted().map { .string($0) }),
             "pending_approvals": .number(Double(plans.values.filter { !$0.denied && $0.approval == nil && $0.receipt == nil && $0.dto.expires_at > clock() }.count)),
             "remaining_characters": .number(Double(remainingCharacters))
@@ -196,6 +203,94 @@ public actor AgentLibraryService: AgentBridge {
             data["receipt"] = try .encoding(receipt)
         }
         return .object(data)
+    }
+
+    private func refreshFeeds(_ a: [String: AgentJSON]) async throws -> AgentJSON {
+        let scope = try string(a, "scope")
+        switch scope {
+        case "all":
+            guard a["account_id"] == nil, a["feed_ids"] == nil else {
+                throw AgentFailure("INVALID_ARGUMENT", "scope all does not take account_id or feed_ids.")
+            }
+        case "account":
+            guard a["account_id"] != nil, a["feed_ids"] == nil else {
+                throw AgentFailure("INVALID_ARGUMENT", "scope account requires account_id only.")
+            }
+        case "feeds":
+            guard a["account_id"] != nil, a["feed_ids"] != nil else {
+                throw AgentFailure("INVALID_ARGUMENT", "scope feeds requires account_id and feed_ids.")
+            }
+        default:
+            throw AgentFailure("INVALID_ARGUMENT", "Invalid refresh scope.")
+        }
+        let idempotencyKey = a["idempotency_key"]?.stringValue
+        if let idempotencyKey, idempotencyKey.isEmpty || idempotencyKey.unicodeScalars.count > 128 {
+            throw AgentFailure("INVALID_ARGUMENT", "Invalid idempotency_key.")
+        }
+        var accountID: String?
+        var feedIDs: [String] = []
+        if scope != "all" {
+            let account = try string(a, "account_id")
+            accountID = account
+            try authorize(account)
+            if scope == "feeds" {
+                let type = try accountType(account)
+                guard type.fetchesRSSDirectly else {
+                    throw AgentFailure("UNSUPPORTED", "This account syncs as a whole. Use scope account.")
+                }
+                feedIDs = try feedIDList(a)
+                try requireOwnedFeeds(feedIDs, account: account)
+            }
+        }
+        guard let refreshStarter else {
+            throw AgentFailure("UNSUPPORTED", "Refresh requires the running PaperRss App.")
+        }
+        let feedCount = scope == "feeds" ? feedIDs.count : try subscribedFeedCount(accountID: scope == "all" ? nil : accountID)
+        return try await refreshStarter(AgentRefreshRequest(scope: scope, accountID: accountID, feedIDs: feedIDs,
+            feedCount: feedCount, idempotencyKey: idempotencyKey))
+    }
+
+    private func accountType(_ account: String) throws -> AccountType {
+        try database.read { db in
+            guard let record = try AccountRecord.fetchOne(db, key: account),
+                  let type = AccountType(rawValue: record.type) else {
+                throw AgentFailure("NOT_FOUND", "Enabled account not found.")
+            }
+            return type
+        }
+    }
+
+    private func feedIDList(_ a: [String: AgentJSON]) throws -> [String] {
+        guard let ids = a["feed_ids"]?.arrayValue?.compactMap(\.stringValue),
+              (1...50).contains(ids.count), Set(ids).count == ids.count else {
+            throw AgentFailure("INVALID_ARGUMENT", "feed_ids must be 1–50 unique feed IDs.")
+        }
+        return ids
+    }
+
+    private func requireOwnedFeeds(_ ids: [String], account: String) throws {
+        try database.read { db in
+            for id in ids {
+                guard let feed = try provider.feedRepository.fetchFeed(id: id, in: db),
+                      feed.accountID == account, !feed.isDeleted else {
+                    throw AgentFailure("NOT_FOUND", "Feed not found in the account.")
+                }
+            }
+        }
+    }
+
+    private func subscribedFeedCount(accountID: String?) throws -> Int {
+        try database.read { db in
+            if let accountID {
+                return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM feeds WHERE account_id = ? AND is_deleted = 0",
+                    arguments: [accountID]) ?? 0
+            }
+            let ids = policy.accountIDs.sorted()
+            guard !ids.isEmpty else { return 0 }
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM feeds WHERE is_deleted = 0 AND account_id IN (\(placeholders))",
+                arguments: StatementArguments(ids)) ?? 0
+        }
     }
 
     private func requireEnabled() throws {

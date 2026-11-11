@@ -297,3 +297,135 @@ extension AgentBridgeControllerTests {
         await bridge.stop()
     }
 }
+
+extension AgentBridgeControllerTests {
+    func testRefreshJoinsConflictsAndReplaysWithoutApproval() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agent-refresh-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try LibraryDatabase(databaseURL: directory.appendingPathComponent("library.sqlite"))
+        let provider = LocalAccountProvider(database: database)
+        try provider.ensureAccountExists()
+        _ = try provider.addFeed(title: "Synthetic", feedURL: URL(string: "https://example.org/feed")!)
+        let center = AgentApprovalCenter(showPanel: false)
+        let bridge = AgentBridgeController(defaults: AgentVolatileDefaults(), approvalCenter: center)
+        let probe = AgentRefreshProbe()
+        bridge.attachForTesting(database: database)
+        bridge.setRefreshWorkForTesting { _ in
+            let index = probe.begin()
+            if index == 1 { await probe.wait() }
+            return AgentRefreshDetail(updatedFeedCount: 1, newArticleIDs: ["article-1"])
+        }
+
+        let idle = try await bridge.call(tool: "paperrss_status", arguments: [:])
+        XCTAssertEqual(idle["approval_mode"], .string("ask"))
+        XCTAssertTrue(idle["capabilities"]?.arrayValue?.contains(.string("feeds.refresh")) == true)
+        XCTAssertTrue(center.pending.isEmpty)
+
+        let first = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: [
+            "scope": .string("all"), "idempotency_key": .string("batch-1")])
+        let operationID = try XCTUnwrap(first["operation_id"]?.stringValue)
+        XCTAssertTrue(operationID.hasPrefix("refresh-"))
+        XCTAssertEqual(first["state"], .string("running"))
+        XCTAssertEqual(first["joined"], .bool(false))
+        XCTAssertEqual(first["feed_count"], .number(1))
+
+        let joined = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: ["scope": .string("all")])
+        XCTAssertEqual(joined["operation_id"], .string(operationID))
+        XCTAssertEqual(joined["joined"], .bool(true))
+        XCTAssertEqual(joined["state"], .string("running"))
+        do {
+            _ = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: [
+                "scope": .string("account"), "account_id": .string("local-default")])
+            XCTFail("A different target must not start")
+        } catch let error as AgentFailure {
+            XCTAssertEqual(error.code, "REFRESH_IN_PROGRESS")
+            XCTAssertTrue(error.message.contains(operationID))
+        }
+        do {
+            _ = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: [
+                "scope": .string("account"), "account_id": .string("local-default"),
+                "idempotency_key": .string("batch-1")])
+            XCTFail("A key must stay bound to its target")
+        } catch let error as AgentFailure {
+            XCTAssertEqual(error.code, "CONFLICT")
+        }
+        for _ in 0..<50 where probe.count < 1 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(probe.count, 1)
+
+        probe.release()
+        var finished = first
+        for _ in 0..<50 where finished["state"] == .string("running") {
+            finished = try await bridge.call(tool: "paperrss_status", arguments: ["operation_id": .string(operationID)])
+            if finished["state"] == .string("running") {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        XCTAssertEqual(finished["state"], .string("completed"))
+        XCTAssertEqual(finished["updated_feed_count"], .number(1))
+        XCTAssertEqual(finished["new_unread_count"], .number(1))
+        XCTAssertEqual(finished["new_article_ids"], .array([.string("article-1")]))
+        XCTAssertEqual(probe.count, 1)
+        let encoded = String(decoding: try JSONEncoder().encode(finished), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("title"))
+        XCTAssertFalse(encoded.contains("http"))
+
+        let replay = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: ["scope": .string("all")])
+        XCTAssertEqual(replay["operation_id"], .string(operationID))
+        XCTAssertEqual(replay["state"], .string("completed"))
+        XCTAssertEqual(probe.count, 1)
+
+        let next = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: [
+            "scope": .string("account"), "account_id": .string("local-default")])
+        XCTAssertEqual(next["state"], .string("running"))
+        XCTAssertNotEqual(next["operation_id"], .string(operationID))
+        for _ in 0..<50 where probe.count < 2 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(probe.count, 2)
+        await bridge.stop()
+    }
+}
+
+private final class AgentRefreshProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var starts = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func begin() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        starts += 1
+        return starts
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return starts
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.lock.lock()
+            if self.released {
+                self.lock.unlock()
+                continuation.resume()
+                return
+            }
+            self.continuation = continuation
+            self.lock.unlock()
+        }
+    }
+
+    func release() {
+        lock.lock()
+        released = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume()
+    }
+}

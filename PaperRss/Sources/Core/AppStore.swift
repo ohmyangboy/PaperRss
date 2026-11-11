@@ -166,6 +166,7 @@ public final class AppStore: ObservableObject {
     @Published public private(set) var isRefreshing = false
     @Published public private(set) var refreshStatus: FeedRefreshStatus = .idle
     @Published public private(set) var latestRefreshOutcome: FeedRefreshOutcome?
+    private var lastAgentRefreshDetail: AgentRefreshDetail?
     @Published public private(set) var refreshInterval: FeedRefreshInterval = .twoHours
     @Published public private(set) var refreshOnLaunch: Bool = true
     @Published public private(set) var lastError: String?
@@ -2205,6 +2206,9 @@ public final class AppStore: ObservableObject {
         var updatedFeeds = 0
         var newUnreadEntries: [Entry] = []
         var shouldReloadLocalSnapshot = false
+        var agentDetail = AgentRefreshDetail()
+        let agentUnreadBefore = origin == .agent ? Set(unreadEntryListItems.map(\.id)) : []
+        if origin == .agent { lastAgentRefreshDetail = nil }
 
         // 1. 本地源抓取（指定局部源或全局本地源）
         var targetFeeds: [Feed]
@@ -2233,7 +2237,10 @@ public final class AppStore: ObservableObject {
             while feedIndex < targetFeeds.count && activeTaskCount < maxConcurrency {
                 let feed = targetFeeds[feedIndex]
                 feedIndex += 1
-                guard !invalidatedRefreshFeedIDs.contains(feed.id) else { continue }
+                guard !invalidatedRefreshFeedIDs.contains(feed.id) else {
+                    agentDetail.skippedCount += 1
+                    continue
+                }
                 let fetchTask = Task.detached { [provider] in
                     await provider.fetchSingleFeed(feed: feed)
                 }
@@ -2251,17 +2258,42 @@ public final class AppStore: ObservableObject {
                 // 删除动作已经使本轮 Feed 失效：不计失败、不写数据库、不生成通知。
                 if !invalidatedRefreshFeedIDs.contains(taskResult.feedID) {
                     shouldReloadLocalSnapshot = true
+                    var recordedAgentFailure = false
                     do {
                         let outcome = try await provider.applyRefreshResultAsync(taskResult)
                         if outcome.updated { updatedFeeds += 1 }
                         newUnreadEntries.append(contentsOf: outcome.newUnreadEntries)
+                        switch taskResult.result {
+                        case .success:
+                            if outcome.updated { agentDetail.updatedFeedCount += 1 }
+                            else { agentDetail.notModifiedCount += 1 }
+                        case .failure(let error):
+                            recordedAgentFailure = true
+                            agentDetail.failedFeedCount += 1
+                            agentDetail.failures.append(AgentRefreshFailure(
+                                accountID: "local-default", feedID: taskResult.feedID.uuidString,
+                                code: Self.agentRefreshCode(error)))
+                        }
                     } catch {
                         failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                        recordedAgentFailure = true
+                        agentDetail.failedFeedCount += 1
+                        agentDetail.failures.append(AgentRefreshFailure(
+                            accountID: "local-default", feedID: taskResult.feedID.uuidString,
+                            code: Self.agentRefreshCode(error)))
                     }
 
                     if case let .failure(error) = taskResult.result {
                         failures.append("\(taskResult.oldTitle)：\(error.localizedDescription)")
+                        if !recordedAgentFailure {
+                            agentDetail.failedFeedCount += 1
+                            agentDetail.failures.append(AgentRefreshFailure(
+                                accountID: "local-default", feedID: taskResult.feedID.uuidString,
+                                code: Self.agentRefreshCode(error)))
+                        }
                     }
+                } else {
+                    agentDetail.skippedCount += 1
                 }
 
                 completedLocalFeeds += 1
@@ -2270,7 +2302,10 @@ public final class AppStore: ObservableObject {
                 while feedIndex < targetFeeds.count && activeTaskCount < maxConcurrency {
                     let feed = targetFeeds[feedIndex]
                     feedIndex += 1
-                    guard !invalidatedRefreshFeedIDs.contains(feed.id) else { continue }
+                    guard !invalidatedRefreshFeedIDs.contains(feed.id) else {
+                        agentDetail.skippedCount += 1
+                        continue
+                    }
                     let fetchTask = Task.detached { [provider] in
                         await provider.fetchSingleFeed(feed: feed)
                     }
@@ -2292,8 +2327,16 @@ public final class AppStore: ObservableObject {
                 guard !targets.isEmpty else { continue }
                 do {
                     let result = try await iCloudProvider(for: account).refresh(feedIDs: targets, reason: .manual)
-                    if case .failed(let message) = result.status { failures.append(message) }
-                } catch { failures.append(ICloudSyncFailure.message(for: error)) }
+                    if case .failed(let message) = result.status {
+                        failures.append(message)
+                        agentDetail.failedFeedCount += 1
+                        agentDetail.failures.append(AgentRefreshFailure(accountID: account.id, code: "sync_failed"))
+                    }
+                } catch {
+                    failures.append(ICloudSyncFailure.message(for: error))
+                    agentDetail.failedFeedCount += 1
+                    agentDetail.failures.append(AgentRefreshFailure(accountID: account.id, code: "sync_failed"))
+                }
                 shouldReloadLocalSnapshot = true
             }
         }
@@ -2302,16 +2345,25 @@ public final class AppStore: ObservableObject {
         if feedIDs == nil {
             let initialUnreadIDs = Set(self.unreadEntryListItems.map(\.id))
 
-            let syncResults = await syncCoordinator.refreshRemoteAccounts(reason: origin == .manual ? .manual : .scheduled)
+            let remoteReason: RefreshReason = (origin == .manual || origin == .agent) ? .manual : .scheduled
+            let syncResults = await syncCoordinator.refreshRemoteAccounts(reason: remoteReason)
 
             for (accID, res) in syncResults {
+                let syncsSubscriptions = accounts.first { $0.id == accID }
+                    .flatMap { AccountType(rawValue: $0.type)?.syncsRemoteArticleStates } == true
                 switch res {
                 case .success(let result):
                     if case let .failed(msg) = result.status {
                         failures.append("账号 \(accID)：\(msg)")
+                        agentDetail.failedFeedCount += 1
+                        agentDetail.failures.append(AgentRefreshFailure(accountID: accID, code: "sync_failed"))
+                    } else if syncsSubscriptions {
+                        agentDetail.subscriptionsSynced = true
                     }
                 case .failure(let error):
                     failures.append("账号 \(accID)：\(error.localizedDescription)")
+                    agentDetail.failedFeedCount += 1
+                    agentDetail.failures.append(AgentRefreshFailure(accountID: accID, code: "sync_failed"))
                 }
             }
 
@@ -2342,6 +2394,16 @@ public final class AppStore: ObservableObject {
                   let current = try? localProvider.fetchEntry(id: candidate.id) ?? self.entry(id: candidate.id),
                   !current.isRead else { return nil }
             return current
+        }
+
+        if origin == .agent {
+            var ids = finalNewUnreads.map(\.id)
+            var seen = Set(ids)
+            for id in unreadEntryListItems.map(\.id) where !agentUnreadBefore.contains(id) && seen.insert(id).inserted {
+                ids.append(id)
+            }
+            agentDetail.newArticleIDs = ids
+            lastAgentRefreshDetail = agentDetail.resolved()
         }
 
         let outcome = FeedRefreshOutcome(
@@ -2377,6 +2439,92 @@ public final class AppStore: ObservableObject {
         }
 
         return outcome
+    }
+
+    /// MCP refresh. `scope=all` is the toolbar refresh. Smaller scopes use the same functions.
+    public func performAgentRefresh(_ request: AgentRefreshRequest) async -> AgentRefreshDetail {
+        switch request.scope {
+        case "all":
+            return await runAgentRefresh { await self.refresh(origin: .agent) }
+        case "account":
+            guard let accountID = request.accountID,
+                  let record = accounts.first(where: { $0.id == accountID }),
+                  let type = AccountType(rawValue: record.type) else {
+                return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(accountID: request.accountID, code: "not_found")]).resolved()
+            }
+            if !type.fetchesRSSDirectly {
+                return await refreshReaderAccountFromAgent(accountID)
+            }
+            let ids = feeds(for: accountID).filter { !$0.isDeleted }.map(\.id)
+            return await runAgentRefresh { await self.refresh(feedIDs: ids, origin: .agent) }
+        case "feeds":
+            let ids = request.feedIDs.compactMap(UUID.init(uuidString:))
+            return await runAgentRefresh { await self.refresh(feedIDs: ids, origin: .agent) }
+        default:
+            return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(code: "invalid")]).resolved()
+        }
+    }
+
+    private func runAgentRefresh(_ body: () async -> FeedRefreshOutcome?) async -> AgentRefreshDetail {
+        guard !isRefreshing else {
+            return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(code: "refresh_busy")]).resolved()
+        }
+        lastAgentRefreshDetail = nil
+        guard await body() != nil else {
+            return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(code: "refresh_busy")]).resolved()
+        }
+        return lastAgentRefreshDetail ?? AgentRefreshDetail()
+    }
+
+    private func refreshReaderAccountFromAgent(_ accountID: String) async -> AgentRefreshDetail {
+        guard !isRefreshing else {
+            return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(accountID: accountID, code: "refresh_busy")]).resolved()
+        }
+        let startedAt = Date.now
+        isRefreshing = true
+        refreshStatus = .refreshing
+        accountRefreshProgress[accountID] = AccountRefreshProgress()
+        defer { endRefreshProgress(accountID: accountID); isRefreshing = false }
+        let before = Set(unreadEntryListItems.filter { $0.accountID == accountID }.map(\.id))
+        var detail = AgentRefreshDetail()
+        do {
+            let result = try await syncCoordinator.refreshAccount(accountID: accountID, reason: .manual)
+            await reloadStateAsync()
+            switch result.status {
+            case .success, .notModified:
+                detail.subscriptionsSynced = true
+                detail.newArticleIDs = unreadEntryListItems.filter { $0.accountID == accountID && !before.contains($0.id) }.map(\.id)
+                refreshStatus = .completed(updatedFeeds: 0, finishedAt: Date.now)
+            case .failed(let message):
+                detail.failedFeedCount = 1
+                detail.failures = [AgentRefreshFailure(accountID: accountID, code: "sync_failed")]
+                refreshStatus = .failed(message: message, finishedAt: Date.now)
+                reportErrorMessage(message, module: .refresh)
+                lastError = message
+            }
+        } catch {
+            let message = error.localizedDescription
+            detail.failedFeedCount = 1
+            detail.failures = [AgentRefreshFailure(accountID: accountID, code: "sync_failed")]
+            refreshStatus = .failed(message: message, finishedAt: Date.now)
+            reportErrorMessage(message, module: .refresh)
+            lastError = message
+            await reloadStateAsync()
+        }
+        let remaining = 1.2 - Date.now.timeIntervalSince(startedAt)
+        if remaining > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+        return detail.resolved()
+    }
+
+    private static func agentRefreshCode(_ error: Error) -> String {
+        guard let urlError = error as? URLError else { return "fetch_failed" }
+        switch urlError.code {
+        case .timedOut: return "timeout"
+        case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost: return "network"
+        default: return "fetch_failed"
+        }
     }
 
     /// 强制重新拉取指定 Feed 的全部内容并回填恢复正文

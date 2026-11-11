@@ -251,7 +251,7 @@ private extension AgentMCPServer {
         let workflow: String
         switch name {
         case "digest":
-            workflow = "Call paperrss_status to discover authorized accounts. Use the specified account_id or all authorized accounts. Resolve since (default today) to an ISO8601 instant in the user's timezone. Call paperrss_list_articles with scope unread and since, following next_cursor within budgets. Summarize metadata only, grouped by feed; include titles and available source links. Explain truncation or missing content; do not fetch article bodies or mark articles read."
+            workflow = "This prompt does not refresh. When the user explicitly wants the latest articles, call paperrss_refresh_feeds first, then poll paperrss_status with its operation_id about every 2 seconds until it finishes. Call paperrss_status to discover authorized accounts. Use the specified account_id or all authorized accounts. Resolve since (default today) to an ISO8601 instant in the user's timezone. Call paperrss_list_articles with scope unread and since, following next_cursor within budgets. Summarize metadata only, grouped by feed; include titles and available source links. Explain truncation or missing content; do not fetch article bodies or mark articles read."
         case "feeds":
             workflow = "Call paperrss_status, then paperrss_list_feeds for the specified account_id or each authorized account. Follow next_cursor within budgets. List feed titles, IDs and unread counts grouped by account."
         case "mark_feed_read":

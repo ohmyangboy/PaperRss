@@ -18,6 +18,7 @@
 		A40000000000000000000203 /* AgentSpikeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000103 /* AgentSpikeBridge.swift */; };
 		A40000000000000000000204 /* AgentIPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000104 /* AgentIPC.swift */; };
 		A40000000000000000000205 /* AgentProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000105 /* AgentProtocol.swift */; };
+		A40000000000000000000206 /* AgentRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A40000000000000000000106 /* AgentRefresh.swift */; };
 		A40000000000000000000002 /* paperrss-agent in Embed Helper */ = {isa = PBXBuildFile; fileRef = A40000000000000000000001 /* paperrss-agent */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A50000000000000000000002 /* PaperRssAITransfer in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* PaperRssAITransfer */; };
 		A50000000000000000000003 /* PaperRssAITransfer in Frameworks */ = {isa = PBXBuildFile; productRef = A50000000000000000000001 /* PaperRssAITransfer */; };
@@ -40,6 +41,7 @@
 		A40000000000000000000103 /* AgentSpikeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperRss/Sources/AgentMCP/AgentSpikeBridge.swift; sourceTree = "<group>"; };
 		A40000000000000000000104 /* AgentIPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperRss/Sources/Core/AgentProtocol/AgentIPC.swift; sourceTree = "<group>"; };
 		A40000000000000000000105 /* AgentProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperRss/Sources/Core/AgentProtocol/AgentProtocol.swift; sourceTree = "<group>"; };
+		A40000000000000000000106 /* AgentRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperRss/Sources/Core/AgentProtocol/AgentRefresh.swift; sourceTree = "<group>"; };
 		A40000000000000000000001 /* paperrss-agent */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "paperrss-agent"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -125,6 +127,7 @@
 				A40000000000000000000103 /* AgentSpikeBridge.swift */,
 				A40000000000000000000104 /* AgentIPC.swift */,
 				A40000000000000000000105 /* AgentProtocol.swift */,
+				A40000000000000000000106 /* AgentRefresh.swift */,
 			); name = "Helper Sources"; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -280,6 +283,7 @@
 				A40000000000000000000203 /* AgentSpikeBridge.swift in Sources */,
 				A40000000000000000000204 /* AgentIPC.swift in Sources */,
 				A40000000000000000000205 /* AgentProtocol.swift in Sources */,
+				A40000000000000000000206 /* AgentRefresh.swift in Sources */,
 			); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 

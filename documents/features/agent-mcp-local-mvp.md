@@ -389,3 +389,21 @@ stderr 仅以最佳努力输出固定生命周期记录（PID、父 PID、启动
 - `receipt.results` 按输入顺序返回 `index`（从 0 开始）、`action`、`status`（`applied` / `failed`）、`feed_id`、`feed_title`、`error_code`、`sync`；不会回传任意服务器错误文本。
 - 必须检查 `failed_count` 与 `local_commit`（`committed` / `partial` / `failed`）。`plan_state=committed` 只表示已产生终态回执，不等于整批成功。
 - 无论相同还是新的幂等键，重放已执行计划只返回原回执，不重做其中的成功或失败项。核对目标账号实际状态后，仅为失败项创建新计划；服务器可能在网络报错前已完成部分动作。
+
+## 免审批刷新（2026-11-11）
+
+`paperrss_refresh_feeds` 调用 App 已有的刷新，不另写抓取器，也不经过批准面板。`scope=all` 就是工具栏「刷新全部订阅」：`store.refresh(origin: .agent)`。来源 `.agent` 只用于区分调用方；远端同步原因与手点相同，为 `RefreshReason.manual`，因此 FreshRSS / Miniflux 仍会推送已有 outbox、同步订阅目录并调和文章。系统通知只对定时刷新弹出。
+
+`scope=account` 刷新一个已启用账号。本地和 iCloud 走 `refresh(feedIDs:)`，只含该账号未删除的源。FreshRSS / Miniflux 走该账号自己的 `provider.refresh`，效果与它在「刷新全部」里的那一段相同。`scope=feeds` 只接受本地或 iCloud 的 1–50 个源 ID；服务端账号返回 `UNSUPPORTED`，应改用 `scope=account`。现有按源刷新不会悄悄扩大成整账号同步。
+
+调用立刻返回 `operation_id`（`refresh-` 前缀），不等待抓取结束。helper 与 App 的 Unix socket 单次读超时是 15 秒，全库刷新经常更久。客户端用 `paperrss_status` 传入该 `operation_id` 轮询，间隔约 2 秒。`status` 不计入每分钟 60 次工具限额。`plan_id` 与 `operation_id` 互斥。
+
+全进程同时只有一次刷新，并与工具栏共用 `isRefreshing`。相同目标加入该次操作（`joined: true`）；不同目标返回 `REFRESH_IN_PROGRESS`。相同目标在完成后 30 秒内直接交回那次回执，助手不会连打源站。断开会话不取消已经开始的刷新。关闭 MCP 后不能再发起或查询。
+
+完成回执只有计数、最多 50 个 `new_article_ids`、`truncated`、`subscriptions_synced` 和失败码（`timeout` / `network` / `fetch_failed` / `sync_failed` / `refresh_busy`）。不含标题、摘要、链接或正文。不标记已读，不接受 URL。`subscriptions_synced` 只在 FreshRSS / Miniflux 账号同步时为 true。最近 20 次结果保留 15 分钟。
+
+能力名是 `feeds.refresh`，与 Ask / Auto / Full 无关。设置里的工具目录在「只读」和「需审批写入」之间增加「刷新 / Refresh」。fixture 不联网，对合成库返回一次已完成、计数为 0 的操作。
+
+```sh
+./scripts/verify.sh --filter 'AgentLibraryServiceTests|AgentRefreshTests|AgentMCPTests|AgentBridgeControllerTests|AgentIPCTests|AgentIPCIntegrationTests'
+```

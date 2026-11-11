@@ -139,6 +139,7 @@ final class PaperRssCoreTests: XCTestCase {
             .launch,
             .scheduled,
             .manual,
+            .agent,
             .subscriptionManagement,
             .systemBackground
         ])

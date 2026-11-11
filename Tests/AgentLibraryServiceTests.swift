@@ -964,3 +964,59 @@ extension AgentLibraryServiceTests {
         XCTAssertEqual(plan["affected_feeds"]?.arrayValue?.first?["id"], .string(fixture.feed.id.uuidString))
     }
 }
+
+extension AgentLibraryServiceTests {
+    func testRefreshDelegatesLocalScopesAndRejectsServerFeedScopeBeforeStarting() async throws {
+        let fixture = try Fixture(); defer { try? fixture.remove() }
+        let recorder = RefreshRecorder()
+        let service = AgentLibraryService(database: fixture.database,
+            policy: AgentAccessPolicy(enabled: true, accountIDs: ["local-default"], allowStateChanges: true),
+            refreshStarter: { request in
+                await recorder.record(request)
+                return .object(AgentRefreshSnapshot(operationID: "refresh-test", state: "running", scope: request.scope,
+                    accountID: request.accountID, feedCount: request.feedCount, joined: false).fields())
+            })
+        let before = try fixture.state("a")
+        let accountRefresh = try await service.call(tool: "paperrss_refresh_feeds", arguments: ["account_id": account, "scope": .string("account")])
+        XCTAssertEqual(accountRefresh["state"], .string("running"))
+        XCTAssertEqual(accountRefresh["operation_id"], .string("refresh-test"))
+        let feedRefresh = try await service.call(tool: "paperrss_refresh_feeds", arguments: [
+            "account_id": account, "scope": .string("feeds"), "feed_ids": .array([.string(fixture.feed.id.uuidString)])])
+        XCTAssertEqual(feedRefresh["feed_count"], .number(1))
+        let all = try await service.call(tool: "paperrss_refresh_feeds", arguments: ["scope": .string("all")])
+        XCTAssertNil(all["account_id"])
+        let requests = await recorder.requests
+        XCTAssertEqual(requests.map(\.scope), ["account", "feeds", "all"])
+        XCTAssertEqual(requests[1].feedIDs, [fixture.feed.id.uuidString])
+        XCTAssertEqual(try fixture.state("a"), before)
+        let status = try await service.call(tool: "paperrss_status", arguments: [:])
+        XCTAssertEqual(status["pending_approvals"], .number(0))
+        XCTAssertTrue(status["accounts"]?.arrayValue?.first?["capabilities"]?.arrayValue?.contains(.string("feeds.refresh")) == true)
+        let encoded = String(decoding: try JSONEncoder().encode(feedRefresh), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("BODY_ONLY_SENTINEL"))
+        XCTAssertFalse(encoded.contains("Fixture feed"))
+        await expectFailure("NOT_FOUND") {
+            _ = try await service.call(tool: "paperrss_refresh_feeds", arguments: [
+                "account_id": account, "scope": .string("feeds"), "feed_ids": .array([.string(UUID().uuidString)])])
+        }
+        let beforeReject = await recorder.requests
+        XCTAssertEqual(beforeReject.count, 3)
+
+        for type in [AccountType.freshRSS, .miniflux] {
+            try fixture.database.write { db in
+                try db.execute(sql: "UPDATE accounts SET type = ? WHERE id = 'local-default'", arguments: [type.rawValue])
+            }
+            await expectFailure("UNSUPPORTED") {
+                _ = try await service.call(tool: "paperrss_refresh_feeds", arguments: [
+                    "account_id": account, "scope": .string("feeds"), "feed_ids": .array([.string(fixture.feed.id.uuidString)])])
+            }
+        }
+        let afterReject = await recorder.requests
+        XCTAssertEqual(afterReject.count, 3)
+    }
+}
+
+private actor RefreshRecorder {
+    var requests: [AgentRefreshRequest] = []
+    func record(_ request: AgentRefreshRequest) { requests.append(request) }
+}

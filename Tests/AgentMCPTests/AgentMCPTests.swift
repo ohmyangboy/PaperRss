@@ -192,7 +192,7 @@ final class AgentMCPTests: XCTestCase {
         let tools = try XCTUnwrap(reply?["result"]?["tools"]?.arrayValue)
         XCTAssertEqual(Set(tools.compactMap { $0["name"]?.stringValue }), Set([
             "paperrss_plan_manage_feeds", "paperrss_status", "paperrss_open", "paperrss_list_feeds", "paperrss_list_articles", "paperrss_get_article",
-            "paperrss_get_content", "paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_apply_plan", "paperrss_apply_state_change",
+            "paperrss_get_content", "paperrss_refresh_feeds", "paperrss_plan_state_change", "paperrss_plan_mark_read", "paperrss_apply_plan", "paperrss_apply_state_change",
             "paperrss_add_feed", "paperrss_rename_feed", "paperrss_remove_feed",
             "paperrss_plan_add_feed", "paperrss_plan_rename_feed", "paperrss_plan_remove_feed"
         ]))
@@ -207,6 +207,11 @@ final class AgentMCPTests: XCTestCase {
         let apply = try XCTUnwrap(tools.first { $0["name"]?.stringValue == "paperrss_apply_state_change" })
         XCTAssertEqual(apply["annotations"]?["destructiveHint"], .bool(true))
         XCTAssertEqual(apply["annotations"]?["idempotentHint"], .bool(true))
+        let refresh = try XCTUnwrap(tools.first { $0["name"]?.stringValue == "paperrss_refresh_feeds" })
+        XCTAssertEqual(refresh["annotations"]?["readOnlyHint"], .bool(false))
+        XCTAssertEqual(refresh["annotations"]?["destructiveHint"], .bool(false))
+        XCTAssertEqual(refresh["annotations"]?["openWorldHint"], .bool(true))
+        XCTAssertEqual(refresh["annotations"]?["idempotentHint"], .bool(false))
     }
 
     func testBatchFeedSchemaValidatesEachOperationAndBounds() throws {
@@ -257,6 +262,57 @@ final class AgentMCPTests: XCTestCase {
             XCTAssertNoThrow(try AgentMCPTools.validate(name: name, arguments: apply))
         }
         XCTAssertThrowsError(try AgentMCPTools.validate(name: "paperrss_approve", arguments: apply))
+    }
+
+    func testRefreshSchemaRejectsMismatchedScopesAndExtraFields() throws {
+        let definition = try XCTUnwrap(AgentMCPTools.definitions.first { $0["name"] == .string("paperrss_refresh_feeds") })
+        XCTAssertEqual(definition["annotations"]?["readOnlyHint"], .bool(false))
+        XCTAssertEqual(definition["annotations"]?["destructiveHint"], .bool(false))
+        XCTAssertEqual(definition["annotations"]?["openWorldHint"], .bool(true))
+        XCTAssertTrue(definition["description"]?.stringValue?.contains("operation_id") == true)
+        XCTAssertNoThrow(try AgentMCPTools.validate(name: "paperrss_refresh_feeds", arguments: ["scope": .string("all")]))
+        XCTAssertNoThrow(try AgentMCPTools.validate(name: "paperrss_refresh_feeds", arguments: [
+            "scope": .string("account"), "account_id": .string("local-default")]))
+        XCTAssertNoThrow(try AgentMCPTools.validate(name: "paperrss_refresh_feeds", arguments: [
+            "scope": .string("feeds"), "account_id": .string("local-default"),
+            "feed_ids": .array([.string("feed-1")])]))
+        let tooMany = (0..<51).map { AgentJSON.string("feed-\($0)") }
+        for arguments: [String: AgentJSON] in [
+            [:],
+            ["scope": .string("all"), "account_id": .string("local-default")],
+            ["scope": .string("all"), "feed_ids": .array([.string("feed-1")])],
+            ["scope": .string("account")],
+            ["scope": .string("account"), "account_id": .string("local-default"), "feed_ids": .array([.string("feed-1")])],
+            ["scope": .string("feeds"), "account_id": .string("local-default")],
+            ["scope": .string("feeds"), "account_id": .string("local-default"), "feed_ids": .array(tooMany)],
+            ["scope": .string("feeds"), "account_id": .string("local-default"), "feed_ids": .array([.string("feed-1"), .string("feed-1")])],
+            ["scope": .string("all"), "url": .string("https://example.org/feed.xml")]
+        ] {
+            XCTAssertThrowsError(try AgentMCPTools.validate(name: "paperrss_refresh_feeds", arguments: arguments))
+        }
+    }
+
+    func testFixtureRefreshCompletesWithoutArticleText() async throws {
+        let bridge = AgentFixtureBridge(enabled: true)
+        let result = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: ["scope": .string("all")])
+        XCTAssertEqual(result["state"], .string("completed"))
+        XCTAssertEqual(result["new_unread_count"], .number(0))
+        XCTAssertEqual(result["subscriptions_synced"], .bool(false))
+        let encoded = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("title"))
+        XCTAssertFalse(encoded.contains("http"))
+        await expectFixtureFailure(bridge, "NOT_FOUND", ["scope": .string("feeds"), "account_id": .string("fixture-local"), "feed_ids": .array([.string("missing")])])
+    }
+
+    private func expectFixtureFailure(_ bridge: AgentFixtureBridge, _ code: String, _ arguments: [String: AgentJSON]) async {
+        do {
+            _ = try await bridge.call(tool: "paperrss_refresh_feeds", arguments: arguments)
+            XCTFail("Expected \(code)")
+        } catch let error as AgentFailure {
+            XCTAssertEqual(error.code, code)
+        } catch {
+            XCTFail("Unexpected \(error)")
+        }
     }
 
     func testOpenHasReadOnlyAnnotationsAndExactlyOneTarget() async throws {

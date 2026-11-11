@@ -38,6 +38,8 @@ final class AgentBridgeController: AgentBridge {
     private var clientLabels: [String: String] = [:]
     private var writeAction: (@MainActor @Sendable (String, [String], AgentStateField, Bool, Date) throws -> AgentWriteResult)?
     private var feedWriteAction: (@MainActor @Sendable (AgentFeedMutation, Date) async throws -> AgentFeedWriteResult)?
+    private var refreshBoard = AgentRefreshBoard()
+    private var refreshWork: (@MainActor (AgentRefreshRequest) async -> AgentRefreshDetail)?
     private var sessions: [String: AgentLibraryService] = [:]
     private var generation = UUID()
     private var qaArticleIDs: [String] = []
@@ -83,6 +85,12 @@ final class AgentBridgeController: AgentBridge {
         feedWriteAction = { [weak store] mutation, expiresAt in
             guard let store else { throw AgentFailure("APP_NOT_RUNNING", "PaperRss is not ready.") }
             return try await store.applyAgentFeedMutation(mutation, expiresAt: expiresAt)
+        }
+        refreshWork = { [weak store] request in
+            guard let store else {
+                return AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(code: "app_not_running")]).resolved()
+            }
+            return await store.performAgentRefresh(request)
         }
         Task { [weak self, store] in
             do { try await self?.attach(database: store.libraryDatabase, accountID: store.localProvider.accountID,
@@ -140,6 +148,10 @@ final class AgentBridgeController: AgentBridge {
     }
 
     #if DEBUG
+    func setRefreshWorkForTesting(_ work: @escaping @MainActor (AgentRefreshRequest) async -> AgentRefreshDetail) {
+        refreshWork = work
+    }
+
     /// Isolated fixtures only; never reached by IPC or launch arguments.
     func attachForTesting(database: LibraryDatabase,
                           feedExecutor: (@MainActor @Sendable (AgentFeedMutation, Date) async throws -> AgentFeedWriteResult)? = nil) {
@@ -191,6 +203,10 @@ final class AgentBridgeController: AgentBridge {
                 }
                 return try await action(mutation, expiresAt)
             }) },
+            refreshStarter: { [weak self] request in
+                guard let self else { throw AgentFailure("APP_NOT_RUNNING", "PaperRss is not ready.") }
+                return try await self.startRefresh(request)
+            },
             opener: { [weak self] request in
                 guard let self, self.generation == sessionGeneration, self.sessions[id] != nil,
                       self.defaults.bool(forKey: Self.enableKey), let opener = self.opener else {
@@ -220,6 +236,20 @@ final class AgentBridgeController: AgentBridge {
     }
 
     func call(sessionID: String, tool: String, arguments: [String: AgentJSON]) async throws -> AgentJSON {
+        if tool == "paperrss_status", let operationID = arguments["operation_id"]?.stringValue, operationID.hasPrefix("refresh-") {
+            _ = try await readySession(id: sessionID)
+            guard defaults.bool(forKey: Self.enableKey) else {
+                throw AgentFailure("NOT_ENABLED", "Local agent access was revoked.")
+            }
+            guard let snapshot = refreshBoard.snapshot(operationID: operationID, now: Date()) else {
+                throw AgentFailure("NOT_FOUND", "Refresh operation not found.")
+            }
+            var fields = snapshot.fields()
+            if snapshot.state == "running", let progress = refreshProgressJSON() {
+                fields["progress"] = progress
+            }
+            return .object(fields)
+        }
         let requestGeneration = generation
         let service = try await readySession(id: sessionID)
         var response = try await service.call(tool: tool, arguments: arguments)
@@ -251,10 +281,11 @@ final class AgentBridgeController: AgentBridge {
                 var capabilities = fields["capabilities"]?.arrayValue ?? []
                 capabilities.append(.string(mode.stateCapability))
                 if feedWriteAction != nil { capabilities.append(.string(mode.feedCapability)) }
+                if refreshWork != nil { capabilities.append(.string("feeds.refresh")) }
                 fields["capabilities"] = .array(capabilities)
                 return .object(fields)
             })
-            status["capabilities"] = .array((Self.capabilities(canOpen: opener != nil, mode: mode) + (feedWriteAction != nil ? [mode.feedCapability] : [])).map(AgentJSON.string))
+            status["capabilities"] = .array((Self.capabilities(canOpen: opener != nil, mode: mode, canRefresh: refreshWork != nil) + (feedWriteAction != nil ? [mode.feedCapability] : [])).map(AgentJSON.string))
             status["tools"] = .array(AgentToolCatalog.names.map(AgentJSON.string))
             status["transport"] = .string(sessionID == "app" ? "in_process" : "unix_socket")
             status["paired"] = .bool(sessionID != "app")
@@ -275,8 +306,44 @@ final class AgentBridgeController: AgentBridge {
                         "debug": .bool(debug)])
     }
 
-    private static func capabilities(canOpen: Bool, mode: AgentMCPApprovalMode) -> [String] {
-        ["metadata.read", "content.read.selection", mode.stateCapability] + (canOpen ? ["ui.open"] : [])
+    private static func capabilities(canOpen: Bool, mode: AgentMCPApprovalMode, canRefresh: Bool) -> [String] {
+        ["metadata.read", "content.read.selection", mode.stateCapability] + (canOpen ? ["ui.open"] : []) + (canRefresh ? ["feeds.refresh"] : [])
+    }
+
+    private func startRefresh(_ request: AgentRefreshRequest) async throws -> AgentJSON {
+        guard refreshWork != nil else {
+            throw AgentFailure("UNSUPPORTED", "Refresh requires the running PaperRss App.")
+        }
+        if approvalCenter.store?.isRefreshing == true, !refreshBoard.isRunning {
+            throw AgentFailure("REFRESH_IN_PROGRESS", "PaperRss is already refreshing.")
+        }
+        switch refreshBoard.admit(request: request, now: Date()) {
+        case .start(let snapshot):
+            let work = refreshWork
+            Task { @MainActor [weak self] in
+                let detail = await work?(request) ?? AgentRefreshDetail(failedFeedCount: 1, failures: [AgentRefreshFailure(code: "app_not_running")]).resolved()
+                self?.refreshBoard.finish(operationID: snapshot.operationID, detail: detail, now: Date())
+            }
+            return .object(snapshot.fields())
+        case .joined(let snapshot), .replay(let snapshot):
+            return .object(snapshot.fields())
+        case .busy(let snapshot):
+            throw AgentFailure("REFRESH_IN_PROGRESS", "Refresh \(snapshot.operationID) is already running. Poll paperrss_status with this operation_id.")
+        case .conflict:
+            throw AgentFailure("CONFLICT", "Idempotency key is bound to a different refresh.")
+        }
+    }
+
+    private func refreshProgressJSON() -> AgentJSON? {
+        let values = approvalCenter.store?.accountRefreshProgress.values
+        guard let values, !values.isEmpty else { return nil }
+        let completed = values.reduce(0) { $0 + $1.completed }
+        var object: [String: AgentJSON] = ["completed": .number(Double(completed))]
+        let totals = values.compactMap(\.total)
+        if totals.count == values.count {
+            object["total"] = .number(Double(totals.reduce(0, +)))
+        }
+        return .object(object)
     }
 
     static func accountSnapshots(database: LibraryDatabase, accounts: [AccountRecord]? = nil,
