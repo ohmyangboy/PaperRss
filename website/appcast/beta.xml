@@ -5,26 +5,22 @@
     <link>https://github.com/ohmyangboy/PaperRss/releases</link>
     <description>PaperRss beta updates</description>
     <item>
-      <title>PaperRss 1.5.3-beta.1</title>
-      <description><![CDATA[## v1.5.3-beta.1 · Build 48 · 2026-11-07
+      <title>PaperRss 1.5.3-beta.2</title>
+      <description><![CDATA[## v1.5.3-beta.2 · Build 49 · 2026-11-11
 
-本次 Beta 增加与 iPhone 上 Papery 的配对导入，并更新 MCP 和订阅管理；欢迎 Beta 通道用户测试，稳定版仍为 v1.5.2。
+本次 Beta 优化 MCP 工具：外部助手可以拉取已有订阅的最新文章，无需再次批准。欢迎 Beta 通道用户测试，稳定版仍为 v1.5.2。
 
-- **iPhone 兼容**：在同一局域网通过二维码配对，将所选账号的订阅或 AI 配置导入 Papery；iOS 版仍在开发中。
-- **MCP 批量订阅管理**：外部助手可为指定账号规划批量添加、重命名和删除订阅，按设置的审批模式执行。
-- **订阅管理**：导入 OPML 时可选择目标账号，也可将订阅拖到其他账号复制；导入结果显示成功、已存在和失败数量。
+- **MCP 刷新订阅**：可刷新全部订阅、单个账号，或本地与 iCloud 的指定订阅。调用立即返回进度编号，完成前不标记已读，也不返回正文。FreshRSS 与 Miniflux 按账号同步。
 
 ---
 
-This Beta adds pairing with Papery on iPhone and updates MCP and subscription management. Beta channel users are invited to test it; the stable release remains v1.5.2.
+This Beta improves the MCP tools: an external assistant can refresh subscribed feeds without another approval. Beta channel users are invited to test it; the stable release remains v1.5.2.
 
-- **iPhone compatibility**: Pair over the same local network with a QR code to import subscriptions from a selected account or AI configuration into Papery. The iOS app is still in development.
-- **MCP batch feed management**: External assistants can plan additions, renames and removals for a selected account, with execution governed by the configured approval mode.
-- **Subscription management**: Choose a destination account when importing OPML or drag feeds to another account to copy them. Import results show added, existing and failed counts.]]></description>
-      <sparkle:version>48</sparkle:version>
-      <sparkle:shortVersionString>1.5.3-beta.1</sparkle:shortVersionString>
+- **MCP feed refresh**: Refresh every feed, one account, or selected local and iCloud feeds. The call returns a progress id immediately. Articles stay unread, and article text is not returned. FreshRSS and Miniflux sync by account.]]></description>
+      <sparkle:version>49</sparkle:version>
+      <sparkle:shortVersionString>1.5.3-beta.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.5.3-beta.1/PaperRss-v1.5.3-beta.1.zip" length="17967315" type="application/octet-stream" sparkle:edSignature="9cuQmw4n90fVUCL6BNu8MIHPNUHDHmdKGjmls60Je5ImGKREVQe8FKIELuE+Z2Rjxlf9H2OaH3KpYoeZ2kvoDw==" paperrss:sha256="c479288b37171a7347c518a83a1dc987989219fc453f0cb6d826d13943c8689d" sparkle:minimumSystemVersion="14.0" />
+      <enclosure url="https://github.com/ohmyangboy/PaperRss/releases/download/v1.5.3-beta.2/PaperRss-v1.5.3-beta.2.zip" length="18115164" type="application/octet-stream" sparkle:edSignature="7Ha93rLERpGUOEVcJXywiA/tuWNGlx39wuIwLz1vR7ELL4nCqRDIKa6ouTo88rC2VRsv6aiFCgsZwTt1CiLbBQ==" paperrss:sha256="4934f4ff8c0aa13c64ca7c9c0ef6cdcf6cd18b91bd2b37d0887d2d40de13e802" sparkle:minimumSystemVersion="14.0" />
     </item>
   </channel>
 </rss>
