@@ -84,7 +84,7 @@ On first launch after upgrading, the former single AI configuration is bound to 
 
 **Stable v1.5.2 (Build 47)** is recommended for all users. It improves article loading, feed switching and keyboard reading, and fixes image previews and local assistant connections. See the [changelog](CHANGELOG.md).
 
-**[Beta v1.5.3-beta.1 (Build 48)](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.5.3-beta.1)** adds pairing with Papery on iPhone, MCP batch feed management, and cross-account subscription management.
+**[Beta v1.5.3-beta.2 (Build 49)](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.5.3-beta.2)** improves the MCP tools so an assistant can refresh subscribed feeds.
 
 Download the latest `.dmg` installer from [Releases](https://github.com/ohmyangboy/PaperRss/releases), open it, and drag PaperRss into your Applications folder. That's it.
 

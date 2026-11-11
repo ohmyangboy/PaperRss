@@ -1,5 +1,17 @@
 # 更新记录 / Changelog
 
+## v1.5.3-beta.2 · Build 49 · 2026-11-11
+
+本次 Beta 优化 MCP 工具：外部助手可以拉取已有订阅的最新文章，无需再次批准。欢迎 Beta 通道用户测试，稳定版仍为 v1.5.2。
+
+- **MCP 刷新订阅**：可刷新全部订阅、单个账号，或本地与 iCloud 的指定订阅。调用立即返回进度编号，完成前不标记已读，也不返回正文。FreshRSS 与 Miniflux 按账号同步。
+
+---
+
+This Beta improves the MCP tools: an external assistant can refresh subscribed feeds without another approval. Beta channel users are invited to test it; the stable release remains v1.5.2.
+
+- **MCP feed refresh**: Refresh every feed, one account, or selected local and iCloud feeds. The call returns a progress id immediately. Articles stay unread, and article text is not returned. FreshRSS and Miniflux sync by account.
+
 ## v1.5.3-beta.1 · Build 48 · 2026-11-07
 
 本次 Beta 增加与 iPhone 上 Papery 的配对导入，并更新 MCP 和订阅管理；欢迎 Beta 通道用户测试，稳定版仍为 v1.5.2。

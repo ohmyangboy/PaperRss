@@ -86,7 +86,7 @@ _本项目灵感启发自另一款优秀的开源RSS预读器 [NetNewsWire](http
 
 **稳定版 v1.5.2（Build 47）** 推荐所有用户升级：优化长文加载、订阅切换与键盘阅读，并修复图片预览和本地助手连接问题。详情见 [更新记录](CHANGELOG.md)。
 
-**[Beta v1.5.3-beta.1（Build 48）](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.5.3-beta.1)** 更新 iPhone 上 Papery 的配对导入、MCP 批量订阅管理与跨账号订阅管理。
+**[Beta v1.5.3-beta.2（Build 49）](https://github.com/ohmyangboy/PaperRss/releases/tag/v1.5.3-beta.2)** 优化 MCP 工具，助手可拉取已有订阅的最新文章。
 
 从 [Releases](https://github.com/ohmyangboy/PaperRss/releases) 下载最新的 `.dmg` 安装包，打开后将 PaperRss 拖入 Applications 文件夹即可使用。
 
