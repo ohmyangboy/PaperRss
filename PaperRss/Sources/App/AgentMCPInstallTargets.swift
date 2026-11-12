@@ -2,7 +2,7 @@
 import Foundation
 
 enum AgentMCPInstallTarget: String, CaseIterable, Identifiable {
-    case codex, claudeCode, dsh, cursor, vscode, vscodeInsiders
+    case codex, claudeCode, dsh, pi, cursor, vscode, vscodeInsiders
     enum Kind { case deeplink, command }
     var id: String { rawValue }
     var label: String {
@@ -20,12 +20,13 @@ enum AgentMCPInstallTarget: String, CaseIterable, Identifiable {
         case .claudeCode: return "Claude Code"
         case .codex: return "Codex CLI"
         case .dsh: return "DeepSeek dsh"
+        case .pi: return "Pi"
         }
     }
     var kind: Kind {
         switch self {
         case .cursor, .vscode, .vscodeInsiders: return .deeplink
-        case .claudeCode, .codex, .dsh: return .command
+        case .claudeCode, .codex, .dsh, .pi: return .command
         }
     }
     var bundleIdentifier: String? {
@@ -33,7 +34,7 @@ enum AgentMCPInstallTarget: String, CaseIterable, Identifiable {
         case .cursor: return "com.todesktop.230313mzl4w4u92"
         case .vscode: return "com.microsoft.VSCode"
         case .vscodeInsiders: return "com.microsoft.VSCodeInsiders"
-        case .claudeCode, .codex, .dsh: return nil
+        case .claudeCode, .codex, .dsh, .pi: return nil
         }
     }
     var iconAssetName: String {
@@ -43,6 +44,7 @@ enum AgentMCPInstallTarget: String, CaseIterable, Identifiable {
         case .claudeCode: return "AgentMCPClaude"
         case .codex: return "AgentMCPCodex"
         case .dsh: return "AgentMCPDeepSeek"
+        case .pi: return "AgentMCPPi"
         }
     }
     private func server(path: String) -> [String: Any] {
@@ -78,6 +80,7 @@ enum AgentMCPInstallTarget: String, CaseIterable, Identifiable {
         switch self {
         case .claudeCode: return "claude mcp add --scope user --env PAPERRSS_AGENT_ENABLED=1 --transport stdio paperrss -- \(quoted) serve --stdio --client \(label)"
         case .codex: return "codex mcp add paperrss --env PAPERRSS_AGENT_ENABLED=1 -- \(quoted) serve --stdio --client \(label)"
+        case .pi: return "pi mcp add paperrss --env PAPERRSS_AGENT_ENABLED=1 -- \(quoted) serve --stdio --client \(label)"
         case .dsh:
             // YAML and POSIX shell quoting are separate layers; never interpolate the path as shell code.
             let yamlPath = "'" + path.replacingOccurrences(of: "'", with: "''") + "'"
