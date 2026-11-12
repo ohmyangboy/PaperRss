@@ -22,6 +22,7 @@ actor ICloudSyncEngineDriver: CKSyncEngineDelegate, ICloudAccountSyncing {
     private var engineIsAutomatic = false
     private var lifecycleGeneration = 0
     private var needsInitialFetch = true
+    private var checkedArticleMetadata: Set<String> = []
     private var cloudGeneration: String?
     private var systemFingerprint: String?
     private var rootVerification: (id: UUID, lifecycle: Int, fingerprint: String, task: Task<String, any Error>)?
@@ -297,10 +298,35 @@ actor ICloudSyncEngineDriver: CKSyncEngineDelegate, ICloudAccountSyncing {
         // A serialization may be emitted before zones exist. Track zone
         // creation separately, including crashes between the two zone saves.
         guard try boundGeneration(on: engine) == epoch else { throw CancellationError() }
+        try await refreshUnresolvedArticleMetadata(on: engine, generation: epoch)
         engine.state.add(pendingDatabaseChanges: try repository.missingZones().map {
             .saveZone(CKRecordZone(zoneID: try ICloudGenerationZone.id($0, generation: epoch)))
         })
         needsInitialFetch = false
+    }
+
+    private func refreshUnresolvedArticleMetadata(on engine: CKSyncEngine, generation: String) async throws {
+        while true {
+            let pending = try repository.unresolvedArticleMetadata(excluding: checkedArticleMetadata)
+            guard !pending.isEmpty else { return }
+            let ids = try pending.map { try ICloudRecordCodec.recordID($0, generation: generation) }
+            let results = try await engine.database.records(for: ids, desiredKeys: ["envelope"])
+            guard self.engine === engine, try await verifyRoot(on: engine) == generation else { throw CancellationError() }
+            var received: [ICloudReceivedRecord] = []
+            for id in ids {
+                guard let result = results[id] else { throw ICloudRecordError.persistenceFailed }
+                switch result {
+                case .success(let record): received.append(try ICloudRecordCodec.received(record, generation: generation))
+                case .failure(let error):
+                    // An expired state can remain in an old local inbox. Its
+                    // absence must not create an article or reset a checkpoint.
+                    if (error as? CKError)?.code != .unknownItem { throw error }
+                }
+            }
+            try repository.receive(received)
+            checkedArticleMetadata.formUnion(pending.map(\.recordName))
+            if !received.isEmpty { await automaticCallback?(.changed) }
+        }
     }
 
     func stop() async {
@@ -314,6 +340,7 @@ actor ICloudSyncEngineDriver: CKSyncEngineDelegate, ICloudAccountSyncing {
         let previous = engine
         let assets = inFlightAssets
         engine = nil
+        checkedArticleMetadata = []
         lifecycleGeneration &+= 1
         engineIsAutomatic = false
         needsInitialFetch = true

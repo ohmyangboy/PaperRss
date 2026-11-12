@@ -44,6 +44,7 @@ final class ICloudRecordRepository: Sendable {
             try ICloudRecordSchema.ensureDeviceIdentity(accountID: accountID, in: db)
             try ICloudSyncSchema.captureBaseline(accountID: accountID, in: db)
             try ICloudContentSchema.captureEligible(accountID: accountID, in: db)
+            try prepareArticleMetadata(limit: 150, in: db)
         }
     }
 
@@ -118,6 +119,7 @@ final class ICloudRecordRepository: Sendable {
                 ORDER BY changed_at, kind, entity_id LIMIT ?;
                 """, arguments: [accountID, limit])
             for change in changes { try prepare(change, in: db) }
+            try prepareArticleMetadata(limit: limit, in: db)
             try prepareSettings(in: db)
             try prepareRetentionUnreadPolicy(in: db)
             let scope: String
@@ -265,6 +267,25 @@ final class ICloudRecordRepository: Sendable {
         try remoteTransaction { db in
             try reconcileCachedRecords(in: db)
             try ICloudContentSchema.captureEligible(accountID: accountID, in: db)
+        }
+    }
+
+    /// An older client may have consumed a CloudKit change token while
+    /// ignoring the optional metadata. Re-read only its unresolved unread
+    /// records on upgrade, without resetting tokens or scanning the library.
+    func unresolvedArticleMetadata(excluding checked: Set<String>, limit: Int = 100) throws -> [ICloudRecordEnvelope] {
+        let excluded = String(decoding: try JSONEncoder().encode(checked.sorted()), as: UTF8.self)
+        return try database.read { db in
+            try requireScope(in: db)
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM icloud_records WHERE account_id = ? AND needs_apply = 1
+                  AND json_extract(envelope_json, '$.kind') = 'read'
+                  AND json_extract(envelope_json, '$.fields.value.value.flag._0') = 0
+                  AND json_extract(envelope_json, '$.articleMetadata') IS NULL
+                  AND record_name NOT IN (SELECT value FROM json_each(?))
+                ORDER BY record_name LIMIT ?;
+                """, arguments: [accountID, excluded, limit])
+            return try rows.map { try prepared($0).envelope }
         }
     }
 
@@ -418,14 +439,23 @@ final class ICloudRecordRepository: Sendable {
         }
         var local = try ICloudRecordEnvelope(kind: kind, recordName: name, feedURL: feedURL, sourceItemID: source,
                                              feedRecordName: feedName, folderRecordName: folderName, fields: stamped)
+        if kind == .read {
+            if let metadata = existing?.envelope.articleMetadata { local.articleMetadata = metadata }
+            else if let article = try ArticleRecord.fetchOne(db, key: entity) {
+                local.articleMetadata = ICloudArticleMetadata(article)
+            }
+        }
         if kind == .read || kind == .starred {
+            // Adding a metadata snapshot is not a new reader intent. In
+            // particular it must not rebase an already retired state.
+            if !(row["is_pending"] as Bool), try retentionSuppresses(local, in: db) { return }
             guard let version = try retentionStateVersion(local, origin: origin, isUserIntent: row["is_user_intent"], in: db) else {
                 try acknowledge([origin], in: db)
                 return
             }
             local.fields["value"] = .init(value: values["value"]!, version: version)
         }
-        if existing?.origins.contains(origin) == true, existing?.envelope.fields == local.fields { return }
+        if existing?.origins.contains(origin) == true, existing?.envelope == local { return }
         let merged = try existing?.envelope.merged(with: local) ?? local
         if let existing, merged == existing.envelope {
             // In particular, a just-materialized false/false bootstrap is
@@ -437,6 +467,40 @@ final class ICloudRecordRepository: Sendable {
         var origins = existing?.origins.filter { !($0.kind == kind && $0.entityID == entity) } ?? []
         origins.append(origin)
         try save(merged, systemFields: existing?.systemFields, origins: origins, pending: true, in: db)
+    }
+
+    /// Upgrade old state-only records in bounded batches without changing
+    /// their read/starred values, logical versions, or journal revisions.
+    private func prepareArticleMetadata(limit: Int, in db: Database) throws {
+        var after = "", remaining = limit
+        while remaining > 0 {
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT c.* FROM icloud_sync_changes c
+                JOIN items i ON i.id = c.entity_id AND i.account_id = c.account_id
+                JOIN articles a ON a.item_id = i.id JOIN article_states s ON s.item_id = i.id
+                JOIN feeds f ON f.id = i.feed_id
+                LEFT JOIN icloud_record_mappings m ON m.account_id = c.account_id AND m.kind = 'read' AND m.entity_id = i.id
+                LEFT JOIN icloud_records r ON r.account_id = c.account_id AND r.zone = 'PaperRssArticles-v1' AND r.record_name = m.record_name
+                WHERE c.account_id = ? AND c.kind = 'read' AND c.is_pending = 0
+                  AND f.is_deleted = 0 AND (s.is_read = 0 OR s.is_starred = 1)
+                  AND length(trim(i.source_item_id)) > 0
+                  AND json_extract(r.envelope_json, '$.articleMetadata') IS NULL
+                  AND c.entity_id > ?
+                ORDER BY c.entity_id LIMIT ?;
+                """, arguments: [accountID, after, remaining])
+            guard !rows.isEmpty else { break }
+            for row in rows {
+                let entity: String = row["entity_id"]
+                after = entity
+                let payload = try decode([String: JSONValue].self, json: row["payload_json"])
+                guard let url = payload["feed_url"]?.string.flatMap(URL.init(string:)),
+                      let identity = try ICloudSyncIdentity.articleRecordName(feedURL: url, sourceItemID: payload["source_item_id"]?.string) else { continue }
+                let name = "read-v1:" + identity.dropFirst("article-v1:".count)
+                if let stored = try cached(name, zone: .articles, in: db), try retentionSuppresses(stored.envelope, in: db) { continue }
+                try prepare(row, in: db)
+                if try cached(name, zone: .articles, in: db)?.envelope.articleMetadata != nil { remaining -= 1 }
+            }
+        }
     }
 
     private func structuralMapping(kind: ICloudRecordKind, entity: String, in db: Database) throws -> String {
@@ -505,7 +569,7 @@ final class ICloudRecordRepository: Sendable {
             let names = recordNames.sorted()
             scope = """
                 AND (record_name IN (\(Array(repeating: "?", count: names.count).joined(separator: ", ")))
-                     \(includesRelationships ? "OR json_extract(envelope_json, '$.kind') IN ('membership', 'content')" : ""))
+                     \(includesRelationships ? "OR json_extract(envelope_json, '$.kind') IN ('membership', 'content', 'read', 'starred')" : ""))
                 """
             arguments += StatementArguments(names)
             let sources = try String.fetchAll(db, sql: """
@@ -517,7 +581,7 @@ final class ICloudRecordRepository: Sendable {
                 // An earlier body may have been waiting for this state page.
                 let pendingBodies = try Row.fetchAll(db, sql: """
                     SELECT * FROM icloud_records WHERE account_id = ? AND needs_apply = 1
-                      AND json_extract(envelope_json, '$.kind') = 'content'
+                      AND json_extract(envelope_json, '$.kind') IN ('content', 'read', 'starred')
                       AND json_extract(envelope_json, '$.sourceItemID') IN (\(Array(repeating: "?", count: sources.count).joined(separator: ",")));
                     """, arguments: StatementArguments([accountID] + sources))
                 additionalRecords = try pendingBodies.map { try prepared($0).envelope }
@@ -526,7 +590,8 @@ final class ICloudRecordRepository: Sendable {
             // Unmatched state can remain in the inbox for a long time. Decode
             // only identities currently materialized by RSS, using an index.
             scope = """
-                AND (zone = 'PaperRssLibrary-v1' OR json_extract(envelope_json, '$.kind') = 'content' OR EXISTS (
+                AND (zone = 'PaperRssLibrary-v1' OR json_extract(envelope_json, '$.kind') = 'content'
+                    OR json_extract(envelope_json, '$.articleMetadata') IS NOT NULL OR EXISTS (
                     SELECT 1 FROM items i WHERE i.account_id = icloud_records.account_id
                     AND i.source_item_id IS NOT NULL
                     AND i.source_item_id = json_extract(icloud_records.envelope_json, '$.sourceItemID')
@@ -556,6 +621,7 @@ final class ICloudRecordRepository: Sendable {
                   try liveEntity(kind: .feed, name: feed, in: db) != nil,
                   try liveEntity(kind: .folder, name: folder, in: db) != nil else { return }
         } else if [.read, .starred].contains(envelope.kind) {
+            try restoreArticleMetadata(for: envelope, in: db)
             guard try !localEntities(for: envelope, in: db).isEmpty else { return }
         }
         try apply(envelope, in: db)
@@ -563,6 +629,36 @@ final class ICloudRecordRepository: Sendable {
             UPDATE icloud_records SET needs_apply = 0
             WHERE account_id = ? AND zone = ? AND record_name = ?;
             """, arguments: [accountID, envelope.zone.rawValue, envelope.recordName])
+    }
+
+    private func restoreArticleMetadata(for envelope: ICloudRecordEnvelope, in db: Database) throws {
+        let prefix = "\(envelope.kind.rawValue)-v1:"
+        let suffix = envelope.recordName.dropFirst(prefix.count)
+        guard let read = try cached("read-v1:" + suffix, zone: .articles, in: db)?.envelope,
+              try retentionCanApply(read, in: db), let metadata = read.articleMetadata,
+              let feedURL = read.feedURL, let parsed = URL(string: feedURL), let source = read.sourceItemID else { return }
+        let readFlag = try liveCloudFlag(kind: .read, suffix: suffix, in: db)
+        let starFlag = try liveCloudFlag(kind: .starred, suffix: suffix, in: db)
+        guard readFlag == .flag(false) || starFlag == .flag(true) else { return }
+        let feedName = try ICloudSyncIdentity.feedRecordName(feedURL: parsed)
+        guard try cached(feedName, zone: .library, in: db)?.envelope.fields["deleted"]?.value != .flag(true),
+              let feedID = try liveEntity(kind: .feed, name: feedName, in: db) else { return }
+        var entities = try localEntities(for: read, in: db)
+        let now = Date().timeIntervalSince1970
+        if entities.isEmpty {
+            let itemID = "\(feedID)|\(source)".stableDigest
+            if let existing = try ItemRecord.fetchOne(db, key: itemID),
+               existing.accountID != accountID || existing.feedID != feedID || existing.sourceItemID != source { return }
+            try ItemRecord(id: itemID, accountID: accountID, externalID: itemID, feedID: feedID,
+                createdAt: now, updatedAt: now, sourceItemID: source).save(db)
+            try ArticleStateRecord(itemID: itemID, isRead: readFlag != .flag(false), isStarred: starFlag == .flag(true),
+                dateArrived: now, updatedAt: now).save(db)
+            entities = [itemID]
+        }
+        for itemID in entities where try ArticleRecord.fetchOne(db, key: itemID) == nil {
+            try ArticleRecord(itemID: itemID, title: metadata.title, author: metadata.author, url: metadata.url,
+                publishedAt: metadata.publishedAt, summary: "", contentUpdatedAt: 0).save(db)
+        }
     }
 
     func replayStates(for envelope: ICloudRecordEnvelope, in db: Database) throws {

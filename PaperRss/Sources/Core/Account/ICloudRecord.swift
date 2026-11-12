@@ -49,6 +49,48 @@ public enum ICloudRecordError: Error, Equatable, Sendable {
     case unavailableScope, accountChanged, recoveryRequired, persistenceFailed
 }
 
+/// Enough original feed information to materialize a reader row without RSS
+/// still carrying the item. Summaries and HTML remain behind the body policy.
+public struct ICloudArticleMetadata: Codable, Sendable, Equatable {
+    public let title: String
+    public let author: String?
+    public let url: String?
+    public let publishedAt: Double?
+
+    init(_ article: ArticleRecord) {
+        title = Self.bounded(article.title, bytes: 8192)
+        author = article.author.map { Self.bounded($0, bytes: 2048) }
+        url = article.url.flatMap { $0.utf8.count <= 8192 ? $0 : nil }
+        publishedAt = article.publishedAt?.isFinite == true ? article.publishedAt : nil
+    }
+
+    private static func bounded(_ value: String, bytes: Int) -> String {
+        var result = "", count = 0
+        for scalar in value.unicodeScalars {
+            let size = scalar.utf8.count
+            guard count + size <= bytes else { break }
+            result.unicodeScalars.append(scalar)
+            count += size
+        }
+        return result
+    }
+
+    func validate() throws {
+        guard title.utf8.count <= 8192, (author?.utf8.count ?? 0) <= 2048,
+              (url?.utf8.count ?? 0) <= 8192, publishedAt?.isFinite != false else {
+            throw ICloudRecordError.malformedRecord
+        }
+    }
+
+    /// This is a gap-filling snapshot, independent of the user's state clock.
+    /// A deterministic tie-break makes differing RSS snapshots converge too.
+    func merged(with other: Self) throws -> Self {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self).lexicographicallyPrecedes(encoder.encode(other)) ? self : other
+    }
+}
+
 /// Strict portable wire contract. No local item IDs, AI artifacts or caches.
 /// read/starred use separate records so an independent change cannot overwrite
 /// the other field. Structure fields retain their own logical versions.
@@ -60,6 +102,7 @@ public struct ICloudRecordEnvelope: Codable, Sendable, Equatable {
     public let sourceItemID: String?
     public let feedRecordName: String?
     public let folderRecordName: String?
+    public var articleMetadata: ICloudArticleMetadata?
     public var fields: [String: ICloudVersionedField]
 
     public var zone: ICloudRecordZone { kind.zone }
@@ -67,17 +110,23 @@ public struct ICloudRecordEnvelope: Codable, Sendable, Equatable {
     public init(
         kind: ICloudRecordKind, recordName: String, feedURL: String? = nil,
         sourceItemID: String? = nil, feedRecordName: String? = nil,
-        folderRecordName: String? = nil, fields: [String: ICloudVersionedField]
+        folderRecordName: String? = nil, fields: [String: ICloudVersionedField],
+        articleMetadata: ICloudArticleMetadata? = nil
     ) throws {
         schemaVersion = 1
         self.kind = kind; self.recordName = recordName; self.feedURL = feedURL
         self.sourceItemID = sourceItemID; self.feedRecordName = feedRecordName
         self.folderRecordName = folderRecordName; self.fields = fields
+        self.articleMetadata = articleMetadata
         try validate()
     }
 
     public func validate() throws {
         guard schemaVersion == 1 else { throw ICloudRecordError.unsupportedVersion }
+        if let articleMetadata {
+            guard kind == .read else { throw ICloudRecordError.malformedRecord }
+            try articleMetadata.validate()
+        }
         let allowed: Set<String>
         switch kind {
         case .feed: allowed = ["feed_url", "title", "site_url", "sort_order", "deleted"]
@@ -166,6 +215,9 @@ public struct ICloudRecordEnvelope: Codable, Sendable, Equatable {
               sourceItemID == other.sourceItemID, feedRecordName == other.feedRecordName,
               folderRecordName == other.folderRecordName else { throw ICloudRecordError.incompatibleRecord }
         var result = self
+        if let incoming = other.articleMetadata {
+            result.articleMetadata = try articleMetadata?.merged(with: incoming) ?? incoming
+        }
         for (key, incoming) in other.fields {
             guard let local = fields[key] else { throw ICloudRecordError.malformedRecord }
             if (kind == .retention || kind == .retentionPolicy), key == "writer_nonce" {

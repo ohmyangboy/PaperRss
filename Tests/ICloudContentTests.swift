@@ -214,7 +214,7 @@ final class ICloudContentTests: XCTestCase {
         XCTAssertEqual(try b.database.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM feeds") }, 0)
     }
 
-    func testDeletedFeedAndRetainedIneligibleBodyCannotResurrectOldArticles() throws {
+    func testDeletedFeedAndRetainedIneligibleBodyCannotRestoreContentOrUnreadState() throws {
         let a = try peer(), b = try peer()
         let item = try article(a, read: true, star: true)
         let old = try a.repository.outgoingRecords()
@@ -225,7 +225,14 @@ final class ICloudContentTests: XCTestCase {
         try b.repository.receive(received(old.filter { $0.envelope.kind != .content }))
         try b.repository.receive(received(newer))
         try b.repository.receive(received([content]))
-        XCTAssertEqual(try b.database.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM items") }, 0)
+        // The state snapshot now carries the minimal article row. An old body
+        // still cannot restore content or turn a read, unstarred row unread.
+        let restored = try b.database.read { try XCTUnwrap(ArticleRecord.fetchOne($0)) }
+        XCTAssertNil(restored.contentHTML)
+        XCTAssertTrue(restored.summary.isEmpty)
+        let restoredState = try b.database.read { try XCTUnwrap(ArticleStateRecord.fetchOne($0, key: restored.itemID)) }
+        XCTAssertTrue(restoredState.isRead)
+        XCTAssertFalse(restoredState.isStarred)
         try a.database.write { _ = try FeedRecord.filter(Column("account_id") == a.account).deleteAll($0) }
         try b.repository.receive(received(try a.repository.outgoingRecords()))
         try b.repository.receive(received(old))
