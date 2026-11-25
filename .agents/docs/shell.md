@@ -95,7 +95,8 @@ release.sh ──► verify.sh --all
 | 工作流 | 触发 | 执行 |
 | --- | --- | --- |
 | `pr-checks.yml` | 面向 main 的 PR 创建、更新、重开、正文编辑、就绪 | 规范检查、Web/Core 实测及始终汇总的 PR gate |
-| `deploy-pages.yml` | push `main` 且改动 `website/**`、本工作流或赞赏预览脚本 / 依赖；每 12 小时 cron；手动 | 更新 stars / 赞赏预览后部署 Pages，并同步官网服务器 |
-| `sync-release-server.yml` | 正式 Release 发布（非 prerelease）自动触发；手动 | 经 SSH 同步发布服务器资产 |
+| `deploy-pages.yml` | push `main` 且改动 `website/**`、本工作流或赞赏预览脚本 / 依赖；每 12 小时 cron；手动 | 更新 stars / 赞赏预览后部署 GitHub Pages |
 
-deploy-pages 与 sync-release-server 两个 CI 工作流负责部署与分发，没有执行 `verify.sh`。它们运行成功不能替代代码回归或发布候选的交互验收。
+官网服务器通过 `paperrss-website-pull.timer` 每约 5 分钟检查 `main` 的 `website/`，有变更时部署，并约每 12 小时刷新 stars。正式版下载由 `paperrss-release-sync.timer` 每约 5 分钟从 GitHub Releases 拉取。可在服务器通过 `systemctl list-timers` 和 `journalctl -u paperrss-website-pull.service -u paperrss-release-sync.service` 查看运行情况。
+
+部署和分发任务不执行 `verify.sh`，代码回归和发布候选交互验收仍走各自流程。
