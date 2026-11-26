@@ -17,7 +17,7 @@
 
 ## 构建与启用
 
-在 macOS App 中打开 **设置 → AI → MCP → 连接外部助手**，即可开启或关闭现有 MCP listener；默认关闭。「一键安装」按 Codex CLI、Claude Code、DeepSeek dsh、Cursor、VS Code、VS Code Insiders 排序（Insiders 仍仅在已安装时出现）；其他助手可通过「复制配置」获取通用配置与提示词。关闭开关时两个区域置灰且不可操作。原生 App 将签名的 helper 内嵌在 `PaperRss.app/Contents/MacOS/paperrss-agent`。移动 App 后需重新复制配置；Release 缺少 helper 时提示重新安装，Debug 则可使用开发构建路径并提示构建。
+在 macOS App 中打开 **设置 → AI → MCP → 连接外部助手**，即可开启或关闭现有 MCP listener；默认关闭。「一键安装」按 Codex CLI、Claude Code、DeepSeek dsh、Pi、Cursor、VS Code、VS Code Insiders 排序（Insiders 仍仅在已安装时出现）；其他助手可通过「复制配置」获取通用配置与提示词。关闭开关时两个区域置灰且不可操作。原生 App 将签名的 helper 内嵌在 `PaperRss.app/Contents/MacOS/paperrss-agent`。移动 App 后需重新复制配置；Release 缺少 helper 时提示重新安装，Debug 则可使用开发构建路径并提示构建。
 
 以下均在本 worktree 执行。构建本身不启动 App：
 
@@ -194,9 +194,15 @@ Bro 硬要求（UDS-only 非 fixture、enable gate listen/revoke、0700/0600+pee
 
 ## 常见客户端快速接入
 
-设置 → AI → MCP 提供 Cursor 安装链接；VS Code 和 VS Code Insiders 使用各自的 MCP 安装链接。Codex CLI、Claude Code 与 DeepSeek dsh 复制终端命令（Codex CLI、ChatGPT 桌面应用与 Codex IDE 扩展共享配置）。Claude Desktop、Windsurf / Devin Desktop 和 Gemini CLI 等其他客户端通过「复制配置」取得通用配置与提示词，按各自要求合并配置并保留其他服务器。连接时需要开启「连接外部助手」并保持 PaperRss 运行。
+设置 → AI → MCP 提供 Cursor 安装链接；VS Code 和 VS Code Insiders 使用各自的 MCP 安装链接。Codex CLI、Claude Code、DeepSeek dsh 与 Pi 复制终端命令（Codex CLI、ChatGPT 桌面应用与 Codex IDE 扩展共享配置）。Claude Desktop、Windsurf / Devin Desktop 和 Gemini CLI 等其他客户端通过「复制配置」取得通用配置与提示词，按各自要求合并配置并保留其他服务器。连接时需要开启「连接外部助手」并保持 PaperRss 运行。
 
 格式参考：[Cursor](https://cursor.com/docs/context/mcp/install-links)、[VS Code](https://code.visualstudio.com/api/extension-guides/ai/mcp)、[Claude Code](https://code.claude.com/docs/en/mcp)、[Codex](https://developers.openai.com/codex/mcp)、[Claude Desktop / MCP](https://modelcontextprotocol.io/docs/develop/connect-local-servers)、[Devin Desktop](https://docs.devin.ai/desktop/cascade/mcp)、[Gemini CLI](https://geminicli.com/docs/tools/mcp-server/)。
+
+### Pi
+
+Pi 原生支持 stdio MCP，无需安装 MCP 扩展。在「一键安装」中点击 Pi 的「复制命令」，在终端运行即可将 `paperrss` 添加或更新到用户级 `~/.pi/agent/mcp.json`，保留其他服务器。命令使用当前 helper 绝对路径、`PAPERRSS_AGENT_ENABLED=1` 与 `--client pi`；安装命令不建立连接。保持 PaperRss 运行并开启「连接外部助手」后，运行 `pi mcp list` 检查连接；已打开的 Pi 会话使用 `/reload`，再通过 `/mcp` 查看状态。手动配置时可复用「复制配置」的 `mcpServers` JSON，合并到上述文件。使用注册了 `/mcp` 的第三方扩展时，按 [Pi 官方 MCP 文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md) 移除替代扩展以恢复内置支持。
+
+客户端命令、标识与图标由 `AgentMCPInstallTarget` 统一提供，设置页复用现有复制、禁用和 helper 缺失处理；MCP 协议、授权与数据访问仍由现有 helper / App 负责。`AgentMCPInstallTargetsTests` 验证目标元数据及复制命令实际传给 CLI 的参数，包含带空格、单引号和 shell 元字符的 helper 路径。
 
 ### Icon sources & licensing
 
@@ -204,8 +210,9 @@ Bro 硬要求（UDS-only 非 fixture、enable gate listen/revoke、0700/0600+pee
 - VS Code：[官方品牌素材](https://code.visualstudio.com/brand)中的图标，Microsoft 商标；Insiders 未找到应用图标时使用此素材。
 - Claude：[Anthropic 已验证的 Claude Code for VS Code 扩展](https://open-vsx.org/extension/Anthropic/claude-code) 2.1.312 中的 `claude-logo.png`，© Anthropic PBC。
 - Codex：[OpenAI 已验证的 Codex 扩展](https://open-vsx.org/extension/openai/chatgpt) 26.51021.22027 中的 `blossom.dark.png`；OpenAI 商标，按 [OpenAI 品牌指引](https://openai.com/brand/)用于标识集成。
+- Pi：[官方站点 favicon](https://pi.dev/favicon.svg)，添加白底与留白以适配浅色和深色设置页，仅用于标识 Pi 集成。
 
-素材仅缩放，作为兼容性标识；带 bundle identifier 的目标优先通过 `NSWorkspace` 读取已安装应用的实际图标。
+其余素材仅缩放，作为兼容性标识；带 bundle identifier 的目标优先通过 `NSWorkspace` 读取已安装应用的实际图标。
 
 
 ## Batch 1：dsh、丰富状态与 App 内定位（2026-10-28）

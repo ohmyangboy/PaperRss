@@ -41,6 +41,29 @@ final class AgentMCPInstallTargetsTests: XCTestCase {
         XCTAssertEqual(AgentMCPInstallTarget.claudeCode.command(path: path), "claude mcp add --scope user --env PAPERRSS_AGENT_ENABLED=1 --transport stdio paperrss -- \(quoted) serve --stdio --client claude-code")
         XCTAssertEqual(AgentMCPInstallTarget.codex.command(path: path), "codex mcp add paperrss --env PAPERRSS_AGENT_ENABLED=1 -- \(quoted) serve --stdio --client codex")
     }
+    func testPiCommandPassesLiteralHelperPathToUserScopedCLI() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appendingPathComponent("pi")
+        try "#!/bin/sh\nprintf '%s\\0' \"$@\"\n".write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        let helperPath = path + " $(printf injected);\n"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", try XCTUnwrap(AgentMCPInstallTarget.pi.command(path: helperPath))]
+        process.environment = ["PATH": root.path]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init),
+                       ["mcp", "add", "paperrss", "--env", "PAPERRSS_AGENT_ENABLED=1", "--",
+                        helperPath, "serve", "--stdio", "--client", "pi"])
+    }
+
     func testDSHCommandWritesYAMLAndIsIdempotent() throws {
         // Execute the actual copied command, with both home locations isolated from user configuration.
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -91,9 +114,12 @@ final class AgentMCPInstallTargetsTests: XCTestCase {
         XCTAssertEqual(AgentMCPInstallTarget.dsh.name, "DeepSeek dsh")
         XCTAssertEqual(AgentMCPInstallTarget.dsh.kind, .command)
         XCTAssertNil(AgentMCPInstallTarget.dsh.url(path: path))
-        XCTAssertEqual(AgentMCPInstallTarget.allCases, [.codex, .claudeCode, .dsh, .cursor, .vscode, .vscodeInsiders])
-        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.label), ["codex", "claude-code", "dsh", "cursor", "vscode", "vscode-insiders"])
-        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.bundleIdentifier), [nil, nil, nil, "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"])
-        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.iconAssetName), ["AgentMCPCodex", "AgentMCPClaude", "AgentMCPDeepSeek", "AgentMCPCursor", "AgentMCPVSCode", "AgentMCPVSCode"])
+        XCTAssertEqual(AgentMCPInstallTarget.pi.name, "Pi")
+        XCTAssertEqual(AgentMCPInstallTarget.pi.kind, .command)
+        XCTAssertNil(AgentMCPInstallTarget.pi.url(path: path))
+        XCTAssertEqual(AgentMCPInstallTarget.allCases, [.codex, .claudeCode, .dsh, .pi, .cursor, .vscode, .vscodeInsiders])
+        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.label), ["codex", "claude-code", "dsh", "pi", "cursor", "vscode", "vscode-insiders"])
+        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.bundleIdentifier), [nil, nil, nil, nil, "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"])
+        XCTAssertEqual(AgentMCPInstallTarget.allCases.map(\.iconAssetName), ["AgentMCPCodex", "AgentMCPClaude", "AgentMCPDeepSeek", "AgentMCPPi", "AgentMCPCursor", "AgentMCPVSCode", "AgentMCPVSCode"])
     }
 }
